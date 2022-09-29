@@ -1,6 +1,6 @@
 # Understand Plugins
 
-[Understand](www.scitools.com) is a powerful static analysis tool designed for code maintenance and exploration. It has fully extensible plugin systems for Python and Perl. Understand supports 4 flavors of plugins: Graphs, Interactive Reports, CodeChecks and Scripts.
+[Understand](www.scitools.com) is a powerful static analysis tool designed for code maintenance and exploration. It creates an extensive database about your code and how everything is interconnected. The Understand IDE shows you a lot of that information directly, but it also has fully extensible plugin systems for Python and Perl to let you gather and display your teams information in the most meaningful way. Understand supports 4 flavors of plugins: Graphs, Interactive Reports, CodeChecks and Scripts.
 
 Checkout the [API tutorials](https://scitools.freshdesk.com/en/support/solutions/articles/70000582855) for more help writing your own plugins.
 The most up-to-date documentation is accessible from the Help menu in Understand. Select Help->Python API Documentation. You can also [access it here](https://support.scitools.com/en/support/solutions/articles/70000582856).
@@ -14,5 +14,9 @@ Interactive report plugins, or IReports, let you run queries or gather informati
 ![image](https://user-images.githubusercontent.com/6586272/193100232-d82e65a9-dea5-48c1-94fe-0596e66442de.png)
 
 ## CodeCheck Plugins
-The CodeCheck feature in Understand has hundreds of checks yous can run against your code to validate coding standards and look for issues and vunerabilities. The Python API makes it easy to write your own checks as well. 
+The CodeCheck feature in Understand has hundreds of checks yous can run against your code to validate coding standards and look for issues and vunerabilities. The Python API makes it easy to write your own checks as well, like this one we use to enforce our internal parenthesis standard.  
+![image](https://user-images.githubusercontent.com/6586272/193142606-7bf859c2-138b-49d5-a0ec-a403a3a6cf7a.png)
 
+## Scripts
+You can also query the Understand DB directly with Python and Perl API scripts. You can run these scripts from inside the GUI or from the command line, which lends itself well to batch processes or DevOps integration. We use these scripts heavily as part of our Jenkins CI Pipeline.  With this trivial example I can list all of the enums in the Understand source code itself.
+![image](https://user-images.githubusercontent.com/6586272/193142975-512082f8-b9c6-4fc1-b077-b5c5f450f00c.png)
