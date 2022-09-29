@@ -1,0 +1,168 @@
+#This script is designed to run with Understand as an Interactive Report
+use base ("Understand::IReport");
+use strict;
+
+# Required - Return the short name of the Report, slashes (/) will be used to create directories in the menu
+sub name { return "Test Report";}
+
+# return -1 to indicate this report is never available, nor valid, for any entities.
+# otherwise test $entity to determine if the report can be run on that entity and return 0 or 1
+sub test_entity {
+  my $entity = shift;
+  # return $entity->kind->check("function"); # run the report on function entities
+  # return $entity->name =~ /^p/i; # run the report on entities whose name starts with the letter 'p'
+  return 1; # run the report on any entity by right clicking it and selecting interactive report
+}
+
+# return -1 to indicate this report is never available, nor valid, for any architectures.
+# otherwise test $arch to determine if the report can be run on that architecture and return 0 or 1
+sub test_architecture {
+    my $arch = shift;
+    return 1;	# any arch is valid, right click on the architecture and select interactive report
+}
+
+# Required - Return 1 if this report should be run on the entire project
+# and appear in the top level Report menu, otherwise return 0
+# Understand must be restarted to view new global reports
+sub test_global { return 1;}
+
+
+# Indicate this report supports displaying the progress bar.
+sub support_progress { return 1; }
+
+# Indicate this report supports the cancel button.
+sub support_abort { return 1; }
+our $abort_called;
+
+# This function is called when the cancel button is clicked
+sub abort{
+  $abort_called=1;
+}
+
+# Initialization code will be called once, per external report object.
+sub init {
+  my $report = shift;
+  $abort_called=0; #reset the cancel flag in case it was set on another run
+# These create an option dialog
+#     $report->option->checkbox($name,$optionText,$default); # create a checkbox option
+#     $report->option->checkbox_horiz($name,$optionText,@choices,@defaults); # create a horizontal group of checkbox options
+#     $report->option->checkbox_vert($name,$optionText,@choices,@defaults); # create a vertical group of checkbox options
+#     $report->option->file($name,$optionText,$default); # create a file choice option
+#     $report->option->directory($name,$optionText,$default); # create a directory choice option
+#     $report->option->integer($name,$optionText,$default); # create an integer option
+#     $report->option->label($name,$text); # create a text label to be displayed in report options
+#     $report->option->radio_horiz($name,$optionText,@choices,$default); # create a horizontalradio button option
+#     $report->option->radio_vert($name,$optionText,@choices,$default); # create a vertical radio button option
+#     $report->option->text($name,$optionText,$default); # create a text option
+      $report->option->choice("color","Pick your Favorite Color",["Red","Green","Blue"],"Red"); # create a choice option
+}
+
+
+# Required - This is where the report is actually run
+# if this is called for an entity $ent is set to the Understand::Ent object 
+# if called for an architecture than $arch is an Understand::Arch object
+# it is also called once with $ent and $arch set to null if test_global returns 1
+sub generate {
+  my $report = shift;
+  my $ent    = shift;
+  my $arch   = shift;
+
+  
+  if ($ent){ #this report was run on an entity
+    printFavoriteColor($report, $ent);
+  }elsif ($arch){ #this report was run on an architecture
+    generate_arch_tree($report,$arch,1);
+  }else{ #this report was run globally
+    interactiveTest($report);
+  }
+
+  $report->print("\n"); #Make sure to end with a new line, or the last line may not display  
+}
+
+
+#The following options are available in iReports in addition to those in the standard Understand Perl API library
+
+# text/color options 
+#$report->print($string); #output the text $string in the interactive report
+#$report->bold(); #bold the following text
+#$report->nobold(); #stop bolding
+#$report->fontcolor($color); Change the color of the following text - "blue", "#0000FF"
+#$report->fontcolor(); change the text color back to black
+#$report->hover($string); #set the hover text for the following text
+#$report->hover(); End the hover text
+#$report->fontbgcolor($color); #set the background color for the following text
+#$report->fontbgcolor(); #stop using the background color
+#$report->bgcolor($color); #Set the background color for the report
+
+# links
+#$report->entity($entity); #link the following text to the entity
+#$report->entity(); #terminate the link
+#$report->syncfile($file,$line,$column); #link the following text to the specific editor location
+#$report->syncfile(); #terminate the link
+
+# trees
+#$report->tree($depth,$startExpanded); #create a node in a tree object
+#$report->tree(); #terminate the tree object
+
+# data access
+#$report->db(); #return the Understand::Db object for the current project
+#$report->option->lookup($name); #returns the text for the selected choice
+#$report->progress($percentComplete, $outputText); # update the progress bar, the text is optional
+
+
+
+#************* Sample Functions ******************
+
+#update the progress bar and make the cancel button active for 5 seconds
+sub interactiveTest{
+  my $report = shift;
+  my $time = 5;
+ 
+  for (my $percent=0; $percent<=100 && !$abort_called; $percent += 100/$time) {
+    $report->progress($percent,$percent."% complete");
+    sleep 1;
+  }
+  $report->print("You ran this on the whole project: ");
+  $report->print($report->db->name);
+}
+
+
+#Prints some colored text and show an entity link
+sub printFavoriteColor{
+  my $report = shift;
+  my $ent = shift;
+  my $favColor = $report->option->lookup("color"); #Lookup the selected choice for the color option
+  $report->entity($ent);
+  $report->print($ent->name);
+  $report->entity();
+  $report->print("'s favorite color is also ");
+  $report->fontcolor($favColor);
+  $report->print($favColor);
+  $report->fontcolor("#FFFFFF");
+}
+
+# This subroutine demonstrates how to make a tree
+sub generate_arch_tree {
+  my $report = shift;
+  my $arch = shift;
+  my $level = shift;
+
+  if ($level == 1) {
+    my $favColor = $report->option->lookup("color"); #Lookup the selected choice for the color option
+    $report->fontbgcolor($favColor);
+    $report->tree($level,1);#The first number is the depth, the second determines rather or not to expand the tree
+    $report->bold();
+    $report->print($arch->longname());
+    $report->nobold();
+  } else {
+    $report->tree($level);
+    $report->print($arch->name());
+  }
+  foreach my $child ($arch->children()) {
+    generate_arch_tree($report,$child,$level+1);
+  }
+  if($level == 1){
+    $report->tree(); #terminate the tree
+    $report->fontbgcolor("white");
+  }
+}

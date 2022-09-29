@@ -1,0 +1,160 @@
+import understand
+
+def name():
+  """
+  Required, the name of the graph.
+  """
+  return "Python API Calls"
+
+def test_global(db):
+  """
+  Optional, return True if this graph is a project level graph
+
+  If True, this graph will appear in the top level Graph Menu.
+  """
+  return True
+
+def test_entity(ent):
+  """
+  Optional, return True if the graph exists for the given entity
+
+  If True, this graph will appear in the Graphical Views menu for the
+  entity.
+  """
+  return ent.kind().check("function ~unknown ~unresolved");
+
+def test_architecture(arch):
+  """
+  Optional, return True if the graph exists for the given architecture
+
+  If True, this graph will appear in the Graphical Views menu for the
+  architecture.
+  """
+  return True;
+
+def init(graph, target):
+  """
+  Initialize the graph
+
+  This function is called once on graph creation. Use it to define the
+  available graph options and/or a legend.
+  """
+  # Define options through the options object
+  graph.options().define("Fill", ["On","Off"], "Off");
+
+  # Use isinstance on the target to see if it's an entity, architecture, or
+  # project level graph (if your plugin supports multiple). You can use the
+  # target to customize available options.
+  if isinstance(target, understand.Ent):
+    graph.options().define("Depth", ["1", "2", "3"], "3")
+
+  # Defining a legend is optional. You can add multiple entries to the legend.
+  graph.legend().define("func", "roundedrect", "Function", "blue", "#FFFFFF")
+
+def grabNode(graph, nodes, ent):
+  """
+  This is a custom function for this script to get a graphviz node
+  """
+  if ent in nodes:
+    node = nodes[ent]
+  else:
+    # passing an ent to the node object will automatically sync the entity.
+    node = graph.node(ent.name(),ent)
+
+    if ent.kind().check("unresolved"):
+      # Set graph, node, and edge attributes with the set function.
+      # See Graphviz documentation for available attributes.
+      node.set("shape","octagon")
+      node.set("color","gray")
+      node.set("fillcolor","white")
+    nodes[ent] = node
+
+  return node
+
+
+def draw(graph, target):
+  """
+  Draw the graph
+
+  The second argument can be a database or an entity depending on whether
+  the graph was created at a project level or entity level.
+  """
+
+  fore = "blue"
+  back = "#FFFFFF"
+
+  # Use options to lookup the current values
+  if graph.options().lookup("Fill") == "On":
+    fore = "#000000"
+    back = "blue"
+
+  # Use set to update the legend outside of init
+  graph.legend().set("func","fore",fore)
+  graph.legend().set("func","back",back)
+
+  # Use set to change graph, node, and edge attributes
+  graph.set("rankdir", "LR")
+
+  # Use default to set the default attributes for graphs, nodes, and edges
+  graph.default("color", fore, "node")
+  graph.default("fillcolor", back, "node")
+  graph.default("style","filled,rounded","node")
+  graph.default("shape","box","node")
+
+  # store the ent->graphviz node so that each entity node appears only
+  # once no matter how many calls to it there are.
+  nodes = dict()
+
+  # avoid visiting any node more than once
+  visited = set()
+
+  # If the graph can be more than one type, use isinstance to determine the type
+  depth = 1
+  curLevel = []
+  if isinstance(target, understand.Db):
+    # This sample graphs all functions in the database for a project level
+    #graph
+    curLevel = target.ents("function ~unknown ~unresolved")
+  elif isinstance(target, understand.Arch):
+    # Graph all functions in the architecture
+    for ent in target.ents(False):
+      if ent.kind().check("function ~unknown ~unresolved"):
+        curLevel.append(ent)
+      elif ent.kind().check("file"):
+        for ref in ent.refs("define", "function ~unknown ~unresolved", True):
+          curLevel.append(ref.ent())
+    # Create clusters with cluster
+    cluster = graph.cluster(target.name(), target)
+    # add nodes to the cluster
+    for ent in curLevel:
+      grabNode(cluster, nodes, ent)
+  else:
+    # For an entity level graph, generate a calls tree
+    curLevel.append(target)
+    depth = int(graph.options().lookup("Depth"))
+
+  # Loop over the levels of the tree
+  while depth > 0:
+    depth -= 1
+    nextLevel = []
+    for ent in curLevel:
+
+      # avoid visiting nodes multiple times
+      if ent in visited:
+        continue
+      visited.add(ent)
+
+      # Get a graphviz node for the entity
+      tail = grabNode(graph,nodes,ent)
+
+      # Add edges for each call
+      for ref in ent.refs("call",unique=True):
+        headEnt = ref.ent()
+        nextLevel.append(headEnt)
+        head = grabNode(graph,nodes,headEnt)
+
+        # create an edge
+        edge = graph.edge(tail,head)
+        # Use sync so that clicking on the edge will visit the reference
+        edge.sync(ref)
+    curLevel = nextLevel
