@@ -1,0 +1,163 @@
+#
+# globals
+#
+
+my $filter = 
+  "function ~unknown ~unresolved," .
+  "method ~unknown ~unresolved," .
+  "procedure ~unknown ~unresolved," .
+  "vhdl process, vhdl architecture";
+  
+my $OverviewTitle = "Overview Mode (No Text)";
+my $ScaleTitle = "Scale by Code Size";
+my $ComplexTitle = "Color by Complexity";
+my $OrganizeByFile = "Organize by file";
+
+my @functions;  # Functions that have already been drawn.
+                 # Store a list to avoid unbounded recursion.
+my $unique_id; #keep track of the individual nodes
+my %clusterList;
+
+#
+# overrides
+#
+
+use base ("Understand::Graph::Gv");
+
+sub name { return "GV Invocation"; }
+
+sub test_entity {
+  my $entity = shift;
+  return 0;
+}
+
+sub test_global { return 1; }
+
+sub init {
+    my $graph = shift;
+    $graph->options->define($OverviewTitle, ["On","Off"], "Off");
+    $graph->options->define($ScaleTitle, ["On","Off"], "Off");
+    $graph->options->define($ComplexTitle, ["On","Off"], "Off");
+    $graph->options->define($OrganizeByFile,["On","Off"],"Off");
+    $unique_id = 0;
+	%clusterList=();
+}
+
+sub do_load {
+  my $graph = shift;
+  my $ent = shift;
+
+  resetGraphDefaults($graph);
+
+  if ($ent) {
+    draw_function($graph, $ent);
+  } else {
+    draw_global($graph);
+  }
+
+  @functions = ();  # cleanup
+}
+
+
+#
+# user subs
+#
+
+sub draw_function {
+  my $graph = shift;
+  my $func = shift;
+
+  return if grep {$_ == $func} (@functions);
+  push @functions, $func; 
+  my $node = getNode($graph, $func);
+  foreach my $callref ($func->refs("call","function,method,procedure",1)) {
+    $graph->edge($node, getNode($graph, $callref->ent));
+    draw_function($graph, $callref->ent);
+  }
+}
+
+sub draw_global {
+  my $graph = shift;
+
+  # Get only the functions that have a call reference.
+  my @functions = grep {$_->ents("call")} ($graph->db->ents($filter));
+  @functions = grep {$_->library ne "Standard"} (@functions);
+
+  foreach my $func (@functions) {
+    my $node = getNode($graph, $func);
+    foreach my $call ($func->ents("call")) {
+      $graph->edge($node, getNode($graph, $call));
+    }
+  }
+}
+
+sub getNode(){
+  my ($graph,$func) = @_;
+  my $unique_id=$func->id();
+  my $nodeParent = getNodesParent($graph,$func);
+  
+  my $size = $func->metric("CountLineCode");
+  my $name; 
+  my $string = " "; #This is default value if Scaling Off and Overview On
+  
+  #Set the box text output based on Scaling and Overview options
+  if($graph->options->lookup($ScaleTitle) eq "On"){
+    my $count = int(sqrt($size?$size:25));
+    $name = substr($func->longname,0,$count*2);
+    my $pad = int((($count*2) - length($name))/2);
+    $name =(" "x $pad). $name .(" "x$pad);
+    if ($graph->options->lookup($OverviewTitle) eq "On"){
+      $name = " " x ($count*2);
+    }
+    $string = ("\n" x (($count/2)-1)).$name.("\n" x ($count/2));   
+  }
+  else{
+    if ($graph->options->lookup($OverviewTitle) eq "Off"){
+      $string = $func->longname;
+    }
+  }
+  my $node = $nodeParent->node( $unique_id, $string, $func );
+    
+  if(($graph->options->lookup($ScaleTitle) eq "On" || $graph->options->lookup($ComplexTitle) eq "On") && !$size){
+    #unknown function
+      $node->set("color","black");
+      $node->set("fillcolor","gray");
+      $node->set("shape","hexagon");
+    }elsif($graph->options->lookup($ComplexTitle) eq "On" && $size){
+      #Set Color based on complexity
+      my $cyclo = $func->metric("Cyclomatic");
+      my $color = "#00C000";  
+      $color = "#00FF00" if ($cyclo > 13);
+      $color = "#FFFF00" if ($cyclo > 25); #yellow
+      $color = "#FFC001" if ($cyclo > 38);
+      $color = "#FF0000" if ($cyclo > 50); #red
+      $node->set("fillcolor",$color);
+    }
+   
+  return $node;  
+}
+
+sub resetGraphDefaults()
+{
+  my $graph = shift;
+  $graph->default("rankdir","LR","graph");
+  $graph->default("color","blue","node");
+  $graph->default("shape","box","node");
+  $graph->default("fontcolor","black","node");
+  $graph->default("color","blue","edge");
+  $graph->default("fillcolor","white","node");
+  $graph->default("fillcolor","yellow","cluster");
+  $graph->default("style","filled","cluster");
+}
+
+sub getNodesParent{
+	my ($graph,$func) = @_;
+	return $graph if $graph->options->lookup($OrganizeByFile) eq "Off";
+	my $declRef = $func->ref("definein, declarein body");
+	return $graph unless $declRef;
+	my $file = $declRef->file;
+  my $text = "File: ".$file->relname;
+  $text  = " " if $graph->options->lookup($OverviewTitle) eq "On";
+	my $fileCluster = $graph->cluster($file->id,$text);
+	return $fileCluster;
+}

@@ -1,0 +1,501 @@
+use base ("Understand::Graph::Gv");
+use List::Util qw[min max];
+use strict;
+use experimental 'smartmatch';
+
+# shapes
+use constant CONDITIONAL => ("if", "elsif", "exit-when", "where",
+                             "else-where-cond", "conditional-goto");
+use constant LOOP => ("end-do-while", "while-for", "while", "for", "do",
+                      "do-infinite", "do-while", "loop-expr",
+                      "end-repeat-until", "do-until",
+                      "end-do-until",);
+use constant SWITCH => ("case", "switch", "arith-if",
+                        "select-case", "computed-goto",);
+use constant TRY => ("try");
+use constant CATCH => ("try-catch", "try-finally");
+
+use constant NORMALCHILDREN => 1;
+use constant DEFERREDCHILDREN => 2;
+use constant ALLCHILDREN => 3;
+
+# filter
+use constant FILTER =>
+  ("do-while", "end-case", "loop", "end-switch", "end-block", "end-try",
+   "end-select", "else-where", "end-where", "end-do","repeat-until",
+   "end-with-do","do");
+
+sub name { return "Control Flow"; }
+
+sub test_global {
+  return -1;
+}
+
+sub test_entity {
+  my $entity = shift;
+
+  if ($entity->control_flow_graph()) {
+    if (my $file = file($entity)) {
+      return !$file->lexer_test;
+    }
+  }
+
+  return -1;
+}
+
+sub init {
+  my $graph = shift;
+  my @languages = $graph->db->language();
+
+  $graph->options->define("Blank Lines", ["On", "Off"], "Off");
+  $graph->options->define("Cluster", ["On", "Off"], "Off");
+  $graph->options->define("Collapse", ["On", "Off"], "Off");
+  $graph->options->define("Comments", ["On", "Off"], "Off");
+  $graph->options->define("Debug", ["On", "Off"], "Off");
+  $graph->options->define("Entity Name", ["On", "Off"], "Off");
+  $graph->options->define("Filter", ["On", "Off"], "On");
+  $graph->options->define("Passive", ["On", "Off"], "On");
+  if (/Assembly/ ~~ @languages) {
+    $graph->options->define("Identification Sequences", ["On", "Off"], "Off");
+  }
+
+  $graph->options->define("Labels", ["On", "Off"], "On");
+  $graph->options->define("Source Code", ["On", "Off", "Decision Only"], "On");
+  $graph->options->define("Macro Expansion", ["On", "Off"], "Off");
+}
+
+sub do_load {
+  my $graph = shift;
+  my $entity = shift;
+  my @languages = $graph->db->language();
+
+  # read options
+  my $blanks = ($graph->options->lookup("Blank Lines") eq "On");
+  my $debug = ($graph->options->lookup("Debug") eq "On");
+  my $filter = ($graph->options->lookup("Filter") eq "On");
+  my $passive = ($graph->options->lookup("Passive") eq "Off");
+  my $labels = ($graph->options->lookup("Labels") eq "On");
+  my $source = ($graph->options->lookup("Source Code") eq "On");
+  my $source_decision = ($graph->options->lookup("Source Code") eq "Decision Only");
+  my $cluster = ($graph->options->lookup("Cluster") eq "On");
+  my $collapse = ($graph->options->lookup("Collapse") eq "On");
+  my $comments = ($graph->options->lookup("Comments") eq "On");
+  my $expand = ($graph->options->lookup("Macro Expansion") eq "On");
+  my $entname = ($graph->options->lookup("Entity Name") eq "On");
+  my $idseq = (/Assembly/ ~~ @languages &&
+               ($graph->options->lookup("Identification Sequences") eq "On"));
+
+  # set graph defaults
+  $graph->default("shape", "box", "node");
+  $graph->default("color", "blue", "node");
+  $graph->default("color", "black", "edge");
+  $graph->default("style", "solid", "edge");
+  $graph->default("labeljust", "centered", "node");
+
+  # create nodes
+  my $id = 1;
+  my @nodes = ();
+  my @cfnodes = $entity->control_flow_graph()->nodes();
+  my %attributes = {};
+  foreach my $node (@cfnodes) {
+    $attributes{$node} = {};
+    $attributes{$node}{id} = $id ++;
+    $attributes{$node}{parents} = ();
+  }
+
+  # connect nodes
+  foreach my $node (@cfnodes) {
+    foreach my $child ($node->children(ALLCHILDREN)) {
+      push(@{$attributes{$child}{parents}}, $node);
+    }
+  }
+
+
+  # check connectivity
+  traverse($cfnodes[0],\%attributes);
+
+  # filter
+  if ($filter) {
+    filter($entity->language(),\@cfnodes, \%attributes);
+  }
+
+  if ($passive) {
+    passive(\@cfnodes, \%attributes);
+  }
+
+
+  # collapse
+  if ($collapse) {
+    collapse(\@cfnodes, \%attributes);
+  }
+
+  # lookup file and lexer
+  my $file = file($entity);
+  my $lexer = $file->lexer(0, 8, 0, $expand);
+  die "Unable to create lexer" unless $lexer;
+
+  # init clusters
+  my @subgraphs = ();
+  my @subgraphids = ();
+  push(@subgraphids, 0);
+  push(@subgraphs, $graph);
+
+  # create graph nodes
+  foreach my $node (@cfnodes) {
+    my $id = $attributes{$node}{id};
+    my $kind = $node->kind();
+
+    # cluster before filtering
+    my $subgraph = $subgraphs[-1];
+    if ($cluster) {
+      my $endnode = $node->end_node();
+      if ($endnode) {
+        $subgraph = $subgraph->cluster($debug ? $id . "-" . $attributes{$endnode}{id} : undef);
+        $subgraph->default("color", "cyan", "graph");
+        push(@subgraphids, $attributes{$endnode}{id});
+        push(@subgraphs, $subgraph);
+      } elsif ($id == $subgraphids[-1]) {
+        $subgraph = pop(@subgraphs);
+        pop(@subgraphids);
+      }
+    }
+
+    # skip filtered nodes
+    next if $attributes{$node}{filtered};
+
+    # get text
+    my @lines = ();
+    if ($debug) {
+      push(@lines, $id . " - " . $node->kind());
+      push(@lines, "Start Line " . $node->line_begin() . " Col ". $node->column_begin());
+      push(@lines, "End Line " . $node->line_end() . " Col ". $node->column_end());
+      my $endnode = $node->end_node();
+      if ($endnode) {
+        push(@lines, "End Node " . $attributes{$endnode}{id});
+      }
+      my $childstr = "";
+      foreach my $child ($node->children(NORMALCHILDREN)) {
+        $childstr .= $attributes{$child}{id} . ",";
+      }
+      if ($childstr) {
+        chop($childstr); #remove final comma
+        push(@lines, "Children: " . $childstr);
+      }
+      my $deferredchildstr = "";
+      foreach my $child ($node->children(DEFERREDCHILDREN)) {
+        $deferredchildstr .= $attributes{$child}{id} . ",";
+      }
+      if ($deferredchildstr) {
+        chop($deferredchildstr); #remove final comma
+        push(@lines, "Deferred Children: " . $deferredchildstr);
+      }
+    }
+
+    my $name = "";
+    my $title;
+    if ($kind eq "start") {
+      if ($labels) {
+        $title = "start";
+      }
+
+      if ($entname) {
+        $name = $entity->longname ? $entity->longname : $entity->name;
+        $name = $name . "(" . $entity->parameters . ")";
+        push(@lines, $name);
+      }
+    } elsif ($kind eq "end") {
+      if ($labels) {
+        $title = "end";
+      }
+    } else {
+      #if label text is provided, set $title to it ($title = $node->label())
+      my $tmp = $node;
+      do {
+        # preceding comments
+        if ($comments) {
+          my @comments = ();
+          my $line = $tmp->line_begin() - 1;
+          while ($line >= 0) {
+            my $lexeme = $lexer->lexeme($line, 0);
+            while ($lexeme && whitespace($lexeme)) {
+              $lexeme = $lexeme->next;
+            }
+
+            if ($lexeme && comment($lexeme)) {
+              unshift(@comments, $lexeme->text);
+              $line = min($lexeme->line_begin - 1, $line - 1);
+            } else {
+              last;
+            }
+          }
+
+          push(@lines, @comments);
+        }
+
+        # text
+        my $text = "";
+        if ($tmp->line_begin() && $tmp->column_begin() &&
+            $tmp->line_end() &&  $tmp->column_end()) {
+          my $lexeme = $lexer->lexeme($tmp->line_begin(), $tmp->column_begin());
+          while ($lexeme && before($lexeme, $tmp->line_end(), $tmp->column_end())) {
+            if (newline($lexeme)) {
+              if ($source && (($blanks && $text) || ($text !~ /^\s*$/))) {
+                push(@lines, $text);
+              }
+              elsif ($source_decision && $kind ne "passive") {
+                push(@lines, $text);
+              }
+
+              $text = "";
+            } elsif ($lexeme->token eq "IdSeq") {
+              $text .= $lexeme->text if $idseq;
+            } else {
+              my $comment = comment($lexeme);
+              if (($comment && $comments) || (!$comment && $source) || (!$comment && $source_decision && $kind ne "passive")) {
+                $text .= $lexeme->text;
+              }
+            }
+
+            $lexeme = $lexeme->next;
+          }
+
+          # trailing comment
+          if ($comments && $lexeme && !newline($lexeme)) {
+            while ($lexeme && !newline($lexeme)) {
+              $lexeme = $lexeme->next;
+            }
+
+            if ($lexeme) {
+              my $prev = $lexeme->previous;
+              if (comment($prev)) {
+                $text .= " " . $prev->text;
+              }
+            }
+          }
+        } else {
+          $text = $tmp->kind();
+        }
+
+        if (length $text) {
+          push(@lines, $text);
+        }
+
+        my @children = $tmp->children(ALLCHILDREN);
+        $tmp = $children[0];
+      } while ($tmp && $attributes{$tmp}{collapse});
+    }
+
+    # strip leading and trailing space
+    # escape literal backslashes
+    foreach my $line (@lines) {
+      $line =~ s/^\s+//;
+      $line =~ s/\s+$//;
+      $line =~ s/\\/\\\\/g;
+    }
+
+    # left align multiple lines
+    my $text = join("\\l", @lines);
+    if (@lines > 1) {
+      $text .= "\\l";
+    }
+
+    # prepend title
+    if ($title) {
+      $text = "\\n" . $text if $text;
+      $text = $title . "\\n" . $text;
+    }
+
+    my $gvnode = $subgraph->node($id, $text);
+    $attributes{$node}{node} = $gvnode;
+
+    # set node properties
+    if ($kind eq "start") {
+      $gvnode->set("shape", "Msquare") if !$entname;
+      $gvnode->set("color", "darkgreen");
+    } elsif ($kind eq "end") {
+      $gvnode->set("shape", "Msquare") if !$entname;
+      $gvnode->set("color", "brown");
+    } elsif (grep($_ eq $kind, CONDITIONAL)) {
+      $gvnode->set("shape", "diamond");
+    } elsif (grep($_ eq $kind, SWITCH)) {
+      $gvnode->set("shape", "octagon");
+    } elsif (grep($_ eq $kind, LOOP)) {
+      $gvnode->set("shape", "oval");
+    } elsif (grep($_ eq $kind, TRY)) {
+      $gvnode->set("shape", "hexagon");
+      $gvnode->set("color", "red");
+    } elsif (grep($_ eq $kind, CATCH)) {
+      $gvnode->set("shape", "oval");
+      $gvnode->set("color", "red");
+    }
+
+    # color unreachable nodes
+    if (!$attributes{$node}{reachable}) {
+      $gvnode->set("color", "red");
+    }
+
+    # sync to file
+    if ($node->line_begin() && $node->column_begin()) {
+      $gvnode->sync($file, $node->line_begin(), $node->column_begin());
+    }
+  }
+
+  # connect graph nodes
+  foreach my $node (@cfnodes) {
+    # skip edges from filtered nodes
+    next if $attributes{$node}{filtered};
+
+    foreach my $child ($node->children(NORMALCHILDREN)) {
+      foreach my $visiblechild (unfiltered($child,\%attributes)) {
+        my $edge = $graph->edge($attributes{$node}{node}, $attributes{$visiblechild}{node});
+        # use original child to determine label
+        my $label = $node->child_label($child);
+        if ($label) {
+          $edge->set("label", $label) if $labels;
+          if ($label eq "yes") {
+            $edge->set("color", "green");
+          } elsif ($label eq "no") {
+            $edge->set("color", "red");
+          }
+        }
+      }
+    }
+
+    foreach my $child ($node->children(DEFERREDCHILDREN)) {
+      foreach my $visiblechild (unfiltered($child,\%attributes)) {
+        my $edge = $graph->edge($attributes{$node}{node}, $attributes{$visiblechild}{node});
+        $edge->set("color", "gray");
+      }
+    }
+  }
+}
+
+sub traverse {
+  my $node = shift;
+  my $attributes = shift;
+
+  my @childqueue = ();
+  push @childqueue, $node;
+
+  while (@childqueue) {
+    my $child = shift @childqueue;
+    if (!$attributes->{$child}{reachable}) {
+      $attributes->{$child}->{reachable} = 1;
+      push @childqueue, $child->children(ALLCHILDREN);
+    }
+  }
+}
+
+sub filter {
+  my $language = shift;
+  my $nodes = shift;
+  my $attributes = shift;
+
+  # mark implicit nodes as 'filtered'
+  foreach my $node (@$nodes) {
+    my $kind = $node->kind();
+    if ($kind eq "passive-implicit" ||
+        ($kind eq "block-begin" && @{$node->children(ALLCHILDREN)} <= 1) ||
+        grep($_ eq $kind, FILTER) ||
+        (($kind eq "else" || $kind eq "end-if" || $kind eq "end-loop") && $language ne "Assembly"))
+    {
+      $attributes->{$node}->{filtered} = 1;
+    }
+  }
+}
+
+sub passive {
+  my $nodes = shift;
+  my $attributes = shift;
+
+  # mark implicit nodes as 'filtered'
+  foreach my $node (@$nodes) {
+    if ($node->kind() eq "passive") {
+      $attributes->{$node}->{filtered} = 1;
+    }
+  }
+}
+
+sub collapse {
+  my $nodes = shift;
+  my $attributes = shift;
+
+  # collapse node into parent and mark as 'filtered'
+  foreach my $node (@$nodes) {
+    my @children = $node->children(ALLCHILDREN);
+    my $num_children = @children;
+    if ($num_children == 1) {
+      my $kind = $node->kind();
+      my $child = $children[0];
+      if ($kind eq "passive" && $child->kind() eq "passive" &&
+          @{$attributes->{$child}->{parents}} == 1) {
+        $attributes->{$child}->{collapse} = $node;
+        $attributes->{$child}->{filtered} = 1;
+      }
+    }
+  }
+}
+
+sub unfiltered {
+  my $node = shift;
+  my $attributes = shift;
+
+  my @childqueue = ();
+  push @childqueue, $node;
+
+  my @children = ();
+  while (@childqueue) {
+    my $child = shift @childqueue;
+    if ($attributes->{$child}->{filtered}) {
+      push @childqueue, $child->children(ALLCHILDREN);
+    } else {
+      push @children, $child;
+    }
+  }
+  return @children;
+}
+
+sub file {
+  my $entity = shift;
+
+  if ($entity->kind->check("file")) {
+    return $entity;
+  }
+
+  if (my $ref = $entity->ref("definein,body declarein")) {
+    return $ref->file;
+  } elsif ($entity->kind->check("vhdl process")) {
+    return $entity->ref("declarein")->file;
+  }
+
+  return undef;
+}
+
+# token predicates
+sub comment {
+  my $lexeme = shift;
+  return ($lexeme && $lexeme->token eq "Comment");
+}
+
+sub newline {
+  my $lexeme = shift;
+  return ($lexeme && $lexeme->token eq "Newline");
+}
+
+sub whitespace {
+  my $lexeme = shift;
+  return ($lexeme && $lexeme->token eq "Whitespace");
+}
+
+sub before {
+  my $lexeme = shift;
+  my $eline = shift;
+  my $ecol = shift;
+
+  # end of lexical stream
+  return undef unless $lexeme;
+
+  my $sline = $lexeme->line_begin;
+  my $scol = $lexeme->column_begin;
+  return ($sline < $eline || ($sline == $eline && $scol <= $ecol));
+}
