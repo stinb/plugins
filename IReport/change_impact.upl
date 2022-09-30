@@ -1,0 +1,133 @@
+# See what impact changing a particular entity will have on the codebase.
+
+use base ("Understand::IReport");
+use Tie::RefHash;
+
+# Indicate the name of this report.
+sub name { return "Change Impact"; }
+
+# Indicate this report is valid for certain entities.
+sub test_entity { my $ent = shift; return 1; }
+
+# Indicate this report is never valid as a global report
+sub test_global { return -1; }
+
+
+# Indicate this report supports the abort method.
+sub support_abort { return 1; }
+
+# Abort method.
+our $Abort=0;
+sub abort {
+    $Abort = 1;
+}
+    
+
+# Initialization code will be called once, per external report object.
+sub init {
+    my $report = shift;
+
+    $Abort = 0;
+    # define options dialog, with initial default values
+    $report->option->integer
+	("MaxLevels",	# option name
+	 "Levels",	# display text
+	 5);		# initial default value
+    $report->option->checkbox_vert
+	("ShowTree","",["show callby tree"],"show callby tree");
+}
+
+# Generate code will be called once, after init(), and perhaps
+# additional times if the report is regenerated (perhaps with
+# new option settings.
+sub generate {
+    my $report = shift;
+    my $entity = shift;
+
+    # retrieve levels option value
+    my $maxlevels = $report->option->lookup("MaxLevels");
+    $maxlevels = 0 if ($maxlevels < 0);
+    my $showtree = $report->option->lookup("ShowTree");
+
+    $report->entity($entity);
+    $report->print($entity->longname());
+    $report->entity();
+    $report->print("\n");
+
+    if ($showtree) {
+		$report->bold();
+		$report->tree(1,0);
+		$report->print("Callby (tree):");
+		$report->nobold();
+    }
+    tie my %used, 'Tie::RefHash';
+    my @parents = ();
+    push @parents,$entity;
+    callby_tree($report,$showtree,2,$entity,\%used,$maxlevels,\@parents);
+    $report->tree() if $showtree;
+
+    my $loc=0;
+    my $cplx=0;
+    my $stmt=0;
+    my $exe=0;
+    my $num=0;
+    my @ents;
+    foreach my $ent (keys %used) {
+		++$num;
+		push @ents,$ent;
+		$loc += $ent->metric("CountLineCode");
+		$cplx += $ent->metric("Cyclomatic");
+		$stmt += $ent->metric("CountStmt");
+		$exe += $ent->metric("CountStmtExe");
+    }
+    $report->bold();
+    $report->tree(1,0);
+    if ($showtree) {
+		$report->print("Callby (flat):");
+    } else {
+		$report->print("Callby:");
+    }
+    $report->nobold();
+    foreach my $ent (sort {lc($a->longname()) cmp lc($b->longname())} @ents) {
+		$report->tree(2);
+		$report->entity($ent);
+		$report->print($ent->longname());
+    }
+    $report->tree();
+
+    $report->print("\n");
+    $cplx = int $cplx/$num if $num;
+    $report->print("LOC      $loc\n");
+    $report->print("CPLX    $cplx\n");
+    $report->print("STMT   $stmt\n");
+    $report->print("EXE       $exe\n");
+}
+
+
+sub callby_tree {
+    my ($report,$showtree,$level,$entity,$used,$maxlevels,$parents) = @_;
+
+    foreach my $ref ($entity->refs("callby ~inactive","",1)) {
+		return if $Abort;
+		my $ent = $ref->ent();
+		next if !$showtree and exists $$used{$ent};
+		$$used{$ent} = 1;
+		if ($showtree) {
+			$report->tree($level);
+			$report->entity($ent);
+			$report->print($ent->longname());
+			$report->entity();
+		}
+		if (!$maxlevels || $level < $maxlevels) {
+			my $found=0;
+			foreach my $parent (@$parents) {
+				$found = 1 if $parent == $ent;
+			}
+			if (!$found) {
+				push @$parents,$ent;
+				callby_tree($report,$showtree,$level+1,$ent,$used,$maxlevels,$parents);
+				pop @$parents;
+			}
+		}
+    }
+}

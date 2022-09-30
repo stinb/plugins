@@ -1,0 +1,532 @@
+#
+# Your code is beautiful, formatted to your liking and spaced just how you want it, but sometimes you have to work with other people’s code – yuck! 
+# If only there was something that would make it look like your code, instead of spaghetti. Artistic Style, or astyle as it is also known, is a great open 
+# source application that does exactly that. This Understand plugin uses astyle to reformat the code to your liking.
+#
+my $kind ="file ~unknown ~unresolved";
+
+#
+# overrides
+#
+use base ("Understand::IReport");
+use strict;
+
+sub name { return "Beautify"; }
+
+sub test_entity {
+  my $entity = shift;
+  my $result = ($entity->kind()->check($kind));
+  return $result;
+}
+
+sub test_global { return 1; }
+
+sub test_architecture {
+    my $arch = shift;
+    return 1;	# any arch is valid, right click on the architecture and select interactive report
+}
+
+sub init {
+  my $report = shift;
+  $report->option->file("astyleLocation","Location of astyle executable:","");
+  $report->option->radio_vert("action","Action",["Preview the change","Replace the original file","Display the help text"],"Preview the change");
+  $report->option->radio_horiz("Predefined Style", "Predefined Style",[ "None", "ANSI", "GNU", "K/R", "Linux", "Java"], "None" );
+  $report->option->choice("indent","Indent with:",["Style Default","Tab","Spaces"],"Style Default");
+  $report->option->choice("spaces","Number of spaces in Indent/Tab(only used with previous option)",["Style Default","0","1","2","3","4","5","6","7","8","9","10","11","12"],"Style Default");
+  $report->option->choice("brackets","Bracket Positioning",["Style Default","Break brackets from their pre-block statements(ANSI)","Attach Brackets to their pre-block statements(Java/KR)"
+			,"Break brackets from class and function declarations, but attach to pre-block command statments (Linux)","Java/KR style, but break closing headers from their preceding brackets(Java/KR&break-closing)"
+			,"Linux style, but break closing headers from their preceding brackets(Linux&break-closing)"],"Style Default");
+  $report->option->checkbox_horiz("indentopts","Indent the following(Override Style)",["Classes","Switches","Cases","Blocks","Brackets","Namespaces","Labels","Preprocessor"],"");
+  $report->option->text("extra","Additional Astyle switches to add","");
+}
+
+sub generate {
+  my $report = shift;
+  my $ent    = shift;
+  my $arch   = shift;
+  my ($processedText, $tempfile, $lexer, @text);
+  my $usetemp = 1;
+    
+  #read options
+  my $exe = $report->option->lookup("astyleLocation");
+  my $predef = $report->option->lookup("Predefined Style");
+  my $indent = $report->option->lookup("indent");
+  my $spaces = $report->option->lookup("spaces");
+  my $brackets = $report->option->lookup("brackets");
+  my $extras = $report->option->lookup("extra");
+  my @indentopts = $report->option->lookup("indentopts");
+  
+  #verify that the astule exe exists
+  if (! $exe || ! -e $exe){
+	  $report->print("Could not find the astyle executable: $exe\nPlease install Astyle and point to the executable. You can download it from http://astyle.sourceforge.net/\n") ;
+	  $report->print("\n");
+	  return;
+  }
+
+
+  # Display Help text
+  if ($report->option->lookup("action") =~ /help text/){
+	foreach my $line (split(/\n/,helpText())){
+		$report->bold if($line =~ s/^\*\*//);
+		$report->print($line."\n");
+		$report->nobold;
+	}
+	return;
+  }
+  
+  my @files;
+  if ($arch){
+    foreach (sort {$a->longname cmp $b->longname;} $arch->ents(1)){
+      push (@files, $_);
+    }
+  }elsif($ent){
+    push (@files, $ent);
+  }else{
+    @files = $report->db->ents("file ~unknown ~unresolved");
+  }
+
+foreach my $file (@files){
+  
+  if ($report->option->lookup("action") =~ /Replace the original file/){
+    $usetemp = 0;
+    $tempfile = $file->longname;
+    
+    if (! -e $tempfile){ 
+      $report->print("Could not open $tempfile to replace it\n");
+      $report->print("\n");
+      return;
+    }
+  }
+  
+  if ($usetemp){
+	  $tempfile = $report->db->name.".". int(rand()*10000);
+	  
+	  $lexer = $file->lexer;
+	  if (! $lexer){
+	  	$report->print("Could not open a lexer for". $file->longname) ;
+		$report->print("\n");
+		return;
+	  }
+	  @text = $lexer->lexemes();
+	  if(open(FILE,">$tempfile")){
+		  foreach(@text){
+			print FILE $_->text;
+		  }
+		  close(FILE);
+	  }else{
+	  	$report->print("Could not create a temporary file at $tempfile") ;
+		$report->print("\n");
+		return;
+	  }
+  }
+
+  
+	my $command = "\"$exe\"";
+	if ($predef ne "None"){
+		$command .=" --style=".lc($predef);
+	}
+	if($indent eq "Tab"){
+		$command .= " -t";
+		if ($spaces ne "Style Default"){
+			$command .="$spaces";
+		}
+	}elsif($indent eq "Spaces"){
+		$command .= " -s";
+		if ($spaces ne "Style Default"){
+			$command .="$spaces";
+		}
+	}
+	$command .= " -b" if $brackets =~ /\(ANSI\)/;
+	$command .= " -a" if $brackets =~ /\(Java\/K&R\)/;
+	$command .= " -l" if $brackets =~ /\(Linux\)/;
+	$command .= " -ly" if $brackets =~ /\(Linux&break\-closing\)/;
+	$command .= " -by" if $brackets =~ /\(Java\/KR&break\-closing\)/;
+	
+	foreach(@indentopts){
+		$command .= " -C" if $_ eq "Classes";
+		$command .= " -S" if $_ eq "Switches";
+		$command .= " -K" if $_ eq "Cases";
+		$command .= " -G" if $_ eq "Blocks";
+		$command .= " -B" if $_ eq "Brackets";
+		$command .= " -N" if $_ eq "Namespaces";
+		$command .= " -L" if $_ eq "Labels";
+		$command .= " -w" if $_ eq "Preprocessor";
+	}
+	
+	$command .= " $extras" if $extras;
+	$command .= " -n \"$tempfile\"";
+	my $status = `$command`;
+	#$report->print($command."\n'$status'\n");
+	
+	# If previewing, open and view the contents of the tempfile
+	if ($usetemp){
+		if (open(FILE,"<$tempfile")){
+			@text = <FILE>;
+			close(FILE);
+			if (! unlink($tempfile)){
+				$report->print("could not delete temp file $tempfile");
+				$report->print("\n");
+				return;
+			}
+      $report->print( "Previewing the first file of ".@files."\n");
+      $report->print( "FileName: ".$file->longname."\n");
+      $report->print( "Command: $command\n\n");
+			foreach(@text){$report->print($_);}
+		}else{
+			$report->print("Could not read temp file $tempfile") ;
+			$report->print("\n");
+			return;
+		}
+    return; #When previewing multiple files, only show the first
+	}else{
+		$report->print("$command\n File Modified.\n");
+	}
+
+
+  $report->print("\n");
+  }
+}
+
+sub helpText ($)
+{
+    return << "END_USAGE";
+*******************************************
+**Predefined Style Options
+Predefined Style options define the style by setting several other options. If other options are also used, they will override the predefined style.
+**style=ansi
+ANSI style formatting/indenting. Brackets are broken, indentation is 4 spaces. Namespaces, classes, and switches are NOT indented.
+
+namespace foospace
+{
+int Foo()
+{
+    if (isBar)
+    {
+        bar();
+        return 1;
+    }
+    else
+        return 0;
+}
+}
+
+**style=gnu
+GNU style formatting/indenting.  Brackets are broken, blocks are indented, and indentation is 2 spaces. Namespaces, classes, and switches are NOT indented.
+
+namespace foospace
+  {
+    int Foo()
+      {
+        if (isBar)
+          {
+            bar();
+            return 1;
+          }
+        else
+          return 0;
+      }
+  }
+
+**style=kr
+Kernighan & Ritchie style formatting/indenting. Brackets are attached, indentation is 4 spaces. Namespaces, classes, and switches are NOT indented.
+
+namespace foospace {
+int Foo() {
+    if (isBar) {
+        bar();
+        return 1;
+    } else
+        return 0;
+}
+}
+
+**style=linux
+Linux style formatting/indenting. All brackets are linux style, indentation is 8 spaces. Namespaces, classes, and switches are NOT indented.
+
+namespace foospace
+{
+int Foo()
+{
+        if (isBar) {
+                bar();
+                return 1;
+        } else
+                return 0;
+}
+}
+
+**style=java
+Java style formatting/indenting. Brackets are attached, indentation is 4 spaces. Switches are NOT indented.
+
+class foospace {
+    int Foo() {
+        if (isBar) {
+            bar();
+            return 1;
+        } else
+            return 0;
+    }
+}
+
+*******************************************
+**Tab and Bracket Options
+If no indentation option is set, the default option of 4 spaces will be used. You can choose to indent using tab or spaces.
+**Break brackets from their pre-block statements(ANSI)
+void Foo(bool isFoo)
+{
+    if (isFoo)
+    {
+        bar();
+    }
+    else
+    {
+        anotherBar();
+    }
+}
+
+**Attach Brackets to their pre-block statements(Java/KR)
+void Foo(bool isFoo) {
+    if (isFoo) {
+        bar();
+    } else {
+        anotherBar();
+    }
+}
+
+**Break brackets from class and function declarations, but attach to pre-block command statments (Linux)
+void Foo(bool isFoo)
+{
+    if (isFoo) {
+        bar();
+    } else {
+        anotherBar;
+    }
+}
+
+**Java/KR style, but break closing headers from their preceding brackets(Java/KR&break-closing)
+void Foo(bool isFoo) {
+    if (isFoo) {
+        bar();
+    }
+	else {
+        anotherBar();
+    }
+}
+
+**Linux style, but break closing headers from their preceding brackets(Linux&break-closing)
+void Foo(bool isFoo)
+{
+    if (isFoo) {
+        bar();
+    } 
+	else {
+        anotherBar;
+    }
+}
+*******************************************
+**Indentation Options
+
+**Indent Classes
+Indent 'class' and 'struct' blocks so that the blocks 'public:', 'protected:' and 'private:' are indented. The entire block is indented. This option has no effect on Java and C# files.
+
+class Foo
+{
+public:
+    Foo();
+    virtual ~Foo();
+};
+
+becomes:
+
+class Foo
+{
+    public:
+        Foo();
+        virtual ~Foo();
+};
+
+ 
+
+**Indent Switches
+Indent 'switch' blocks so that the 'case X:' statements are indented in the switch block. The entire case block is indented.
+
+switch (foo)
+{
+case 1:
+    a += 1;
+    break;
+
+case 2:
+{
+    a += 2;
+    break;
+}
+}
+
+becomes:
+
+switch (foo)
+{
+    case 1:
+        a += 1;
+        break;
+
+    case 2:
+    {
+        a += 2;
+        break;
+    }
+}
+
+ 
+
+**Indent Cases
+Indent 'case X:' blocks from the 'case X:' headers. Case statements not enclosed in blocks are NOT indented.
+
+switch (foo)
+{
+    case 1:
+        a += 1;
+        break;
+
+    case 2:
+    {
+        a += 2;
+        break;
+    }
+}
+
+becomes:
+
+switch (foo)
+{
+    case 1:
+        a += 1;
+        break;
+
+    case 2:
+        {
+            a += 2;
+            break;
+        }
+}
+
+ 
+
+**Indent Blocks
+Add extra indentation to entire blocks.
+
+if (isFoo)
+{
+    bar();
+}
+else
+    anotherBar();
+
+becomes:
+
+if (isFoo)
+    {
+        bar();
+    }
+else
+    anotherBar();
+
+ 
+
+**Indent Brackets
+Add extra indentation to brackets. This option has no effect if --indent-blocks is used.
+
+if (isFoo)
+{
+    bar();
+}
+else
+    anotherBar();
+
+becomes:
+
+if (isFoo)
+    {
+    bar();
+    }
+else
+    anotherBar();
+
+ 
+
+**Indent Namespaces
+Add extra indentation to namespace blocks.
+
+namespace foospace
+{
+class Foo
+{
+    public:
+        Foo();
+        virtual ~Foo();
+};
+}
+
+becomes:
+
+namespace foospace
+{
+    class Foo
+    {
+        public:
+            Foo();
+            virtual ~Foo();
+    };
+}
+
+ 
+
+**Indent Labels
+Add extra indentation to labels so they appear 1 indent less than the current indentation, rather than being flushed to the left (the default).
+
+int foo() {
+    while (isFoo) {
+        ...
+        if (isFoo)
+            goto error;
+    }
+
+error:
+        ...
+}
+
+becomes (with indented 'error'):
+
+int foo() {
+    while (isFoo) {
+        ...
+        if (isFoo)
+            goto error;
+    }
+ 
+    error:
+        ...
+}
+
+ 
+
+**Indent Preprocessor
+Indent multi-line preprocessor definitions ending with a backslash. Should be used with --convert-tabs for proper results. Does a pretty good job, but can not perform miracles in obfuscated preprocessor definitions.
+
+#define Is_Bar(arg,a,b) \
+(Is_Foo((arg), (a)) \
+|| Is_Foo((arg), (b)))
+
+becomes:
+
+#define Is_Bar(arg,a,b) \
+    (Is_Foo((arg), (a)) \
+     || Is_Foo((arg), (b)))
+
+
+** Additional Switches
+Any other option from http://astyle.sourceforge.net/astyle.html can be specified here.
+     
+END_USAGE
+}

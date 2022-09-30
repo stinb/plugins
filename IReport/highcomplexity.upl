@@ -1,0 +1,100 @@
+# Report highly complex functions
+
+use base ("Understand::IReport");
+use Tie::RefHash;
+
+# Indicate the name of this report.
+sub name { return "High Complexity Functions"; }
+
+# Indicate this report is never available (non-empty), nor valid, for any entities.
+sub test_entity { return -1; }
+
+# Indicate this report is always available as a global report.
+sub test_global { return 1; }
+
+# Indicate this report supports the progress method.
+sub support_progress { return 1; }
+
+
+# Initialization code will be called once, per external report object.
+sub init {
+    my $report = shift;
+
+    # define options dialog, with initial default values
+    $report->option->integer
+	("Threshold",				# option name
+	 "Complexity Threshold",		# display text
+	 15);					# initial default value
+    $report->option->radio_vert
+	("Sort",				# option name
+	 "Sort by",				# display text
+	 ["Function Name","Complexity Value"],	# radio choices
+	 "Complexity Value");			# initial default value
+}
+
+
+# Generate code will be called once, after init(), and perhaps
+# additional times if the report is regenerated (perhaps with
+# new option settings).
+sub generate {
+    my $report = shift;
+
+    # retrieve threshold option value
+    my $threshold = $report->option->lookup("Threshold");
+    $threshold = 1 if ($threshold < 1);
+
+    # retrieve sorting method option value
+    my $sort_method = $report->option->lookup("Sort");
+
+    # build hash of matching functions
+	tie my %funcs, 'Tie::RefHash';
+    my $func;
+    foreach $func ($report->db->ents("function, method, fortran subroutine, fortran main program, ada procedure")) {
+	my $val = $func->metric("Cyclomatic");
+        if ($val >= $threshold) {
+	    $funcs{$func} = $val;
+	}
+    }
+
+    # test colors
+    $report->bgcolor("#F0F0F0");
+    $report->fontbgcolor("#F0F0F0");
+    $report->fontcolor("black");
+
+    # output, based on sorting criteria
+    my $num = keys %funcs;
+    my $cur = 1;
+    if ($sort_method eq "Function Name") {
+	foreach my $ent (sort {
+	    lc($a->longname()) cmp lc($b->longname());
+	} keys %funcs) {
+	    $report->progress($cur++/$num*100);
+	    $func = $ent;
+	    $report->entity($func);
+	    $report->print($func->longname());
+	    $report->entity();
+	    $report->print(" "x5);
+	    $report->fontcolor("red");
+	    $report->print($funcs{$ent});
+	    $report->fontcolor("black");
+	    $report->print("\n");
+	}
+    }
+
+    else {
+	foreach my $ent (sort {
+	    $funcs{$b} <=> $funcs{$a}
+	    || lc($b->longname()) cmp lc($a->longname());
+	} keys %funcs) {
+	    $report->progress($cur++/$num*100);
+	    $func = $ent;
+	    $report->fontcolor("red");
+	    $report->print($funcs{$ent}." "x5);
+	    $report->fontcolor("black");
+	    $report->entity($func);
+	    $report->print($func->longname());
+	    $report->entity();
+	    $report->print("\n");
+	}
+    }
+}
