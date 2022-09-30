@@ -72,16 +72,9 @@ This is what it will look look like in Python:
  upython -c "path/to/mysample.upy"
 ```
 If the CodeCheck tab is open in Understand close it and reopen it, and your new check should appear and be ready to test.
-<<<<<<< HEAD
 
 Congratulations! You wrote your first Codecheck script. The next step is to become more familiar with Understand's Perl and Python API's.
 
-=======
-
-
-Congratulations! You wrote your first Codecheck script. The next step is to become more familiar with Understand's Perl and Python API's.
-
->>>>>>> main
 Browsing the Codecheck scripts that are shipped with Understand can also be very beneficial. They can be found in conf/plugin/Scitools/Codecheck/.
 
 If you have questions, just shoot us an email at support@scitools.com or visit https://support.scitools.com/.
