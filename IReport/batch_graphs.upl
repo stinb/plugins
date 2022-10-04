@@ -1,0 +1,291 @@
+# This script is designed to run with Understand as an Interactive Report
+# It generates all the graphs of the selected type and saves them to the specified folder
+# It also creates an index.html file to view them all with.
+
+use base ("Understand::IReport");
+use strict;
+use POSIX;
+
+# Required - Return the short name of the Report, slashes (/) will be used to create directories in the menu
+sub name { return "Batch Generate Graphs";}
+
+# return -1 to indicate this report is never available, nor valid, for any entities.
+# otherwise test $entity to determine if the report can be run on that entity and return 0 or 1
+sub test_entity {
+  my $entity = shift;
+  # return $entity->kind->check("function"); # run the report on function entities
+  # return $entity->name =~ /^p/i; # run the report on entities whose name starts with the letter 'p'
+  return 0; # run the report on any entity by right clicking it and selecting interactive report
+}
+
+# return -1 to indicate this report is never available, nor valid, for any architectures.
+# otherwise test $arch to determine if the report can be run on that architecture and return 0 or 1
+sub test_architecture {
+    my $arch = shift;
+    return 0;	# any arch is valid, right click on the architecture and select interactive report
+}
+
+# Required - Return 1 if this report should be run on the entire project
+# and appear in the top level Report menu, otherwise return 0
+# Understand must be restarted to view new global reports
+sub test_global { return 1;}
+
+
+# Indicate this report supports displaying the progress bar.
+sub support_progress { return 1; }
+
+# Indicate this report supports the cancel button.
+sub support_abort { return 1; }
+our $abort_called;
+
+# This function is called when the cancel button is clicked
+sub abort{
+  $abort_called=1;
+}
+
+# Initialization code will be called once, per external report object.
+sub init {
+  my $report = shift;
+  $abort_called=0; #reset the cancel flag in case it was set on another run
+  
+  my @graphTypes = ["Butterfly","Calls", "Called By","Class Invocation","Control Flow","Data Members","Declaration","Declaration File","Declared In","Depends On", "Depended On By","Include","Parent Declaration","UML Class Diagram",];
+
+  $report->option->label("intro","This generates all of the graphs of the specified type and saves them to the selected folder. It will also create an index.html file to browse the images. This can take some time to run.");
+  $report->option->choice("graph"     ,"      Graph type:",@graphTypes,@graphTypes[0]);
+  $report->option->choice("type"      ,"      Image Type:",["jpg","png","svg","vdx"],"jpg"); 
+  $report->option->directory("savedir","Save Directory:","");
+  $report->option->text("options"      ,"   Option String:","");
+  $report->option->label("optioninst", "The format of the options string is 'first option=value 1;second option=value 2'. The valid names and values are the same as appear in that graphs right click menu.
+
+Some example options string:
+  Layout=Crossing; name=Fullname;Level=All Levels
+  Display Preceding Comments=On;Display Entity Name=On");
+  #Options string for $ent->draw API command
+  
+}
+
+  our %fileNames;
+# Required - This is where the report is actually run
+# if this is called for an entity $ent is set to the Understand::Ent object 
+# if called for an architecture than $arch is an Understand::Arch object
+# it is also called once with $ent and $arch set to null if test_global returns 1
+sub generate {
+  my $report = shift;
+  my $ent    = shift;
+  my $arch   = shift;
+  %fileNames =();
+
+  my %graphics = ();
+  my @ents;
+  my $graph = $report->option->lookup("graph");
+	my @ents = $report->db->ents("~unknown ~unresolved");
+  
+ 
+  my $outputDir = $report->option->lookup("savedir");
+  $report->print("Saving graph images for entities to $outputDir\n");
+
+ my $count = 0;
+ my %skipKinds;
+ mkdir($outputDir);
+  foreach $ent (sort{
+    my $left = lc($a->longname());
+    my $right = lc($b->longname());
+
+    if ( $a->kind->check('file') ) {
+      $left = lc($a->name());
+    } 
+    
+    if ( $b->kind->check('file') ) {
+      $right = lc($b->name());
+    }
+    $left cmp $right;
+    
+    }@ents){
+    if ($abort_called){
+      $report->print("\n Aborted!\n\n");
+      return;
+    }
+    $count++;
+    next if $skipKinds{$ent->kind->longname};
+    next if $ent->library() eq "Standard";
+    my $percent = ceil(($count/@ents)*100);
+    
+    $report->progress($percent,"${percent}% Complete");
+   # $report->print($percent."% ".$ent->name." ".$ent->kindname()."\n");
+    my $filename = makeFileName($report,$ent);
+    my $option = $report->option->lookup("options");
+    RUNGRAPH: my $status = $ent->draw($graph,$outputDir."/".$filename,$option);
+    if ($status && $status =~ /unknown graph/i){
+      $skipKinds{$ent->kind->longname}=1;
+    }elsif ($status && $status =~ /unknown option/i){
+      $option = "";
+      $report->print("Ignoring Option String for ".$ent->kindname."s: ");
+      goto RUNGRAPH;
+    }elsif($status){
+      $report->print("Couldn't create graph for '".$ent->name."' - $status\n");
+    }else{
+      $report->print("Saving $graph graph for '".$ent->name."' to $filename\n");
+      $graphics{$ent->id()}{"ent"} = $ent;
+      $graphics{$ent->id()}{"filename"} = $filename;
+      $graphics{$ent->id()}{"graph"} = $graph;
+    }
+  }
+  $report->progress("100","100% Complete");
+  writeTOC($outputDir,%graphics);
+  
+  $report->print("\nFinished. You can view the graphs at $outputDir\\index.html\n\n"); #Make sure to end with a new line, or the last line may not display  
+  
+}
+
+
+
+
+sub makeFileName($){
+  my ($report,$ent) = @_;
+  my $printName;
+  my $ext = $report->option->lookup("type");
+  if ($ent->kind->check("file")){
+    $printName = $ent->name.".".$ext ;
+  }else{
+    my $defRef = $ent->ref("definein, declarein Body");
+    my $filename = $defRef->file->name if $defRef;
+    $printName = ($defRef?$filename."-":"").$ent->longname() .".". $ext;
+    
+  }
+  $printName =~ s/\:/\./g; #replace colons in names
+  $printName =~ s/\\/_/g; #replace slashes in names
+  $printName =~ s/\//_/g; #replace slashes in names
+    
+  # remember how many occurances of this name
+  $fileNames{$printName}++;
+
+  # recreate name with trailing _N if more than one match
+  if ( $fileNames{$printName} > 1) {
+    my $n = $fileNames{$printName} - 1;
+    $printName = $printName . "_" . $n .".". $ext;
+  }
+
+  return($printName);
+}
+
+sub writeTOC($$){
+   my ($dirname,%graphics) = @_;
+   my $slash = "/";
+   my ($name, $file);        # makes for easier reading of hash variables
+   
+   my $index = $dirname . $slash . "index.html";
+   my $startview = $dirname . $slash . "startview.html";
+   my $toc = $dirname . $slash . "toc.html";
+
+
+   open (INDEX, ">".$index) || die "Can't create index.html: $! \n";
+   print INDEX "<HTML><HEAD><TITLE>".$dirname."</TITLE>\n";
+   print INDEX "</HEAD>\n";
+   print INDEX "<FRAMESET COLS=\"20%,*\">\n";
+   print INDEX "<FRAME SRC=\"toc.html\" NAME=\"toc\">\n";
+   print INDEX "<FRAME SRC=\"startview.html\" NAME=\"view\">\n";
+   print INDEX "</FRAMESET>\n";
+   print INDEX "</HTML>\n";
+   close (INDEX);
+   
+   # create opening view
+   open (STARTVIEW, ">".$startview) || die "Can't create startview.html: $! \n";
+   print STARTVIEW " <HTML><HEAD></HEAD><BODY>\n";
+   print STARTVIEW "<BR><BR><BR>Select an entity view from the list to the left";
+   print STARTVIEW "</BODY></HTML>\n";
+   close (STARTVIEW);
+   
+   # now write out the table of contents doc
+   open (TOC, ">".$toc) || die "Can't create table of contents file: $! \n";
+   # write header of TOC file
+   print TOC "<HTML><HEAD><TITLE>Table of Contents</TITLE>\n</HEAD>\n<BODY>\n";
+   print TOC "<TABLE COLS=3>\n";
+   
+   # sorted by entity names and write to Table of Contents
+   foreach my $key (sort {
+    my $left = lc($graphics{$a}{"ent"}->longname());
+    my $right = lc($graphics{$b}{"ent"}->longname());
+
+    if ( $graphics{$a}{"ent"}->kind->check('file') ) {
+      $left = lc($graphics{$a}{"ent"}->name());
+    } 
+    
+    if ( $graphics{$b}{"ent"}->kind->check('file') ) {
+      $right = lc($graphics{$b}{"ent"}->name());
+    }
+    $left cmp $right;
+     } keys %graphics)
+   {
+       my $ent = $graphics{$key}{"ent"};
+       my $name = $ent->longname();
+	   if ( $ent->kind->check('file') ) {
+	       $name = $ent->name();
+       }
+       print TOC "<TR>";
+       print TOC "<TD COLSPAN=3>$name";
+       my $declRef = getDeclRef($ent);
+       if ($declRef) {
+      my $declFile = $declRef->ent()->relname();
+      if ($declFile) {
+          print TOC " (".$declFile.")";
+      }
+       }
+       else {
+      print "no declaration ref for $name\n";
+       }
+       print TOC "<TD></TR>\n";
+       my $file = $graphics{$key}{"filename"};
+       my $view = $graphics{$key}{"graph"};
+      print TOC "<TR><TD></TD><TD></TD><TD NOWRAP>";
+      print TOC "<A HREF=\"$file\" TARGET=view onClick=\'window.status=\"$view : $name \"; parent.document.title=\"$view : $name \"; return true;\'>$view";
+      print TOC "</TD></TR>\n";
+       #}
+   }
+
+   # close TOC file
+   print TOC "</TABLE>\n</BODY></HTML>";
+   close (TOC);
+
+   return($index);
+}
+
+# return declaration ref (based on language) or 0 if unknown
+sub getDeclRef{
+   my ($ent) =@_;
+   my @decl=();
+   return @decl unless defined ($ent);
+   my $language = $ent->language();
+   if ($language =~ /ada/i)
+   {
+      my @declOrder = ("declarein ~spec ~body ~instance ~formal ~incomplete ~private ~stub",
+                 "spec declarein",
+                 "body declarein",
+                 "instance declarein",
+                 "formal declarein",
+                 "incomplete declarein",
+                 "private declarein",
+                 "stub declarein");
+               
+      foreach my $type (@declOrder)
+      {
+         @decl = $ent->refs($type);
+         if (@decl) { last;  }
+      }
+   }
+   elsif ($language =~ /fortran/i)
+   {
+      @decl = $ent->refs("definein");
+      if (!@decl) {   @decl = $ent->refs("declarein");  }
+   }
+   else # C/C++
+   {
+      @decl = $ent->refs("definein");
+      if (!@decl) {   @decl = $ent->refs("declarein"); }
+   }
+   
+   if (@decl)
+   {   return $decl[0];   }
+   else
+   {   return 0;   }
+}
+
