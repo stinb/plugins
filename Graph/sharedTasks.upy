@@ -1,0 +1,264 @@
+import understand
+
+orange = '#e45721'
+green  = '#569f38'
+blue   = '#4e8cb9'
+purple = '#974eb9'
+gray   = '#777777'
+
+opacity = '55'
+
+refKinds = 'Modify, Set, Use'
+funKinds = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
+objKinds = 'Global Object'
+
+def name():
+    return 'Shared Tasks'
+
+def test_architecture(arch):
+    return True
+
+def init(graph, target):
+    # Options
+    graph.options().define('Filter modify/set only', ['On', 'Off'], 'Off')
+    graph.options().define('Filter use only', ['On', 'Off'], 'Off')
+    graph.options().define('Objects', ['All', 'Shared only'], 'All')
+    graph.options().define('Reference', ['All', 'Simple'], 'All')
+
+    # Legend
+    graph.legend().define('function', 'rectangle', 'Function', '', '', 0, 0)
+    graph.legend().define('object', 'ellipse', 'Object', '', gray, 1, 0)
+    graph.legend().define('sharedObject', 'ellipse', 'Shared Object', '', blue, 2, 0)
+
+    graph.legend().define('refCall', 'dashedarrow', 'Ref: Call', '', '', 0, 1)
+    graph.legend().define('refModify', 'arrow', 'Ref: Modify', orange, orange, 1, 1)
+    graph.legend().define('refSet', 'arrow', 'Ref: Set', green, green, 2, 1)
+    graph.legend().define('refUse', 'arrow', 'Ref: Use', blue, blue, 3, 1)
+    graph.legend().define('refMany', 'arrow', 'Ref: (Many)', purple, purple, 4, 1)
+
+def drawNode(graph, ent, **kwargs):
+    node = graph.node(ent.name(), ent)
+
+    if 'box' in kwargs and kwargs['box']:
+        node.set('shape', 'box')
+    if 'bold' in kwargs and kwargs['bold']:
+        node.set('penwidth', '5')
+    if 'color' in kwargs and kwargs['color']:
+        node.set('fillcolor', kwargs['color'])
+
+    return node
+
+def drawEdge(graph, head, tail, name, **kwargs):
+    edge = graph.edge(head, tail, name)
+
+    if 'color' in kwargs and kwargs['color']:
+        edge.set('color', kwargs['color'])
+    if 'dashed' in kwargs and kwargs['dashed']:
+        edge.set('style', 'dashed')
+
+    return edge
+
+def getEdgeInfo(visited, allFiltered, roots, root, incoming, outgoing, edgeInfo, fun, options):
+    # Base case: visiting a function again from the same root
+    funKey = str(root) + ' ' + str(fun)
+    if funKey in visited:
+        return allFiltered[fun]
+    visited.add(funKey)
+
+    # If this function wasn't ever visited before, assume it's not filtered
+    if fun not in allFiltered:
+        allFiltered[fun] = True
+
+    # References to global objects
+    for ref in fun.refs(refKinds, objKinds):
+        scope = root if options['simple'] else fun
+        ent = ref.ent()
+
+        edgeKey = str(scope) + ' ' + str(ent)
+
+        kindname = ref.kindname().split(' ').pop()
+
+        # Add to edge info
+        if edgeKey not in edgeInfo:
+            edgeInfo[edgeKey] = {
+                'root': scope in roots,
+                'scope': scope,
+                'ent': ent,
+                'kindnames': set(),
+                'from': set(),
+                'filtered': False,
+            }
+        edgeObj = edgeInfo[edgeKey]
+        edgeObj['kindnames'].add(kindname)
+        edgeObj['from'].add(root)
+
+        # Add to incoming node edges
+        if ent not in incoming:
+            incoming[ent] = set()
+        incoming[ent].add(edgeKey)
+
+        # Add to outgoing node edges
+        if scope not in outgoing:
+            outgoing[scope] = set()
+        outgoing[scope].add(edgeKey)
+
+    # Filter out object reference edges
+    if fun in outgoing:
+        for edgeKey in outgoing[fun]:
+            edgeObj = edgeInfo[edgeKey]
+
+            # See if the edge is filtered out based on options
+            kindnames = edgeObj['kindnames']
+            if len(kindnames) == 0:
+                continue
+            filtered = False
+            if len(kindnames) in {1, 2} and 'Use' not in kindnames and options['filterModifySetOnly']:
+                filtered = True
+            elif len(kindnames) == 1 and 'Use' in kindnames and options['filterUseOnly']:
+                filtered = True
+
+            # Filter out edges
+            if filtered:
+                edgeObj['filtered'] = True
+            else:
+                allFiltered[fun] = False
+
+    # Function calls
+    for call in fun.refs('Call', funKinds, True):
+        if not options['simple']:
+            scope = call.scope()
+            ent = call.ent()
+
+            edgeKey = str(scope) + ' ' + str(ent)
+
+            # Add to edge info
+            if edgeKey not in edgeInfo:
+                edgeInfo[edgeKey] = {
+                    'root': ent in roots,
+                    'scope': scope,
+                    'ent': ent,
+                    'kindnames': set(),
+                    'from': set(),
+                    'filtered': False,
+                }
+            edgeInfo[edgeKey]['from'].add(root)
+
+            # Add to incoming node edges
+            if ent not in incoming:
+                incoming[ent] = set()
+            incoming[ent].add(edgeKey)
+
+            # Add to outgoing node edges
+            if scope not in outgoing:
+                outgoing[scope] = set()
+            outgoing[scope].add(edgeKey)
+
+        filtered = getEdgeInfo(visited, allFiltered, roots, root, incoming, outgoing, edgeInfo, call.ent(), options)
+
+        if not filtered:
+            allFiltered[fun] = False
+
+    return allFiltered[fun]
+
+def draw(graph, target):
+    # Get options
+    options = {
+        'filterModifySetOnly': True if graph.options().lookup('Filter modify/set only') == 'On' else False,
+        'filterUseOnly': True if graph.options().lookup('Filter use only') == 'On' else False,
+        'sharedOnly': True if graph.options().lookup('Objects') == 'Shared only' else False,
+        'simple': True if graph.options().lookup('Reference') == 'Simple' else False,
+    }
+
+    # Get the refs going to each object
+    visited      = set()  # { funKey, ... }
+    allFiltered  = dict() # { fun: boolean, ... }
+    roots        = set()  # { ent, ... }
+    incoming     = dict() # { ent: set, ... }
+    outgoing     = dict() # { ent: set, ... }
+    edgeInfo     = dict() # { edgeKey: { 'root': boolean, 'scope': ent, 'ent': ent, 'kindnames': set, from: set, 'filtered': boolean }, ... }
+    rootEnts     = set()
+    for ent in target.ents(False):
+        if not ent.kind().check(funKinds):
+            continue
+        rootEnts.add(ent)
+    for ent in rootEnts:
+        roots.add(ent)
+    for ent in rootEnts:
+        getEdgeInfo(visited, allFiltered, roots, ent, incoming, outgoing, edgeInfo, ent, options)
+
+    # Filter out incoming function call edges
+    for edgeObj in edgeInfo.values():
+        fun = edgeObj['scope']
+        if not allFiltered[fun] or fun not in incoming:
+            continue
+        for edgeKey in incoming[fun]:
+            edgeObj = edgeInfo[edgeKey]
+            edgeObj['filtered'] = True
+
+    # Draw the graph
+    nodes = dict()
+    graph.set('rankdir', 'LR')
+    for edgeObj in edgeInfo.values():
+
+        # Draw or get head node
+        ent = edgeObj['scope']
+        if ent not in nodes:
+            # Style node
+            box = ent.kind().check(funKinds)
+            bold = edgeObj['root'] and box
+            color = None
+
+            # Draw and add
+            head = drawNode(graph, ent, box=box, bold=bold, color=color)
+            nodes[ent] = head
+        else:
+            head = nodes[ent]
+
+        # Draw or get tail node
+        ent = edgeObj['ent']
+        isFunction = ent.kind().check(funKinds)
+        if ent not in nodes:
+            # See how many root functions it is from
+            fromRoots         = set()
+            fromRootsFiltered = set()
+            edgeKeys = incoming[ent] if ent in incoming else set()
+            for edgeKey in edgeKeys:
+                info = edgeInfo[edgeKey]
+                if not info['filtered']:
+                    fromRootsFiltered.update(info['from'])
+                fromRoots.update(info['from'])
+            shared = len(fromRoots) > 1
+            if options['sharedOnly'] and not shared and not isFunction:
+                continue
+
+            # Style node
+            box = isFunction
+            bold = edgeObj['root'] and isFunction
+            color = None
+            if not isFunction:
+                color = gray + opacity
+                if len(fromRootsFiltered) > 1:
+                    color = blue + opacity
+
+            # Draw and add
+            tail = drawNode(graph, ent, box=box, bold=bold, color=color)
+            nodes[ent] = tail
+        else:
+            tail = nodes[ent]
+
+        # Style edge
+        kindnames = edgeObj['kindnames']
+        color = None
+        if len(kindnames) == 1:
+            if 'Modify' in kindnames:
+                color = orange
+            elif 'Set' in kindnames:
+                color = green
+            elif 'Use' in kindnames:
+                color = blue
+        elif len(kindnames) > 1:
+            color = purple
+        dashed = edgeObj['filtered']
+
+        # Draw edge
+        edge = drawEdge(graph, head, tail, '/'.join(kindnames), dashed=dashed, color=color)
