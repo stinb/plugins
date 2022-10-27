@@ -1,0 +1,554 @@
+# =====================================================
+import understand
+# =====================================================
+import sys
+import re
+import argparse
+import os
+import collections
+import time
+import threading
+import os, time
+import traceback
+import itertools
+# =====================================================
+# ===============================================================================
+# ===============================================================================
+sys.path.insert(0, '___D___')
+import architectureparser
+import pather
+# =====================================================
+# ===============================================================================
+# ===============================================================================
+aArchitectureParser = None
+aPather = None 
+architecturechoice = None
+wasComputed = False
+# =====================================================
+# ===============================================================================
+# ===============================================================================
+def name():
+	return "CRITICAL PATHS Graph"
+
+def test_global(db):
+	return True
+
+def test_entity(ent):
+	if ent == None: 
+		return False
+	return ent.kind().check("Function")
+
+def test_architecture(arch):
+	return False
+
+# ===============================================================================
+# ===============================================================================
+# ===============================================================================
+def init(graph):
+	# ============================================================
+	global aArchitectureParser
+	global architecturechoice
+	# ============================================================
+	#architectures = graph.db().arch_roots()
+	#org_architecturechoices = []
+	#org_architecturechoice = None
+	#for architecture in architectures:
+	#	org_architecturechoices.append(architecture.longname())
+	#	org_architecturechoice = architecture.longname()
+	#if org_architecturechoice != None:
+	#	graph.options().define("Aggregate By",org_architecturechoices,org_architecturechoice)    
+	# ============================================================
+	aArchitectureParser = architectureparser.ArchitectureParser(graph.db())
+	architecturechoices = []
+	architectures = aArchitectureParser.findArchitecturesWithName("[CRITICAL]")
+	for architecture in architectures:		
+		architecturechoices.append(architecture.longname())
+		architecturechoice = architecture.longname()
+	if architecturechoice != None:
+		graph.options().define("Scenario",architecturechoices,architecturechoice)    
+	# ============================================================
+	graph.options().define("Simplify Graph",["on","off"],"on") 
+	graph.options().define("Display Changed Path Only",["on","off(!)"],"on")     
+	graph.options().define("Orientation", ["Vertical","Horizontal"], "Horizontal") 
+	graph.options().define("Break By Change", ["change by change","independent","by start","by end","by start and end","break all paths(!)","off"], "off") 
+	graph.options().define("Group Start and End", ["on","off"], "on") 
+	graph.options().define("Performance Check (max path)", ["off","100","1000","10000","100000"], "1000") 
+# ===============================================================================
+	graph.legend().define("startnode","arrow","starting point","green","white",1,0)
+	graph.legend().define("endnode","arrow","end point","red","white",2,0)
+	graph.legend().define("mainnode","rectangle","Element w/o change","black","white",3,0)	
+	graph.legend().define("shortcut", "circle", "simplified path", "black", "#FFFFFF",4,0)
+	graph.legend().define("changednode","rectangle","changed element","blue","white",5,0)
+	graph.legend().define("highlightednode","circle","higlighted element","blue","white",6,0)
+	graph.legend().define("path","arrow","path","black","white",7,0)	
+# ===============================================================================
+# ===============================================================================
+
+# bug when grouping !!!!!
+# make every path separate if possible.
+
+def drawNode_TREE(graph,path_element,cache,cacheDraw,clusterstart,clusterend,group_start_and_end,highlight,highlight2,optionalstring = ""):
+	node = None
+	ent = path_element[0]
+	is_changed = path_element[1]
+	is_start = path_element[2]
+	is_end = path_element[3]
+	# if there is already a node for this one.
+	if ent.id() in cacheDraw: 
+		return cacheDraw[ent.id()]
+	# We are here only if there was NO CACHED VALUE
+	if group_start_and_end:
+		if is_start:
+			#node = graph.node(ent.name()+optionalstring,ent)
+			node = clusterstart.node(ent.name()+optionalstring,ent)
+		else:
+			if is_end:
+				#node = graph.node(ent.name()+optionalstring,ent)
+				node = clusterend.node(ent.name()+optionalstring,ent)
+			else:
+				node = graph.node(ent.name()+optionalstring,ent)
+	else:
+		node = graph.node(ent.name()+optionalstring,ent)
+	node.set("shape","rectangle")	
+	node_id = drawNode_TREE.current_node_id
+	drawNode_TREE.current_node_id = drawNode_TREE.current_node_id+1
+	if is_changed:		
+		dataset = cache[ent.id()]
+		node.sync(dataset["AFTER_Entity"],dataset["BEFORE_Entity"]) 			
+		node.set("penwidth","4")
+		node.set("color","blue")
+		node.set("fontcolor","black")
+	else:
+		if is_start:
+			node.set("shape","cds")	
+			node.set("penwidth","4")
+			node.set("color","green")
+			node.set("fontcolor","black") 
+		if is_end:
+			node.set("shape","cds")	
+			node.set("penwidth","4")
+			node.set("color","red")
+			node.set("fontcolor","black")
+	if highlight:
+		if ent.id() in highlight:
+			node.set("penwidth","4")
+			node.set("shape","Mcircle")
+	if highlight2:
+		if ent.id() in highlight2:
+			node.set("penwidth","4")
+			node.set("shape","Msquare")
+			node.set("color","black")
+			node.set("fontcolor","black")
+	cacheDraw[ent.id()] = [node,node_id]
+	return [node,node_id]		
+# attribute to function (to store the "..." node if exists)
+# THIS IS NOT the previous node [Node,ID] as in the "last drawn one"
+drawNode_TREE.current_node_id = 0
+
+# graphDataSet_TREE: Display the dataset from list of tree.
+# return a [node,wasItAJump]
+def graphDataSet_TREE_resursive(graph,cache,node,cacheDraw,edgecache,pipeline,clusterstart,clusterend,group_start_and_end,highlight,highlight2):
+	if node:
+		if (len(node[1]) == 1) and (len(node[2]) == 1) and (not (node[0][1])): #only one children and only 1 parent and NOT changed!, we pass... 
+			pipeline[node[0][0].id()] = None
+			local_pipeline = pipeline.copy()
+			result = graphDataSet_TREE_resursive(graph,cache,node[1][0],cacheDraw,edgecache,local_pipeline,clusterstart,clusterend,group_start_and_end,highlight,highlight2)
+			return [result[0],True]
+		else:
+			c_node = drawNode_TREE(graph,node[0],cache,cacheDraw,clusterstart,clusterend,group_start_and_end,highlight,highlight2)
+			if c_node:
+				if (node[0][0].id()) in pipeline: # we stop in case we meet again the same entity.
+					return [c_node,False]
+				pipeline[node[0][0].id()] = None # we flag as seen... 
+				for child in node[1]:
+					local_pipeline = pipeline.copy()
+					result = graphDataSet_TREE_resursive(graph,cache,child,cacheDraw,edgecache,local_pipeline,clusterstart,clusterend,group_start_and_end,highlight,highlight2)
+					n_node = result[0]
+					if n_node:
+						KEY = str(c_node[1])+"-"+str(n_node[1])
+						if not KEY in edgecache: # we prevent edge to be shown 2 times.
+							if result[1]: # that was a jump , and it's not a change !!!
+								nodeDDD = graph.node("...")
+								nodeDDD.set("shape","circle")								
+								edge = graph.edge(c_node[0], nodeDDD)
+								edge.set("arrowhead","box")
+								edge.set("color","black")
+								edge2 = graph.edge(nodeDDD, n_node[0])
+							else:
+								edge = graph.edge(c_node[0], n_node[0])
+								edge.set("color","black")
+							edgecache[KEY] = None	# Flag as added already								
+				return [c_node,False]
+			else:
+				return [None,False]
+	else:
+		return [None,False]
+
+def graphDataSet_TREE(graph,cache,result,cacheDraw,group_start_and_end,highlight,highlight2):
+	####################################################################
+	# A Tree is a [[START1,children1],[START2,children2],....]
+  # Where START is the [A0,B0,C0,D0] from paths.
+  # A(0):ent B(1):isChange C(2):isStart D(3):isEnd
+  # The children are a [] or [[NODE1,children1],[NODE2,children2],....]
+  # where NODE is the [A0,B0,C0,D0] for that node.	
+	# We need to prevent for infinite loop, by keeping a pipeline for each leg...
+	if not result:
+		return
+	####################################################################
+	edgecache = {}
+	####################################################################
+	clusterstart = graph.cluster("START")
+	clusterstart.set("rank","same")
+	clusterstart.set("color","green")
+	clusterstart.set("penwidth","4")
+	clusterend = graph.cluster("END")
+	clusterend.set("color","red")
+	clusterend.set("rank","same")
+	clusterend.set("penwidth","4")
+	clusterall = graph
+	clusterall.set("rank","same")
+	####################################################################	
+	for start in result:
+		pipeline = {}
+		graphDataSet_TREE_resursive(clusterall,cache,start,cacheDraw,edgecache,pipeline,clusterstart,clusterend,group_start_and_end,highlight,highlight2)
+
+# path_element[ent,isChanged,isStart,isEnd]
+# CacheDraw contains [Node,NodeID]
+def drawNode_LIST(graph,path_element,cache,cacheDraw,clusterstart,clusterend,group_start_and_end,highlight,highlight2):
+	node = None
+	ent = path_element[0]
+	is_changed = path_element[1]
+	is_start = path_element[2]
+	is_end = path_element[3]
+	# if there is already a node for this one.
+	if ent.id() in cacheDraw: 
+		return cacheDraw[ent.id()]
+	# We are here only if there was NO CACHED VALUE
+	if group_start_and_end:
+		if is_start:
+			node = clusterstart.node(ent.name(),ent)
+		else:
+			if is_end:
+				node = clusterend.node(ent.name(),ent)
+			else:
+				node = graph.node(ent.name(),ent)
+	else:
+		node = graph.node(ent.name(),ent)
+	node.set("shape","rectangle")	
+	node_id = drawNode_LIST.current_node_id
+	drawNode_LIST.current_node_id = drawNode_LIST.current_node_id+1
+	if is_changed:		
+		dataset = cache[ent.id()]
+		node.sync(dataset["AFTER_Entity"],dataset["BEFORE_Entity"]) 			
+		node.set("penwidth","4")
+		node.set("color","blue")
+		node.set("fontcolor","black")
+	else:
+		if is_start:
+			node.set("shape","cds")	
+			node.set("penwidth","4")
+			node.set("color","green")
+			node.set("fontcolor","black") 
+		if is_end:
+			node.set("shape","cds")	
+			node.set("penwidth","4")
+			node.set("color","red")
+			node.set("fontcolor","black")
+	if highlight:
+		if ent.id() in highlight:
+			node.set("penwidth","4")
+			node.set("shape","Mcircle")
+	if highlight2:
+		if ent.id() in highlight2:
+			node.set("penwidth","4")
+			node.set("shape","Msquare")
+			node.set("color","black")
+			node.set("fontcolor","black")
+	cacheDraw[ent.id()] = [node,node_id]
+	return [node,node_id]		
+# attribute to function (to store the "..." node if exists)
+# THIS IS NOT the previous node [Node,ID] as in the "last drawn one"
+drawNode_LIST.current_node_id = 0
+
+# graphDataSet_LIST: Display the dataset from list of path.
+# cache: cache from the comparison object {ent.id}->dataset
+# result: [] of [] where each [] is a path of [entity,changed?]
+# cacheDraw is a {} by {ent.id}->node if exists already.
+def graphDataSet_LIST(graph,cache,result,cacheDraw,group_start_and_end,highlight,highlight2):
+	####################################################################        
+	if not result:
+		return
+	####################################################################
+	edgecache = {}
+	####################################################################
+	clusterstart = graph.cluster("START")
+	clusterstart.set("rank","same")
+	clusterstart.set("color","green")
+	clusterstart.set("penwidth","4")
+	clusterend = graph.cluster("END")
+	clusterend.set("color","red")
+	clusterend.set("rank","same")
+	clusterend.set("penwidth","4")
+	clusterall = graph
+	clusterall.set("rank","same")
+	####################################################################
+	# We first add all the beginning and end! to avoid them being in "..."
+	for path in result:
+		if len(path) >= 2: # We don't show lonely one, i.e. only starts one.
+			lastindex = len(path)
+			c_node = drawNode_LIST(clusterall,path[0],cache,cacheDraw,clusterstart,clusterend,group_start_and_end,highlight,highlight2)
+			for index in range(1,lastindex):
+				# on the last one, we force it to be displayed!!!
+				n_node = drawNode_LIST(clusterall,path[index],cache,cacheDraw,clusterstart,clusterend,group_start_and_end,highlight,highlight2)
+				KEY = str(c_node[1])+"-"+str(n_node[1])
+				if not KEY in edgecache: # we prevent edge to be shown 2 times.
+					# we show an edge if both are not ...
+					edge = clusterall.edge(c_node[0], n_node[0])
+					edgecache[KEY] = None	# Flag as added already					
+				c_node = n_node
+
+def draw(graph, target):
+	global aArchitectureParser
+	global aPather
+	global architecturechoice
+	global wasComputed
+	try:	
+		# =====================================================     
+		# Will we only show for one function !!! 
+		isTargeted = (target != None) and (not isinstance(target,understand.Db))
+		highlight2 = None
+		if (isTargeted):
+			highlight2 = [target.id()]
+		# =====================================================        
+		if (graph.options().lookup("Orientation") == "Horizontal"):
+			graph.set("rankdir","LR")
+		else:
+			graph.set("rankdir","TB")
+		# =====================================================
+		if aPather == None:
+			aPather = pather.Pather(graph.db())
+			wasComputed = False
+		# =====================================================
+		new_architecturechoice = graph.options().lookup("Scenario")
+		forceCompute = True
+		if (new_architecturechoice == architecturechoice):
+			if (wasComputed):
+				forceCompute = False
+		# =====================================================
+		architecturechoice = new_architecturechoice
+		# =====================================================
+		if forceCompute:
+			from_ents = []			
+			archFromName = architecturechoice+"/from"
+			archFrom = graph.db().lookup_arch(archFromName)
+			graph.cluster(archFrom.longname(),archFrom)
+			FromResult = aArchitectureParser.createListOfObjectFromDescriptionArchitecture(archFrom)
+			for x in FromResult:
+				from_ents.append(FromResult[x][0])
+			to_ents = []
+			archToName = architecturechoice+"/to"
+			archTo = graph.db().lookup_arch(archToName)
+			ToResult = aArchitectureParser.createListOfObjectFromDescriptionArchitecture(archTo)
+			for x in ToResult:
+				to_ents.append(ToResult[x][0])
+			aPather.computePaths(from_ents,to_ents)
+			wasComputed = True
+		# =====================================================
+		change_only = (graph.options().lookup("Display Changed Path Only") == "on")
+		break_by_change = not (graph.options().lookup("Break By Change") == "off")
+		break_by_independent_group = (graph.options().lookup("Break By Change") == "independent")
+		break_1_by_1 = (graph.options().lookup("Break By Change") == "change by change")
+		break_by_start = (graph.options().lookup("Break By Change") == "by start")
+		break_by_end = (graph.options().lookup("Break By Change") == "by end")
+		break_by_start_and_end = (graph.options().lookup("Break By Change") == "by start and end")
+		break_all = (graph.options().lookup("Break By Change") == "break all paths(!)")
+		group_start_and_end = (graph.options().lookup("Group Start and End") == "on")
+		performance_check = graph.options().lookup("Performance Check (max path)")
+		# =====================================================
+		result = None
+		if change_only:
+			result = aPather.getChangedPaths()
+		else:
+			result = aPather.getAllPaths()
+		graph.legend().set("path","description","path ("+str(len(result))+")")
+		# =====================================================
+		# If we have targets, we only show the one that are including the targets, and remove possible problematic options... 
+		if (highlight2 != None) and (result != None):
+			# =====================================================================
+			if break_by_independent_group or break_1_by_1:
+				break_by_independent_group = False
+				break_1_by_1 = False
+				break_by_change = False
+			# =====================================================================
+			newresult = []
+			for path in result:
+				for item in path:
+					if item[0].id() in highlight2:
+						newresult.append(path)
+						break
+			graph.legend().set("path","description","path ("+str(len(newresult))+"/"+str(len(result))+")")
+			result = newresult		
+		# =====================================================
+		if len(result) == 0:
+			errorString = "It appears that there is no paths where changed happened in this scenario '"+architecturechoice+"'. Try to change scenario in graph option menu by right clicking on it.\n\nFROM function(s):\n"
+			for element in FromResult:
+				errorString = errorString + FromResult[element][0].name() + "(" + FromResult[element][1] + ")\n"
+			errorString = errorString + "\nTO function(s):\n"
+			for element in ToResult:
+				errorString = errorString + ToResult[element][0].name() + "(" + ToResult[element][1] + ")\n"
+			node = graph.node(errorString)
+			node.set("shape","rectangle")	
+			node.set("penwidth","4")
+			node.set("color","red")
+			node.set("fontcolor","black") 
+		else:
+			if (performance_check != "off"):
+				maxpath = int(performance_check)
+				if (len(result) > maxpath):
+					node = graph.node("Performance Warning. This graph will display "+str(len(result))+" paths. The max allowed is "+performance_check+". Change the options in 'Performance Check' to 'off' or a higher threshold to display graph.")
+					node.set("shape","rectangle")	
+					node.set("penwidth","4")
+					node.set("color","red")
+					node.set("fontcolor","black") 
+					return
+			# =====================================================
+			simplify_graph = (graph.options().lookup("Simplify Graph") == "on")
+			# =====================================================
+			# A(0):ent B(1):isChange C(2):isStart D(3):isEnd
+			if break_by_change:		
+				broken_graphs = {}
+				id_to_brokenGraph = {}
+				id_to_string = {}
+				highlighted_entities = {}
+				# =============================================================================
+				if break_all:		
+					id = 1
+					for path in result:						
+						broken_graphs[id] = [path]
+						highlighted_entities[id] = []
+						id_to_string[id] = "PATH #"+str(id)
+						id = id + 1
+				# =============================================================================
+				if break_by_independent_group: # Create Independent Group
+					# We create a list of groups, where each index contains an array the ones that are linked to us (including ourselves)
+					# making sure to keep them updated as we find them... 
+					groups = {}				
+					for path in result: 
+						listOfBuddies = []
+						for item in path:
+							if item[1]:							
+								listOfBuddies.append(item[0].id())
+						listOfBuddies = list(dict.fromkeys(listOfBuddies)) # remove duplicate
+						newlistOfBuddies = listOfBuddies
+						for buddy in listOfBuddies:
+							if buddy in groups:
+								newlistOfBuddies = newlistOfBuddies + groups[buddy]
+						newlistOfBuddies = list(dict.fromkeys(newlistOfBuddies)) # remove duplicate					
+						for buddy in newlistOfBuddies: 						
+							groups[buddy] = newlistOfBuddies
+					# We need to make a list after eliminating duplicates
+					listofGroups = []
+					for index in groups:
+						listofGroups.append(groups[index])
+					listofGroups.sort()
+					listofGroups = list(l for l, _ in itertools.groupby(listofGroups))
+					# =============================================================================
+					for group in listofGroups:
+						if len(group)>0:
+							group_id = group[0]
+							broken_graphs[group_id] = []						
+							id_to_string[group_id] = ""
+							highlighted_entities[group_id] = []
+							for ID in group:
+								id_to_brokenGraph[ID] = broken_graphs[group_id]
+								highlighted_entities[group_id].append(ID)
+								id_to_string[group_id] = id_to_string[group_id] + graph.db().ent_from_id(ID).longname() + " "
+					for path in result: 
+						for item in path:
+							if item[1]:							
+								id_to_brokenGraph[item[0].id()].append(path)
+								break
+				# =============================================================================
+				if break_1_by_1: # We show a graph for each changed entity (ALL PATH LINKED TO ONE CHANGE ENTITY)
+					for path in result:
+						for item in path:
+							if item[1]:
+								if not item[0].id() in broken_graphs:
+									broken_graphs[item[0].id()] = [path]
+									highlighted_entities[item[0].id()] = [item[0].id()]
+									id_to_string[item[0].id()] = item[0].longname()
+								else:
+									broken_graphs[item[0].id()].append(path)
+				# =============================================================================
+				if break_by_start:
+					for path in result:
+						if not path[0][0].id() in broken_graphs:
+							broken_graphs[path[0][0].id()] = [path]
+							highlighted_entities[path[0][0].id()] = [path[0][0].id()]
+							id_to_string[path[0][0].id()] = path[0][0].longname()
+						else:
+							broken_graphs[path[0][0].id()].append(path)
+				# =============================================================================
+				if break_by_end:
+					for path in result:
+						lastindex = len(path)-1
+						if not path[lastindex][0].id() in broken_graphs:
+							broken_graphs[path[lastindex][0].id()] = [path]
+							highlighted_entities[path[lastindex][0].id()] = [path[lastindex][0].id()]
+							id_to_string[path[lastindex][0].id()] = path[lastindex][0].longname()
+						else:
+							broken_graphs[path[lastindex][0].id()].append(path)
+				# =============================================================================
+				if break_by_start_and_end:
+					KEYS = {}
+					for path in result:
+						if len(path)>2:
+							lastindex = len(path)-1
+							aKey = str(path[0][0].id()) + "-" + str(path[lastindex][0].id())
+							id_to_string[aKey] = str(path[0][0].longname()) + " -> " + str(path[lastindex][0].longname())
+							if not aKey in broken_graphs:
+								broken_graphs[aKey] = []
+								highlighted_entities[aKey] = [path[0][0].id(),path[lastindex][0].id()]
+							broken_graphs[aKey].append(path)
+				# =============================================================================
+				for broken_graph_index in broken_graphs:
+					if simplify_graph: # we simplify in case it's simplifying
+						# =====================================================
+						cluster_graph = graph.cluster(id_to_string[broken_graph_index])
+						tree_result = aPather.convertPathsToTree(broken_graphs[broken_graph_index])
+						highlight = highlighted_entities[broken_graph_index]
+						cacheDraw = {}
+						drawNode_TREE.current_node_id = 0
+						graphDataSet_TREE(cluster_graph,aPather.comparisonLoader.cache,tree_result,cacheDraw,group_start_and_end,highlight,highlight2)
+					else:
+						# =====================================================
+						cluster_graph = graph.cluster(id_to_string[broken_graph_index])
+						highlight = highlighted_entities[broken_graph_index]
+						cacheDraw = {}
+						drawNode_LIST.current_node_id = 0
+						graphDataSet_LIST(cluster_graph,aPather.comparisonLoader.cache,broken_graphs[broken_graph_index],cacheDraw,group_start_and_end,highlight,highlight2)
+						# =====================================================   			
+			else: # Normal Drawing, no splitting in multiple
+				if simplify_graph: # we simplify in case it's simplifying
+					# =====================================================
+					tree_result = aPather.convertPathsToTree(result)
+					cacheDraw = {}
+					drawNode_TREE.current_node_id = 0
+					graphDataSet_TREE(graph,aPather.comparisonLoader.cache,tree_result,cacheDraw,group_start_and_end,None,highlight2)
+				else:
+					# =====================================================
+					cacheDraw = {}
+					drawNode_LIST.current_node_id = 0
+					graphDataSet_LIST(graph,aPather.comparisonLoader.cache,result,cacheDraw,group_start_and_end,None,highlight2)
+					# =====================================================   
+	# Handling Exception
+	except understand.UnderstandError as err:
+		node = graph.node(traceback.format_exc())
+		node.set("shape","rectangle")
+		print(traceback.format_exc())
+		print(f"Understand Error {err=}")
+	except BaseException as err:
+		node = graph.node(traceback.format_exc())
+		node.set("shape","rectangle")
+		print(traceback.format_exc())
+		print(f"Unexpected Error {err=}")      
