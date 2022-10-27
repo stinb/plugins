@@ -1,0 +1,341 @@
+# The original Butterfly graph plugin. This plugin has been replaced with a
+# Python version.
+
+our $forward;
+our $inverse;
+our $forwardRel;
+our $inverseRel;
+our $result;
+
+use base ("Understand::Graph::Gv");
+use strict;
+
+
+sub name { return "Butterfly"; }
+
+sub style { return "Perl Classic"; }
+
+
+sub test_entity {
+    my $entity = shift;
+
+  if ($entity->kind->check("ada entry, ada function, ada package, ada procedure, ada protected, ada task,"
+    ."assembly label,"
+    ."basic method,"
+    ."c function,"
+    ."cobol program,"
+    ."csharp method,"
+    ."fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+    ."java method,"
+    ."jovial file, jovial subroutine,"
+    ."pascal compunit, pascal function, pascal procedure,"
+    ."php function,"
+	."python function,"
+    ."vhdl procedure, vhdl function, vhdl process, vhdl architecture")) {
+    $forward = "Calls";
+    $forwardRel = "ada call ~dispatch,"
+	."ada with,"
+    ."assembly call,"
+    ."basic call ~virtual, basic use ptr,"
+    ."c call ~virtual, c use ptr,"
+    ."cobol call,"
+    ."csharp call ~virtual, csharp use ptr,"
+    ."fortran call,"
+    ."java call,"
+    ."jovial call, jovial asm use,"
+    ."pascal call ~virtual,"
+    ."php call,"
+	."python call,"
+    ."vhdl call";
+    $inverse = "Called By";
+    $inverseRel = "ada callby,"
+	."ada withby,"
+    ."assembly callby,"
+    ."basic callby, basic useby ptr,"
+    ."c callby ~inactive, c useby ptr,"
+    ."cobol callby,"
+    ."csharp callby, csharp useby ptr,"
+    ."fortran callby,"
+    ."java callby,"
+    ."jovial callby, jovial asm useby,"
+    ."pascal callby,"
+    ."php callby,"
+	."python callby,"
+    ."vhdl callby";
+    $result  = 1;
+  } elsif ($entity->kind->check("basic class, basic struct,csharp class, csharp struct,c class, c struct, c union")) {
+    $forward = "Derived Classes";
+    $forwardRel ="derive";
+    $inverse = "Base Classes";
+    $inverseRel="base";
+    $result  = 1;
+  } elsif ($entity->kind->check("pascal class, pascal interface,java class ~anonymous, java interface")) {
+    $forward = "Extended By";
+    $forwardRel ="derive,extendby ~implicit";
+    $inverse = "Extends";
+    $inverseRel="derivefrom,extend ~implicit";
+    $result  = 1;
+  } elsif ($entity->kind->check("ada type")) {
+    $forward = "Type";
+    $forwardRel ="derive";
+    $inverse = "Type Derived From";
+    $inverseRel="derivefrom";
+    $result  = 1;
+  } elsif ($entity->kind->check("c file, fortran file, pascal file")) {
+    $forward = "Include";
+    $forwardRel = "include ~inactive";
+    $inverse = "Includeby";
+    $inverseRel= "includeby ~inactive";
+    $result = 1;
+  } elsif ($entity->kind->check("vhdl entity,vhdl architecture,vhdl package,vhdl configuration")) {
+    $forward = "Use";
+    $forwardRel = "vhdl use name";
+    $inverse = "Useby";
+    $inverseRel= "vhdl useby name";
+    $result = 1;
+  } elsif ($entity->kind->check("cobol paragraph, cobol section")) {
+    $forward = "Perform";
+    $forwardRel = "cobol perform,cobol goto";
+    $inverse = "Perform By";
+    $inverseRel = "cobol performby,cobol gotoby";
+    $result = 1;
+  } else {
+    $result  = -1;
+  }
+
+  return $result;
+}
+
+
+sub test_global { return -1; }
+
+
+sub init {
+  my $graph = shift;
+
+  $graph->options->define("$forward Depth",[ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" ], "3");
+  $graph->options->define("$inverse Depth",[ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" ], "3");
+  $graph->options->define("Name", ["Shortname", "Fullname", "None (Overview Mode)"], "Shortname");
+  $graph->options->define("Filename",["None","Shortname","Fullname","Relative"],"None");
+  $graph->options->define("Unresolved",["Off","On"],"On");
+  $graph->options->define("Random Edge Color",["Off","On"],"Off");
+  $graph->options->define("Virtual Calls",["Off","On"],"Off") if $forward eq "Calls";
+  $graph->options->define("Intrinsic",["Off","On"],"On");
+
+}
+
+
+sub do_load {
+  my $graph  = shift;
+  my $entity = shift;
+
+  $graph->default("rankdir","LR","graph");
+  $graph->default("color","#90c4e4","node");
+  $graph->default("shape","box","node");
+  $graph->default("color","#4e8cb9","edge");
+
+  # create start node
+  my %nodes = ();
+  my $start = get_node(\%nodes,$graph,$entity,1);
+  my %save_nodes = %nodes;
+  $start->set("fillcolor","#1976d2");
+  $start->set("fontcolor","white");
+
+  # draw forward relations
+  draw_tree($graph,$entity,\%nodes,0,$forward,$forwardRel,1);
+
+  # draw inverse relations
+  %nodes = %save_nodes;
+  draw_tree($graph,$entity,\%nodes,0,$inverse,$inverseRel,0);
+}
+
+
+sub get_node {
+  my $nodes = shift;
+  my $graph = shift;
+  my $ent = shift;
+  my $create = shift;
+
+  # build id
+  my $id = $ent->id();
+
+  # return existing node
+  return $$nodes{$id} if exists($$nodes{$id});
+
+  # don't create new node
+  return 0 if !$create;
+
+  # build label
+  my $label = " ";
+  if ($graph->options->lookup("Name") eq "Fullname") {
+    $label = $ent->longname;
+  } elsif ($graph->options->lookup("Name") eq "Shortname") {
+    $label = $ent->name;
+  }
+
+  my $filenameopt = $graph->options->lookup("File Name");
+  my $deffile = $ent->ref("definein,declarein");
+
+  if ($deffile && $filenameopt ne "None" && ! $ent->kind->check("file")) {
+    $label .= "\n".$deffile->file->name if $filenameopt eq "Shortname";
+    $label .= "\n".$deffile ->file->longname if $filenameopt eq "Fullname";
+    $label .= "\n".$deffile->file->relname if $filenameopt eq "Relative";
+  }
+$label =~ s/\\/\\\\/g;
+
+  # build node
+  my $node = $graph->node($ent,$label);
+  $$nodes{$id} = $node;
+
+  # set attributes
+  if ($ent->kind->check("unresolved,unknown,undefined")) {
+    $node->set("shape","octagon");
+    $node->set("color","gray");
+  }
+
+  return $node;
+}
+
+
+sub get_virtual_node {
+  my $nodes = shift;
+  my $graph = shift;
+  my $ent = shift;
+  my $create = shift;
+
+  # build id
+  my $id = "v". $ent->id();
+
+  # return existing node
+  return $$nodes{$id} if exists($$nodes{$id});
+
+  # don't create new node
+  return 0 if !$create;
+
+  # build label
+  my $label = "Virtual";
+
+  # build node
+  my $node = $graph->node($ent,$label);
+  $$nodes{$id} = $node;
+
+  # set attributes
+  $node->set("shape","plaintext");
+  $node->set("style","bold");
+
+  return $node;
+}
+
+
+sub new_edge {
+  my $graph = shift;
+  my $start = shift;
+  my $end = shift;
+  my $dir = shift;
+
+  my $edge = $dir? $graph->edge($start,$end) : $graph->edge($end,$start);
+  if ($graph->options->lookup("Random Edge Color") eq "On") {
+    $edge->set("color",randomColor());
+  }
+
+  return $edge;
+}
+
+
+sub draw_tree {
+  my $graph    = shift;
+  my $ent      = shift;
+  my $nodes    = shift;
+  my $depth    = shift;
+  my $type     = shift;
+  my $typelist = shift;
+  my $dir      = shift;
+
+  # don't draw some entities
+  return 0 if $depth > $graph->options->lookup($type . " Depth");
+  return 0 if $graph->options->lookup("Unresolved") eq "Off" && $ent->kind->check("unresolved,unknown,undefined");
+  return 0 if $graph->options->lookup("Intrinsic Functions") eq "Off" && $ent->kind->check("intrinsic");
+
+  # lookup existing node
+  my $start = get_node($nodes,$graph,$ent,0);
+  return $start if $start && $depth > 0;
+
+  # create node
+  $start = get_node($nodes,$graph,$ent,1) if !$start;
+
+  # build list of main refs to follow
+  my @refs = $ent->refs($typelist,"",1);
+
+  # add refs from cobol child paragraphs and parent sections
+  if ($ent->kind->check("cobol section")) {
+    foreach my $paragraph ($ent->ents("define","paragraph")) {
+      push @refs, $paragraph->refs($typelist,"",1);
+    }
+  } elsif ($ent->kind->check("cobol paragraph")) {
+    foreach my $section ($ent->ents("definein","section")) {
+      push @refs, $section->refs($typelist,"",1);
+    }
+  }
+
+  # process refs
+  my %children;
+  foreach my $childRef (sort{$a->line <=> $b->line;} @refs) {
+    my $child = $childRef->ent;
+    my $node = draw_tree($graph,$child,$nodes,$depth+1,$type,$typelist,$dir);
+    if ($node && !exists($children{$node})) {
+      new_edge($graph,$start,$node,$dir);
+      $children{$node} = 1;
+    }
+  }
+
+  # handle virtual calls
+  if ($graph->options->lookup("Virtual Calls") eq "On" && $dir) {
+    my @virtuals = $ent->refs("java call, call virtual","function, method",1);
+    if (@virtuals) {
+      my $virNode = get_virtual_node($nodes,$graph,$ent,1);
+      my $edge = new_edge($graph,$start,$virNode,$dir);
+      my @virtEnts = @virtuals;
+      foreach my $childRef (@virtuals) {
+        foreach my $orRef ($childRef->ent->refs("overriddenby,overrideby","",1)) {
+          push @virtEnts, $orRef;
+        }
+      }
+      foreach my $childRef (@virtEnts) {
+        my $child = $childRef->ent;
+        my $child_node = draw_tree($graph,$child,$nodes,$depth+1,$type,$typelist,$dir);
+        new_edge($graph,$virNode,$child_node,$dir) if $child_node;
+      }
+    }
+  }
+
+  # handle virtual callbys
+  if ($graph->options->lookup("Virtual Calls") eq "On" && !$dir) {
+    my @virtEnts;
+    foreach my $orRef ($ent->refs("overrides,override","",1)) {
+      my @virtuals = $orRef->ent->refs("java callby,callby virtual","function, method",1);
+      push(@virtEnts,@virtuals);
+    }
+    if (@virtEnts) {
+      my $virNode = get_virtual_node($nodes,$graph,$ent,1);
+      my $edge = new_edge($graph,$start,$virNode,$dir);
+      foreach my $childRef (@virtEnts) {
+        my $child = $childRef->ent;
+        my $child_node = draw_tree($graph,$child,$nodes,$depth+1,$type,$typelist,$dir);
+        new_edge($graph,$virNode,$child_node,$dir) if $child_node;
+      }
+    }
+  }
+
+  return $start;
+}
+
+
+sub randomColor{
+  my @bgc=('','','');
+  foreach my $c (@bgc){
+    my $r=int(rand(180));
+    $c=sprintf("%X",$r);
+  }
+  my $color = join("",@bgc);
+  return "#".$color;
+}

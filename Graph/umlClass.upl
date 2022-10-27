@@ -1,0 +1,306 @@
+#
+# options
+#
+
+my $debug = 0;
+my $debugFile = 'd:\temp\uml_debug.log';
+
+my $filter = "";
+my %drawn;
+
+
+#
+# globals
+#
+
+my $kind =
+  "class ~unknown ~unresolved,".
+  "typedef ~unknown ~unresolved,".
+  "struct ~unknown ~unresolved,".
+  "ada type ~unknown ~unresolved";
+
+
+#
+# overrides
+#
+
+use base ("Understand::Graph::Gv");
+use strict;
+
+sub name { return "UML Class Diagram"; }
+
+sub test_entity {
+  my $entity = shift;
+  return 1 if $entity->kind()->check($kind);
+  return 1 if $entity->kind()->check("file ~unknown ~unresolved");
+  return 1 if $entity->kind()->check("python package ~unknown");
+  return -1;
+}
+
+sub test_global { return 1; }
+
+sub init {
+  my $graph = shift;
+
+  $graph->options->define("Show Solo Classes",["Off","On"],"On");
+  $graph->options->define("Show Class Details",["Off","On"],"On");
+  $graph->options->define("Show Related Classes",["Off","On"],"On");
+  $graph->options->define("Include Standard Libraries",["Off","On"],"On");
+  $graph->options->define("Random Edge Color",["On","Off"],"Off");
+  $graph->options->define("Layout",["Horizontal","Vertical"],"Horizontal");
+}
+
+sub do_load {
+  my $graph = shift;
+  my $entity = shift;
+  my $isFile = 1 if $entity && $entity->kind()->check("file");
+  my @ents;
+  %drawn =();
+
+  if ($debug) {
+    open (FILE,">$debugFile") || die "Couldn't open debug file";
+    print FILE "starting\n";
+    print FILE "Show Solo Classes  - ". $graph->options->lookup("Show Solo Classes")."\n";
+    print FILE "Show Class Details - ".  $graph->options->lookup("Show Class Details")."\n";
+    print FILE "Show Related Classes - ".  $graph->options->lookup("Show Related Classes")."\n";
+    close FILE;
+  }
+
+
+  if ($isFile) {
+    my @refs = $entity->filerefs("define,body declare",$kind,1);
+    @ents = map{$_->ent} @refs;
+    printDebug(@ents." entities in file");
+  } elsif ($entity && $entity->kind()->check("python package")) {
+    foreach my $fileent ( $entity->ents("python contain") ) {
+      my @refs = $fileent->filerefs("define,body declare",$kind,1);
+      push @ents, map{$_->ent} @refs;
+    }
+    printDebug(@ents." entities in python package");
+  } elsif ($entity) {
+    @ents = ($entity);
+    printDebug(@ents." entities selected");
+  } else {
+    @ents = $graph->db->ents($kind);
+    @ents = grep {$_->longname !~ /$filter/i} @ents if $filter;
+    printDebug(@ents." project entities");
+  }
+
+
+
+  if ($graph->options->lookup("Layout") eq "Vertical"){
+    $graph->default("rankdir","RL","graph");
+  }else{
+    $graph->default("rankdir","BT","graph");
+  }
+  $graph->default("concentrate","true","graph");
+  $graph->default("color","blue","node");
+  $graph->default("shape","polygon","node");
+  $graph->default("sides","4","node");
+  $graph->default("fontcolor","black","node");
+  $graph->default("fontsize","10","node");
+  $graph->default("color","#CC0044","edge");
+  $graph->default("packmode","graph","graph");
+
+  my $singletons = $graph->options->lookup("Show Solo Classes") eq "On";
+  my $showDetails = $graph->options->lookup("Show Class Details") eq "On";
+  my $showLibrary = $graph->options->lookup("Include Standard Libraries") eq "On";
+
+
+  # alpha sort matching classes and output
+  foreach my $ent (sort {$a->name() cmp $b->name();} @ents) {
+    next if $ent->library() && ! $showLibrary;
+    if ($ent->kind()->check("typedef")) {
+      my $typeRef = $ent->ref("typed");
+        if ($typeRef && $typeRef->ent->kind->check($kind)) {
+          if ($ent->name eq $typeRef->ent->name || $typeRef->ent->name eq "[unnamed]") {
+            $ent = $typeRef->ent;
+          }
+        }
+      }
+    my @relatives = $ent->ents("base,derive,extend,extendby,inherit,inheritby");
+    my $hasRelative=0;
+    foreach my $rel (@relatives){
+      next if $rel->library() && ! $showLibrary;
+      $hasRelative=1;
+      last;
+    }
+    if ($hasRelative || $singletons) {
+      draw_class($ent, $graph, $entity, 1, 1,$showDetails);
+    }
+  }
+   printDebug("finished analyzing, rendering graph");
+}
+
+
+#
+# user subs
+#
+
+sub draw_class {
+  my $ent = shift;
+  my $g = shift;
+  my $is_entity = shift;
+  my $do_base = shift;
+  my $do_derive = shift;
+  my $showDetails = shift;
+
+  my $showLibrary = $g->options->lookup("Include Standard Libraries") eq "On";
+  return if $ent->library() && ! $showLibrary;
+
+  my $className = $ent->longname;
+
+  if ($className eq "[unnamed]") {
+    my $ref= $ent->ref("Typedby");
+    $className = $ref->ent->longname if $ref;
+  }
+
+  # make the graph node and its label
+  printDebug("Starting analysis of class $className");
+
+
+  my $showRelated = $g->options->lookup("Show Related Classes") eq "On";
+
+  # Handle infinite recursion
+  if ($drawn{$ent->id}) {
+    return $drawn{$ent->id}
+  }
+
+  my $classnode = $g->node($ent);
+  if ($is_entity) {
+    $classnode->set("color", "red");
+  }
+
+  $drawn{$ent->id}=$classnode;
+  $classnode->set("shape", "record");
+
+  my $classnodeAttrLabel = "";
+  my $classNodeOperationsLabel = "";
+
+  if ($showRelated) {
+    # show base and derive classes
+    my @bases = $do_base ? $ent->ents("base, extend, inherit") : ();
+    @bases = grep {$_->longname !~ /$filter/i} @bases if $filter;
+    my @derived = $do_derive ? $ent->ents("derive, extendby, inheritby") : ();
+    @derived = grep {$_->longname !~ /$filter/i} @derived if $filter;
+
+    foreach my $base (sort {$a->name cmp  $b->name} @bases) {
+      next if $base->library()  && ! $showLibrary;
+      my $node = draw_class($base, $g, 0, 1, 0,$showDetails);
+      my $edge = $g->edge($classnode, $node);
+      if ($g->options->lookup("Random Edge Color") eq "On") {
+        $edge->set("color",randomColor());
+      }
+    }
+
+    foreach my $derive (sort {$a->name cmp  $b->name} @derived) {
+      next if $derive->library()  && ! $showLibrary;
+      my $node = draw_class($derive, $g, 0, 0, 1,$showDetails);
+      my $edge = $g->edge($node, $classnode);
+      if ($g->options->lookup("Random Edge Color") eq "On") {
+        $edge->set("color",randomColor());
+      }
+    }
+  }
+
+  # output any members
+  # sort by kind using a hash of arrays
+  my %members=();
+
+  foreach my $ref ($ent->refs("operation, define, declare", "", 1)) {
+    push @{$members{$ref->ent()->kindname()} }, $ref->ent();
+  }
+
+  # reverse sort by member type
+  foreach my $membertype ( sort {$b cmp $a;} keys (%members)) {
+    if (@{$members{$membertype}}) {
+      foreach my $member (sort {$a->name() cmp  $b->name(); }
+                          @{$members{$membertype}}) {
+        printDebug($membertype." ".$member->longname());
+
+        # now build up the UML label - for private,
+        # # for protected, + for public
+
+        my $umlmembertype = "+"; #default to public
+
+        if ($membertype =~ /protected/i) {
+          $umlmembertype = "#"; # UML symbol for protected
+        } elsif ($membertype =~ /private/i) {
+          $umlmembertype = "-"; # UML symbol for private
+        }
+
+        if ($membertype =~ /procedure|function|method/i) {
+          #Create the attribute string for this operation
+          my $string = $umlmembertype ." ".$member->name.()." (";
+
+          #parameter list
+          my $notfirst = 0;
+          my @paramList = $member->parameters(1);
+          while(@paramList){
+            $string .= ", " if $notfirst++;
+            my $fullname = shift(@paramList);
+            if($fullname =~ /(.*\s\W?)(\w+)/){
+              $string .= $2.": ".$1;
+            }else{
+              $string .= $fullname;
+            }
+          }
+          $string .= ") " .$member->type;
+          $string .= " Pure" if $membertype =~ /pure virtual/i;
+          $string .= " Virtual" if $membertype =~ /virtual/i;
+          $classNodeOperationsLabel .=  "$string\\l";
+
+        } elsif ($membertype =~ /component|object|variable|field|attribute|property/i) {
+          # Create the attribute string for this member
+          my $string = $umlmembertype ." ".$member->name.();
+          $string .= ": ".$member->type if $member->type;
+          $string .= "= ".$member->value()if $member->value();
+          $string =~ s/\\/\\\\/g; #Escape slashes
+          $classnodeAttrLabel .=  "$string\\l";
+        }
+      }
+    }
+
+  }
+  if ($showDetails){
+    my $label = "{".recordCleanup($className)." | ".recordCleanup($classnodeAttrLabel)." | ".recordCleanup($classNodeOperationsLabel)." }";
+    $classnode->set("label", $label) ;
+    printDebug("label: $label");
+  }
+
+  printDebug("finished Calculating $className");
+  return $classnode;
+}
+
+# Escape strings correctly for graphviz records
+# From graphviz doc: Braces, vertical bars and angle brackets must be escaped with a backslash character if you wish them to
+# appear as a literal character
+sub recordCleanup{
+  my $string = shift;
+  $string =~ s/\[/\\\[/g;
+  $string =~ s/\]/\\\]/g;
+  $string =~ s/\{/\\\{/g;
+  $string =~ s/\}/\\\}/g;
+  $string =~ s/\|/\\\|/g;
+  $string =~ s/>/\\>/g;
+  $string =~ s/</\\</g;
+  return  $string;
+}
+
+sub printDebug {
+  my $message = shift;
+  return unless $debug;
+  open (FILE,">>$debugFile") || die "Couldn't open debug file";
+  print FILE $message."\n";
+  close FILE;
+}
+
+sub randomColor{
+  my @bgc=('','','');
+  foreach my $c (@bgc){
+    my $r=int(rand(180));
+    $c=sprintf("%X",$r);
+  }
+  my $color = join("",@bgc);
+  return "#".$color;
+}

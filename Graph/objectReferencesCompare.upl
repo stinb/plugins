@@ -1,0 +1,372 @@
+# The original Object References Compare graph plugin. This plugin has been
+# replaced with a Python version.
+
+our $comparison_db;
+our @color_kind = ("#4e8cb9", "#afd870", "#e45721", "#FFFFFF"); # Allows for access via kind integers (Both=0, New=1, Old=2) (Blue, Green, Red)
+#our @color_kind = ("#3399FF", "#79FF4D", "#FF4040", "#FFFFFF"); # Allows for access via kind integers (Both=0, New=1, Old=2) (Blue, Green, Red)
+our @color_kind_basic = ("blue", "green", "red", "black");
+
+use base ("Understand::Graph::Gv");
+use Tie::RefHash;
+use strict;
+
+sub name { return "Object References"; }
+sub style { return "Perl Compare (Classic)"; }
+
+sub test_entity {
+    my $entity = shift;
+    return $entity->kind()->check("Object, Macro, Variable, Field, Property") ? 1 : -1;
+}
+
+sub test_global { return -1; }
+
+sub init {
+    my $graph = shift;
+    $graph->options()->define("Layout", ["Horizontal", "Vertical"], "Vertical");
+    $graph->options()->define("Type", ["Off", "On"], "Off");
+    $graph->options()->define("References", ["Simple", "All"], "All");
+    $graph->options()->define("Define/Declare", ["Off", "On"], "Off");
+    $graph->options()->define("Modified Entities", ["Ignore comments/spaces/newlines", "Include all modifications"], "Ignore comments/spaces/newlines");
+
+    $graph->legend->define("entMod", "roundedrect", "Entity in Both", "", "", "0,0");
+    $graph->legend->define("entBoth", "roundedrect", "Modified Entity", "", "#4e8cb9", "1,0");
+    $graph->legend->define("entNew", "roundedrect", "New Entity", "", "#afd870", "2,0");
+    $graph->legend->define("entOld", "roundedrect", "Old Entity", "", "#e45721", "3,0");
+
+    $graph->legend->define("refUseby", "arrow", "Ref: Use by", "#4e8cb9", "#4e8cb9", "0,1");
+    $graph->legend->define("refSetby", "arrow", "Ref: Set by", "#569f38", "#569f38", "1,1");
+    $graph->legend->define("refModby", "arrow", "Ref: Modify by", "#e45721", "#e45721", "2,1");
+    $graph->legend->define("refDefDec", "arrow", "Ref: Define/Declare in", "#8f8f8f", "#8f8f8f", "3,1");
+
+    $graph->legend->define("entStart", "ellipse", "Object Graphed", "", "", "0,2");
+    $graph->legend->define("entFn", "roundedrect", "Function/Method", "#90c4e4", "", "1,2");
+    $graph->legend->define("entOther", "roundedrect", "General Entity", "", "", "2,2");
+    $graph->legend->define("refInactive", "arrow", "Ref: Inactive (Gray Text)", "#8f8f8f", "#8f8f8f", "3,2");
+
+    $comparison_db = $graph->db->comparison_db;
+}
+
+sub do_load {
+    my $graph = shift;
+    my $var = shift;
+
+    if (!defined $comparison_db) {
+        return;
+    }
+
+    my $comp_var = $comparison_db->lookup_uniquename($var->uniquename());
+    my $kind;
+
+    if ($comp_var) {
+      if (compare_contents($var, $comp_var, $graph)) {
+        $kind = 3;
+      } else {
+        $kind = 0;
+      }
+    } else {
+      $kind = 1;
+    }
+
+
+
+    reset_graph($graph);
+    my $rankdir = "TB";
+    $rankdir = "LR" if ($graph->options()->lookup("Layout") eq "Horizontal");
+    $graph->default("rankdir", $rankdir, "graph");
+    draw($graph, $var, $kind);
+}
+
+sub draw {
+    my $graph = shift;
+    my $var = shift;
+    my $kind = shift;
+
+    my $varname;
+    $varname = ($var->type() ? $var->type() : "unknown")."\n" if $graph->options()->lookup("Type") eq "On";
+    $varname .= $var->longname();
+    my $varnode = $graph->node($var, $varname);
+    $varnode->set("shape", "oval");
+    if ($kind < 3) {
+      $varnode->set("fillcolor",$color_kind[$kind]);
+      $graph->legend->setvalue("entStart", "fillcolor", $color_kind[$kind]);
+    }
+
+    my $uniq = $graph->options()->lookup("References") eq "All" ? 0 : 1;
+    my $qual = $graph->options()->lookup("Inactive") eq "Off" ? " ~inactive" : "";
+    my @refs = ();
+    push @refs, $var->refs("Definein $qual, Declarein $qual", "", $uniq) if $graph->options()->lookup("Define/Declare") eq "On";
+    push @refs, $var->refs("SetBy Init $qual", "", $uniq);
+    push @refs, $var->refs("SetBy ~Init $qual, Modifyby $qual", "", $uniq);
+    push @refs, $var->refs("UseBy Return $qual", "", $uniq);
+    push @refs, $var->refs("UseBy ~Return $qual", "", $uniq);
+
+    my @comp_refs = ();
+    my $comp_var = $comparison_db->lookup_uniquename($var->uniquename()) if ($kind == 0 || $kind == 3);
+    if ($kind == 0 || $kind == 3) {
+      push @comp_refs, $comp_var->refs("Definein $qual, Declarein $qual", "", $uniq) if $graph->options()->lookup("Define/Declare") eq "On";
+      push @comp_refs, $comp_var->refs("SetBy Init $qual", "", $uniq);
+      push @comp_refs, $comp_var->refs("SetBy ~Init $qual, Modifyby $qual", "", $uniq);
+      push @comp_refs, $comp_var->refs("UseBy Return $qual", "", $uniq);
+      push @comp_refs, $comp_var->refs("UseBy ~Return $qual", "", $uniq);
+    }
+
+    # Hash children/comparison children by their uniquenames
+    my %children;
+    foreach my $childRef (@refs) {
+      my $child = $childRef->ent();
+      my $refs_uniquename = $child->uniquename();
+      $children{$refs_uniquename} = $childRef;
+    }
+    my %comp_children;
+    foreach my $childRef (@comp_refs) {
+      my $child = $childRef->ent();
+      my $refs_uniquename = $child->uniquename();
+      $comp_children{$refs_uniquename} = $childRef;
+    }
+
+    # Get lists of new, old, and both children
+    my @refs_both = ();
+    my @refs_new = ();
+    my @refs_old = ();
+
+    if ($kind == 0 || $kind == 3) {         # Exists in both
+      my @refs_key_both = grep { exists $comp_children{$_} } keys %children;
+      foreach my $key (@refs_key_both) { push @refs_both, $children{$key}; }
+
+      my @refs_key_new = grep { !exists $comp_children{$_} } keys %children;
+      foreach my $key (@refs_key_new) { push @refs_new, $children{$key}; }
+
+      my @refs_key_old = grep { !exists $children{$_} } keys %comp_children;
+      foreach my $key (@refs_key_old) { push @refs_old, $comp_children{$key}; }
+    } elsif ($kind == 1) {  # New entity
+      @refs_new = values %children;
+    } else {                  # Old entity
+      @refs_old = values %children;
+    }
+
+    @refs_both = sort{$a->ent->name cmp $b->ent->name} @refs_both;
+    @refs_new = sort{$a->ent->name cmp $b->ent->name} @refs_new;
+    @refs_old = sort{$a->ent->name cmp $b->ent->name} @refs_old;
+
+    foreach my $ref (@refs_both) {
+        my $ent = $ref->ent();
+        my $filename = "";
+
+        if ($graph->options()->lookup("References") eq "All") {
+            $filename = sprintf "\n%s(%d)", $ref->file()->name(), $ref->line();
+        }
+
+        my $name = $ent->longname();
+        $name = $ent->name() if $ent->kindname() =~ /File/;
+
+        my $refnode = $graph->node($ent, $name.$filename);
+        $refnode->set("shape", "rectangle");
+        $refnode->set("color", "#90c4e4") if $ent->kind->check("Function, Method");
+
+        my $comp_ent = $comparison_db->lookup_uniquename($ent->uniquename());
+        if (!compare_contents($ent, $comp_ent, $graph)) {
+          $refnode->set("fillcolor", @color_kind[0]);
+        }
+
+        $refnode->diffsync($ent, $comp_ent);
+
+        my ($src, $dst);
+        if ($ref->kind()->check("UseBy, TypedBy")) {
+            $src = $varnode;
+            $dst = $refnode;
+        } else {
+            $src = $refnode;
+            $dst = $varnode;
+        }
+
+        my $edge = $graph->edge($src, $dst);
+        $edge->set("label", $ref->kindname());
+        $edge->sync($ref->file(), $ref->line(), $ref->column()) if $graph->options()->lookup("References") eq "All";
+
+        my $refTypeColor;
+        $refTypeColor = "#4e8cb9" if $ref->kind->check("Useby");
+        $refTypeColor = "#569f38" if $ref->kind->check("Setby");
+        $refTypeColor = "#e45721" if $ref->kind->check("Modifyby");
+        $refTypeColor = "#8f8f8f" if $ref->kind->check("Definein, Declarein");
+
+        if ($ref->kind()->check("Inactive")) {
+            $refTypeColor = "#8f8f8f";
+            $edge->set("fontcolor", "#8f8f8f");
+        }
+
+        $edge->set("color", $refTypeColor);
+    }
+
+    foreach my $ref (@refs_new) {
+        my $ent = $ref->ent();
+        my $filename = "";
+
+        if ($graph->options()->lookup("References") eq "All") {
+            $filename = sprintf "\n%s(%d)", $ref->file()->name(), $ref->line();
+        }
+
+        my $name = $ent->longname();
+        $name = $ent->name() if $ent->kindname() =~ /File/;
+
+        my $refnode = $graph->node($ent, $name.$filename);
+        $refnode->set("shape", "rectangle");
+        $refnode->set("color", "#90c4e4") if $ent->kind->check("Function, Method");
+
+        $refnode->set("fillcolor", @color_kind[1]);
+
+        my ($src, $dst);
+        if ($ref->kind()->check("UseBy, TypedBy")) {
+            $src = $varnode;
+            $dst = $refnode;
+        } else {
+            $src = $refnode;
+            $dst = $varnode;
+        }
+
+        $refnode->diffsync($ent, 0);
+
+        my $edge = $graph->edge($src, $dst);
+        $edge->set("label", $ref->kindname());
+        $edge->sync($ref->file(), $ref->line(), $ref->column()) if $graph->options()->lookup("References") eq "All";
+
+        my $refTypeColor;
+        $refTypeColor = "#4e8cb9" if $ref->kind->check("Useby");
+        $refTypeColor = "#569f38" if $ref->kind->check("Setby");
+        $refTypeColor = "#e45721" if $ref->kind->check("Modifyby");
+        $refTypeColor = "#8f8f8f" if $ref->kind->check("Definein, Declarein");
+
+        if ($ref->kind()->check("Inactive")) {
+            $refTypeColor = "#8f8f8f";
+            $edge->set("fontcolor", "#8f8f8f");
+        }
+
+        $edge->set("color", $refTypeColor);
+    }
+
+    foreach my $ref (@refs_old) {
+        my $ent = $ref->ent();
+        my $filename = "";
+
+        if ($graph->options()->lookup("References") eq "All") {
+            $filename = sprintf "\n%s(%d)", $ref->file()->name(), $ref->line();
+        }
+
+        my $name = $ent->longname();
+        $name = $ent->name() if $ent->kindname() =~ /File/;
+
+        my $refnode = $graph->node($ent, $name.$filename);
+        $refnode->set("shape", "rectangle");
+        $refnode->set("color", "#90c4e4") if $ent->kind->check("Function, Method");
+
+        $refnode->set("fillcolor", @color_kind[2]);
+
+        my ($src, $dst);
+        if ($ref->kind()->check("UseBy, TypedBy")) {
+            $src = $varnode;
+            $dst = $refnode;
+        } else {
+            $src = $refnode;
+            $dst = $varnode;
+        }
+
+        $refnode->diffsync(0, $ent);
+
+        my $edge = $graph->edge($src, $dst);
+        $edge->set("label", $ref->kindname());
+        $edge->sync($ref->file(), $ref->line(), $ref->column()) if $graph->options()->lookup("References") eq "All";
+
+        my $refTypeColor;
+        $refTypeColor = "#4e8cb9" if $ref->kind->check("Useby");
+        $refTypeColor = "#569f38" if $ref->kind->check("Setby");
+        $refTypeColor = "#e45721" if $ref->kind->check("Modifyby");
+        $refTypeColor = "#8f8f8f" if $ref->kind->check("Definein, Declarein");
+
+        if ($ref->kind()->check("Inactive")) {
+            $refTypeColor = "#8f8f8f";
+            $edge->set("fontcolor", "#8f8f8f");
+        }
+
+        $edge->set("color", $refTypeColor);
+    }
+}
+
+sub reset_graph()
+{
+    my $graph = shift;
+    $graph->default("shape",     "box",   "node");
+}
+
+# Compare new/old entity contents to check for modifications
+sub compare_contents {
+  my $ent       = shift;
+  my $comp_ent  = shift;
+  my $graph     = shift;
+
+  my $cont = $ent->contents;
+  my $comp_cont = $comp_ent->contents;
+
+  if ($graph->options->lookup("Modified Entities") eq "Ignore comments/spaces/newlines") {
+    # Get language
+    my $lang = $ent->language();
+
+    # Remove comments
+    if ($lang eq "Ada" || $lang eq "VHDL") {
+      # Remove any -- style comments
+      $cont =~ s/\-\-.*?\n//g;
+      $comp_cont =~ s/\-\-.*?\n//g;
+    } elsif ($lang eq "C" || $lang eq "C#" || $lang eq "Java" || $lang eq "Plm") {
+      # Remove any // style comments
+      $cont =~ s/\/\/.*?\n//g;
+      $comp_cont =~ s/\/\/.*?\n//g;
+      # Remove any /* */ style comments
+      $cont =~ s/\/\*.*?\*\///gs;
+      $comp_cont =~ s/\/\*.*?\*\///gs;
+    } elsif ($lang eq "Fortran") {
+      # Remove any ! style comments
+      $cont =~ s/\!.*?\n//g;
+      $comp_cont =~ s/\!.*?\n//g;
+      # Remove any (c,C,*,d,D) first character comments
+      $cont =~ s/^[cC*dD].*?\n//g;
+      $comp_cont =~ s/^[cC*dD].*?\n//g;
+    } elsif ($lang eq "Jovial") {
+      # Remove any " " style comments
+      $cont =~ s/\".*?\"//gs;
+      $comp_cont =~ s/\".*?\"//gs;
+      # Remove any % % style comments
+      $cont =~ s/\%.*?\%//gs;
+      $comp_cont =~ s/\%.*?\%//gs;
+    } elsif ($lang eq "Pascal") {
+      # Remove any // style comments
+      $cont =~ s/\/\/.*?\n//g;
+      $comp_cont =~ s/\/\/.*?\n//g;
+      # Remove any (* *) style comments
+      $cont =~ s/\(\*.*?\*\)//gs;
+      $comp_cont =~ s/\(\*.*?\*\)//gs;
+      # Remove any { } style comments
+      $cont =~ s/\{.*?\}//gs;
+      $comp_cont =~ s/\{.*?\}//gs;
+    } elsif ($lang eq "Web") {
+      # Remove any <!--  --> style comments (HTML)
+      $cont =~ s/\<\!\-\-.*?\-\-\>//gs;
+      $comp_cont =~ s/\<\!\-\-.*?\-\-\>//gs;
+      # Remove any // style comments (PHP/Javascript)
+      $cont =~ s/\/\/.*?\n//g;
+      $comp_cont =~ s/\/\/.*?\n//g;
+      # Remove any /* */ style comments (PHP/Javascript)
+      $cont =~ s/\/\*.*?\*\///gs;
+      $comp_cont =~ s/\/\*.*?\*\///gs;
+    }
+
+    #Remove all whitespaces (\s) and newlines (\r\n)
+    $cont =~ s/[\s\r\n]+//g;
+    $comp_cont =~ s/[\s\r\n]+//g;
+  }
+
+  my $result;
+  if ($cont eq $comp_cont) {
+    $result = 1;
+    return $result;
+  }
+  $result = 0;
+  return $result;
+}
