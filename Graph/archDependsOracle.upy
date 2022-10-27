@@ -1,0 +1,87 @@
+"""
+Generate an architecture dependency graph that reads from an external
+"oracle" file to add user-defined edges.
+Blog Article: https://blog.scitools.com/making-a-dependency-graph-with-custom-dependencies/
+"""
+
+import understand
+import os.path
+
+def name():
+  """
+  Required, the name of the graph.
+  """
+  return "Python Arch Dependencies with Oracle"
+
+def test_architecture(arch):
+  """
+  Optional, return True if the graph exists for the given architecture
+
+  If True, this graph will appear in the Graphical Views menu for the
+  architecture.
+  """
+  return True;
+
+def grabNode(graph, nodes, arch):
+  """
+  This is a custom function for this script to get a graphviz node
+  """
+  if arch in nodes:
+    node = nodes[arch]
+  else:
+    node = graph.node(arch.name())
+    node.sync(arch); # architectures must be synced instead of given at creation
+    nodes[arch] = node
+
+  return node
+
+
+def draw(graph, target):
+  """
+  Draw the graph
+  """
+
+  # Load an oracle file
+  oracle = dict()
+  path = graph.db().name()[:-4] + "_oracle.csv"
+  if os.path.exists(path):
+    fin = open(path,'r')
+    line = fin.readline()
+    while line:
+      parts = line.split(',')
+      src = graph.db().lookup_arch(parts[0].strip())
+      dest = graph.db().lookup_arch(parts[-1].strip())
+      if src and dest:
+        oracle.setdefault(src,[]).append(dest)
+      line = fin.readline()
+    fin.close()
+
+  graph.set("rankdir", "LR")
+
+  # store the arch->graphviz node so that each arch node appears only
+  # once no matter how many edges
+  nodes = dict()
+  visited = set()
+
+  curLevel = []
+  curLevel.append(target)
+
+  while curLevel:
+    nextLevel = []
+    for arch in curLevel:
+      # Avoid cycles
+      if arch in visited:
+        continue
+      visited.add(arch)
+
+      tail = grabNode(graph, nodes, arch)
+      # depends() returns a dictionary from architectures to references. Here
+      # only the architecture keys are used
+      for child in arch.depends():
+        edge = graph.edge(tail,grabNode(graph,nodes,child))
+        nextLevel.append(child)
+      for child in oracle.get(arch,[]):
+        edge = graph.edge(tail,grabNode(graph,nodes,child)) # custom dep
+        edge.set("color","blue")
+        nextLevel.append(child)
+    curLevel = nextLevel
