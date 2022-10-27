@@ -1,0 +1,306 @@
+# Graph Provided by Tech Matrix
+# Blog Article: https://blog.scitools.com/cool-plugins-for-code-maintenance/
+# This graph visualizes three metrics:
+#   - CountDeclClassMethod: Class methods are blue rectangles
+#   - CountClassCoupled: Dependencies are dashed line gray edges
+#   - PercentLackOfCohesion: Edges connecting methods (blue rectangles) and
+#     objects (ovals) within the target class (off-white cluster).
+
+use base ("Understand::Graph::Gv");
+use strict;
+
+our %classEnts;
+our %funcEnts;
+our %objEnts;
+
+our %drawedNodes;
+
+my $maingraph;
+
+our $ent_class_filter =
+  "class ~unknown ~unresolved," .
+  "interface ~unknown ~unresolved," .
+  "c# struct ~unknown ~unresolved";
+
+our $ent_func_filter =
+  "function ~unknown ~unresolved," .
+  "method ~unknown ~unresolved," .
+  "property ~unknown ~unresolved," .
+  "procedure ~unknown ~unresolved";
+
+our $ent_obj_filter =
+  "object ~unknown ~unresolved," .
+  "field ~unknown ~unresolved," .
+  "variable ~unknown ~unresolved," .
+  "C# event ~unknown ~unresolved";
+
+our $ref_define_filter = "define";
+our $ref_call_filter = "call";
+our $ref_callby_filter = "callby";
+our $ref_use_filter = "modify ~inactive, set ~inactive, use ~inactive";
+our $ref_useby_filter = "modifyby ~inactive, setby ~inactive, useby ~inactive";
+our $ref_extend_filter = "extend, implement, base";
+our $ref_extendby_filter = "extendby, implementby, derive";
+
+sub name { return "Call and Refs Class Internal"; }
+
+sub test_entity {
+  my $ent = shift;
+  return $ent->kind->check($ent_class_filter) ? 1 : -1;
+}
+
+sub test_global { return -1; }
+
+sub init {
+  my $graph = shift;
+  %classEnts = ();
+  %funcEnts = ();
+  %objEnts = ();
+
+  $graph->options->define("Class Name", ["Shortname", "Fullname"], "Fullname");
+  $graph->options->define("Parameters", ["Short", "Full", "None"], "None");
+  $graph->options->define("Show Classes", ["Off", "All", "Coupled Only", "Calls Only"], "All");
+  $graph->options->define("Show Objects", ["Off", "On", "On Cluster"], "On");
+  $graph->options->define("Show References", ["Simple", "All"], "Simple");
+}
+
+sub do_load {
+  my $graph = shift;
+  my $class = shift;
+
+  $graph->default("rankdir", "LR", "graph");
+  $graph->default("color", "blue", "node");
+  $graph->default("shape", "box", "node");
+  $graph->default("fontcolor", "black", "node");
+  $graph->default("color", "dimgray", "edge");
+  $graph->default("fillcolor", "white", "node");
+  $graph->default("compound", "true", "graph");
+
+  my $unique = $graph->options->lookup("Show References") eq "Simple";
+  my $cluster = $graph->options->lookup("Show Objects") eq "On Cluster";
+
+  my %nodes;
+
+  # init graphs and clusters
+  $maingraph = $graph;
+  my $subgraph = $graph->cluster($graph->options->lookup("Class Name") eq "Fullname" ? $class->longname : $class->simplename);
+  $subgraph->default("bgcolor", "ivory", "graph");
+  $subgraph->default("color", "dimgray", "graph");
+  my $subgraph_objs = $subgraph->cluster("objects");
+  $subgraph_objs->default("bgcolor", "aliceblue", "graph");
+  $subgraph_objs->default("color", "blue", "graph");
+
+  draw_internal_function_nodes($subgraph, $class, \%nodes);
+  draw_internal_object_nodes($cluster ? $subgraph_objs: $subgraph, $class, \%nodes);
+  draw_internal_edges($subgraph, $class, \%nodes, $unique);
+
+  draw_external_dependencies($graph, $subgraph, $class, \%nodes, $unique);
+}
+
+
+sub draw_internal_function_nodes {
+  my $graph = shift;
+  my $class = shift;
+  my $nodes = shift;
+
+  my %drawedNode;
+  # draw function nodes
+  foreach my $ent ($class->ents($ref_define_filter, $ent_func_filter)) {
+    next if $drawedNode{$ent->id};
+    my $node = draw_node($graph, $ent, $nodes);
+    $drawedNode{$ent->id} = 1;
+  }
+}
+
+sub draw_internal_object_nodes {
+  my $graph = shift;
+  my $class = shift;
+  my $nodes = shift;
+
+  return if $graph->options->lookup("Show Objects") eq "Off";
+
+  my %drawedNode;
+  # draw object nodes
+  foreach my $ent ($class->ents($ref_define_filter, $ent_obj_filter)) {
+    next if $drawedNode{$ent->id};
+    my $node = draw_node($graph, $ent, $nodes);
+    $drawedNode{$ent->id} = 1;
+  }
+}
+
+sub draw_internal_edges {
+  my $graph = shift;
+  my $class = shift;
+  my $nodes = shift;
+  my $unique = shift;
+
+  my %drawedNode;
+
+  # draw internal calls
+  foreach my $func ($class->ents($ref_define_filter, $ent_func_filter)) {
+    foreach my $ref ($func->refs($ref_call_filter, $ent_func_filter, $unique)) {
+      my $parent = get_parent_class($ref->ent);
+      if ($parent && $class->id == $parent->id) {
+        my $node = $$nodes{$func->id};
+        my $node_forward = $$nodes{$ref->ent->id};
+        draw_edge($graph, $node, $node_forward, $ref, "dimgray");
+      }
+    }
+  }
+
+  # draw internal uses
+  foreach my $obj ($class->ents($ref_define_filter, $ent_obj_filter)) {
+    foreach my $ref ($obj->refs($ref_useby_filter, $ent_func_filter, $unique)) {
+      my $parent = get_parent_class($ref->ent);
+      if ($parent && $class->id == $parent->id) {
+        my $node = $$nodes{$ref->ent->id};
+        my $node_forward = $$nodes{$obj->id};
+        draw_edge($graph, $node, $node_forward, $ref, "blue");
+      }
+    }
+  }
+}
+
+sub draw_external_dependencies {
+  my $graph = shift;
+  my $subgraph = shift;
+  my $class = shift;
+  my $nodes = shift;
+  my $unique = shift;
+
+  return if $graph->options->lookup("Show Classes") eq "Off";
+  my %drawedEdge;
+
+  #draw depends
+  my $depends = $class->depends;
+  if ($depends) {
+    foreach my $depend ($depends->keys) {
+      foreach my $ref ($depends->value($depend)) {
+        next if $ref->scope->kind->check($ent_obj_filter) && $graph->options->lookup("Show Objects") eq "Off";
+
+        my $ent = $ref->scope;
+        my $parent = $ent->kind->check("Class, Interface") ? $ent : $ent->parent;
+        my $same = $parent->id == $class->id;
+        my $source = $same ? $ent : $parent;
+        my $node_source = $$nodes{$source->id} ? $$nodes{$source->id} : draw_node($subgraph, $source, $nodes, $same ? "gray65" : undef);
+
+        next if !$ref->kind->check("Call") && $graph->options->lookup("Show Classes") eq "Calls Only";
+
+        my $target = get_parent_class($ref->ent);
+        my @extends = $class->refs($ref_extend_filter);
+        my $related = grep { $_->ent->id == $target->id } @extends if @extends;
+        next if $graph->options->lookup("Show Classes") eq "Coupled Only" && $related;
+        next if $target->kind->check("Namespace, Package, Internal");
+        my $node_target = $$nodes{$target->id} ? $$nodes{$target->id} : draw_node($graph, $target, $nodes, $related ? "gray65" : undef);
+
+        if ($unique) {
+          draw_edge($graph, $node_source, $node_target, $ref, undef, "dashed", "empty") unless $drawedEdge{$source->id.$target->id};
+          $drawedEdge{$source->id.$target->id} = 1;
+        } else {
+          draw_edge($graph, $node_source, $node_target, $ref, undef, "dashed", "empty");
+        }
+      }
+    }
+  }
+
+  #draw dependsby
+  if ($graph->options->lookup("Show Classes") eq "All") {
+    my $dependsby = $class->dependsby;
+    if ($dependsby) {
+      foreach my $dependby ($dependsby->keys) {
+        foreach my $ref ($dependsby->value($dependby)) {
+          next if $ref->scope->kind->check($ent_obj_filter) && $graph->options->lookup("Show Objects") eq "Off";
+
+          my $source = $ref->scope;
+          my $same = $source->id == $class->id;
+          my $node_source = $$nodes{$source->id} ? $$nodes{$source->id} : draw_node($subgraph, $source, $nodes, $same ? "gray65" : undef);
+
+          my $target = get_parent_class($ref->ent);
+          my @extendbys = $class->refs($ref_extendby_filter);
+          my $related = grep { $_->ent->id == $target->id } @extendbys if @extendbys;
+          my $node_target = $$nodes{$target->id} ? $$nodes{$target->id} : draw_node($graph, $target, $nodes, $related ? "gray65" : undef);
+
+          if ($unique) {
+            draw_edge($graph, $node_target, $node_source, $ref, undef, "dashed", "empty") unless $drawedEdge{$target->id.$source->id};
+            $drawedEdge{$target->id.$source->id} = 1;
+          } else {
+            draw_edge($graph, $node_target, $node_source, $ref, undef, "dashed", "empty");
+          }
+        }
+      }
+    }
+  }
+}
+
+
+sub draw_node {
+  my $graph = shift;
+  my $ent = shift;
+  my $nodes = shift;
+  my $color = shift;
+
+  # node already exists
+  my $id = $ent->id();
+  return $$nodes{$id} if exists $$nodes{$id};
+
+  # set name
+  my $name = $ent->simplename;
+  $name = $ent->longname if $ent->kind->check($ent_class_filter) && $graph->options->lookup("Class Name") eq "Fullname";
+  if ($ent->kind->check("Function, Method, Procedure") && $graph->options->lookup("Parameters") ne "None") {
+    my $showas = $graph->options->lookup("Parameters") eq "Short" ? 0 : 1;
+    $name = $ent->name."(".$ent->parameters($showas).")";
+  }
+
+  # create a node
+  my $node;
+  $node = $graph->node($ent, $name);
+  $$nodes{$id} = $node;
+
+  # object node settings
+  if ($ent->kind->check($ent_obj_filter)){
+    $node->set("color", "black");
+    $node->set("fillcolor", "transparent");
+    $node->set("shape", "oval");
+  # class node settings
+  } elsif ($ent->kind->check($ent_class_filter)){
+    $node->set("color", "black");
+    $node->set("fillcolor", "dimgray");
+    $node->set("fontcolor", "white");
+  }
+  $node->set("fillcolor", $color) if $color;
+  return $node;
+}
+
+sub draw_edge {
+  my $graph = shift;
+  my $source = shift;
+  my $target = shift;
+  my $ref = shift;
+  my $color = shift;
+  my $style = shift;
+  my $arrowhead = shift;
+
+  return unless $source && $target;
+
+  my $edge = $graph->edge($source, $target);
+  $edge->set("color", $color ? $color : "dimgray");
+  $edge->set("style", $style ? $style : "solid");
+  $edge->set("arrowhead", $arrowhead ? $arrowhead : "normal");
+
+  if ($ref && $graph->options->lookup("Show References") eq "All") {
+    $edge->set("label", $ref->kindname) ;
+    $edge->sync($ref->file, $ref->line, $ref->column);
+  }
+  return $edge;
+}
+
+sub get_parent_class {
+  my $ent = shift;
+
+  my $parent = $ent;
+  return $parent if $parent && $parent->kind->check($ent_class_filter);
+  return $parent unless $parent->parent;
+  $parent = get_parent_class($parent->parent);
+  return $parent
+}
+

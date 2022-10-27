@@ -1,0 +1,85 @@
+# IReport provided by Tech Matrix
+# Blog Article: https://blog.scitools.com/cool-plugins-for-code-maintenance/
+# Use this report to help find low maintainibility functions. This report
+# outputs functions that exceed user-defined thresholds for the metrics
+# Cyclomatic, CountLine, MaxNesting.
+
+use base ("Understand::IReport");
+use Tie::RefHash;
+
+sub name { return "Low Maintainability Functions"; }
+
+sub test_entity { return -1; }
+
+sub test_global { return 1; }
+
+sub support_progress { return 1; }
+
+sub init {
+    my $report = shift;
+    $report->option->integer("Cyclomatic", "Cyclomatic Threshold :", 20);
+    $report->option->integer("CountLine", "CountLine Threshold :", 100);
+    $report->option->integer("MaxNesting", "MaxNesting Threshold :", 5);
+}
+
+sub generate {
+    my $report = shift;
+
+    my $th_cc = $report->option->lookup("Cyclomatic");
+    my $th_cl = $report->option->lookup("CountLine");
+    my $th_mn = $report->option->lookup("MaxNesting");
+    $th_cc = 1 if $th_cc < 1;
+    $th_cl = 1 if $th_cl < 1;
+    $th_mn = 1 if $th_mn < 1;
+
+    tie my %funcs, 'Tie::RefHash';
+    my $func;
+    foreach $func ($report->db->ents("function, method, fortran subroutine, fortran main program, ada procedure")) {
+        my $cyclomatic = $func->metric("Cyclomatic");
+        my $countline  = $func->metric("CountLine");
+        my $maxnesting = $func->metric("MaxNesting");
+        if ($cyclomatic >= $th_cc || $countline >= $th_cl || $maxnesting >= $th_mn) {
+            my $var = {
+                cyclomatic => $cyclomatic,
+                countline  => $countline,
+                maxnesting => $maxnesting,
+            };
+            $funcs{$func} = $var;
+        }
+    }
+
+    $report->bold();
+    $report->print("Cyclomatic >= $th_cc or\n");
+    $report->print("CountLine >= $th_cl or\n");
+    $report->print("MaxNesting >= $th_mn\n");
+    $report->nobold();
+    $report->print("\n");
+
+    $report->print("Name, Cyclomatic, CountLine, MaxNesting\n");
+    my $num = keys %funcs;
+    my $cur = 1;
+    foreach my $ent (sort { $a->name() cmp $b->name(); } keys %funcs) {
+        next if ($ent->library() eq "Standard");
+        $report->progress($cur++ / $num * 100);
+        $func = $ent;
+        $report->entity($func);
+        $report->print($func->longname());
+        $report->entity();
+
+        $report->print(", ");
+
+        $report->fontcolor("#ff0000") if $funcs{$ent}->{cyclomatic} >= $th_cc;
+        $report->print($funcs{$ent}->{cyclomatic});
+        $report->fontcolor("#000000");
+        $report->print(", ");
+        $report->fontcolor("#ff0000") if $funcs{$ent}->{countline} >= $th_cl;
+        $report->print($funcs{$ent}->{countline});
+        $report->fontcolor("#000000");
+        $report->print(", ");
+        $report->fontcolor("#ff0000") if $funcs{$ent}->{maxnesting} >= $th_mn;
+        $report->print($funcs{$ent}->{maxnesting});
+        $report->fontcolor("#000000");
+
+        $report->print("\n");
+    }
+}
