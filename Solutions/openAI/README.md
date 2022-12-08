@@ -1,4 +1,4 @@
-﻿**INTRODUCTION**
+﻿**Overview**
 
 This User Tool queries OpenAI to automatically explain the selected code. It was written along [with this article.](https://blog.scitools.com/?p=2241)
 ![Image of OpenAI explaing the code](https://blog.scitools.com/wp-content/uploads/2022/12/image-6.png)
