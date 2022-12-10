@@ -17,6 +17,10 @@ Interactive report plugins, or IReports, let you run queries or gather informati
 The CodeCheck feature in Understand has hundreds of checks yous can run against your code to validate coding standards and look for issues and vulnerabilities. The Python API makes it easy to [write your own checks](https://github.com/stinb/plugins/blob/main/CodeCheck/README.md) as well, like this one we use to enforce our internal parenthesis standard.  
 ![image](https://user-images.githubusercontent.com/6586272/193142606-7bf859c2-138b-49d5-a0ec-a403a3a6cf7a.png)
 
+## Automatic Architectures
+Automatic architecture plugins are Python scripts that get run every time you open your Understand project. They allow you to easily create your own architectures that are automatically updated
+![image](https://user-images.githubusercontent.com/6586272/206825252-1d7c2f5f-038c-4196-874d-e32475e798d0.png)
+
 ## Scripts
 You can also query the Understand DB directly with Python and Perl API scripts. You can run these scripts from inside the GUI or from the command line, which lends itself well to batch processes or DevOps integration. We use these scripts heavily as part of our Jenkins CI Pipeline.
 In this trivial example I list all of the enums in my project from the command line.
