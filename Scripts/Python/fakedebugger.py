@@ -9,6 +9,10 @@ Welcome to the fake debugger. Available commands are:
   next        go to the next control flow node. Optionally give a # argument
               to follow the path # without prompting (ex: "next 0" to follow
               the yes path)
+  step        if there is a call reference, step into the function. Otherwise
+              the behavior matches next. If there are multiple call references
+              the call reference must be chosen with a # ("step 0" to follow
+              the first call)
   continue    run until the next choice
   locals      list the local variables, including parameters
   globals     list the global variables that are referenced from the current
@@ -64,17 +68,29 @@ def isFiltered(node):
 # Track References that have been hit in the current run
 hits = dict()
 
-def addHits(node, lexer, note = ""):
+def refs(node, func, refkindstr = ""):
+  file = defFile(func)
+  sline = node.line_begin()
+  if not file or not sline:
+    return []
+  scol = node.column_begin()
+  eline = node.line_end()
+  ecol = node.column_end()
+  reflist = []
+  for ref in file.filerefs():
+    if (ref.scope() == func and
+        (not refkindstr or ref.kind().check(refkindstr)) and
+        before(sline, scol, ref.line(), ref.column()) and
+        before(ref.line(), ref.column(), eline, ecol)):
+      reflist.append(ref)
+  return reflist
+
+def addHits(node, lexer, func, note = ""):
   ''' Add all the references from the node's range '''
   global hits
-  for lexeme in lexemes(node,lexer):
-    ref = lexeme.ref()
-    if ref:
-      ent = ref.scope()
-      if ref.isforward():
-        ref.ent()
-      context = lexText(lexer.lexemes(ref.line(), ref.line()))
-      hits.setdefault(ent, []).append([ref,context,note])
+  for ref in refs(node,func):
+    context = lexText(lexer.lexemes(ref.line(), ref.line()))
+    hits.setdefault(ref.ent(), []).append([ref,context,note])
 
 def printHits(args = []):
   ''' Hits command '''
@@ -107,7 +123,7 @@ def globals(func, args = []):
   if "all" in args:
     entset = db.ents("global object")
   elif "file" in args:
-    for ref in file(func).filerefs("define,declare","global object", True):
+    for ref in defFile(func).filerefs("define,declare","global object", True):
       entset.add(ref.ent())
   else:
     for ref in func.refs():
@@ -149,62 +165,85 @@ def printText(node, lexer):
       text += lexeme.text()
     print ("{}{:>5}{}".format(leader,l,text), end="")
 
-def next(node, lexer, args = []):
+def next(node, lexer, func, args = []):
   ''' Navigate to the next control flow node '''
   choices = node.children()
   if not choices:
-    addHits(node,lexer)
+    addHits(node,lexer, func)
     return None
 
   if len(choices) == 1:
-    addHits(node,lexer)
+    addHits(node,lexer, func)
     if isFiltered(choices[0]):
-      return next(choices[0], lexer)
+      return next(choices[0], lexer, func)
     return choices[0]
 
-  idx = -1
   if args:
     try:
       idx = int(args[0])
+      if idx >= 0 and idx < len(choices):
+        note = node.child_label(choices[idx])
+        if not note:
+          note = str(idx) + ": " + nodeText(choices[idx])
+        note = "Choose path " + note
+        addHits(node,lexer, func, note)
+        if isFiltered(choices[idx]):
+          return next(choices[idx],lexer,func)
+        return choices[idx]
     except:
       pass
-  if not (idx >= 0 and idx < len(choices)):
-    print ("Possible paths from: ", nodeText(node, lexer))
-    for i in range(len(choices)):
-      label = node.child_label(choices[i])
-      if not label:
-        label = nodeText(choices[i])
-      print ("\t",i, label)
-    while True:
-      try:
-        idx = int(input("Enter path number: "))
-        if idx >= 0 and idx < len(choices):
-          break
-      except:
-        pass
-  note = node.child_label(choices[idx])
-  if not note:
-    note = str(idx) + ": " + nodeText(choices[idx])
-  note = "Choose path " + note
-  addHits(node,lexer,note)
-  if isFiltered(choices[idx]):
-    return next(choices[idx],lexer)
-  return choices[idx]
+
+  print ("Multiple paths exist. Specify the path # in the command (ex: next 0)")
+  print ("Possible paths from: ", nodeText(node, lexer))
+  for i in range(len(choices)):
+    label = node.child_label(choices[i])
+    if not label:
+      label = nodeText(choices[i])
+    print ("\t",i, label)
+  return node
+
+def step(node, lexer, func, args = []):
+  choices = []
+  for ref in refs(node, func, "call"):
+    if not ref.ent() in choices and defFile(ref.ent()):
+      choices.append(ref.ent())
+
+  if not choices:
+    return next(node,lexer, func, args)
+
+  if len(choices) == 1:
+    enterFunc((choices[0]))
+    return node
+
+  if args:
+    try:
+      idx = int(args[0])
+      if idx >= 0 and idx < len(choices):
+        enterFunc(choices[idx])
+        return node
+    except:
+      pass
+
+  print ("Multiple calls exist. Specify the call # in the command (ex: step 0)")
+  print ("Possible calls in: ", nodeText(node,lexer))
+  for i in range(len(choices)):
+    print("\t",i, choices[i].name())
+  return node
 
 # Main Loop
 def enterFunc(func):
-  ''' Executate the given function '''
+  ''' Execute the given function '''
   cfg = func.control_flow_graph()
   if not cfg:
     print ("Error: no control flow information for function")
     return
 
-  lexer = file(func).lexer()
+  lexer = defFile(func).lexer()
   if not lexer:
     print ("Error: no lexer for function's file")
     return
 
-  curNode = next(cfg.start(), lexer)
+  curNode = next(cfg.start(), lexer, func)
   printText(curNode, lexer)
   while True:
     parts = input("Enter a command: ").split()
@@ -212,14 +251,16 @@ def enterFunc(func):
       cmd = parts[0]
     else:
       cmd = ''
-    if cmd == "next":
-      curNode = next(curNode, lexer, parts[1:])
+    if cmd == "next" or cmd == "n":
+      curNode = next(curNode, lexer, func, parts[1:])
+    elif cmd == "step" or cmd == "s":
+      curNode = step(curNode, lexer, func, parts[1:])
     elif cmd == "help":
       print(helpMsg)
     elif cmd == "continue":
       choices = curNode.children()
       while len(choices) == 1:
-        curNode = next(curNode, lexer)
+        curNode = next(curNode, lexer, func)
         choices = curNode.children()
     elif cmd == "globals":
       printVariables(globals(func, parts[1:]))
@@ -243,7 +284,10 @@ def enterFunc(func):
       break
 
 # Argument parsing
-def file(ent):
+def defFile(ent):
+  if not ent:
+    return None
+
   if ent.kind().check("file"):
     return ent
 
@@ -260,7 +304,7 @@ def findFunction(db, name):
   if len(ent) > 1:
     print("Multiple functions found:")
     for i in range(len(ent)):
-      print (i, ent[i].longname(), file(ent[i]))
+      print (i, ent[i].longname(), defFile(ent[i]))
     idx = int(input("Enter the number of the desired function "))
     ent = ent[idx]
   else:
