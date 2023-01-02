@@ -2,6 +2,7 @@
 
 import argparse
 import understand
+from collections import deque
 
 helpMsg = """
 Welcome to the fake debugger. Available commands are:
@@ -9,6 +10,8 @@ Welcome to the fake debugger. Available commands are:
   next        go to the next control flow node. Optionally give a # argument
               to follow the path # without prompting (ex: "next 0" to follow
               the yes path)
+  prev        go to the previous control flow node. Optionally give a # argument
+              to follow the path #
   step        if there is a call reference, step into the function. Otherwise
               the behavior matches next. If there are multiple call references
               the call reference must be chosen with a # ("step 0" to follow
@@ -22,6 +25,7 @@ Welcome to the fake debugger. Available commands are:
   hits        Print the references hit during the current executation for
               the given entity name (ex "hits foobar"). If no entity name
               is given, list all the entities with hits.
+  history     Print the current executation path
   exit/quit   stop debugging
 """
 
@@ -62,7 +66,7 @@ def isFiltered(node):
   ''' Nodes that should be skipped when traversing the graph '''
   filtered = ["do-while", "end-case", "loop", "end-switch", "end-block",
   "end-try","end-select", "else-where", "end-where", "end-do","repeat-until",
-  "end-with-do","do","passive-implicit","else","end-if","end-loop"]
+  "end-with-do","do","passive-implicit","else","end-if","end-loop","start"]
   return node.kind() in filtered
 
 # Track References that have been hit in the current run
@@ -85,12 +89,27 @@ def refs(node, func, refkindstr = ""):
       reflist.append(ref)
   return reflist
 
-def addHits(node, lexer, func, note = ""):
+def addHits(node, lexer, func, note = "", isForward = True):
   ''' Add all the references from the node's range '''
   global hits
   for ref in refs(node,func):
     context = lexText(lexer.lexemes(ref.line(), ref.line()))
-    hits.setdefault(ref.ent(), []).append([ref,context,note])
+    if isForward:
+      hits.setdefault(ref.ent(), deque()).append([ref,context,note])
+    else:
+      hits.setdefault(ref.ent(), deque()).appendleft([ref,context,note])
+
+def removeHits(node, func, isForward = True):
+  global hits
+  for ref in refs(node, func):
+    size = len(hits.get(ref.ent(),deque()))
+    if size == 1:
+      del hits[ref.ent()]
+    elif size > 1:
+      if isForward:
+        hits[ref.ent()].pop()
+      else:
+        hits[ref.ent()].popleft()
 
 def printHits(args = []):
   ''' Hits command '''
@@ -165,73 +184,175 @@ def printText(node, lexer):
       text += lexeme.text()
     print ("{}{:>5}{}".format(leader,l,text), end="")
 
+# manage path
+history = deque()
+curNode = 0
+
+def printHistory():
+  lastFunc = None
+  for i in range(len(history)):
+    curFunc = history[i]["function"]
+    if curFunc != lastFunc:
+      print (curFunc.longname())
+      lastFunc = curFunc
+    node = history[i]["node"]
+    if isFiltered(node):
+      continue
+
+    leader = "  "
+    if i == curNode:
+      leader = "->"
+    l = node.line_begin()
+    text = nodeText(node, history[i]["lexer"])
+    print ("{}{:>5} {}".format(leader,l,text))
+
+def changeNode(toNode, toLexer, toFunc, note, isForward):
+  global history
+  global curNode
+  global hits
+  histItem = { "node" : toNode, "lexer": toLexer, "function": toFunc }
+
+  curItem = None
+  if not history:
+    history.append(histItem)
+    curNode = 0
+  elif isForward:
+    if curNode == (len(history) - 1):
+      curItem = history[curNode]
+      history.append(histItem)
+      curNode += 1
+    elif history[1] == histItem:
+      removeHits(toNode, toFunc, False)
+      history.popLeft()
+    else:
+      curItem = history[0]
+      hits.clear()
+      history.clear()
+      history = deque([curItem, histItem])
+      curNode = 1
+  else:
+    if curNode == 0:
+      curItem = history[curNode]
+      history.appendleft(histItem)
+    elif history[-2] == histItem:
+      removeHits(toNode, toFunc, True)
+      history.pop()
+      curNode -= 1
+    else:
+      curItem = history[-1]
+      hits.clear()
+      history.clear()
+      history = deque([histItem, curItem])
+      curNode = 0
+
+  if curItem:
+    addHits(curItem["node"], curItem["lexer"], curItem["function"], note, isForward)
+
 def next(node, lexer, func, args = []):
   ''' Navigate to the next control flow node '''
   choices = node.children()
+  labels = []
+  for choice in choices:
+    labels.append(node.child_label(choice))
+  nextNode,note = chooseNode(node,lexer,args,choices, labels)
+  if nextNode != node:
+    changeNode(nextNode, lexer, func, note, True)
+    if nextNode and isFiltered(nextNode):
+      return next(nextNode, lexer, func, [])
+  return nextNode
+
+def prev(node, lexer, func, reverseCFG, args = []):
+  if node.kind() == "start":
+    choices = func.refs("callby")
+    return chooseFunc(node, choices, True, "Possible calls from:", args)
+  choices = reverseCFG.get(node,[])
+  labels = []
+  for choice in choices:
+    labels.append(choice.child_label(node))
+  nextNode,note = chooseNode(node,lexer,args,choices,labels)
+  if nextNode != node:
+    changeNode(nextNode, lexer, func, note, False)
+    if nextNode and isFiltered(nextNode):
+      return prev(nextNode, lexer, func, reverseCFG, [])
+  return nextNode
+
+def chooseNode(node, lexer, args, choices, labels):
   if not choices:
-    addHits(node,lexer, func)
-    return None
+    return None, ""
 
   if len(choices) == 1:
-    addHits(node,lexer, func)
-    if isFiltered(choices[0]):
-      return next(choices[0], lexer, func)
-    return choices[0]
+    return choices[0], ""
 
   if args:
     try:
       idx = int(args[0])
       if idx >= 0 and idx < len(choices):
-        note = node.child_label(choices[idx])
+        note = labels[idx]
         if not note:
-          note = str(idx) + ": " + nodeText(choices[idx])
+          note = str(idx) + ": " + nodeText(choices[idx],lexer)
         note = "Choose path " + note
-        addHits(node,lexer, func, note)
-        if isFiltered(choices[idx]):
-          return next(choices[idx],lexer,func)
-        return choices[idx]
-    except:
+        return choices[idx],note
+    except Exception as e:
+      print ("Exception" + str(e))
       pass
 
   print ("Multiple paths exist. Specify the path # in the command (ex: next 0)")
   print ("Possible paths from: ", nodeText(node, lexer))
   for i in range(len(choices)):
-    label = node.child_label(choices[i])
+    label = labels[i]
     if not label:
-      label = nodeText(choices[i])
+      label = nodeText(choices[i], lexer)
     print ("\t",i, label)
-  return node
+  return node, ""
 
 def step(node, lexer, func, args = []):
   choices = []
+  uniqueEnts = set()
   for ref in refs(node, func, "call"):
-    if not ref.ent() in choices and defFile(ref.ent()):
-      choices.append(ref.ent())
-
+    if not ref.ent() in uniqueEnts and defFile(ref.ent()):
+      uniqueEnts.add(ref.ent())
+      choices.append(ref)
   if not choices:
     return next(node,lexer, func, args)
 
+  contextMessage = "Possible calls in: " + nodeText(node,lexer)
+  return chooseFunc(node, choices, False, contextMessage, args)
+
+def chooseFunc(node, choices, useLine, contextMessage, args = []):
+  if not choices:
+    return None # nowhere to go
+
+  line = -1
   if len(choices) == 1:
-    enterFunc((choices[0]))
+    if useLine:
+      line = choices[0].line()
+    enterFunc(choices[0].ent(), line)
     return node
 
   if args:
     try:
       idx = int(args[0])
       if idx >= 0 and idx < len(choices):
-        enterFunc(choices[idx])
+        if useLine:
+          line = choices[idx].line()
+        enterFunc(choices[idx].ent(), line)
         return node
     except:
       pass
 
   print ("Multiple calls exist. Specify the call # in the command (ex: step 0)")
-  print ("Possible calls in: ", nodeText(node,lexer))
+  print (contextMessage)
   for i in range(len(choices)):
-    print("\t",i, choices[i].name())
+    lineText = ""
+    if useLine:
+      lineText = " (" + str(choices[i].line()) + ")"
+    print("\t",i, choices[i].ent().name(), lineText)
   return node
 
+
+
 # Main Loop
-def enterFunc(func):
+def enterFunc(func, line = -1):
   ''' Execute the given function '''
   cfg = func.control_flow_graph()
   if not cfg:
@@ -243,7 +364,21 @@ def enterFunc(func):
     print ("Error: no lexer for function's file")
     return
 
-  curNode = next(cfg.start(), lexer, func)
+  reverseCFG = dict()
+  for node in cfg.nodes():
+    for child in node.children():
+      reverseCFG.setdefault(child,[]).append(node)
+
+  curNode = None
+  if line != -1:
+    for node in cfg.nodes():
+      if node.line_begin() and node.line_begin() >= line:
+        curNode = node
+        # Assume that going to a line is always going back out of a call
+        changeNode(curNode, lexer, func, "", False)
+        break
+  if not curNode:
+    curNode = next(cfg.start(), lexer, func)
   printText(curNode, lexer)
   while True:
     parts = input("Enter a command: ").split()
@@ -253,6 +388,8 @@ def enterFunc(func):
       cmd = ''
     if cmd == "next" or cmd == "n":
       curNode = next(curNode, lexer, func, parts[1:])
+    elif cmd == "prev" or cmd == "p":
+      curNode = prev(curNode, lexer, func, reverseCFG, parts[1:])
     elif cmd == "step" or cmd == "s":
       curNode = step(curNode, lexer, func, parts[1:])
     elif cmd == "help":
@@ -270,6 +407,9 @@ def enterFunc(func):
       continue
     elif cmd == "hits":
       printHits(parts[1:])
+      continue
+    elif cmd == "hist" or cmd == "history":
+      printHistory()
       continue
     elif cmd == "exit" or cmd == "quit":
       exit()
