@@ -1,0 +1,131 @@
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Friend References"
+
+def test_entity(ent):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  # This is valid for c class's that have a friend reference
+  return ent.kind().check("c class, c struct") and len(ent.refs("c friend")) > 0
+  #return ent.kind().check("c class") and ent.refs("c friend")
+
+# Report generation
+def generate(report, ent):
+  """
+  Required, generate the report
+  """
+  # Find the friends
+  friends = {}
+  frefs = {}
+  for ref in ent.refs("c friend"):
+    friends[ref.ent()] = {}
+    frefs[ref.ent()] = ref
+
+
+  # Find all private and protected members
+  members = {}
+  for ref in ent.refs("define,declare","protected member, private member", True):
+    member = ref.ent()
+    members[member]={}
+
+    # Look for references that belong to a friend's scope
+    friendrefs = []
+    for ref in member.refs():
+      # only worry about reverse refs (setby, useby, callby, etc)
+      if ref.isforward():
+        continue
+
+      par = ref.ent()
+      while par:
+        if par in friends:
+          friends[par].setdefault(member, []).append(ref)
+          members[member].setdefault(par,[]).append(ref)
+        par = par.parent()
+
+  # Start the
+  report.print("Friend references into class: ")
+  print_ent(report,ent)
+
+  # Begin a grouped-by-friend tree
+  report.tree(1,True)
+  report.print("Grouped By Friend")
+
+  for friend in sorted(friends.keys(), key = lambda e: e.name()):
+    # Report each Friend as a tree node
+    report.tree(2,True)
+    print_friend(report,frefs[friend])
+
+    refdict = friends[friend]
+    for member in sorted(refdict.keys(), key = lambda e: e.name()):
+      # Report each member referenced by the friend as a tree node
+      report.tree(3)
+      print_member(report,member)
+
+      for ref in refdict[member]:
+        # Report each reference from the friend to the member as a leaf node
+        report.tree(4)
+        print_ref(report,ref)
+
+  # End the grouped-by-friend tree
+  report.tree()
+
+  # Begin a grouped-by-member tree
+  report.tree(1,True)
+  report.print("Grouped By Member")
+
+  for member in sorted(members.keys(), key = lambda e: e.name()):
+    # Report each Friend as a tree node
+    report.tree(2,True)
+    print_member(report,member)
+
+    refdict = members[member]
+    for friend in sorted(refdict.keys(), key = lambda e: e.name()):
+      report.tree(3)
+      print_friend(report, frefs[friend])
+
+      for ref in refdict[friend]:
+        report.tree(4)
+        print_ref(report,ref)
+
+  # End the grouped-by-friend tree
+  report.tree()
+
+def print_friend(report,ref):
+    report.print("Friend ")
+    print_ent(report,ref.ent())
+    report.print(": " + ref.ent().kind().name() + " ")
+    print_refloc(report, ref, False)
+
+def print_member(report, member):
+  print_ent(report,member)
+  report.print(": " + member.kind().name())
+
+def print_ref(report, ref):
+  report.print(ref.kind().name() + " ")
+  print_ent(report,ref.ent())
+  report.print(" ")
+  print_refloc(report, ref, True)
+
+
+# Some helper functions
+def print_ent(report, ent):
+  report.entity(ent)
+  report.print(ent.name())
+  report.entity()
+
+def print_refloc(report,ref,showFile=False):
+  report.syncfile(ref.file().longname(), ref.line(), ref.column())
+  if showFile:
+    report.print(ref.file().name())
+    report.print(" ")
+  report.bold()
+  report.print("(")
+  report.nobold()
+  report.print(str(ref.line()))
+  report.bold()
+  report.print(")")
+  report.nobold()
+  report.syncfile()
