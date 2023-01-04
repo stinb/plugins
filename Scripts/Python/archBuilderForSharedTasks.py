@@ -12,15 +12,18 @@ def error(string):
 def getNum(string, minimum=None, maximum=None):
     while True:
         num = input(string)
-        try:
-            num = int(num)
-            if minimum != None and num < minimum:
-                raise IndexError(f'Minimum {minimum}')
-            if maximum != None and num > maximum:
-                raise IndexError(f'Maximum {maximum}')
-        except:
-            error('Not a valid number')
-            continue
+        if num:
+            try:
+                num = int(num)
+                if minimum != None and num < minimum:
+                    raise IndexError(f'Minimum {minimum}')
+                if maximum != None and num > maximum:
+                    raise IndexError(f'Maximum {maximum}')
+            except:
+                error('Not a valid number')
+                continue
+        else:
+            num = None
         break
     return num
 
@@ -110,7 +113,10 @@ def main():
 
             # Function: task
             task = getFunction(functions, 'Task')
-            task.add_to_arch(f'{arch}/Task Priority/{group}')
+            if group:
+                task.add_to_arch(f'{arch}/Task Priority/{group}')
+            else:
+                task.add_to_arch(f'{arch}/Tasks')
 
         # Interrupt control
         else:
