@@ -1,0 +1,305 @@
+import understand
+
+def name():
+  """
+  Required, the name of the graph.
+  """
+  return "Set References"
+
+
+def test_entity(ent):
+  """
+  Optional, return True if the graph exists for the given entity
+
+  If True, this graph will appear in the Graphical Views menu for the
+  entity.
+  """
+  # This graph is valid for entities that are set
+  return len(ent.refs("c setby")) > 0;
+
+def init(graph, target):
+  """
+  Initialize the graph
+
+  This function is called once on graph creation. Use it to define the
+  available graph options and/or a legend.
+  """
+
+  # Options
+  graph.options().define("Level", ["1", "2", "3", "4", "5"], "1")
+  graph.options().define("Returns", ["Off","On"], "On")
+  graph.options().define("Parameter Calls", ["Off","On"], "On")
+  graph.options().define("Show Source Locations", ["Off","On"], "Off")
+
+  # Legend
+  graph.legend().define("param", "roundedrect", "Parameter", "#90c4e4", "")
+  graph.legend().define("global", "ellipse", "Global Object", "#90c4e4", "")
+  graph.legend().define("func", "rectangle", "Function", "#569f38", "")
+  graph.legend().define("other", "rectangle", "Other Entities", "#90c4e4", "")
+  graph.legend().define("src", "none", "Source Code", "#90c4e4", "")
+
+
+
+def draw(graph, ent):
+  """
+  Draw the graph
+
+  The second argument can be a database, an architecture or an entity depending
+  on whether the graph was created at a project, architecture, or entity level.
+  """
+
+  # Graph style defaults
+  graph.set("rankdir","RL")
+  graph.default('color', '#90c4e4', 'node')
+  graph.default('shape', 'box', 'node')
+  graph.default('color', '#4e8cb9', 'edge')
+
+  # Cache entity nodes so each entity appears once in the graph
+  nodecache = {}
+  lexercache = {} # cache lexers for speed
+
+  visited = set() # avoid infinite recursion
+  curLevel = [ent]
+  nextLevel = []
+
+  # Expand entities level by level
+  depth = int(graph.options().lookup("Level"))
+  for i in range(depth):
+    for curEnt in curLevel:
+      if curEnt in visited:
+        continue
+      visited.add(curEnt)
+      nextLevel += expand(graph, curEnt, nodecache, lexercache)
+    curLevel = nextLevel
+    nextLevel = []
+
+
+def expand(graph, ent, nodecache, lexercache):
+  # Expanding an entity creates source code nodes and connects them to both
+  # the initial entity and all other entities in that source. The complete
+  # list of other entities is returned to form the next level
+
+  # Complete list of all entities for the next level
+  next = []
+
+  # initial entity
+  headNode = entNode(graph, ent, nodecache)
+
+  # Create source code nodes for each set reference
+  for ref in ent.refs("c setby"):
+    lexlist = lexemes(ref, lexercache)
+    tailNode = srcNode(graph, ref, lexlist)
+    graph.edge(tailNode, headNode)
+
+    for lexEnt in ents(lexlist, ent):
+      next.append(lexEnt)
+      graph.edge(entNode(graph, lexEnt, nodecache), tailNode)
+
+  # Create source code nodes for particular lexeme lists, as appropriate
+  lexlists = []
+  if graph.options().lookup("Returns") == "On" and ent.kind().check("function"):
+    lexlists += returnLexemes(ent, lexercache)
+
+  if graph.options().lookup("Parameter Calls") == "On" and ent.kind().check("parameter"):
+    lexlists += paramCalls(ent, lexercache)
+
+  for lexlist in lexlists:
+    loc =[lexlist[0], lexlist[1].line_begin(), lexlist[1].column_begin()]
+    tailNode = srcNode(graph, loc, lexlist[1:])
+    graph.edge(tailNode, headNode)
+
+    for lexEnt in ents(lexlist[1:], ent):
+      next.append(lexEnt)
+      graph.edge(entNode(graph, lexEnt, nodecache), tailNode)
+
+  return next
+
+def ents(lexlist, exceptEnt):
+  # Find all the entities appearing in the list of lexemes. exceptEnt allows
+  # ignoring the initial entity.
+  entlist = []
+  for lexeme in lexlist:
+    nextent = lexeme.ent()
+    if nextent and not nextent in entlist and nextent != exceptEnt:
+      entlist.append(nextent)
+  return entlist
+
+def entNode(graph, ent, cache):
+  # Create a node for an entity. Entity nodes are cached so that all
+  # edges to a specific entity go to the same entity node
+  if ent in cache:
+    node = cache[ent]
+  else:
+    # passing an ent to the node object will automatically sync the entity.
+    node = graph.node(ent.name(),ent)
+    cache[ent] = node
+    if ent.kind().check("global object"):
+      node.set("shape","oval")
+    elif ent.kind().check("function"):
+      node.set("color","#569f38")
+    elif ent.kind().check("parameter"):
+      node.set("style","rounded")
+  return node
+
+def srcNode(graph, loc, lexlist):
+  # Create a node from a lexeme list. These nodes are not cached.
+
+  # The text of the node is the source code from the lexemes
+  text = ""
+  for lexeme in lexlist:
+    text += lexeme.text()
+
+  if not text or graph.options().lookup("Show Source Locations") == "On":
+    if isinstance(loc, understand.Ref):
+      text += "\\l[" + loc.file().relname() + " (" + str(loc.line()) + ":" + str(loc.column()) + ")]"
+    else:
+      text += "\\l[" + loc[0].relname() + " (" + str(loc[1]) + ":" + str(loc[2]) + ")]"
+
+  node = graph.node(text)
+
+  # The node syncs to the location in the source code. loc should be either
+  # a reference or a (file, line, column) tuple/list
+  if isinstance(loc, understand.Ref):
+    node.sync(loc)
+  else:
+    node.sync(loc[0].longname(), loc[1], loc[2])
+
+  # Source code node styling
+  node.set("shape","none")
+  return node
+
+def returnLexemes(func, lexercache):
+  # References will only exist if an entity is returned. Returns with data
+  # like return "a string" are not references. So, rather than use references,
+  # use the lexer to find all return statements.
+  retlist  = []
+
+  # Find the beginning of the function by finding the definition reference
+  defref = func.refs("definein")
+  if len(defref) != 1:
+    return retlist
+  defref = defref[0]
+
+  lexer = findlexer(defref.file(), lexercache)
+  if lexer:
+    # Start at the function name
+    lexeme = lexer.lexeme(defref.line(), defref.column())
+    braces = None
+    inRet = False
+    curRet = []
+    # Continue until the end of the current scope (braces == 0)
+    while lexeme and (braces is None or braces > 0):
+      if lexeme.token() == "Punctuation":
+        if lexeme.text() == "{":
+          if not braces:
+            braces = 1
+          else:
+            braces += 1
+        elif lexeme.text() == "}":
+          braces -= 1
+        elif lexeme.text() == ';' and inRet:
+          # A return statement ends with a semicolon
+          retlist.append(curRet)
+          curRet = []
+          inRet = False
+      if lexeme.token() == "Keyword" and lexeme.text() == "return":
+        # A return statement begins with the keyword "return"
+        curRet.append(defref.file())
+        inRet = True
+      if inRet:
+        curRet.append(lexeme)
+      lexeme = lexeme.next()
+  return retlist
+
+def paramCalls(param, lexercache):
+  retlist  = []
+
+  # Find the function defining the parameter
+  defref = param.refs("definein")
+  if len(defref) != 1:
+    return retlist
+  defref = defref[0]
+
+  # Get a sorted list of parameters to determine this parameters position
+  paramrefs = sorted(defref.ent().refs("define","c parameter"), key= lambda ref: (ref.line(), ref.column()))
+  pos = -1
+  for idx, ref in enumerate(paramrefs):
+    if ref.ent() == param:
+      pos = idx
+      break
+  if pos == -1:
+    return retlist
+
+  # Look at each of the function calls to find the lexemes at this
+  # parameters position
+  for ref in defref.ent().refs("callby"):
+    lexer = findlexer(ref.file(), lexercache)
+    if lexer:
+      lexeme = lexer.lexeme(ref.line(), ref.column())
+      parens = None
+      curPos = 0
+      curlist = [ref.file()]
+      while lexeme and (parens is None or parens > 0) and curPos <= pos:
+        if lexeme.token() == "Punctuation":
+          if lexeme.text() == ')':
+            parens -= 1
+          elif lexeme.text() == '(':
+            if parens:
+              parens += 1
+            else:
+              parens = 1
+              lexeme = lexeme.next()
+              continue
+        if lexeme.token() == "Operator" and  parens and parens == 1 and lexeme.text() == ',':
+            # Only increment current position if we're at parentheses level
+            # 1, to handle nested functions with their own parameters
+            curPos += 1
+            lexeme = lexeme.next()
+            continue
+        if parens and curPos == pos:
+          # If this lexeme is inside the range mapped to this parameter
+          curlist.append(lexeme)
+        lexeme = lexeme.next()
+      if len(curlist) > 1:
+        retlist.append(curlist)
+
+  return retlist
+
+def findlexer(file, lexercache):
+  # Lexer creation takes significant time, so keep track of lexers already
+  # created instead of recreating them each time
+  lexer = None
+  if file in lexercache:
+    lexer = lexercache[file]
+  else:
+    try:
+      lexer = file.lexer()
+      lexercache[file] = lexer
+    except:
+      pass
+  return lexer
+
+def lexemes(ref, lexercache):
+  lexlist = []
+  lexer = findlexer(ref.file(), lexercache)
+  if lexer:
+    # Start at the referenced lexeme
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    parens = 0
+    semicolon = False
+    # Read to the end of the current statement, which is usually a semicolon
+    # but can be parentheses, ex:
+    #  if (x = func()) ...;
+    # would be "x = func()"
+    while lexeme and parens >= 0 and not semicolon:
+      lexlist.append(lexeme)
+      lexeme = lexeme.next()
+      if lexeme and lexeme.token() == "Punctuation":
+        if lexeme.text() == ';':
+          semicolon = True
+        elif lexeme.text() == ')':
+          parens -= 1
+        elif lexeme.text() == '(':
+          parens += 1
+
+  return lexlist
