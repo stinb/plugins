@@ -25,8 +25,8 @@ def test_architecture(arch):
 
 def init(graph, target):
     # Options
-    graph.options().define('Filter modify/set only', ['On', 'Off'], 'Off')
-    graph.options().define('Filter use only', ['On', 'Off'], 'Off')
+    graph.options().define('Filter out modify/set only', ['On', 'Off'], 'Off')
+    graph.options().define('Filter out use only', ['On', 'Off'], 'Off')
     graph.options().define('Objects', ['All', 'Shared only'], 'All')
     graph.options().define('Reference', ['All', 'Simple'], 'All')
 
@@ -41,7 +41,7 @@ def init(graph, target):
     graph.legend().define('refUse', 'arrow', 'Ref: Use', blue, blue, 3, 1)
     graph.legend().define('refMany', 'arrow', 'Ref: (Many)', purple, purple, 4, 1)
     graph.legend().define('interruptProtected', 'dasharrow', 'Interrupt Protected (All Colors)', '', '', 5, 1)
-    graph.legend().define('filtered', 'dotarrow', 'Filtered (All Colors)', '', '', 6, 1)
+    graph.legend().define('filtered', 'dotarrow', 'Filtered Out (All Colors)', '', '', 6, 1)
 
 
 def drawNode(graph, ent, name, **kwargs):
@@ -135,16 +135,12 @@ def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, cont
             interruptDisabledRefs.add(str(ref))
 
 
-def getEdgeInfo(visited, allFiltered, tasks, incoming, outgoing, edgeInfo, root, fun, options):
+def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options):
     # Base case: visiting a function again from the same root
     funKey = str(root) + ' ' + str(fun)
     if funKey in visited:
-        return allFiltered[fun]
+        return
     visited.add(funKey)
-
-    # If this function wasn't ever visited before, assume it's not filtered
-    if fun not in allFiltered:
-        allFiltered[fun] = True
 
     # References to global objects
     for ref in fun.refs(refKinds, objKinds):
@@ -180,27 +176,6 @@ def getEdgeInfo(visited, allFiltered, tasks, incoming, outgoing, edgeInfo, root,
             outgoing[scope] = set()
         outgoing[scope].add(edgeKey)
 
-    # Filter out object reference edges
-    if fun in outgoing:
-        for edgeKey in outgoing[fun]:
-            edgeObj = edgeInfo[edgeKey]
-
-            # See if the edge is filtered out based on options
-            kindnames = edgeObj['kindnames']
-            if len(kindnames) == 0:
-                continue
-            filtered = False
-            if len(kindnames) in {1, 2} and 'Use' not in kindnames and options['filterModifySetOnly']:
-                filtered = True
-            elif len(kindnames) == 1 and 'Use' in kindnames and options['filterUseOnly']:
-                filtered = True
-
-            # Filter out edges
-            if filtered:
-                edgeObj['filtered'] = True
-            else:
-                allFiltered[fun] = False
-
     # Function calls
     for call in fun.refs('Call', funKinds, True):
         if not options['simple']:
@@ -232,12 +207,48 @@ def getEdgeInfo(visited, allFiltered, tasks, incoming, outgoing, edgeInfo, root,
                 outgoing[scope] = set()
             outgoing[scope].add(edgeKey)
 
-        filtered = getEdgeInfo(visited, allFiltered, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
 
-        if not filtered:
-            allFiltered[fun] = False
 
-    return allFiltered[fun]
+def filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options):
+    # Object
+    if ent.kind().check(objKinds):
+        # Get all kindnames for incoming edges
+        allEdgeKindnames = set()
+        for edgeKey in incoming[ent]:
+            edgeObj = edgeInfo[edgeKey]
+            allEdgeKindnames.update(edgeObj['kindnames'])
+
+        # See if the object should be filtered out
+        filtered = False
+        if options['filterUseOnly'] and 'Set' not in allEdgeKindnames and 'Modify' not in allEdgeKindnames \
+        or options['filterModifySetOnly'] and 'Use' not in allEdgeKindnames:
+            filtered = True
+
+    # Function
+    else:
+        # Get all outgoing edges
+        filtered = True
+        for edgeKey in outgoing[ent]:
+            edgeObj = edgeInfo[edgeKey]
+            if not edgeObj['filtered']:
+                filtered = False
+                break
+
+    # Base case: stop filtering out edges
+    if not filtered or ent not in incoming:
+        return
+
+    # Filter out all incoming edges
+    for edgeKey in incoming[ent]:
+        edgeObj = edgeInfo[edgeKey]
+        edgeObj['filtered'] = True
+
+    # Recurse for all scope nodes of incoming edges
+    for edgeKey in incoming[ent]:
+        edgeObj = edgeInfo[edgeKey]
+        scope = edgeObj['scope']
+        filterIncomingEdges(incoming, outgoing, edgeInfo, scope, options)
 
 
 def getNodeName(ent, tasks):
@@ -250,15 +261,14 @@ def getNodeName(ent, tasks):
 def draw(graph, target):
     # Get options
     options = {
-        'filterModifySetOnly': True if graph.options().lookup('Filter modify/set only') == 'On' else False,
-        'filterUseOnly': True if graph.options().lookup('Filter use only') == 'On' else False,
-        'sharedOnly': True if graph.options().lookup('Objects') == 'Shared only' else False,
-        'simple': True if graph.options().lookup('Reference') == 'Simple' else False,
+        'filterModifySetOnly': graph.options().lookup('Filter out modify/set only') == 'On',
+        'filterUseOnly': graph.options().lookup('Filter out use only') == 'On',
+        'sharedOnly': graph.options().lookup('Objects') == 'Shared only',
+        'simple': graph.options().lookup('Reference') == 'Simple',
     }
 
     # Setup data for getEdgeInfo
     visited     = set()  # { funKey, ... }
-    allFiltered = dict() # { fun: boolean, ... }
     tasks       = dict() # { ent: integer, ... }
     incoming    = dict() # { ent: set, ... }
     outgoing    = dict() # { ent: set, ... }
@@ -268,7 +278,7 @@ def draw(graph, target):
                          #     'ent': ent,
                          #     'kindnames': set,
                          #     'from': set,
-                         #     'filtered': boolean
+                         #     'filtered': boolean,
                          #     'ref': ref
                          # }, ... }
 
@@ -329,16 +339,14 @@ def draw(graph, target):
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
-        getEdgeInfo(visited, allFiltered, tasks, incoming, outgoing, edgeInfo, ent, ent, options)
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options)
 
-    # Filter out incoming function call edges
-    for edgeObj in edgeInfo.values():
-        fun = edgeObj['scope']
-        if not allFiltered[fun] or fun not in incoming:
-            continue
-        for edgeKey in incoming[fun]:
-            edgeObj = edgeInfo[edgeKey]
-            edgeObj['filtered'] = True
+    # See which edges are filtered out
+    if options['filterModifySetOnly'] or options['filterUseOnly']:
+        for edgeObj in edgeInfo.values():
+            ent = edgeObj['ent']
+            if ent.kind().check(objKinds):
+                filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
 
     # See which refs are interrupt-protected
     for fun in graph.db().ents(funKinds):
