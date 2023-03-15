@@ -4,7 +4,7 @@ Visualize an architecture of functions with the Shared Tasks graph. See how task
 
 # Setup: Install the Graph Plugin
 
-1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasks.upy) the Shared Tasks graph.
+1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) the Shared Tasks graph.
 
 2. Drag and drop it into Understand.
 
