@@ -10,13 +10,13 @@ Visualize an architecture of functions with the Shared Tasks graph. See how task
 
 # Setup: Install the CSV Interactive Report Plugin
 
-1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks graph.
+1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks CSV script.
 
 2. Drag and drop it into Understand.
 
 # Setup: Use the CSV Script in the Command Line Interface
 
-1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks graph.
+1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks CSV script.
 
 2. Run it with upython. Give it the `-h` argument for help.
 ```sh
