@@ -8,6 +8,21 @@ Visualize an architecture of functions with the Shared Tasks graph. See how task
 
 2. Drag and drop it into Understand.
 
+# Setup: Install the CSV Interactive Report Plugin
+
+1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks graph.
+
+2. Drag and drop it into Understand.
+
+# Setup: Use the CSV Script in the Command Line Interface
+
+1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks graph.
+
+2. Run it with upython. Give it the `-h` argument for help.
+```sh
+upython sharedTasksCSV.upy -h
+```
+
 # Setup: Create an Architecture
 
 ## Automatic Architecture Creation
