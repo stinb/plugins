@@ -14,7 +14,7 @@ Visualize an architecture of functions with the Shared Tasks graph. See how task
 
 2. Drag and drop it into Understand.
 
-3. To have a dynamic file name, you can add {ARCHITECTURE}, {DATE}, or {TIME} to the "CSV file name" option.
+3. To have a dynamic file name, you can add {arch}, {date}, or {time} (case-insensitive) to the "CSV file name" option.
 
 # Setup: Use the CSV Script in the Command Line Interface
 
@@ -25,7 +25,7 @@ Visualize an architecture of functions with the Shared Tasks graph. See how task
 upython sharedTasksCSV.upy -h
 ```
 
-3. To have a dynamic file name, you can add {ARCHITECTURE}, {DATE}, or {TIME} to the value of the `-csvFileName` argument.
+3. To have a dynamic file name, you can add {arch}, {date}, or {time} (case-insensitive) to the value of the `-csvFileName` argument.
 
 # Setup: Create an Architecture
 
