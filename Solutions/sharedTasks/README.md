@@ -14,14 +14,18 @@ Visualize an architecture of functions with the Shared Tasks graph. See how task
 
 2. Drag and drop it into Understand.
 
+3. To have a dynamic file name, you can add {ARCHITECTURE}, {DATE}, or {TIME} to the "CSV file name" option.
+
 # Setup: Use the CSV Script in the Command Line Interface
 
 1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks CSV script.
 
-2. Run it with upython. Give it the `-h` argument for help.
+2. Run it with upython. Give it the `-h`, `--help`, or `help` argument for help.
 ```sh
 upython sharedTasksCSV.upy -h
 ```
+
+3. To have a dynamic file name, you can add {ARCHITECTURE}, {DATE}, or {TIME} to the value of the `-csvFileName` argument.
 
 # Setup: Create an Architecture
 
