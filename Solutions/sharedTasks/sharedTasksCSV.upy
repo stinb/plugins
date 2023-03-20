@@ -228,7 +228,19 @@ def filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options):
         filterIncomingEdges(incoming, outgoing, edgeInfo, scope, options)
 
 
-def generateCSVRows(db, arch, options, lines):
+def printEnt(report, ent):
+    report.entity(ent)
+    report.print(ent.name())
+    report.entity()
+
+
+def printFile(report, file):
+    report.entity(file)
+    report.print(file.relname())
+    report.entity()
+
+
+def generateCSVRows(db, arch, options, lines, report):
     # Setup data for getEdgeInfo
     visited     = set()  # { funKey, ... }
     tasks       = dict() # { ent: integer, ... }
@@ -356,13 +368,15 @@ def generateCSVRows(db, arch, options, lines):
 
             # Info for each column for all rows of the edge
             protected = 'x' if str(edgeObj['ref']) in interruptDisabledRefs else '-'
+            function = edgeObj['scope']
             functionName = edgeObj['scope'].name()
             reference = []
             for kindname in edgeObj['kindnames']:
                 reference.append(kindname[0])
             reference.sort()
             reference = ''.join(reference)
-            file = edgeObj['ref'].file().relname()
+            file = edgeObj['ref'].file()
+            relname = file.relname()
 
             # Sort the tasks that this edge is from
             fromTasks = list(edgeObj['from'])
@@ -375,14 +389,33 @@ def generateCSVRows(db, arch, options, lines):
                 taskName = task.name()
                 taskPriority = tasks[task]
 
-                # Make the row
-                line = f'{objectName}, {shared}, {protected}, {functionName}, {reference}, {file}, {taskName}, {taskPriority}\n'
-                lines.append(line)
+                # Make the clickable row for interactive report
+                if report:
+                    printEnt(report, obj)
+                    report.print(f', {shared}, {protected}, ')
+                    printEnt(report, function)
+                    report.print(f', {reference}, ')
+                    printFile(report, file)
+                    report.print(', ')
+                    printEnt(report, task)
+                    report.print(f', {taskPriority}\n')
+
+                # Make the row for the file
+                if lines:
+                    line = f'{objectName}, {shared}, {protected}, {functionName}, {reference}, {relname}, {taskName}, {taskPriority}\n'
+                    lines.append(line)
 
 
-def generateCSV(db, arch, options, getLines):
+def generateCSV(db, arch, options, report=None):
     lines = ['Global Object, Shared, Protected, Function, Reference(M=Modify/S=Set/U=Use), File, Task, Task Priority\n']
-    generateCSVRows(db, arch, options, lines)
+
+    if report:
+        report.print(lines[0])
+
+    if not options['autoExport']:
+        lines = None
+
+    generateCSVRows(db, arch, options, lines, report)
 
     if options['autoExport']:
         # Default file name
@@ -418,10 +451,6 @@ def generateCSV(db, arch, options, getLines):
         file.writelines(lines)
         file.close()
 
-    # Return lines for the interactive report
-    if getLines:
-        return lines
-
 
 ######################
 # Interactive Report #
@@ -456,9 +485,8 @@ def generate(report, target):
         key = option[KEY]
         options[key] = report.options().lookup(key)
 
-    # Export and print
-    for line in generateCSV(report.db(), target, options, True):
-        report.print(line)
+    # Export file and print lines to report
+    generateCSV(report.db(), target, options, report)
 
 #######
 # CLI #
@@ -603,5 +631,5 @@ if __name__ == '__main__':
         print(f'    {archLongName}')
         exit(1)
 
-    # Export
-    generateCSV(db, arch, options, False)
+    # Export file
+    generateCSV(db, arch, options)
