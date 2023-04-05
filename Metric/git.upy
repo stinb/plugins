@@ -1,0 +1,141 @@
+# A Metrics Plugin for Git
+
+import os
+import understand
+from subprocess import run
+
+gitMets = {
+  "GitCommits" : ["Commits", "The number of git commits that touched this file/directory"],
+  "GitAuthors" : ["Authors", "The number of unique git authors that touched this file/directory"]
+}
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return list(gitMets.keys())
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return gitMets.get(id,["",""])[0]
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return gitMets.get(id,["",""])[1]
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return True
+
+# One of the following three test functions should return True.
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  return ent.kind().check("file ~unknown, ~unresolved") and has_git(metric.db())
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  return (arch.longname().startswith("Directory Structure/") or arch.name() == "Directory Structure") and has_git(metric.db())
+
+def test_global(metric, db):
+  """
+  Optional, return True if metric can be calculated for the given database.
+  """
+  return has_git(metric.db())
+
+def test_available(metric,entkindstr):
+  """
+  Optional, return True if the metric is potentially available.
+
+  This is used when there isn't a specific target for the metric, like lists
+  of metrics available for export, or for a treemap.
+
+  Use metric.db() to retrieve the database. If the metric is language specific,
+  the code might look like this:
+    return "Ada" in metric.db().language()
+
+  entkindstr may be empty. If it is empty, return True as long as the metric
+  is available for an entity, architecture, or the project as a whole.
+
+  If entkindstr is not empty, return True only if the metric is available for
+  entities matching the provided kind string. Kind checks are performed like
+  this:
+    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
+    test_kinds = set(understand.Kind.list_entity(entkindstr)
+    return len(my_kinds.intersection(test_kinds)) > 0
+  """
+  if not has_git(metric.db()):
+    return False
+
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # Git repository was found, so git metrics are available
+  return True
+
+def value(metric, target):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  path = ""
+  if isinstance(target, understand.Db):
+    path = "."
+  elif isinstance(target, understand.Arch):
+    # This assumes that the root of the directory structure architecture is
+    # at the same location as the Understand project. If the Understand project
+    # is not at the root of directory structure, this line must be updated
+    if target.name() == "Directory Structure":
+      path = "."
+    else:
+      path = '/'.join(target.longname().split('/')[1:])
+  else: # entity, must be file
+    path = target.longname()
+
+  # The git repository is assumed to be in the same folder as the Understand
+  # project. If this is not True for your project, update the working directory
+  # accordingly.
+  wd = os.path.dirname(metric.db().name())
+  try:
+    gitlog = run(["git", "log", "--format=%an", "--", path], check=True, capture_output=True, cwd=wd, text=True)
+  except Exception as e:
+    return 0 # not part of the repository?
+
+  commits = gitlog.stdout.splitlines()
+  if metric.id() == "GitCommits":
+    return len(commits)
+
+  authors = set()
+  for author in commits:
+    authors.add(author)
+  return len(authors)
+
+def has_git(db):
+  # This assumes that the git repository, if it exists, is in the same location
+  # as the Understand project. If that is not true for your repository, you
+  # would need to update this code.
+  path = os.path.join(os.path.dirname(db.name()), ".git")
+  return os.path.exists(path)
+

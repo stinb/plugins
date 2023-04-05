@@ -1,0 +1,102 @@
+import understand
+import math
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return ["HalsteadVol","HalsteadMaintainIdx"]
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  if id == "HalsteadVol":
+    return "Halstead Volume"
+  elif id == "HalsteadMaintainIdx":
+    return "Halstead Maintainability Index"
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  if id == "HalsteadVol":
+    return "Halstead Volume = (Total Operators + Total Operands) * log_2(Unique Operators + Unique Operands)"
+  elif id == "HalsteadMaintainIdx":
+    return "Halstead Maintainability Index = 171 - 5.2 * ln(HalsteadVol) - 0.23 * CyclomaticStrict - 16.2 * ln(CountLineCode) + 50 * sqrt(2.46 * RatioCommentToCode)"
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return False
+
+def test_entity(metric, ent):
+  """
+  Required, return True if metric can be calculated for the given entity.
+  """
+  return ent.kind().check("file,function")
+
+def value(metric, ent):
+  """
+  Required, return the metric value for the entity.
+  """
+  hv = halstead_volume(ent)
+  if metric.id() == "HalsteadVol":
+    return hv
+  if metric.id() == "HalsteadMaintainIdx":
+    metlist = ["CyclomaticStrict","CountLineCode","RatioCommentToCode"]
+    if ent.kind().check("file"):
+      metlist[0] = "SumCyclomaticStrict"
+    metdict = ent.metric(metlist)
+    cc = metdict[metlist[0]]
+    lines = metdict[metlist[1]]
+    ratioComToCode = metdict[metlist[2]]
+    try:
+      return 171 - 5.2 * math.log(hv) \
+                 - 0.23 * float(cc) \
+                 - 16.2 * math.log(lines) \
+                 + 50 * math.sqrt(2.46 * float(ratioComToCode))
+    except Exception as e:
+      pass
+
+
+# Functions for this demo
+def halstead_volume(ent):
+  lexemes = []
+  if ent.kind().check("file"):
+    lexemes = ent.lexer().lexemes()
+  else:
+    defref = ent.ref("definein, body declarin")
+    endref = ent.ref("end")
+    if defref and endref and defref.file() == endref.file():
+      lexemes = defref.file().lexer().lexemes(defref.line(), endref.line())
+  unique_operators = set()
+  unique_operands = set()
+  total_operators = 0
+  total_operands = 0
+
+  for lexeme in lexemes:
+    if (lexeme.token() in ["Operator","Keyword","Punctuation"] and
+        not lexeme.text() in [')','}',']']):
+      unique_operators.add(lexeme.text())
+      total_operators += 1;
+    elif (lexeme.token() in ["Identifier","Literal","String"]):
+      unique_operands.add(lexeme.text())
+      total_operands += 1;
+
+  total = total_operators + total_operands
+  unique = len(unique_operators) + len(unique_operands)
+  if unique <= 0:
+    return 0
+  return total * math.log2(unique)
+

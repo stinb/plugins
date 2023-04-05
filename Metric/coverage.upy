@@ -1,0 +1,221 @@
+# A Metrics Plugin that reads lcov info format
+
+import os
+import understand
+
+coverageMets = {
+  "CoverageLinesFound" : ["Coverage Lines Found", "The number of lines that could have coverage information"],
+  "CoverageLinesHit" : ["Coverage Lines Hit", "The number of lines that had coverage hits"],
+  "CoverageLinesPercent" : ["Coverage Lines Percentage", "CoverageLinesHit / CoverageLinesFound"],
+  "CoverageFunctionsFound" : ["Coverage Functions Found", "The number of functions in the file that could have coverage information"],
+  "CoverageFunctionsHit" : ["Coverage Functions Hit", "The number of functions in the file that had coverage hits"],
+  "CoverageFunctionsPercent" : ["Coverage Functions Percent", "CoverageFunctionsHit / CoverageFunctionsFound"],
+  "CoverageHits" : ["Coverage Hits", "The number of coverage hits for the function"],
+}
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return list(coverageMets.keys())
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return coverageMets.get(id,["",""])[0]
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return coverageMets.get(id,["",""])[1]
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return id != "CoverageLinesPercent" and id != "CoverageFunctionsPercent"
+
+# One of the following three test functions should return True.
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  if not has_coverage(metric.db()):
+    return False
+  if metric.id() == "CoverageHits":
+    return ent.kind().check("function ~unknown ~unresolved")
+  else:
+    return ent.kind().check("file ~unknown ~unresolved")
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  if not has_coverage(metric.db()):
+    return False
+  return metric.id() != "CoverageHits" and (arch.longname().startswith("Directory Structure/") or arch.name() == "Directory Structure")
+
+def test_global(metric, db):
+  """
+  Optional, return True if metric can be calculated for the given database.
+  """
+  if not has_coverage(metric.db()):
+    return False
+  return metric.id() != "CoverageHits"
+
+def test_available(metric,entkindstr):
+  """
+  Optional, return True if the metric is potentially available.
+
+  This is used when there isn't a specific target for the metric, like lists
+  of metrics available for export, or for a treemap.
+
+  Use metric.db() to retrieve the database. If the metric is language specific,
+  the code might look like this:
+    return "Ada" in metric.db().language()
+
+  entkindstr may be empty. If it is empty, return True as long as the metric
+  is available for an entity, architecture, or the project as a whole.
+
+  If entkindstr is not empty, return True only if the metric is available for
+  entities matching the provided kind string. Kind checks are performed like
+  this:
+    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
+    test_kinds = set(understand.Kind.list_entity(entkindstr)
+    return len(my_kinds.intersection(test_kinds)) > 0
+  """
+  # Coverage metrics rely on finding the coverage file from the database
+  # name.
+  if not has_coverage(metric.db()):
+    return False
+
+  # Kind check if requested
+  if entkindstr:
+    # Coverage metrics are only available for files and functions
+    if metric.id() == "CoverageHits":
+      my_kinds = set(understand.Kind.list_entity("function ~unknown ~unresolved"))
+    else:
+      my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # The coverage file was found since has_coverage passed, so metric
+  # values are available for some entities, some architectures, and/or
+  # the database.
+  return True
+
+def value(metric, target):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  fileents = []
+  if isinstance(target, understand.Db):
+    fileents = target.lookup_arch("Directory Structure").ents(True)
+  elif isinstance(target, understand.Arch):
+    fileents = target.ents(True)
+  else: # entity
+    if target.kind().check("file"):
+      fileents.append(target)
+    else:
+      # Calculate for a function
+      ref = target.ref("definein, body declarin")
+      if ref:
+        return func_coverage(metric.db(), ref.file().longname(), target.name())
+      return 0
+
+  # Calculate over files
+  fileset = set()
+  for ent in fileents:
+    fileset.add(ent.longname())
+
+  return file_coverage(metric.db(), fileset).get(metric.id(),0)
+
+
+def has_coverage(db):
+  path = os.path.join(os.path.dirname(db.name()), "coverage.info")
+  return os.path.exists(path)
+
+def file_coverage(db, files):
+  # LCOV File format as described here:
+  # https://ltp.sourceforge.net/coverage/lcov/geninfo.1.php
+  cov_file = os.path.join(os.path.dirname(db.name()), "coverage.info")
+
+  keep = None
+  foundfuncs = set()
+  foundlines = set()
+  hitfuncs = set()
+  hitlines = set()
+  with open(cov_file, 'r') as f:
+    for line in f:
+      text = line.strip()
+      if text == "end_of_record":
+        keep = None
+      if text.startswith("SF:"):
+        if text[3:] in files:
+          keep = text[3:]
+      if keep:
+        if text.startswith("FNDA:"):
+          # This probably doesn't work if the same function name exists
+          # multiple times in the same file. But it's possible for multiple
+          # tests to have different function coverage so we have to track
+          # by FNDA instead of FNF and FNH
+          parts = text[5:].split(',')
+          hits = int(parts[0])
+          id = ','.join(parts[1:])
+          if hits > 0:
+            hitfuncs.add(keep + '\n' + id)
+          foundfuncs.add(keep + '\n' + id)
+        elif text.startswith("DA:"):
+          parts = text[3:].split(',')
+          hits = int(parts[1])
+          id = parts[0]
+          if hits > 0:
+            hitlines.add(keep + '\n' + id)
+          foundlines.add(keep + '\n' + id)
+  lineper = 0
+  if len(foundlines):
+    lineper = len(hitlines) / len(foundlines) * 100
+  funcper = 0
+  if len(foundfuncs):
+    funcper = len(hitfuncs) / len(foundfuncs) * 100
+  return {
+    "CoverageLinesFound" : len(foundlines),
+    "CoverageLinesHit" : len(hitlines),
+    "CoverageLinesPercent" : lineper,
+    "CoverageFunctionsFound" : len(foundfuncs),
+    "CoverageFunctionsHit" : len(hitfuncs),
+    "CoverageFunctionsPercent" : funcper,
+  }
+
+def func_coverage(db, filename, funcname):
+  cov_file = os.path.join(os.path.dirname(db.name()), "coverage.info")
+
+  curfile = ""
+  cnt = 0
+  with open(cov_file, 'r') as f:
+    for line in f:
+      text = line.strip()
+      if text == "end_of_record":
+        curfile = ""
+      if text.startswith("SF:"):
+        curfile = text[3:]
+      if curfile == filename and text.startswith("FNDA:"):
+        parts = text[5:].split(',')
+        if ','.join(parts[1:]) == funcname:
+          cnt += int(parts[0])
+  return cnt
+
+
