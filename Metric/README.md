@@ -22,5 +22,7 @@ To install a Metric plugin, simply drag the .upy file into the Understand GUI, i
 - Mac – /Users/username/Library/Application Support/SciTools/plugin/Metric
 - Linux – /home/username/.config/SciTools/plugin/Metric
 
+[This article](https://blog.scitools.com/wp-admin/post.php?post=2470&action=edit) about the Coverage plugin provides a walkthough on installing and using a metrics plugin.
+
 ## Performance 
 The Understand GUI has been updated to calculate metrics on a background thread. So long running metrics like the git churn metrics won't slow down the UI. But they can still take a long time to generate so be careful using them. Note that the Metrics Browser calculates all metrics for the selected entity or architecture before displaying any of them so installing long running metrics can increase the wait time.
