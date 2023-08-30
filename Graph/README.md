@@ -21,3 +21,7 @@ Here are some of the more popular graphs you'll find here.
 
 ![image](https://user-images.githubusercontent.com/6586272/193376858-3e304851-dcb3-4280-9d03-e9ba75185bde.png)
 
+# Bonus
+Check out the [Gephi Extract](https://blog.scitools.com/create-beautiful-overview-graphs-of-your-code/) for an an amazing overview graph option.
+
+![image](https://blog.scitools.com/wp-content/uploads/2023/08/gitahead-overview_labeled.png)
