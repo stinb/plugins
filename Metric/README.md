@@ -6,7 +6,7 @@ Metric plugins provide custom metrics to Understand. Once you've installed your 
  - Use them for a custom color scale on a graph
 
 Check out some of the sample plugins:
- - Find code churn by reporting the number of commits and number of unique authors for your files and folders. [git.upy](https://github.com/stinb/plugins/blob/6.4/Metric/git.upy)
+ - Find code churn by reporting the number of commits and number of unique authors for your files and folders. [git.upy](https://github.com/stinb/plugins/blob/Metric/git.upy)
  - Include test coverage information from lcov info files. [coverage.upy](https://github.com/stinb/plugins/blob/6.4/Metric/coverage.upy)
  - Calculate halstead metrics. [halstead.upy](https://github.com/stinb/plugins/blob/6.4/Metric/halstead.upy)
  
