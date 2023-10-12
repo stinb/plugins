@@ -6,11 +6,11 @@ Metric plugins provide custom metrics to Understand. Once you've installed your 
  - Use them for a custom color scale on a graph
 
 Check out some of the sample plugins:
- - Find code churn by reporting the number of commits and number of unique authors for your files and folders. [git.upy](https://github.com/stinb/plugins/blob/Metric/git.upy)
- - Include test coverage information from lcov info files. [coverage.upy](https://github.com/stinb/plugins/blob/6.4/Metric/coverage.upy)
- - Calculate halstead metrics. [halstead.upy](https://github.com/stinb/plugins/blob/6.4/Metric/halstead.upy)
+ - Find code churn by reporting the number of commits and number of unique authors for your files and folders. [git.upy](git.upy)
+ - Include test coverage information from lcov info files. [coverage.upy](coverage.upy)
+ - Calculate halstead metrics. [halstead.upy](halstead.upy)
  
-Some of the metric ids changed with Understand 6.4. If your scripts rely on the old metric ids, no problem. Just install [compatability.upy](https://github.com/stinb/plugins/blob/6.4/Metric/compatability6-3.upy). That script is also a great starting point as a template for your own plugins.
+Some of the metric ids changed with Understand 6.4. If your scripts rely on the old metric ids, no problem. Just install [compatability.upy](compatability6-3.upy). That script is also a great starting point as a template for your own plugins.
 
 Metrics Plugins are only available through the Python API.
 
