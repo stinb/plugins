@@ -16,8 +16,10 @@ def prepEntArchs():
     findArchs(root,root)
 
 def findArchs(root,arch):
-  for ent in arch.ents():
+  pretty_arch = arch.name()
+  if "/" in arch.longname():
     pretty_arch=arch.longname().split("/")[1] #Only show the top level architecture to reduce total groups
+  for ent in arch.ents():
     entArchs[ent.id()][root.name()]=pretty_arch
   for child in arch.children():
     findArchs(root,child)
@@ -39,7 +41,7 @@ def nodeFile():
       row.append(thisarch)
     csvwriter.writerow(row)
   filecsv.close()
-  
+
 #Create a CSV file with the edge information
 def edgeFile():
   filecsv=open("edges.csv","w")
@@ -48,7 +50,7 @@ def edgeFile():
   csvwriter.writerow(header)
   for file in ents:
     depList=file.depends()
-    for ent in depList: 
+    for ent in depList:
       if ent in ents:  #Don't show non project dependencies
         row =file.id(), ent.id(), len(depList[ent])
         csvwriter.writerow(row)
