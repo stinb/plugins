@@ -1,0 +1,125 @@
+# A Metrics Plugin that reports the lack of cohesion in methods for a given C file [LCOM4]
+
+import understand
+
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return ["LCOM4"]
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return "Lack of Cohesion in Methods (LCOM4)"
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return "Lack of cohesion in methods within a C/C++ file. [LCOM4]"
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return True
+
+# One of the following three test functions should return True.
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  return ent.kind().check("code file ~unknown ~unresolved")
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  return False
+
+def test_global(metric, db):
+  """
+  Optional, return True if metric can be calculated for the given database.
+  """
+  return False
+
+def test_available(metric,entkindstr):
+  """
+  Optional, return True if the metric is potentially available.
+
+  This is used when there isn't a specific target for the metric, like lists
+  of metrics available for export, or for a treemap.
+
+  Use metric.db() to retrieve the database. If the metric is language specific,
+  the code might look like this:
+    return "Ada" in metric.db().language()
+
+  entkindstr may be empty. If it is empty, return True as long as the metric
+  is available for an entity, architecture, or the project as a whole.
+
+  If entkindstr is not empty, return True only if the metric is available for
+  entities matching the provided kind string. Kind checks are performed like
+  this:
+    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
+    test_kinds = set(understand.Kind.list_entity(entkindstr)
+    return len(my_kinds.intersection(test_kinds)) > 0
+  """
+  return "C++" in metric.db().language()
+
+
+def value(metric, target):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+
+  ent_refs = {} # key: ent id, value: list of ent id that references the ent
+
+  for def_ref in sorted(target.filerefs("Define", "Function"), key= lambda x: x.line()):      
+      ent_refs[def_ref.ent().id()] = []
+
+      for ref in def_ref.ent().refs("~Definein ~Declarein ~Define ~Declare", "~Local"):
+          if ref.ent().id() not in ent_refs[def_ref.ent().id()]:
+              ent_refs[def_ref.ent().id()].append(ref.ent().id())
+
+  groups = {}
+  LCOM = 0
+
+  for ids in ent_refs.values():
+      if not groups:
+          groups[LCOM] = ids
+      else:
+          in_group = []
+
+          for key, value in groups.items():                
+              if any(id in value for id in ids):
+                in_group.append(key)
+                groups[key].extend(ids)
+                groups[key] = list(set(groups[key]))
+
+          if not in_group:
+              LCOM += 1
+              groups[LCOM] = ids
+          elif len(in_group) > 1:
+              for group_num in in_group[1:]:
+                groups[in_group[0]].extend(groups[group_num])
+                groups[in_group[0]] = list(set(groups[in_group[0]]))
+                groups.pop(group_num)
+                LCOM -= 1
+
+
+  return len(groups)
+
