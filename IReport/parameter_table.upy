@@ -1,0 +1,119 @@
+# Interactive Report for showing the parameters passed in at each call reference
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Parameters Table"
+
+def test_entity(ent):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  # This is valid for c class's that have a friend reference
+  return ent.kind().check("c function") and ent.parameters()
+
+def init(report):
+    # Allow user to configure the table separator
+    report.options().text("septext", "Table separator text", "\t")
+
+# Report generation
+def generate(report, ent):
+  """
+  Required, generate the report
+  """
+  sep = report.options().lookup("septext")
+
+  report.entity(ent)
+  report.print(ent.name())
+  report.entity()
+  # Start the Report
+  report.print(" Parameters Table:\n\n")
+
+  # Header
+  params = ent.parameters().split(",");
+  report.print("Call" + sep)
+  report.print(sep.join(params) + "\n")
+
+  # defaults
+  defValue = {}
+  for ref in ent.refs("define,declare","c parameter", True):
+    val = ref.ent().value()
+    if val:
+      for i in range(len(params)):
+        if params[i].endswith(ref.ent().name()):
+          defValue[i] = val
+          break
+
+  if len(defValue) > 0:
+    report.print("Default" + sep);
+    for i in range(len(params)):
+      if i in defValue:
+        report.print(defValue[i])
+      if i != (len(params) - 1):
+        report.print(sep)
+    report.print("\n")
+
+  lexercache = {} # cache lexers for speed
+  for ref in ent.refs("callby"):
+    report.entity(ref.file())
+    report.print(ref.file().name())
+    report.entity()
+    report.syncfile(ref.file().longname(), ref.line(), ref.column())
+    report.print("("+str(ref.line())+")")
+    report.syncfile()
+    report.print(sep)
+
+    curPos = 0
+
+    lexer = findlexer(ref.file(), lexercache)
+    if lexer:
+      lexeme = lexer.lexeme(ref.line(), ref.column())
+      parens = None
+      while lexeme and (parens is None or parens > 0):
+        if lexeme.token() == "Punctuation":
+          if lexeme.text() == ')':
+            parens -= 1
+          elif lexeme.text() == '(':
+            if parens:
+              parens += 1
+            else:
+              parens = 1
+              lexeme = lexeme.next()
+              continue
+        if lexeme.token() == "Operator" and  parens and parens == 1 and lexeme.text() == ',':
+            # Only increment current position if we're at parentheses level
+            # 1, to handle nested functions with their own parameters
+            curPos += 1
+            report.print(sep)
+            lexeme = lexeme.next()
+            continue
+        if parens:
+          # If this lexeme is inside the range mapped to this parameter
+          ent = lexeme.ent()
+          if ent:
+            report.entity(ent)
+          report.print(lexeme.text())
+          if ent:
+            report.entity()
+        lexeme = lexeme.next()
+
+    while curPos < (len(params)-1):
+      report.print(sep)
+      curPos += 1
+    report.print("\n")
+
+
+def findlexer(file, lexercache):
+  # Lexer creation takes significant time, so keep track of lexers already
+  # created instead of recreating them each time
+  lexer = None
+  if file in lexercache:
+    lexer = lexercache[file]
+  else:
+    try:
+      lexer = file.lexer()
+      lexercache[file] = lexer
+    except:
+      pass
+  return lexer
