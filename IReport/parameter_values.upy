@@ -1,0 +1,129 @@
+# Interactive Report for showing the values for the given parameter passed
+# in at each call reference
+
+import understand
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Parameter Values"
+
+def test_entity(ent):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  # Valid for parameters whose parent exists and has callby references
+  return ent.kind().check("c parameter") and ent.parent() and len(ent.parent().refs("callby")) > 0
+
+
+# Report generation
+def generate(report, ent):
+  """
+  Required, generate the report
+  """
+
+  report.print("Values for ")
+  report.entity(ent)
+  report.print(ent.name())
+  report.entity()
+  if ent.value():
+    report.print(" (")
+    report.bold()
+    report.print("Default Value: ")
+    report.nobold()
+    report.print(ent.value() + ")")
+  report.print(":\n")
+
+  params = ent.parent().parameters().split(",");
+  idx = -1
+  for i in range(len(params)):
+    if params[i].endswith(ent.name()):
+      idx = i
+      break
+
+  if idx == -1:
+    report.print("Error: Unable to determine parameter position\n")
+    return
+
+  values = {}
+  lexercache = {} # cache lexers for speed
+  for ref in ent.parent().refs("callby"):
+    values.setdefault(paramValue(ref, idx, lexercache), []).append(ref)
+
+  for val in values.keys():
+    report.tree(1, True)
+    if val is None:
+      report.italic()
+      report.print("No Value")
+      report.noitalic()
+    elif isinstance(val, understand.Ent):
+      report.entity(val)
+      report.print(val.name())
+      report.entity()
+    else:
+      report.print(val)
+
+    for ref in values[val]:
+      report.tree(2, True)
+      report.entity(ref.file())
+      report.print(ref.file().name())
+      report.entity()
+      report.syncfile(ref.file().longname(), ref.line(), ref.column())
+      report.print("(" + str(ref.line()) + ")")
+      report.syncfile()
+  report.tree()
+
+
+def paramValue(ref, pos, lexercache):
+  lexer = findlexer(ref.file(), lexercache)
+  val = None
+  ents = []
+  if lexer:
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    parens = None
+    curPos = 0
+    while lexeme and (parens is None or parens > 0) and curPos <= pos:
+      if lexeme.token() == "Punctuation":
+        if lexeme.text() == ')':
+          parens -= 1
+        elif lexeme.text() == '(':
+          if parens:
+            parens += 1
+          else:
+            parens = 1
+            lexeme = lexeme.next()
+            continue
+      if lexeme.token() == "Operator" and  parens and parens == 1 and lexeme.text() == ',':
+          # Only increment current position if we're at parentheses level
+          # 1, to handle nested functions with their own parameters
+          curPos += 1
+          lexeme = lexeme.next()
+          continue
+      if parens and curPos == pos:
+        # If this lexeme is inside the range mapped to this parameter
+        if not val:
+          val = ""
+        val = val + lexeme.text()
+        if lexeme.ent():
+          ents.append(lexeme.ent())
+      lexeme = lexeme.next()
+  if val:
+    val = val.strip()
+  if len(ents) == 1 and val and val.endswith(ents[0].name()):
+    val = ents[0]
+  return val
+
+def findlexer(file, lexercache):
+  # Lexer creation takes significant time, so keep track of lexers already
+  # created instead of recreating them each time
+  lexer = None
+  if file in lexercache:
+    lexer = lexercache[file]
+  else:
+    try:
+      lexer = file.lexer()
+      lexercache[file] = lexer
+    except:
+      pass
+  return lexer
