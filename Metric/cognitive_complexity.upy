@@ -1,0 +1,233 @@
+# An implementation of Sonar's Cognitive Complexity Metric
+# https://www.sonarsource.com/resources/cognitive-complexity/
+
+# Supported Languages
+languages = ["C++"]
+entityKinds = "c function ~unresolved"
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return ["CognitiveComplexity"]
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  if id == "CognitiveComplexity":
+    return "Cognitive Complexity"
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  if id == "CognitiveComplexity":
+    return "Sonar's Cognitive Complexity Metric. See https://www.sonarsource.com/resources/cognitive-complexity/"
+
+def test_available(metric,entkindstr):
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity(entityKinds))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # Available for any database
+  return True
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return True
+
+def test_entity(metric, ent):
+  """
+  Required, return True if metric can be calculated for the given entity.
+  """
+  return ent.language() in languages and ent.control_flow_graph()
+
+def value(metric, ent):
+  """
+  Required, return the metric value for the entity.
+  """
+  return cognitiveComplexity(ent, 0)
+
+# Built from Sonar's Cognitive Complexity Appendix B specification
+# Category                 | Increment | Nesting Level | Nesting Increments
+#--------------------------------------------------------------------------
+# if, ternary operator     |     X     |       X       |         X
+# else if, else            |     X     |       X       |
+# switch                   |     X     |       X       |         X
+# for, foreach             |     X     |       X       |         X
+# while, do while          |     X     |       X       |         X
+# catch                    |     X     |       X       |         X
+# goto LABEL,              |     X     |               |
+#   break LABEL,           |           |               |
+#   continue LABEL,        |           |               |
+#   break NUMBER,          |           |               |
+#   continue NUMBER,       |           |               |
+# sequences of binary      |     X     |               |
+#   logical operators      |           |               |
+# each method in a         |     X     |               |
+#   recursion cycle        |           |               |
+# nested methods and       |           |       X       |
+#   method like structures |           |               |
+#   such as lambdas        |           |               |
+
+def cognitiveComplexity(ent, nesting):
+  print (ent.longname(), nesting)
+  complexity = recursiveComplexity(ent) # methods in recursion cycles
+
+  lexer = findLexer(ent) # for trinary and binary logical operators
+  nodes = ent.control_flow_graph().nodes()
+  nestedFuncs = nestedFunctions(ent)
+  ends = set()
+  nestingChange = []
+  for i in range(len(nodes)):
+    k = nodes[i].kind()
+
+    # End nesting levels
+    if nodes[i] in ends:
+      nesting = nesting - 1
+
+    # Increments
+    if k in ["if", "switch", "while-for", "do-while", "try-catch"]:
+      complexity = complexity + 1 + nesting
+    elif k == "goto" or (k == "else" and nodes[i+1].kind() != "if"):
+      complexity = complexity + 1
+
+    # Increase nesting level
+    if k in ["if", "switch", "while-for", "do-while", "try-catch"] or (k == "else" and nodes[i+1].kind() != "if"):
+      nesting = nesting + 1
+      ends.add(nodes[i].end_node())
+      if k == "if" and nodes[i].children()[1].kind() == "else":
+        # The end node of an if is after the else finishes, but end nesting at
+        # the else so nesting is correct for else if structures since the if
+        # will increment nesting again
+        ends.add(nodes[i].children()[1])
+    if k == "try":
+      # Nesting on try doesn't begin until catch. Catch increments nesting
+      # above but we need to add appropriate end nodes to decrement the nesting
+      # from the catch.
+      children = nodes[i].children()
+      children.append(nodes[i].end_node())
+      for i in range(len(children) - 1):
+        if children[i].kind() == "try-catch":
+          ends.add(children[i+1])
+
+    # Operators (trinary operator and boolean operators) aren't part of the
+    # control flow graph and must be found from the lexer.
+    complexity += operatorComplexity(lexer, nodes[i], nesting, nestedFuncs)
+
+  return complexity
+
+def operatorComplexity(lexer, node, nesting, nestedFuncs):
+  complexity = 0
+  if lexer and node.line_begin() and node.column_begin() and node.line_end() and node.column_end():
+    lexeme = lexer.lexeme(node.line_begin(), node.column_begin())
+    lastOperator = None
+    trinaryNesting = []
+    parens = 0
+    while lexeme and isBefore(lexeme, node):
+      if lexeme.token() == "Punctuation":
+        if lexeme.text() == '(':
+          parens = parens + 1
+        elif lexeme.text() == ')':
+          parens = parens - 1
+          # Limitation: not sure how to tell when a trinary operator
+          # ends. Assume only a parentheses nesting change ends the conditional
+          # expresion. So
+          #   a? 2 : b || c ? 3 : 4
+          # is nested and reads
+          #   a? (2) : ((b || c) ? 3 : 4)
+          # but
+          #   (a? 2 : b) || (c ? 3 : 4)
+          # is not nested because the parentheses after b ended the operator
+          while trinaryNesting and trinaryNesting[-1] > parens:
+            del trinaryNesting[-1]
+      if lexeme.token() == "Operator":
+        if lexeme.text() == '?':
+          complexity = complexity + 1 + nesting + len(trinaryNesting)
+          trinaryNesting.append(parens)
+        elif lexeme.text() in ["&&", "||"] and lexeme.text() != lastOperator:
+          # Limitation: not sure when a new sequence of operators starts,
+          # so assume any operator starts a new sequence.
+          complexity = complexity + 1
+        lastOperator = lexeme.text()
+      # Nested functions in Understand have their own control flow graph
+      # (and cyclomatic complexity which is not counted towards the parents).
+      # But cognitive complexity includes nested function complexity so
+      # recurse for nested functions
+      childFunc = isChildFunction(lexeme, nestedFuncs)
+      if childFunc:
+        complexity = complexity + cognitiveComplexity(childFunc[0], nesting + 1)
+        lexeme = lexer.lexeme(childFunc[2].line(), childFunc[2].column())
+        if lexeme:
+          lexeme = lexeme.next()
+      else:
+        lexeme = lexeme.next()
+  return complexity
+
+def recursiveComplexity(ent):
+  # Methods in a recursion cycle, for efficiency we only check for indirect
+  # recursion at two levels (a -> b - > a). Larger loops are not checked.
+  complexity = 0
+  for ref in ent.refs("call", unique=True):
+    if ref.ent() == ent:
+      complexity = complexity + 1
+    else:
+      for childref in ref.ent().refs("call", unique=True):
+        if childref.ent() == ent:
+          complexity = complexity + 2
+
+  return complexity
+
+def isBefore(cur, cmp):
+  return isBeforeLoc(cur.line_begin(), cur.column_begin(), cmp.line_end(), cmp.column_end())
+
+def isBeforeLoc(curLine, curCol, cmpLine, cmpCol):
+  return curLine < cmpLine or (curLine == cmpLine and curCol <= cmpCol)
+
+def nestedFunctions(ent):
+  nested = []
+  for defRef in ent.refs("define", "c lambda function",True):
+    endRefs = defRef.ent().refs("end", unique=False)
+    beginRefs = defRef.ent().refs("begin",unique=False)
+    if not beginRefs:
+      beginRefs = defRef.ent().refs("definein, declarin body", unique=False)
+    if defRef.ent().control_flow_graph() and len(endRefs) == 1 and len(beginRefs) == 1 and endRefs[0].file() == beginRefs[0].file():
+      nested.append((defRef.ent(), beginRefs[0], endRefs[0]))
+  return nested
+
+def isChildFunction(lexeme, nested):
+  for childFunc in nested:
+    if (isBeforeLoc(childFunc[1].line(), childFunc[1].column(),
+                    lexeme.line_begin(), lexeme.column_begin()) and
+        isBeforeLoc(lexeme.line_begin(), lexeme.column_begin(),
+                    childFunc[2].line(), childFunc[2].column())):
+      print (childFunc)
+      return childFunc
+  return None
+
+def findLexer(ent):
+  if not ent:
+    return None
+
+  if ent.kind().check("file"):
+    return ent.lexer()
+
+  ref = ent.ref("definein, body declarin")
+  if ref:
+    return ref.file().lexer()
+  return None
+
