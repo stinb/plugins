@@ -89,7 +89,8 @@ class DepMatrix:
     if progress:
       progress("\rCalculating Visibility: %d of %d entities\n" % (progressMax, progressMax))
     if self.size():
-      self.values["propagation_cost"] = total / self.size()
+      # Add self.size() to the total because each file is assumed to depend on itself
+      self.values["propagation_cost"] = (total + self.size()) / (self.size() * self.size())
 
   def calcFanIns(self):
     if "vfi" in self.metrics or ("vfo" not in self.metrics and "dfo" in self.metrics):
