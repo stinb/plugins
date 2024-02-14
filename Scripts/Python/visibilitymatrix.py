@@ -4,7 +4,7 @@
 #
 # The display of the matrices uses matplotlib and numpy which are not part
 # of the python version shipped with Understand. You can run the non-visual
-# parts of the script with upython by using the switch --no-show to disable
+# parts of the script with upython by using the switch --noshow to disable
 # the visual display. Or, you can use your own version of python3 with
 # matplotlib, numpy, and Understand to get the full features. See the following
 # article on using Understand with custom Python installations.
@@ -19,6 +19,7 @@ class DepMatrix:
     def __init__(self, file, allowed):
       self.file = file
       self.direct = set(file.depends().keys()).intersection(allowed)
+      self.direct.add(file) # Always assume self dependency
       self.visible = set()
       self.directFanIn = None
       self.visibleFanIn = None
@@ -89,8 +90,7 @@ class DepMatrix:
     if progress:
       progress("\rCalculating Visibility: %d of %d entities\n" % (progressMax, progressMax))
     if self.size():
-      # Add self.size() to the total because each file is assumed to depend on itself
-      self.values["propagation_cost"] = (total + self.size()) / (self.size() * self.size())
+      self.values["propagation_cost"] = total / (self.size() * self.size())
 
   def calcFanIns(self):
     if "vfi" in self.metrics or ("vfo" not in self.metrics and "dfo" in self.metrics):
@@ -240,7 +240,7 @@ class DepMatrix:
     return self.graph[self.order[idx]].value(metric)
 
   def matrixValue(self,row, column, visibility=True):
-    return row == column or (self.order[column] in self.graph[self.order[row]].direct or
+    return (self.order[column] in self.graph[self.order[row]].direct or
             (visibility and self.order[column] in self.graph[self.order[row]].visible))
 
   def orderBy(self,fields, directions, nameformat="long"):
