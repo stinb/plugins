@@ -1,0 +1,162 @@
+# A Metrics Plugin to calculate dependency fan in/out values
+
+import os
+import understand
+
+# Forward dependencies and reverse dependencies may not be identical if
+# multiply-defined entities like macros exist. To match the values in
+# the visibilitymatrix.py script, all values are calculated with the forward
+# dependency map. For the Apache sample project, it takes about a minute and
+# a half to calculate the four fan metrics for all files using metrics export.
+# If the variable below is set to False and reverse dependencies are used,
+# the time is cut in half to about 45 seconds. But if you're most interested
+# in the final export value, using the visibilitymatrix.py script is only a
+# few seconds to calculate the values (Use --noshow to skip the graphic and
+# --metricsout [filename] to save the metrics to a file).
+FORWARD_DEPS_ONLY=True
+
+fanMets = {
+  "DirectFanIn" : ["Direct Fan In (DFI)", "The number of resolved files that depend on this file"],
+  "DirectFanOut" : ["Direct Fan Out (DFO)", "The number of resolved files this file depends on"],
+  "VisibleFanIn" : ["Visible Fan In (VFI)", "The number of resolved files that directly or indirectly depend on this file "],
+  "VisibleFanOut" : ["Visible Fan Out (VFO)", "The number of resolved files that this file directly or indirectly depends on"],
+}
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return list(fanMets.keys())
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return fanMets.get(id,["",""])[0]
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return fanMets.get(id,["",""])[1]
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return True
+
+# One of the following three test functions should return True.
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  return ent.kind().check("file ~unknown ~unresolved")
+
+def test_available(metric,entkindstr):
+  """
+  Optional, return True if the metric is potentially available.
+
+  This is used when there isn't a specific target for the metric, like lists
+  of metrics available for export, or for a treemap.
+
+  Use metric.db() to retrieve the database. If the metric is language specific,
+  the code might look like this:
+    return "Ada" in metric.db().language()
+
+  entkindstr may be empty. If it is empty, return True as long as the metric
+  is available for an entity, architecture, or the project as a whole.
+
+  If entkindstr is not empty, return True only if the metric is available for
+  entities matching the provided kind string. Kind checks are performed like
+  this:
+    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
+    test_kinds = set(understand.Kind.list_entity(entkindstr)
+    return len(my_kinds.intersection(test_kinds)) > 0
+  """
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # File dependencies are available for all languages
+  return True
+
+def value(metric, file):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  if metric.id() == "DirectFanOut":
+    cnt = 1 # Always assume dependent on self
+    for key in file.depends().keys():
+      if key.kind().check("file ~unknown ~unresolved"):
+        cnt += 1
+    return cnt
+  if metric.id() == "VisibleFanOut":
+      visited = set()
+      toVisit = [file]
+      while toVisit:
+        toFile = toVisit.pop() # Take from back
+        if not toFile in visited:
+          visited.add(toFile)
+          toVisit.extend(list(toFile.depends().keys())) # add to back
+      cnt = 0
+      for toFile in visited:
+        if toFile.kind().check("file ~unknown ~unresolved"):
+          cnt += 1
+      return cnt
+
+  if FORWARD_DEPS_ONLY:
+    # Calculate fan in values using the forward map
+    files = set(metric.db().ents("file ~unknown ~unresolved"))
+    reverse = dict()
+    for fromFile in files:
+      reverse.setdefault(fromFile,set()).add(fromFile)
+      for toFile in fromFile.depends():
+        if toFile in files:
+          reverse.setdefault(toFile,set()).add(fromFile)
+
+    if metric.id() == "DirectFanIn":
+      return len(reverse.get(file))
+
+    # VisibleFanOut
+    visited = set()
+    toVisit = [file]
+    while toVisit:
+      toFile = toVisit.pop() # Take from back
+      if not toFile in visited:
+        visited.add(toFile)
+        toVisit.extend(list(reverse[toFile])) # add to back
+    return len(visited)
+  else:
+    if metric.id() == "DirectFanIn":
+      cnt = 1 # Always assume dependent on self
+      for key in file.dependsby().keys():
+        if key.kind().check("file ~unknown ~unresolved"):
+          cnt += 1
+      return cnt
+    if metric.id() == "VisibleFanIn":
+        visited = set()
+        toVisit = [file]
+        while toVisit:
+          toFile = toVisit.pop() # Take from back
+          if not toFile in visited:
+            visited.add(toFile)
+            toVisit.extend(list(toFile.dependsby().keys())) # add to back
+        cnt = 0
+        for toFile in visited:
+          if toFile.kind().check("file ~unknown ~unresolved"):
+            cnt += 1
+        return cnt
