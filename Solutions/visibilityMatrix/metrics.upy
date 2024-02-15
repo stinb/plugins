@@ -1,0 +1,196 @@
+# Access Visibility Matrix Metrics from Understand
+
+import understand
+from matrix import DepMatrix
+
+depMets = {
+  "DirectFanIn" : {
+    "name" : "Direct Fan In (DFI)",
+    "desc" : "The number of resolved files that depend on this file",
+    "global" : False,
+    "key" : "dfi"
+  },
+  "DirectFanOut" : {
+    "name" : "Direct Fan Out (DFO)",
+    "desc" : "The number of resolved files this file depends on",
+    "global" : False,
+    "key" : "dfo"
+  },
+  "VisibleFanIn" : {
+    "name" : "Visible Fan In (VFI)",
+    "desc" : "The number of resolved files that directly or indirectly depend on this file ",
+    "global" : False,
+    "key" : "vfi"
+  },
+  "VisibleFanOut" : {
+    "name" : "Visible Fan Out (VFO)",
+    "desc" : "The number of resolved files that this file directly or indirectly depends on",
+    "global" : False,
+    "key" : "vfo"
+  },
+  "PropagationCost": {
+    "name" : "Propagation Cost",
+    "desc" : "The density of the visibility matrix as a percentage",
+    "global" : True,
+    "key" : "propagation_cost",
+    "integer" : False
+  },
+  "CoreSize": {
+    "name" : "Core Size",
+    "desc" : "The number of files in the largest cyclic group",
+    "global" : True,
+    "key" : "core_size"
+  },
+  "CorePercentage": {
+    "name" : "Core Percentage",
+    "desc" : "The percentage of files in the largest cyclic group",
+    "global" : True,
+    "key" : "core_percent",
+    "integer" : False
+  },
+  "SecondCoreSize": {
+    "name" : "Second Core Size",
+    "desc" : "The number of files in the second largest cyclic group",
+    "global" : True,
+    "key" : "second_largest_cycle_size"
+  }
+}
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return list(depMets.keys())
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return depMets.get(id,dict()).get("name","")
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return depMets.get(id,dict()).get("desc","")
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return depMets.get(id,dict()).get("integer",True)
+
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  return not depMets.get(metric.id(),dict()).get("global",True) and ent.kind().check("file ~unknown ~unresolved")
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  return depMets.get(metric.id(),dict()).get("global",False)
+
+def test_global(metric, db):
+  """
+  Optional, return True if metric can be calculated for the given database.
+  """
+  return depMets.get(metric.id(),dict()).get("global",False)
+
+def test_available(metric,entkindstr):
+  """
+  Optional, return True if the metric is potentially available.
+
+  This is used when there isn't a specific target for the metric, like lists
+  of metrics available for export, or for a treemap.
+
+  Use metric.db() to retrieve the database. If the metric is language specific,
+  the code might look like this:
+    return "Ada" in metric.db().language()
+
+  entkindstr may be empty. If it is empty, return True as long as the metric
+  is available for an entity, architecture, or the project as a whole.
+
+  If entkindstr is not empty, return True only if the metric is available for
+  entities matching the provided kind string. Kind checks are performed like
+  this:
+    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
+    test_kinds = set(understand.Kind.list_entity(entkindstr)
+    return len(my_kinds.intersection(test_kinds)) > 0
+  """
+  if depMets.get(metric.id(),dict()).get("global",True):
+    return False # not an entity metric
+
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # File dependencies are available for all languages
+  return True
+
+def value(metric, target):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  # Invalid Metric
+  key = depMets.get(metric.id(),dict()).get("key")
+  if not key:
+    return None
+
+  # Directory Structure = Database which can use cache. Any other architectures
+  # are caclulated on demand every time
+  if isinstance(target, understand.Arch) and target.longname() != "Directory Structure":
+    m = DepMatrix(entities=target.ents(True))
+    if not key in m.values:
+      m.calcCycles()
+    return m.values.get(key)
+
+  # Check for cached value
+  und_cache = None
+  if hasattr(metric, "cache"):
+    und_cache = metric.cache()
+
+  if und_cache is not None and not und_cache.is_empty():
+    if isinstance(target, understand.Ent):
+      return und_cache.value(key=key, file=target)
+    else:
+      return und_cache.value(key=key)
+
+  # No cached value, create the DepMatrix for the database
+  m = DepMatrix(set(metric.db().lookup_arch("Directory Structure").ents(True)))
+
+  if und_cache is not None:
+    # Caching is allowed, build cache
+    m.calcCycles()
+    ent_keys = []
+    for v in depMets.values():
+      if v["global"]:
+        und_cache.insert(m.values[v["key"]], key=v["key"])
+      else:
+        ent_keys.append(v["key"])
+
+    for i in range(m.size()):
+      ent = m.entityAt(i)
+      for k in ent_keys:
+        und_cache.insert(m.valueAt(i,k), key=k,file=ent)
+
+  if isinstance(target, understand.Ent):
+    return m.entityValue(target,key)
+  else:
+    if not key in m.values:
+      m.calcCycles()
+    return m.values.get(key)
