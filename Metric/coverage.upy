@@ -142,91 +142,20 @@ def value(metric, target):
       # Calculate for a function
       ref = target.ref("definein, body declarin")
       if ref:
-        return func_coverage(metric.db(), ref.file().longname(), target.name())
+        return fileCoverage(metric, ref.file()).functions.get(target.name(),0)
       return 0
 
-  # Calculate over files
-  fileset = set()
-  for ent in fileents:
-    if ent.kind().check("file ~unresolved ~unknown"):
-      fileset.add(ent.longname())
+  sums = SumMetrics()
+  und_cache = findCache(metric)
+  if und_cache:
+    for ent in fileents:
+      sums.addFromCache(ent, und_cache)
+  else:
+    cov_file = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
+    for cov in scanCoverageFile(cov_file, fileents):
+      sums.addCoverageObject(cov)
 
-  return file_coverage(metric.db(), fileset).get(metric.id(),0)
-
-
-def has_coverage(db):
-  path = os.path.join(os.path.dirname(db.name()), "coverage.info")
-  return os.path.exists(path)
-
-def file_coverage(db, files):
-  # LCOV File format as described here:
-  # https://ltp.sourceforge.net/coverage/lcov/geninfo.1.php
-  cov_file = os.path.join(os.path.dirname(db.name()), "coverage.info")
-
-  keep = None
-  foundfuncs = set()
-  foundlines = set()
-  hitfuncs = set()
-  hitlines = set()
-  with open(cov_file, 'r') as f:
-    for line in f:
-      text = line.strip()
-      if text == "end_of_record":
-        keep = None
-      if text.startswith("SF:"):
-        if text[3:] in files:
-          keep = text[3:]
-      if keep:
-        if text.startswith("FNDA:"):
-          # This probably doesn't work if the same function name exists
-          # multiple times in the same file. But it's possible for multiple
-          # tests to have different function coverage so we have to track
-          # by FNDA instead of FNF and FNH
-          parts = text[5:].split(',')
-          hits = int(parts[0])
-          id = ','.join(parts[1:])
-          if hits > 0:
-            hitfuncs.add(keep + '\n' + id)
-          foundfuncs.add(keep + '\n' + id)
-        elif text.startswith("DA:"):
-          parts = text[3:].split(',')
-          hits = int(parts[1])
-          id = parts[0]
-          if hits > 0:
-            hitlines.add(keep + '\n' + id)
-          foundlines.add(keep + '\n' + id)
-  lineper = 0
-  if len(foundlines):
-    lineper = len(hitlines) / len(foundlines) * 100
-  funcper = 0
-  if len(foundfuncs):
-    funcper = len(hitfuncs) / len(foundfuncs) * 100
-  return {
-    "CoverageLinesFound" : len(foundlines),
-    "CoverageLinesHit" : len(hitlines),
-    "CoverageLinesPercent" : lineper,
-    "CoverageFunctionsFound" : len(foundfuncs),
-    "CoverageFunctionsHit" : len(hitfuncs),
-    "CoverageFunctionsPercent" : funcper,
-  }
-
-def func_coverage(db, filename, funcname):
-  cov_file = os.path.join(os.path.dirname(db.name()), "coverage.info")
-
-  curfile = ""
-  cnt = 0
-  with open(cov_file, 'r') as f:
-    for line in f:
-      text = line.strip()
-      if text == "end_of_record":
-        curfile = ""
-      if text.startswith("SF:"):
-        curfile = text[3:]
-      if curfile == filename and text.startswith("FNDA:"):
-        parts = text[5:].split(',')
-        if ','.join(parts[1:]) == funcname:
-          cnt += int(parts[0])
-  return cnt
+  return sums.value(metric.id())
 
 def lines(metric, file):
   """
@@ -238,24 +167,158 @@ def lines(metric, file):
   if not file.kind().check("file ~unresolved ~unknown"):
     return
 
-  cov_file = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
+  return fileCoverage(metric,file).lines
 
-  filename = file.longname()
-  curfile = ""
-  linedict = dict()
+def has_coverage(db):
+  path = os.path.join(os.path.dirname(db.name()), "coverage.info")
+  return os.path.exists(path)
+
+def countFound(countsDict):
+  return len(countsDict)
+
+def countHit(countsDict):
+  cnt = 0
+  for v in countsDict.values():
+    if v > 0:
+      cnt += 1
+  return cnt
+
+class FileCoverage:
+  def __init__(self, file):
+    self.file = file
+    self.lines = dict()
+    self.functions = dict()
+    self.locations = []
+
+  def processLine(self, text):
+    if text == "end_of_record":
+      return False # Done with file
+
+    # Line Hits
+    if text.startswith("DA:"):
+      parts = text[3:].split(',')
+      hits = int(parts[1])
+      id = parts[0]
+      self.lines[id] = self.lines.get(id,0) + hits
+
+    # Function Hits
+    if text.startswith("FNDA:"):
+      # This probably doesn't work if the same function name exists
+      # multiple times in the same file. But it's possible for multiple
+      # tests to have different function coverage so we have to track
+      # by FNDA instead of FNF and FNH
+      parts = text[5:].split(',')
+      hits = int(parts[0])
+      id = ','.join(parts[1:])
+      self.functions[id] = self.functions.get(id,0) + hits
+
+    return True # still in file
+
+  def addToCache(self, cache):
+    cache.insert(countFound(self.functions), key="CoverageFunctionsFound", file=self.file)
+    cache.insert(countHit(self.functions), key="CoverageFunctionsHit", file=self.file)
+    cache.insert(countFound(self.lines), key="CoverageLinesFound", file=self.file)
+    cache.insert(countHit(self.lines), key="CoverageLinesHit", file=self.file)
+    cache.insert(self.locations, key="seek", file=self.file)
+
+def scanCoverageFile(cov_file, entList):
+  # LCOV File format as described here:
+  # https://ltp.sourceforge.net/coverage/lcov/geninfo.1.php
+  nameToFile = dict()
+  for ent in entList:
+    if ent.kind().check("file ~unresolved ~unknown"):
+      nameToFile[ent.longname()] = ent;
+
+  fileToCoverage = dict()
+  curCoverage = None
+  curLoc = 0
   with open(cov_file, 'r') as f:
     for line in f:
       text = line.strip()
-      if text == "end_of_record":
-        curfile = ""
-      if text.startswith("SF:"):
-        curfile = text[3:]
-      if curfile == filename and text.startswith("DA:"):
-          parts = text[3:].split(',')
-          hits = int(parts[1])
-          id = parts[0]
-          if id not in linedict:
-            linedict[id] = 0
-          linedict[id] += hits
-  return linedict
+      if text.startswith("SF:"): # Starting record for file
+        fileEnt = nameToFile.get(text[3:])
+        if fileEnt: # If tracking this file
+          curCoverage = fileToCoverage.setdefault(fileEnt, FileCoverage(fileEnt)) # Set the current coverage
+          curCoverage.locations.append(curLoc) # Note record start
+      elif curCoverage and not curCoverage.processLine(text):
+        curCoverage = None # File ended
+      curLoc += len(line)
 
+  return fileToCoverage.values()
+
+def partialScanCoverage(cov_file, curCoverage, locations):
+  if not locations:
+    return
+  with open(cov_file, 'r') as f:
+    for loc in locations: # for each record start
+      f.seek(loc)
+      for line in f: # read lines
+        if not curCoverage.processLine(line.strip()):
+          break; # Until done with this record
+
+class SumMetrics:
+  def __init__(self):
+    self.linesHit = 0
+    self.linesFound = 0
+    self.functionsHit = 0
+    self.functionsFound = 0
+
+  def addCoverageObject(self, coverage):
+    self.linesHit += countHit(coverage.lines)
+    self.linesFound += countFound(coverage.lines)
+    self.functionsHit += countHit(coverage.functions)
+    self.functionsFound += countFound(coverage.functions)
+
+  def addFromCache(self, file, cache):
+    self.linesHit += cache.value(key="CoverageLinesHit", file=file, value=0)
+    self.linesFound += cache.value(key="CoverageLinesFound", file=file, value=0)
+    self.functionsHit += cache.value(key="CoverageFunctionsHit", file=file, value=0)
+    self.functionsFound += cache.value(key="CoverageFunctionsFound", file=file, value=0)
+
+  def value(self, id):
+    if id == "CoverageLinesHit":
+      return self.linesHit
+    if id == "CoverageLinesFound":
+      return self.linesFound
+    if id == "CoverageLinesPercent":
+      return 0 if self.linesFound < 1 else self.linesHit / self.linesFound
+    if id == "CoverageFunctionsHit":
+      return self.functionsHit
+    if id == "CoverageFunctionsFound":
+      return self.functionsFound
+    if id == "CoverageFunctionsPercent":
+      return 0 if self.functionsFound < 1 else self.functionsHit / self.functionsFound
+
+def findCache(metric):
+  und_cache = None
+  if hasattr(metric, "cache"):
+    und_cache = metric.cache()
+    if und_cache:
+      cov_file = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
+
+      # Clear cache if coverage file has been updated
+      modtime = os.path.getmtime(cov_file)
+      if und_cache.value(key="filemod",value=modtime) < modtime:
+        und_cache.clear()
+
+      # Build cache if empty
+      if und_cache.is_empty():
+        entList = metric.db().lookup_arch("Directory Structure").ents(True)
+        for coverageObj in scanCoverageFile(cov_file, entList):
+          coverageObj.addToCache(und_cache)
+        und_cache.insert(modtime, key="filemod")
+  return und_cache
+
+def fileCoverage(metric, file):
+  cov_file = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
+
+  und_cache = findCache(metric)
+  if und_cache:
+    cov = FileCoverage(file)
+    partialScanCoverage(cov_file, cov, und_cache.value(key="seek",file=file))
+    return cov
+
+  coverages = list(scanCoverageFile(cov_file, [file]))
+  if coverages:
+    return coverages[0]
+  return FileCoverage(file)

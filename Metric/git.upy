@@ -47,19 +47,19 @@ def test_entity(metric, ent):
   """
   Optional, return True if metric can be calculated for the given entity.
   """
-  return ent.kind().check("file ~unknown ~unresolved") and has_git(metric.db())
+  return ent.kind().check("file ~unknown ~unresolved") and has_git(metric)
 
 def test_architecture(metric, arch):
   """
   Optional, return True if metric can be calculated for the given architecture.
   """
-  return (arch.longname().startswith("Directory Structure/") or arch.name() == "Directory Structure") and has_git(metric.db())
+  return has_cache(metric) or ((arch.longname().startswith("Directory Structure/") or arch.name() == "Directory Structure") and has_git(metric))
 
 def test_global(metric, db):
   """
   Optional, return True if metric can be calculated for the given database.
   """
-  return has_git(metric.db())
+  return has_git(metric)
 
 def test_available(metric,entkindstr):
   """
@@ -82,7 +82,7 @@ def test_available(metric,entkindstr):
     test_kinds = set(understand.Kind.list_entity(entkindstr)
     return len(my_kinds.intersection(test_kinds)) > 0
   """
-  if not has_git(metric.db()):
+  if not has_git(metric):
     return False
 
   # Kind check if requested
@@ -100,6 +100,9 @@ def value(metric, target):
   an entity, architecture, or database depending on which test functions
   returned True.
   """
+  if has_cache(metric):
+    return cache_value(metric, target)
+
   path = ""
   if isinstance(target, understand.Db):
     path = "."
@@ -136,10 +139,37 @@ def value(metric, target):
     authors.add(author)
   return len(authors)
 
-def has_git(db):
+def cache_value(metric, target):
+  und_cache = metric.cache("Git")
+  if isinstance(target, understand.Db):
+    files = target.lookup_arch("Directory Structure").ents(True)
+  elif isinstance(target, understand.Arch):
+    files = target.ents(True)
+  else: # entity
+    if metric.id() == "GitCommits":
+      return len(und_cache.value(key="commits",file=target,value=[]))
+    return len(set(und_cache.value(key="authors",file=target,value=[])))
+
+  commits = set()
+  key = "commits" if metric.id() == "GitCommits" else "authors"
+  for file in files:
+    if file.kind().check("file ~unknown ~unresolved"):
+      for commit in und_cache.value(key=key, file=file):
+        commits.add(commit)
+  return len(commits)
+
+def has_git(metric):
+  # If the built-in Git cache has content, then the repository for the project
+  # was found
+  if has_cache(metric):
+    return True
+
   # This assumes that the git repository, if it exists, is in the same location
   # as the Understand project. If that is not true for your repository, you
   # would need to update this code.
-  path = os.path.join(os.path.dirname(db.name()), ".git")
+  path = os.path.join(os.path.dirname(metric.db().name()), ".git")
   return os.path.exists(path)
+
+def has_cache(metric):
+  return hasattr(metric, "cache") and metric.cache("Git") and not metric.cache("Git").is_empty()
 
