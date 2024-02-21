@@ -146,7 +146,7 @@ class DepMatrix:
     self.values["core_size"] = len(components[-1])
     if self.size() > 0:
       self.values["core_percent"] = len(components[-1]) / self.size() * 100
-    self.values["second_largest_cycle_size"] = 0 if len(components) < 1 else len(components[-2])
+    self.values["second_largest_cycle_size"] = 0 if len(components) < 2 else len(components[-2])
     for file in components[-1]:
       self.values["core_vfi"] = self.graph[file].value("vfi")
       self.values["core_vfo"] = self.graph[file].value("vfo")
