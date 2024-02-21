@@ -6,7 +6,10 @@ import subprocess
 
 gitMets = {
   "GitCommits" : ["Commits", "The number of git commits that touched this file/directory"],
-  "GitAuthors" : ["Authors", "The number of unique git authors that touched this file/directory"]
+  "GitAuthors" : ["Authors", "The number of unique git authors that touched this file/directory"],
+  "GitOwnership" : ["Ownership", "The percentage of commits made by the author with the most commits that touched this file/directory"],
+  "GitMajorContributors" : ["Major Contributors", "The number of unique git authors who made at least 5% of commits that touched this file/directory"],
+  "GitMinorContributors" : ["Minor Contributors", "The number of unique git authors who made less than 5% of commits that touched this file/directory"],
 }
 
 def ids():
@@ -40,7 +43,7 @@ def is_integer(id):
    If this function it not implemented, it is assumed false, meaning the
    value should be represented as a double/float.
    """
-   return True
+   return id != "GitOwnership"
 
 # One of the following three test functions should return True.
 def test_entity(metric, ent):
@@ -126,7 +129,7 @@ def value(metric, target):
     startinfo = subprocess.STARTUPINFO()
     startinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
   try:
-    gitlog = subprocess.run(["git", "log", "--format=%an", "--", path], check=True, capture_output=True, cwd=wd, text=True, startupinfo=startinfo)
+    gitlog = subprocess.run(["git", "log", "--format=%an", "--", path], check=True, capture_output=True, cwd=wd, text=True, startupinfo=startinfo, encoding='latin-1')
   except Exception as e:
     return 0 # not part of the repository?
 
@@ -134,10 +137,29 @@ def value(metric, target):
   if metric.id() == "GitCommits":
     return len(commits)
 
-  authors = set()
+  authors = dict()
   for author in commits:
-    authors.add(author)
-  return len(authors)
+    authors[author] = authors.get(author,0) + 1
+  if metric.id() == "GitAuthors":
+    return len(authors)
+
+  return ownershipMetric(metric, authors, len(commits))
+
+def ownershipMetric(metric, authors, sum):
+  max = 0
+  major = 0
+  cutoff = 0.05 * sum
+  for count in authors.values():
+    if count > max:
+      max = count
+    if count > cutoff:
+      major += 1
+  if metric.id() == "GitOwnership" and sum > 0:
+    return max / sum * 100
+  if metric.id() == "GitMajorContributors":
+    return major
+  if metric.id() == "GitMinorContributors":
+    return len(authors) - major
 
 def cache_value(metric, target):
   und_cache = metric.cache("Git")
@@ -148,15 +170,31 @@ def cache_value(metric, target):
   else: # entity
     if metric.id() == "GitCommits":
       return len(und_cache.value(key="commits",file=target,value=[]))
-    return len(set(und_cache.value(key="authors",file=target,value=[])))
+    elif metric.id() == "GitAuthors":
+      return len(set(und_cache.value(key="authors",file=target,value=[])))
+    else:
+      files = [target]
 
+  if metric.id() == "GitCommits" or metric.id() == "GitAuthors":
+    commits = set()
+    key = "commits" if metric.id() == "GitCommits" else "authors"
+    for file in files:
+      if file.kind().check("file ~unknown ~unresolved"):
+        for commit in und_cache.value(key=key, file=file, value=[]):
+          commits.add(commit)
+    return len(commits)
+
+  authors = dict()
   commits = set()
-  key = "commits" if metric.id() == "GitCommits" else "authors"
   for file in files:
     if file.kind().check("file ~unknown ~unresolved"):
-      for commit in und_cache.value(key=key, file=file):
-        commits.add(commit)
-  return len(commits)
+      fileCommits = und_cache.value(key="commits", file=file, value=[])
+      fileAuthors = und_cache.value(key="authors", file=file, value=[])
+      for i in range(len(fileCommits)):
+        if fileCommits[i] not in commits:
+          commits.add(fileCommits[i])
+          authors[fileAuthors[i]] = authors.get(fileAuthors[i],0) + 1
+  return ownershipMetric(metric,authors, len(commits))
 
 def has_git(metric):
   # If the built-in Git cache has content, then the repository for the project
