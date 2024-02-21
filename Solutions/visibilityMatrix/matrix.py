@@ -67,6 +67,7 @@ class DepMatrix:
       return
     self.metrics.append("vfo")
     total = 0
+    dirtotal = 0
     progressMax = self.size()
     for i, data in enumerate(self.graph.values()):
       visited = set()
@@ -78,12 +79,14 @@ class DepMatrix:
           toVisit.extend(list(self.graph[file].direct)) # add to back
       data.visible = visited.difference(data.direct)
       total += data.value("vfo")
+      dirtotal += data.value("dfo")
       if progress and i % 20 == 0:
         progress("\rCalculating Visibility: %d of %d entities" % (i+1, progressMax))
     if progress:
       progress("\rCalculating Visibility: %d of %d entities\n" % (progressMax, progressMax))
     if self.size():
       self.values["propagation_cost"] = total / (self.size() * self.size()) * 100 # percentage
+      self.values["dir_propagation_cost"] = dirtotal / (self.size() * self.size()) * 100 # percentage
 
   def calcFanIns(self):
     if "vfi" in self.metrics or ("vfo" not in self.metrics and "dfo" in self.metrics):
