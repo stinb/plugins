@@ -1,0 +1,130 @@
+# A Metrics Plugin for Git Cohesion
+
+import os
+import understand
+import subprocess
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return ["GitCohesion"]
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return "Git Cohesion"
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return "For a root architecture, the percentage of commits whose changed filed are within a single child architecture. For a child architecture, the percentage of commits touching only files in the architecture out of all commits touching files in the architecture"
+
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  if hasattr(metric, "cache") and metric.cache("Git") and not metric.cache("Git").is_empty():
+    return True
+
+  path = os.path.join(os.path.dirname(metric.db().name()), ".git")
+  return os.path.exists(path)
+
+def value(metric, arch):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  und_cache = None
+  if hasattr(metric, "cache") and metric.cache("Git") and not metric.cache("Git").is_empty():
+    und_cache = metric.cache("Git")
+
+  pathToArch = dict()
+
+  if arch.parent() is None:
+    # For root architecture, map files to direct parent
+    archlist = [arch]
+    while archlist:
+      cur = archlist.pop(0)
+      for ent in cur.ents(False):
+        pathToArch[pathKey(ent, und_cache)] = cur
+      archlist.extend(cur.children())
+  else:
+    # To distinguish between project files and non-project files, map
+    # all project files to Directory Structure
+    dirstruct = metric.db().lookup_arch("Directory Structure")
+    for ent in dirstruct.ents(True):
+      pathToArch[pathKey(ent, und_cache)] = dirstruct
+
+    # Then override mapping for all child architecture descendents
+    for ent in arch.ents(True):
+      pathToArch[pathKey(ent, und_cache)] = arch
+
+  commitToArchs = dict()
+  if und_cache:
+    for file in metric.db().ents("file ~unknown ~unresolved"):
+      for commit in und_cache.value(file=file, key="commits", value=[]):
+        commitToArchs.setdefault(commit,set()).add(pathToArch.get(file))
+  else:
+    # Calculate from Git Log
+    # The git repository must be in the same folder as the Understand
+    # project and the common root of all project files must be the same location
+    # as the git repository. If that is not the case, pathKey and wd would
+    # need to be adjusted
+    wd = os.path.dirname(metric.db().name())
+    startinfo = None
+    if os.name == 'nt':
+      startinfo = subprocess.STARTUPINFO()
+      startinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    try:
+      gitlog = subprocess.run(["git", "log", "--format=#%H", "--name-only"], check=True, capture_output=True, cwd=wd, text=True, startupinfo=startinfo, encoding='latin-1')
+    except Exception as e:
+      return 0 # fail, no repository?
+
+    curCommit = ""
+    for line in gitlog.stdout.splitlines():
+      line = line.strip()
+      if line.startswith("#"):
+        curCommit = line[1:]
+      elif line:
+        line.replace('\\','/')
+        commitToArchs.setdefault(curCommit,set()).add(pathToArch.get(line))
+
+  total = 0
+  cohesive = 0
+  if arch.parent() is None:
+    noneset = set()
+    noneset.add(None)
+    for archset in commitToArchs.values():
+      archcnt = len(archset - noneset)
+      if archcnt > 0:
+        total += 1 # only count commits that touched project files
+      if archcnt == 1:
+        cohesive += 1
+  else:
+    for archset in commitToArchs.values():
+      if arch in archset:
+        total += 1
+        if dirstruct not in archset:
+          cohesive += 1
+
+  return 0 if total < 1 else cohesive / total * 100
+
+def pathKey(ent, und_cache):
+  if und_cache:
+    return ent
+  nm = ent.relname()
+  if nm:
+    nm.replace('\\','/')
+    return nm
+  return ""
