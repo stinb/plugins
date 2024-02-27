@@ -1,0 +1,78 @@
+# A Metrics Plugin for Git Cohesion
+
+import git_util
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return ["GitCohesion"]
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return "Git Cohesion"
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return "For a root architecture, the percentage of commits whose changed filed are within a single child architecture. For a child architecture, the percentage of commits touching only files in the architecture out of all commits touching files in the architecture"
+
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  return git_util.archHasGit(metric,arch)
+
+def value(metric, arch):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  fileToArch = dict()
+
+  if arch.parent() is None:
+    # For root architecture, map files to direct parent
+    archlist = [arch]
+    while archlist:
+      cur = archlist.pop(0)
+      for ent in cur.ents(False):
+        fileToArch[ent] = cur
+      archlist.extend(cur.children())
+  else:
+    # For non-child, all ents recursively count towards parent
+    for ent in arch.ents(True):
+      fileToArch[ent] = arch
+
+  commitToArchs = dict()
+  fileToHashList = git_util.gitHashes(metric, metric.db())
+  for file, commitList in fileToHashList.items():
+    fileArch = fileToArch.get(file)
+    for commit in commitList:
+      commitToArchs.setdefault(commit,set()).add(fileArch)
+
+  total = 0
+  cohesive = 0
+  if arch.parent() is None:
+    total = len(commitToArchs)
+    for archset in commitToArchs.values():
+      if len(archset) == 1:
+        cohesive += 1
+  else:
+    for archset in commitToArchs.values():
+      if arch in archset:
+        total += 1
+        if len(archset) == 1:
+          cohesive += 1
+
+  return 0 if total < 1 else cohesive / total * 100

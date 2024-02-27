@@ -1,0 +1,124 @@
+# A Metrics Plugin for Git
+# This depends on git_util.py
+
+import git_util
+
+gitMets = {
+  "GitCommits" : ["Commits", "The number of git commits that touched this file/directory"],
+  "GitAuthors" : ["Authors", "The number of unique git authors that touched this file/directory"],
+  "GitOwnership" : ["Ownership", "The percentage of commits made by the author with the most commits that touched this file/directory"],
+  "GitMajorContributors" : ["Major Contributors", "The number of unique git authors who made at least 5% of commits that touched this file/directory"],
+  "GitMinorContributors" : ["Minor Contributors", "The number of unique git authors who made less than 5% of commits that touched this file/directory"],
+}
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return list(gitMets.keys())
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return gitMets.get(id,["",""])[0]
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return gitMets.get(id,["",""])[1]
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return id != "GitOwnership"
+
+# One of the following three test functions should return True.
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  return ent.kind().check("file ~unknown ~unresolved") and git_util.hasGit(metric)
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  return git_util.archHasGit(metric,arch)
+
+def test_global(metric, db):
+  """
+  Optional, return True if metric can be calculated for the given database.
+  """
+  return git_util.hasGit(metric)
+
+def test_available(metric,entkindstr):
+  """
+  Optional, return True if the metric is potentially available.
+
+  This is used when there isn't a specific target for the metric, like lists
+  of metrics available for export, or for a treemap.
+
+  Use metric.db() to retrieve the database. If the metric is language specific,
+  the code might look like this:
+    return "Ada" in metric.db().language()
+
+  entkindstr may be empty. If it is empty, return True as long as the metric
+  is available for an entity, architecture, or the project as a whole.
+
+  If entkindstr is not empty, return True only if the metric is available for
+  entities matching the provided kind string. Kind checks are performed like
+  this:
+    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
+    test_kinds = set(understand.Kind.list_entity(entkindstr)
+    return len(my_kinds.intersection(test_kinds)) > 0
+  """
+  if not git_util.hasGit(metric):
+    return False
+
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # Git repository was found, so git metrics are available
+  return True
+
+def value(metric, target):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  authors, sum = git_util.targetAuthorCounts(metric, target)
+  if metric.id() == "GitAuthors":
+    return len(authors)
+  if metric.id() == "GitCommits":
+    return sum
+
+  max = 0
+  major = 0
+  cutoff = 0.05 * sum
+  for count in authors.values():
+    if count > max:
+      max = count
+    if count > cutoff:
+      major += 1
+  if metric.id() == "GitOwnership" and sum > 0:
+    return max / sum * 100
+  if metric.id() == "GitMajorContributors":
+    return major
+  if metric.id() == "GitMinorContributors":
+    return len(authors) - major
