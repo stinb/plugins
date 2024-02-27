@@ -20,6 +20,8 @@ The metric plugin [metric_authors.upy](https://github.com/stinb/plugins/blob/mai
 - **Minor Contributors** The number of authors who made less than 5% of the commits [1]
 - **Major Contributors** The number of authors who made at least 5% of the commits [1]
 
+For a detailed view, the ireport plugin [ireport_authors.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/ireport_authors.upy) shows the owner(s), other major contributor(s), and the minor contributor(s) with the number and percentage of commits.
+
 # Dates
 
 Calendar architectures can be absolute (Year/Month) or relative (Today, This Week, and so on). There are four calendar architecture plugins:
