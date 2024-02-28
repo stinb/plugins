@@ -167,3 +167,16 @@ def targetGitValues(plugin, target, cacheKey, logKey):
   else:
     return listFromLog(plugin.db(), target, logKey)
 
+def kindstringHasGit(plugin, entkindstr):
+  if not hasGit(plugin):
+    return False
+
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # Git repository was found, so git metrics are available
+  return True
+
