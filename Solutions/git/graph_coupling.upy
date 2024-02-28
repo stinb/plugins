@@ -1,0 +1,135 @@
+# A graph plugin for Git coupling
+# This depends on git_util.py
+# The sfdp layout this graph plugin uses requires build 1165 or later
+
+import git_util
+import understand
+
+colors = ["#90c4e4", "#afd870", "#fcad56", "#4e8cb9", "#569f38", "#e45721"]
+
+def name():
+  """
+  Required, the name of the graph.
+  """
+  return "Git Coupling"
+
+def test_architecture(arch):
+  """
+  Optional, return True if the graph exists for the given architecture
+
+  If True, this graph will appear in the Graphical Views menu for the
+  architecture.
+  """
+  return True;
+
+def init(graph, arch):
+  """
+  Initialize the graph
+
+  This function is called once on graph creation. Use it to define the
+  available graph options and/or a legend.
+  """
+  # Options
+
+  # Force a cutoff. If there are too many edges, the UI will freeze trying to
+  # draw them all.
+  graph.options().define("Minimum Coupling %", ["50","60","70","75","80","90"], "50");
+
+  # Create a Legend for coloring by architecture
+  maxRows = len(colors)
+  color = 0
+
+  archList = [arch] + arch.children()
+  recursive = False
+  for a in archList:
+    if a.ents(recursive):
+      graph.legend().define(a.longname(), "circle", a.name(), colors[color%len(colors)], colors[color%len(colors)], color % maxRows, int(color / maxRows))
+      color += 1
+    recursive = True
+
+
+def draw(graph, arch):
+  """
+  Draw the graph
+
+  The second argument can be a database, an architecture or an entity depending
+  on whether the graph was created at a project, architecture, or entity level.
+  """
+  graph.set("layout", "sfdp") # Override default layout algorithm (Usually dot)
+  graph.set("overlap_scaling", "6")
+  graph.set("overlap", "prism")
+
+  graph.default("shape","circle","node")
+  graph.default("arrowhead", "none", "edge")
+
+  # Determine the entities (and their colors) in the graph
+  fileToArch = dict()
+  archList = [arch] + arch.children()
+  recursive = False
+  color = 0
+  for a in archList:
+    entList = a.ents(recursive)
+    for e in entList:
+      fileToArch[e] = color
+    if entList:
+      color += 1
+    recursive = True
+
+  # Find the commits for the relevant files
+  fileToCommits = git_util.gitHashes(graph, graph.db())
+
+  # Track range of commits for node size scale
+  minCommits = 0
+  maxCommits = 0
+  commitToFiles = dict()
+  for file in fileToArch.keys():
+    commitList = fileToCommits.get(file,[])
+    if commitList:
+      for commit in commitList:
+        commitToFiles.setdefault(commit,set()).add(file)
+      if minCommits == 0 or len(commitList) < minCommits:
+        minCommits = len(commitList)
+      if maxCommits == 0 or len(commitList) > maxCommits:
+        maxCommits = len(commitList)
+
+  # Node Creation
+  fileToNode = dict()
+  def fileNode(file):
+    if file in fileToNode:
+      return fileToNode[file]
+    node = graph.node("",file) # No labels
+
+    # Color By Architecture
+    c = colors[fileToArch.get(file,0)%len(colors)]
+    node.set("color",c)
+    node.set("fillcolor",c)
+    commitCount = len(fileToCommits.get(file,[]))
+
+    # Size by number of commits
+    s = str(0.025 + ((commitCount - minCommits) / maxCommits * (0.25 - 0.025)))
+    node.set("width",s)
+    node.set("height",s)
+    fileToNode[file] = node
+    return node
+
+  cutoff = float(graph.options().lookup("Minimum Coupling %")) / 100
+  print(cutoff)
+  # Build Graph
+  for file in fileToArch.keys():
+    # Find weight of this file's coupling
+    coupling = dict()
+    for commit in fileToCommits.get(file,[]):
+      for toFile in commitToFiles.get(commit):
+        if toFile != file:
+          coupling[toFile] = coupling.get(toFile,0) + 1
+
+    # Create nodes and edges
+    if len(coupling):
+      c = colors[fileToArch.get(file,0)%len(colors)]
+      s = len(fileToCommits.get(file,[]))
+      tail = fileNode(file)
+      for toFile, weight in coupling.items():
+        if weight >= (cutoff * s): # Add edges with coupling greater than cutoff
+          edge = graph.edge(tail,fileNode(toFile))
+          edge.set("color", c + "2F") # Make edges semi-transparent
+

@@ -1,0 +1,81 @@
+# A report for git coupling
+# This depends on git_util.py
+
+import git_util
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Git Coupling"
+
+#
+# Report object is not provided to test functions, so always return True and
+# test for Git in generate
+#
+
+def test_entity(ent):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  return ent.kind().check("file ~unknown ~unresolved")
+
+
+# Report generation
+def generate(report, target):
+  """
+  Required, generate the report
+  """
+  if not git_util.hasGit(report):
+    report.print("No Git Repository Found\n")
+    return
+
+  fileToCommits = git_util.gitHashes(report, report.db())
+
+  if not target in fileToCommits:
+    report.print("No Commits for file {}\n".format(target.longname()))
+    return
+
+  commits = set(fileToCommits.get(target))
+  total = len(commits)
+
+  cutoffs = [ total * 0.5, total * 0.3, total * 0.25, total * 0.05, 0 ]
+  counts = [0, 0, 0, 0, 0]
+
+  coupling = dict()
+  for file, commitList in fileToCommits.items():
+    if file == target:
+      continue
+    c = len(commits.intersection(set(commitList)))
+    if c > 0:
+      coupling[file] = c
+      for i in range(len(cutoffs)):
+        if c >= cutoffs[i]:
+          counts[i] += 1
+          break
+
+  report.bold()
+  report.print(target.relname())
+  report.nobold()
+  report.print(": {} Commits, {} Coupled Files\n\n".format(total, len(coupling)))
+
+  labels = [">= 50%", "[33,50) %", "[25,33) %", "[5,25)", "Less than 5%"]
+  runningTotal = [0]
+  for i in range(len(counts)-1):
+    runningTotal.append(runningTotal[-1] + counts[i])
+  runningTotal.append(0)
+
+  cur = 0
+  cnt = 0
+  for k,v in sorted(coupling.items(), key=lambda item: item[1], reverse=True):
+    while cnt == runningTotal[cur]:
+      report.tree(1)
+      report.print("Coupling {} ({} Files)".format(labels[cur], counts[cur]))
+      cur +=1
+
+    report.tree(2, cnt == 0)
+    report.entity(k)
+    report.print(k.relname())
+    report.entity()
+    report.print(" - {} Commits ({:.2f}%)".format(v, v/total*100))
+    cnt += 1

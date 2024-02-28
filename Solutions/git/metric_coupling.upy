@@ -1,0 +1,91 @@
+# A Metrics Plugin for Git Coupling
+# This depends on git_util.py
+
+import git_util
+
+gitMets = {
+  "GitMaxCoupling" : ["Git Max Coupling", "A file is coupled to another file through Git if they are both modified in the same commit. The coupling is measured by the number of commits the two files co-occur in divided by the number of commits for the target file. The maximum coupling is the largest coupling."],
+  "GitAvgCoupling" : ["Git Average Coupling", "A file is coupled to another file through Git if they are both modified in the same commit. The coupling is measured by the number of commits the two files co-occur in divided by the number of commits for the target file. The average coupling is calculated over all coupled files."],
+  "GitCoupledFiles" : ["Git Coupled Files", "A file is coupled to another file through Git if they are both modified in the same commit. This metric is the number of other files coupled with this file at least once"],
+  "GitStrongCoupledFiles" : ["Git Strongly Coupled Files", "A file is coupled to another file through Git if they are both modified in the same commit. The coupling is measured by the number of commits the two files co-occur in divided by the number of commits for the target file. If this value is greater than 50%, the file is strongly coupled. This metric is the number of strongly coupled files"],
+}
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return list(gitMets.keys())
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return gitMets.get(id,["",""])[0]
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return gitMets.get(id,["",""])[1]
+
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return id in ["GitCoupledFiles", "GitStrongCoupledFiles"]
+
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  return ent.kind().check("file ~unknown ~unresolved") and git_util.hasGit(metric)
+
+def value(metric, ent):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  fileToCommits = git_util.gitHashes(metric, metric.db())
+  if ent not in fileToCommits:
+    return None
+
+  commits = set(fileToCommits.get(ent))
+  sum = len(commits)
+  if sum == 0:
+    return 0
+
+  cutoff = 0.5 * sum
+  max = 0
+  files = 0
+  avg = 0
+  strong = 0
+  for file, commitList in fileToCommits.items():
+    if file == ent:
+      continue
+    c = len(commits.intersection(set(commitList)))
+    if c > 0:
+      files += 1
+      avg += c
+      if c > max:
+        max = c
+      if c >= cutoff:
+        strong += 1
+
+  if metric.id() == "GitCoupledFiles":
+    return files
+  if metric.id() == "GitStrongCoupledFiles":
+    return strong
+  if metric.id() == "GitMaxCoupling":
+    return max/sum * 100
+  return 0 if files == 0 else avg * 100 / files / sum
