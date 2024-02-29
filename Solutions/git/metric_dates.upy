@@ -84,6 +84,15 @@ def test_available(metric,entkindstr):
   """
   return git_util.kindstringHasGit(metric, entkindstr)
 
+def test_line(metric):
+  """
+  Optional, return True if the metric has values for line.
+
+  Values per line are returned as a dictionary from line number to line
+  value from the lines function (see below).
+  """
+  return metric.id() == "GitDaysSinceLastModified" and git_util.hasGit(metric)
+
 def value(metric, target):
   """
   Required, return the metric value for the target. The target may be
@@ -103,3 +112,45 @@ def value(metric, target):
     else:
       delta = today - datetime.datetime.fromisoformat(dates[0]).date()
       return delta.days
+
+def lines(metric, file):
+  """
+  Optional, return a dictionary from line number to line value.
+
+  This method is called if test_line returns True. The dictionary does
+  not have to include values for every line.
+  """
+  if not file.kind().check("file ~unresolved ~unknown"):
+    return
+
+  blame, wd = git_util.runProcessInDbDir(["git", "blame", "-p", file.longname()], metric.db())
+  if not blame:
+    return None
+
+  commitToAge = dict()
+  lineToCommit = dict()
+  today = datetime.date.today()
+  nextLineIsHeader = True
+  curCommit = None
+  for line in blame.splitlines():
+    if nextLineIsHeader:
+      # CommitHash OriginalLineNum CurLineNum OptionalLineCount
+      parts = line.strip().split()
+      curCommit = parts[0]
+      lineToCommit[parts[2]] = curCommit
+      nextLineIsHeader = False
+    elif line.startswith('\t'):
+      nextLineIsHeader = True
+    elif line.startswith("author-time"):
+      # Maybe try to parse the time zone? It's not an argument for date
+      # so it probably isn't necessary for days past
+      d = datetime.date.fromtimestamp(int(line.split()[-1]))
+      delta = today - d
+      commitToAge[curCommit] = delta.days
+
+  lineToAge = dict()
+  for line, commit in lineToCommit.items():
+    if commit in commitToAge:
+      lineToAge[line] = commitToAge[commit]
+  return lineToAge
+

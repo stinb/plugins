@@ -3,16 +3,25 @@ import os
 import understand
 import subprocess
 
-def fileToListFromLog(format, db):
+def runProcessInDbDir(args, db):
+  # The git repository is assumed to be in the same folder as the Understand
+  # project. If this is not True for your project, update the working directory
+  # accordingly.
   wd = os.path.dirname(db.name())
   startinfo = None
   if os.name == 'nt':
     startinfo = subprocess.STARTUPINFO()
     startinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
   try:
-    gitlog = subprocess.run(["git", "log", "--format=#"+format, "--name-only"], check=True, capture_output=True, cwd=wd, text=True, startupinfo=startinfo, encoding='latin-1')
+    out = subprocess.run(args, check=True, capture_output=True, cwd=wd, text=True, startupinfo=startinfo, encoding='latin-1')
   except Exception as e:
-    return # no repository ?
+    return None, None # no repository ?
+  return out.stdout, wd
+
+def fileToListFromLog(format, db):
+  gitlog, wd = runProcessInDbDir(["git", "log", "--format=#"+format, "--name-only"], db)
+  if not gitlog:
+    return None
 
   pathToFile = dict()
   wd.replace('\\','/')
@@ -27,7 +36,7 @@ def fileToListFromLog(format, db):
 
   cur = ""
   fileToList = dict()
-  for line in gitlog.stdout.splitlines():
+  for line in gitlog.splitlines():
     line = line.strip()
     if line.startswith("#"):
       cur = line[1:]
@@ -53,20 +62,11 @@ def listFromLog(db, target, format):
   else: # entity, must be file
     path = target.longname()
 
-  # The git repository is assumed to be in the same folder as the Understand
-  # project. If this is not True for your project, update the working directory
-  # accordingly.
-  wd = os.path.dirname(db.name())
-  startinfo = None
-  if os.name == 'nt':
-    startinfo = subprocess.STARTUPINFO()
-    startinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-  try:
-    gitlog = subprocess.run(["git", "log", "--format="+format, "--", path], check=True, capture_output=True, cwd=wd, text=True, startupinfo=startinfo, encoding='latin-1')
-  except Exception as e:
-    return None # not part of the repository?
+  gitlog, wd = runProcessInDbDir(["git", "log", "--format="+format, "--", path], db)
+  if not gitlog:
+    return None
 
-  return gitlog.stdout.splitlines()
+  return gitlog.splitlines()
 
 def fileToListFromCache(und_cache, db, key):
   fileToList = dict()
