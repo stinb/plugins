@@ -1,0 +1,83 @@
+# Make a Visual Studio Architecture using the structure in the solution and
+# filter files
+import glob
+import os.path
+import re
+import xml.etree.ElementTree
+
+
+def name():
+  return "Structured Visual Studio"
+
+def generate(arch, db):
+  # If your solution file(s) are not in the same directory as your Understand
+  # project, update this search
+  solutions = glob.glob(os.path.join(os.path.dirname(db.name()), "*.sln"))
+
+  fileDict = dict()
+  for file in db.ents("file ~unknown ~unresolved"):
+    fileDict[file.longname()] = file
+
+  for solution in solutions:
+    projects = parseSolutionFile(solution)
+    files = filesToArch(projects)
+    for path, name in files.items():
+      if path in fileDict:
+        arch.map(fileDict[path], name)
+
+projectLineRE = re.compile(r"Project\(\"{[a-zA-Z0-9-_]+}\"\)\s*=\s*\"([^\"]*)\"\s*,\s*\"([^\"]*)\"\s*,\s*\"{([a-zA-Z0-9-_]+)}\"")
+parentLineRE = re.compile(r"\s*{([a-zA-Z0-9-_]+)}\s*=\s*{([a-zA-Z0-9-_]+)}")
+def parseSolutionFile(filename):
+  names = dict()
+  paths = dict()
+  parents = dict()
+  with open(filename, 'r') as f:
+    for line in f:
+      m = projectLineRE.search(line)
+      if m:
+        names[m.group(3)] = m.group(1)
+        path = m.group(2).replace('\\','/')
+        if os.path.exists(path):
+          paths[m.group(3)] = path
+      m = parentLineRE.search(line)
+      if m:
+        parents[m.group(1)] = m.group(2)
+  projToArch = dict()
+  for hash, path in paths.items():
+    arch = []
+    while hash in names:
+      arch.append(names[hash])
+      hash = parents.get(hash)
+    projToArch[path] = '/'.join(reversed(arch))
+  return projToArch
+
+def parseProjXML(filename, pathDict, defaultFilter):
+  tree = xml.etree.ElementTree.parse(filename)
+  root = tree.getroot()
+
+  # The elements all appear to be prefixed with the xmlns attribute so find
+  # that based on the root (which should be "Project")
+  prefix = ""
+  if root.tag.endswith("Project"):
+    prefix = root.tag[:-7]
+
+  dir = os.path.abspath(os.path.dirname(filename))
+  for tag in ["ClCompile", "ClInclude"]:
+    for el in root.iter(prefix + tag):
+      inc = el.get("Include")
+      filter = defaultFilter
+      filterEl = el.find(prefix + "Filter")
+      if filterEl is not None:
+        filter = defaultFilter + "/" + filterEl.text
+      if inc:
+        inc = os.path.normpath(os.path.join(dir, inc))
+        pathDict[inc] = filter
+
+def filesToArch(projToArch):
+  pathDict = dict()
+  for proj, arch in projToArch.items():
+    parseProjXML(proj, pathDict, arch)
+    if os.path.exists(proj + ".filters"):
+      parseProjXML(proj + ".filters", pathDict, arch)
+  return pathDict
+
