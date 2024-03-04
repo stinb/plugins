@@ -1,0 +1,122 @@
+# Make an architecture from CMakeLists.txt files. This architecture will likely
+# require customization to work for your project.
+import glob
+import os.path
+import re
+
+# Directory path update for automatically generated files
+buildDirBefore = "/src/"
+buildDirAfter = "/build/release/src/"
+
+def name():
+  return "CMake"
+
+def generate(arch, db):
+  # This finds CMakeLists files recursively from the directory of the project.
+  # Update this to look for the files somewhere else
+  cmakeGlob = os.path.join(os.path.dirname(db.name()), "**","CMakeLists.txt")
+  cmakefiles = glob.glob(cmakeGlob, recursive=True)
+
+  # Map paths to entity
+  fileDict = dict()
+  for file in db.ents("file ~unknown ~unresolved"):
+    path = file.longname()
+    fileDict[path] = file
+
+  # Regular expressions for executables and libraries. Use this to group
+  # files by exe/lib name in the CMake Architecture
+  exeRe = re.compile(r"add_(?:executable|qt_executable)\(\s*(\$?{?\w*}?)(\s*EXCLUDE_FROM_ALL)?([\s\.\w\$\{\}#/]*)\)")
+  libRe = re.compile(r"add_lib(?:rary)?(?:_pic)?\(\s*(\$?{?\w*}?)(\s*OBJECT)?([\s\.\w\$\{\}#/]*)\)")
+
+  # Regular expression to automatically generated qt designer files
+  uiRe = re.compile(r"qt\d?_wrap_ui\(([\s\w\$\{\}\.#/]*)\)")
+
+  # Regular expression to strip CMake comments from a file list
+  deCommentRe = re.compile(r"#.*")
+
+  # Regular expression for CMake variables
+  setRe = re.compile(r"set\(([\s\w\$\{\}\./#\"]*)\)")
+
+  # Storage for CMake Variables
+  sets = {}
+
+  # Read each CMakeLists.txt file
+  for cmakefile in cmakefiles:
+    with open(cmakefile,"r") as file:
+      filetext = file.read()
+      dirname = os.path.dirname(os.path.abspath(cmakefile)) + "/"
+
+      # Look for cmake variables first
+      for result in setRe.findall(filetext):
+        myList = deCommentRe.sub("",result).split()
+        sets["${"+myList[0]+"}"]= expand(myList[1:], sets)
+
+      # map generated qt designer files
+      builddir = dirname.replace(buildDirBefore,buildDirAfter)
+      for result in uiRe.findall(filetext):
+        myList = deCommentRe.sub("",result).split()
+        sets["${"+myList[0]+"}"]= [builddir + "ui_" + s[:-3] + ".h" for s in expand(myList[1:], sets)]
+
+      # add arch nodes for any libraries/executables
+      for result in exeRe.findall(filetext):
+        addArch(dirname,result, False, sets, arch, fileDict, deCommentRe)
+      for result in libRe.findall(filetext):
+        addArch(dirname,result, filetext.count("add_library") == 1, sets, arch, fileDict, deCommentRe)
+
+# Replacement function for cmake variables
+def expand(initialList, sets):
+  finalList = []
+  for item in initialList:
+    # If the name is a variable name, replace it with the value
+    if item in sets:
+      finalList.extend(sets[item])
+    else:
+      finalList.append(item)
+  return finalList
+
+
+# Function for adding child architectures to the root
+def addArch(dirname, result, addHeaders, sets, arch, fileDict, deCommentRe):
+    # The first entry in add_executable or add_library is the name
+    name = expand([result[0]], sets)[0]
+
+    # Strip quotes from name if present
+    if len(name) > 1 and name[0] == '"' and name[-1] == '"':
+      name = name[1:-1]
+
+    filelist = set()
+    # Remove comments and expand variables
+    for s in expand(deCommentRe.sub("",result[2]).split(), sets):
+      if "${" not in s:
+        if s[0] != '/':
+          s = dirname + s
+        if s in fileDict:
+          filelist.add(fileDict[s])
+
+        # Check for corresponding header file
+        s = s.replace('.cpp','.h')
+        if s in fileDict:
+          filelist.add(fileDict[s])
+
+        # Check for corresponding inline file
+        s = s.replace('.h','.inl')
+        if s in fileDict:
+          filelist.add(fileDict[s])
+
+        # Check for moc file
+        s = s.replace(buildDirBefore,buildDirAfter)
+        s = s.replace('.inl','.cpp')
+        for s2 in glob.glob(os.path.join(os.path.dirname(s), "**", "moc_" + os.path.basename(s)), recursive=True):
+          if s2 in fileDict:
+            filelist.add(fileDict[s2])
+
+    # some header files have no cpp file counterpart, so add them too so they
+    # belong somewhere.
+    if addHeaders:
+      for filename in glob.glob(dirname+"*.h"):
+        if filename in fileDict:
+          filelist.add(fileDict[filename])
+
+    # Add files to architecture
+    for f in filelist:
+      arch.map(f, name)
