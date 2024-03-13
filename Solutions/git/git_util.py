@@ -21,7 +21,7 @@ def runProcessInDbDir(args, db):
 def fileToListFromLog(format, db):
   gitlog, wd = runProcessInDbDir(["git", "log", "--format=#"+format, "--name-only"], db)
   if not gitlog:
-    return None
+    return dict()
 
   pathToFile = dict()
   wd.replace('\\','/')
