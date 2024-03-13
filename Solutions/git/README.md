@@ -31,12 +31,12 @@ Calendar architectures can be absolute (Year/Month) or relative (Today, This Wee
 - Absolute from the earliest date [arch_created.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_created.upy)
 - Relative from the earliest date [arch_created_rel.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_created_rel.upy)
 
-There is also an architecture plugin based on activity: [arch_stability.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_stability.upy). Files that have been modified at least twice in the past month (=past 30 days) are "Active". If an active file was also active in the previous month, then it is "Reccurently Active". All other files are "Stable". [3]
+There is also an architecture plugin based on activity: [arch_stability.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_stability.upy). Files that have been modified at least twice in the past month (=past 30 days) are "Active". If an active file was also active in the previous month, then it is "Recurrently Active". All other files are "Stable". [3]
 
 The metric plugin [metric_dates.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/metric_dates.upy) works for file entities, architectures (with file entities) and the whole project. It defines the following metrics:
 
 - Days since creation
-- Days since last modified
+- Days since modified
 
 # Miscellaneous
 
