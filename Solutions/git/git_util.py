@@ -116,7 +116,7 @@ def targetToFileList(target):
   files = []
   if target:
     if isinstance(target, understand.Db):
-      files = target.lookup_arch("Directory Structure").ents(True)
+      files = target.ents("file ~unknown ~unresolved")
     elif isinstance(target, understand.Arch):
       for file in target.ents(True):
         if file.kind().check("file ~unknown ~unresolved"):
