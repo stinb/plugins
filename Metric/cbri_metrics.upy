@@ -1,0 +1,331 @@
+# A plugin for the metrics used by CBR-Insight
+# https://github.com/StottlerHenke/CBRI-Backend
+
+import understand
+import re
+
+metDict = {
+  "CBRIUsefulLOC" : ["CBRI Useful Lines of Code", "From CBRI, lines of code excluding lines with only punctuation"],
+  "CBRIUsefulComments": [ "CBRI Useful Comment Lines", "From CBRI, the number of comments that do not appear to be licensing or commented out code"],
+  "CBRIUsefulCommentToCodeRatio" : ["CBRI Useful Comment To Code Ratio", "CBRI Useful Comments (not licensing or commented out code) divided by CBRI's useful lines of code (excludes lines with only punctuation)."],
+  "CBRIMaxCBO" : ["CBRI Max CBO", "From CBRI. For a file defining class(es), the maximum CountClassCoupled of a class. Otherwise, the number of files this file depends on."],
+  "CBRIMaxRFC" : ["CBRI Max RFC", "From CBRI. For a file defining class(es), the maxium of (CountDeclMethodAll + called methods). Otherwise, the number of functions called by the file."],
+  "CBRIMaxWMC": [ "CBRI Max WMC", "From CBRI. For a file defining class(es), the maximum CountDeclMethod. Otherwise, the file's CountDeclFunction + CountDeclSubProgram metrics."],
+  "CBRIMaxWMCM": [ "CBRI Max WMC-McCabe", "From CBRI. For a file defining class(es), the maximum SumCyclomatic. Otherwise, the file's MaxCyclomatic metric."],
+  "CBRIThresholdViolations": [ "CBRI Threshold Violations", "From CBRI. The number of the following metrics that exceeded the thresholds: CBRIMaxCBO, CBRIMaxWMC, CBRIMaxWMCM, CBRIMaxRFC, MaxFileSize"],
+  "CBRIOverlyComplexFiles": [ "CBRI Overly Complex Files", "The number of files with CBRIThresholdViolations > 3" ]
+}
+
+projMetrics = ["CBRIOverlyComplexFiles", "CBRIUsefulCommentToCodeRatio", "CBRIUsefulComments", "CBRIUsefulLOC"]
+funcKindStr = ("ada entry, ada function, ada package, ada procedure, ada protected, ada task,"
+  "c function,"
+  "cobol program,"
+  "csharp method,"
+  "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+  "java method,"
+  "jovial file, jovial subroutine,"
+  "pascal compunit, pascal function, pascal procedure,"
+  "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
+  "web function")
+
+def ids():
+  """
+  Required, a list of metric ids that this script provides
+
+  For example, CountLineCode is a metric id.
+  """
+  return list(metDict.keys())
+
+def name(id):
+  """
+  Required, the name of the metric given by id.
+
+  For example, CountLineCode -> "Source Lines of Code"
+  """
+  return metDict.get(id,["",""])[0]
+
+def description(id):
+  """
+  Required, the description of the metric given by id
+
+  For example, CountLineCode -> "Number of lines containing source code"
+  """
+  return metDict.get(id,["",""])[1]
+
+def is_integer(id):
+   """
+   Optional, return True if the metric value is an integer.
+
+   If this function it not implemented, it is assumed false, meaning the
+   value should be represented as a double/float.
+   """
+   return id != "CBRIUsefulCommentToCodeRatio"
+
+# One of the following three test functions should return True.
+def test_entity(metric, ent):
+  """
+  Optional, return True if metric can be calculated for the given entity.
+  """
+  return metric.id() != "CBRIOverlyComplexFiles" and ent.kind().check("file ~unknown ~unresolved");
+
+def test_architecture(metric, arch):
+  """
+  Optional, return True if metric can be calculated for the given architecture.
+  """
+  return metric.id() in projMetrics
+
+def test_global(metric, db):
+  """
+  Optional, return True if metric can be calculated for the given database.
+  """
+  return metric.id() in projMetrics
+
+def test_available(metric,entkindstr):
+  """
+  Optional, return True if the metric is potentially available.
+
+  This is used when there isn't a specific target for the metric, like lists
+  of metrics available for export, or for a treemap.
+
+  Use metric.db() to retrieve the database. If the metric is language specific,
+  the code might look like this:
+    return "Ada" in metric.db().language()
+
+  entkindstr may be empty. If it is empty, return True as long as the metric
+  is available for an entity, architecture, or the project as a whole.
+
+  If entkindstr is not empty, return True only if the metric is available for
+  entities matching the provided kind string. Kind checks are performed like
+  this:
+    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
+    test_kinds = set(understand.Kind.list_entity(entkindstr)
+    return len(my_kinds.intersection(test_kinds)) > 0
+  """
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  return True
+
+def value(metricObj, target):
+  """
+  Required, return the metric value for the target. The target may be
+  an entity, architecture, or database depending on which test functions
+  returned True.
+  """
+  fileents = []
+  if isinstance(target, understand.Db):
+    fileents = target.ents("file ~unknown ~unresolved")
+  elif isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check("file ~unresolved ~unknown"):
+        fileents.append(ent)
+  else: # entity
+    if metricObj.id() == "CBRIUsefulLOC":
+      return uloc(metricObj,target)
+    if metricObj.id() == "CBRIUsefulComments":
+      return usefulComments(metricObj, target)
+    if metricObj.id() == "CBRIUsefulCommentToCodeRatio":
+      loc = uloc(metricObj, target)
+      return usefulComments(metricObj,target) / loc if loc else 0
+    if metricObj.id() == "CBRIMaxCBO":
+      return maxCBO(target)
+    if metricObj.id() == "CBRIMaxRFC":
+      return maxRFC(target)
+    if metricObj.id() == "CBRIMaxWMC":
+      return maxWMC(target)
+    if metricObj.id() == "CBRIMaxWMCM":
+      return maxWMCM(target)
+    if metricObj.id() == "CBRIThresholdViolations":
+      return thresholds(metricObj, target)
+
+  if metricObj.id() == "CBRIOverlyComplexFiles":
+    cnt = 0
+    for file in fileents:
+      if thresholds(metricObj,file) > 3:
+        cnt += 1
+    return cnt
+  if metricObj.id() == "CBRIUsefulLOC":
+    sum = 0
+    for file in fileents:
+      sum += uloc(metricObj, file)
+    return sum
+  if metricObj.id() == "CBRIUsefulComments":
+    sum = 0
+    for file in fileents:
+      sum += usefulComments(metricObj, file)
+    return sum
+  if metricObj.id() == "CBRIUsefulCommentToCodeRatio":
+    loc = 0
+    comments = 0
+    for file in fileents:
+      loc += uloc(metricObj, file)
+      comments += usefulComments(metricObj, file)
+    return comments / loc if loc else 0
+
+def metric(ent, id):
+  if id == "RFC":
+    val = rfc(ent)
+  else:
+    val = ent.metric([id]).get(id,0)
+  return val if val else 0
+
+def maxMetric(reflist, id):
+  max = 0
+  for ref in reflist:
+    val = metric(ref.ent(), id)
+    if val > max:
+      max = val
+  return max
+
+def rfc(classEnt):
+  # Methods called by class
+  called = set()
+  for depreflist in classEnt.depends().values():
+    for depref in depreflist:
+      if depref.kind().check("call") and depref.ent().kind().check("method, function"):
+        called.add(depref.ent())
+
+  return metric(classEnt, "CountDeclMethodAll") + len(called)
+
+def maxCBO(file):
+  classes = file.filerefs("define", "class ~function", True)
+  return maxMetric(classes, "CountClassCoupled") if classes else len(file.depends())
+
+def maxRFC(file):
+  classes = file.filerefs("define", "class ~function", True)
+  if not classes:
+    return len(file.filerefs("call,use", funcKindStr, True))
+  return maxMetric(classes, "RFC");
+
+def maxWMC(file):
+  classes = file.filerefs("define", "class ~function", True)
+  if not classes:
+    return metric(file, "CountDeclFunction") + metric(file, "CountDeclSubProgram")
+  maxMetric(classes,"CountDeclMethod")
+
+def maxWMCM(file):
+  classes = file.filerefs("define", "class ~function", True)
+  return maxMetric(classes, "SumCyclomatic") if classes else metric(file, "MaxCyclomatic")
+
+def uloc(metricObj, file):
+  und_cache = None
+  if hasattr(metricObj, "cache"):
+    und_cache = metricObj.cache()
+    if und_cache:
+      val = und_cache.value("code", file)
+      if val is not None:
+        return val
+
+  useless = 0
+  lexer = file.lexer(lookup_ents = False)
+  if lexer:
+    line = ""
+    useless_re = re.compile(r"^[\{\};\(\)]+$")
+    for lexeme in lexer:
+      if lexeme.token() == "Newline":
+        # remove whitespace
+        line = ''.join(line.split())
+        if useless_re.search(line):
+          useless += 1
+        line = ""
+      elif lexeme.token() != "Comment":
+        line += lexeme.text()
+    line = ''.join(line.split())
+    if useless_re.search(line):
+      useless += 1
+
+  loc = metric(file, "CountLineCode") - useless
+  if und_cache:
+    und_cache.insert(loc, "code", file)
+  return loc
+
+def usefulComments(metricObj, file):
+  und_cache = None
+  if hasattr(metricObj, "cache"):
+    und_cache = metricObj.cache()
+    if und_cache:
+      val = und_cache.value("comments", file)
+      if val is not None:
+        return val
+
+  lexer = file.lexer(lookup_ents = False)
+  if not lexer:
+    return 0
+
+  keywords = set("and_eq asm auto bitand bitor bool case catch char class compl const const-cast continue default delete double dynamic_cast enum exit explicit extern false float fprintf friend goto inline int long mutable namespace new not_eq operator or_eq private protected public register reinterpret-cast short signed sizeof static static_cast struct switch template throw true try typedef typeid typename union unsigned using virtual void volatile wchar_t xor xor_eq".split())
+  comment_re = re.compile(r"^/\*|^//|\*/$")
+  strong_keywords_re = re.compile(r"(?<!\w)(for|while|if)\s*\(")
+  preprocesser = {"#include", "#define", "#endif","#ifndef", "#ifdef", "#undef"}
+  strong_ends = {";", "{"}
+  maybe_end = ")"
+  copyright_re = re.compile(r"copyright|license|©", re.I)
+
+    #Language overrides
+  if file.kind().check('java file'):
+    keywords = set("abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float goto implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile".split())
+    comment_re = re.compile(r"^/\*\*|^/\*|^//|\*/$")
+    preprocesser = set()
+  elif file.kind().check('web file'):
+    keywords = set("abstract array as break case catch class clone const continue default delete die do echo else elseif empty endfor endforeach endif endwhile eval exit extends false final finally foreach function global implements import in include include_once instanceof interface isset list long namespace new null print private protected public require require_once return static switch this throw true try typeof unset use var void with".split())
+    comment_re = re.compile(r"^/\*|^//|\*/$|^#|^<!--")
+  elif file.kind().check('ada file'):
+    keywords = set("array begin body case constant delay else elsif end exception exit function generic limited loop mod new not null of others out package private procedure raise range record renames return subtype then type use when with".split())
+    comment_re = re.compile(r"^--")
+  elif file.kind().check('fortran file'):
+    keywords = set("allocatable allocate block call case character close contains continue cycle deallocate default do else elsewhere end exit external file format function go implicit inquire integer intent logical loop module none nullify only open optional out parameter pointer private program public read real recursive result return rewind save select stop subroutine target then type use where write".split())
+    comment_re = re.compile(r"^!--")
+  elif file.kind().check('python file'):
+    keywords = set("assert break class continue def del elif else except False finally from global import lambda None not or pass raise return True try yield =".split())
+    comment_re = re.compile(r"^#")
+    strong_ends = {")"};
+
+  useful = 0
+  for lexeme in lexer:
+    if lexeme.token() != "Comment":
+      continue
+
+    comment = lexeme.text()
+    comment = comment_re.sub('', comment)
+
+    # Ignore copyright comments
+    if copyright_re.search(comment):
+      continue
+
+    for line in comment.split('\n'):
+      line = line.strip() # Remove leading and trailing whitespace
+      line = " ".join(line.split()) # collapse internal whitespace
+      if len(line) < 3:
+        continue
+
+      pp = any(word in line for word in preprocesser)
+      strong_code = strong_keywords_re.search(line)
+      strong_end = any(word in line for word in strong_ends)
+      weak_end = maybe_end in line
+      weak_code = any(re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", line) for word in keywords)
+
+      # Ignore code
+      if pp or (strong_code and (strong_end or weak_end)) or (weak_code and strong_end):
+        continue
+
+      useful += 1
+
+  if und_cache:
+    und_cache.insert(useful, "comments", file)
+  return useful
+
+def thresholds(metricObj, file):
+  cnt = 0
+  if maxCBO(file) > 8:
+    cnt += 1
+  if maxRFC(file) > 30:
+    cnt += 1
+  if maxWMC(file) > 12:
+    cnt += 1
+  if maxWMCM(file) > 100:
+    cnt += 1
+  if uloc(metricObj, file) > 200:
+    cnt += 1
+  return cnt
