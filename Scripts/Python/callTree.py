@@ -1,4 +1,16 @@
-# Print a sorted list of functions and their call trees
+"""
+:Title: Textual Call Trees
+:Description: Print an alphabetically sorted list of functions and their call trees
+:Arg: Takes an Understand database folder (.und) as the first argument
+:Example: upython callTree.py myproject.und
+:Tags: python, script, call tree, calls
+
+This script is designed for use with Understand (https://www.scitools.com)
+For updated scripts, documentation and license info see the Understand Plugins repo
+     https://github.com/stinb/plugins
+"""
+
+# 
 import understand
 import sys
 

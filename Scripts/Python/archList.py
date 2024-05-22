@@ -1,6 +1,14 @@
-#Recursively List the architectures
-#Takes an Understand database file (.udb) as the first argument
+"""
+:Title: List Architectures
+:Description: This sample script recursively lists all architectures in the project
+:Arg: Takes an Understand database folder (.und) as the first argument
+:Example: upython archList.py myproject.und
+:Tags: python, script, template, architectures
 
+This script is designed for use with Understand (https://www.scitools.com)
+For updated scripts, documentation and license info see the Understand Plugins repo
+     https://github.com/stinb/plugins
+"""
 import understand
 import sys
 

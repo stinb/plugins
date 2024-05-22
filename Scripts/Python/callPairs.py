@@ -1,4 +1,19 @@
-# Create a CSV that shows each function call and location as well as where the called function is defined
+"""
+:Title: Function Call Pairs
+:Description: Create a CSV that shows each function call and location as well as where the called function is defined
+              using the format: Caller, Caller File, Call Line, Callee, Callee File
+              For example if funcA calls funcB on line 15 the output would be
+              funcA(int arg1),c:/path/file1.c,15,funcB,c:/path/file2.c
+:Link: https://blog.scitools.com/automating-a-custom-architecture/
+:Arg: Takes an Understand database folder (.und) as the first argument
+:Example: upython callPairs.py myproject.und
+:Tags: python, script, calls, csv
+
+This script is designed for use with Understand (https://www.scitools.com)
+For updated scripts, documentation and license info see the Understand Plugins repo
+     https://github.com/stinb/plugins
+"""
+# 
 import understand
 import sys
 
