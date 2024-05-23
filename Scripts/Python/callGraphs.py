@@ -17,17 +17,21 @@ For updated scripts, documentation and license info see the Understand Plugins r
 import understand
 import sys
 
-def sortedEntities(db):
+def drawGraphs(db):
   f = open("index.htm", "a")
   duplicateName = {}
   for ent in sorted(db.ents("function ~unknown ~unresolved"),key= lambda ent: ent.name()):
+    refs = ent.refs("call")
+    if not refs: #Skip functions that don't call anything
+      print (ent.name() + " -> Skipping, no calls")
+      continue
     count = duplicateName.setdefault(ent.name(), 0)
     dupCount = ""
     if (count):
       dupCount = duplicateName[ent.name()]
     imgFile = ent.name()+str(dupCount)+".png"
     print (ent.name() + " -> " + imgFile)
-    ent.draw("Calls",imgFile)
+    ent.draw("Calls",imgFile,"Level=3","Simplified" )
     f.write("<a href=\""+imgFile+"\">"+ent.name()+"("+ent.parameters()+")</a><br>\n")
     duplicateName[ent.name()]+=1
   f.close()
@@ -37,4 +41,4 @@ if __name__ == '__main__':
   # Open Database
   args = sys.argv
   db = understand.open(args[1])
-  sortedEntities(db)
+  drawGraphs(db)
