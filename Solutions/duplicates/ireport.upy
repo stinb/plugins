@@ -1,0 +1,88 @@
+import duplicates
+import understand
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Duplicate Lines (Python)"
+
+def test_global(db):
+  """
+  Optional method, return true for project level reports
+  """
+  return True
+
+def test_architecture(arch):
+  """
+  Optional method, return true if report is valid for the architecture
+  """
+  return True
+
+def init(report):
+  """
+  Optional method, define options that can be changed by the user
+  """
+  report.options().integer("lines","Minimum # lines to match",5);
+  report.options().checkbox("ws","Ignore Whitespace",True);
+  report.options().checkbox("comments","Ignore Comments",True);
+
+# Report generation
+def generate(report, target):
+  """
+  Required, generate the report
+  """
+  fileents = []
+  if isinstance(target, understand.Db):
+    fileents = target.ents("file ~unknown ~unresolved")
+  elif isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check("file ~unresolved ~unknown"):
+        fileents.append(ent)
+
+  if not fileents:
+    report.print("No files\n")
+    return
+
+  # Load Options
+  ignores = []
+  if report.options().lookup("ws"):
+    ignores.append("Whitespace")
+    ignores.append("Newline")
+  if report.options().lookup("comments"):
+    ignores.append("Comment")
+  matches = duplicates.Matches(report.options().lookup("lines"))
+
+  # Scan files
+  percent = 0
+  filePercent = 90.0 / len(fileents)
+  for file in fileents:
+    matches.processFile(file, duplicates.fileLines(file, ignores)[0])
+    percent += filePercent
+    report.progress(int(percent), "Scanning Files")
+
+  report.progress(90, "Finding Matches")
+  matchlist = matches.findMatches()
+
+  dupl = matches.duplicateLines()
+  total = 0
+  for lineset in dupl.values():
+    total += len(lineset)
+
+  duplicates.addToPluginCache(dupl, report) # for metrics
+  report.progress(100)
+
+  report.print("Found {} duplicated regions, {} duplicated lines".format(len(matchlist), total))
+
+  lineNumbers = dict()
+  for m in sorted(matchlist, key = lambda m: (m.length, m.weight()), reverse=True):
+    report.tree(1,True)
+    report.print("Found {} duplicated lines in {} locations".format(m.length, m.weight()))
+    for loc in m.locations:
+      if loc.file not in lineNumbers:
+        lineNumbers[loc.file] = duplicates.fileLines(loc.file, ignores)[1]
+      report.tree(2)
+      report.syncfile(loc.file.longname(), lineNumbers[loc.file][loc.line])
+      report.print("{} ({} - {})".format(loc.file.relname(), lineNumbers[loc.file][loc.line], lineNumbers[loc.file][loc.line + m.length - 1]))
+      report.syncfile()
+  report.tree()
