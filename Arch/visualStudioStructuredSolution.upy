@@ -3,7 +3,6 @@
 import glob
 import os.path
 import re
-import xml.etree.ElementTree
 
 
 def name():
@@ -51,27 +50,27 @@ def parseSolutionFile(filename):
     projToArch[path] = '/'.join(reversed(arch))
   return projToArch
 
+includeRE = re.compile(r'<Cl(Compile|Include)[^>]*Include="([^"]*)"[^>]*>')
+filterRE = re.compile(r'<Filter>([^<]*)</Filter>')
 def parseProjXML(filename, pathDict, defaultFilter):
-  tree = xml.etree.ElementTree.parse(filename)
-  root = tree.getroot()
-
-  # The elements all appear to be prefixed with the xmlns attribute so find
-  # that based on the root (which should be "Project")
-  prefix = ""
-  if root.tag.endswith("Project"):
-    prefix = root.tag[:-7]
-
   dir = os.path.abspath(os.path.dirname(filename))
-  for tag in ["ClCompile", "ClInclude"]:
-    for el in root.iter(prefix + tag):
-      inc = el.get("Include")
+  with open(filename, 'r') as f:
+    contents = f.read()
+    # Search for ClCompile and ClInclude tags
+    for m in includeRE.finditer(contents):
+      # find filter if present
       filter = defaultFilter
-      filterEl = el.find(prefix + "Filter")
-      if filterEl is not None:
-        filter = defaultFilter + "/" + filterEl.text
-      if inc:
-        inc = os.path.normpath(os.path.join(dir, inc))
-        pathDict[inc] = filter
+      if contents[m.end() - 2] != "/":
+        close = contents.find("</Cl" + m.group(1) + ">", m.end())
+        if close > m.end():
+          fm = filterRE.search(contents[m.end():close])
+          if fm:
+            filter += "/" + fm.group(1)
+
+      # map path to filter
+      inc = m.group(2)
+      inc = os.path.normpath(os.path.join(dir, inc))
+      pathDict[inc] = filter
 
 def filesToArch(projToArch):
   pathDict = dict()
