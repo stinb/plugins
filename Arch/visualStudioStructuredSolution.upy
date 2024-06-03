@@ -8,10 +8,29 @@ import re
 def name():
   return "Structured Visual Studio"
 
-def generate(arch, db):
-  # If your solution file(s) are not in the same directory as your Understand
+def translateFromVSToUnderstand(name):
+  # / is no path separator in vs filter
+  # \ is path separator in vs filter
+  return name.replace("/", "-").replace("%28", "(").replace("%29", ")").replace("&amp;", "&").replace("\\", "/")
+
+def findSolutionsForPath(path):
+  solutions = glob.glob(os.path.join(path, "*.sln"))
+  if len(solutions)>0:
+    return solutions
+
+def findSolutions(db):
+  # If your solution file(s) are not in the same directory hierarchy as your Understand
   # project, update this search
-  solutions = glob.glob(os.path.join(os.path.dirname(db.name()), "*.sln"))
+  slnRoot = os.path.dirname(db.name())
+  solutions = findSolutionsForPath(slnRoot)
+  if not solutions:
+    solutions = findSolutionsForPath(slnRoot + '/..')
+  if not solutions:
+    solutions = findSolutionsForPath(slnRoot + '/../..')
+  return [ os.path.normpath(solution).replace('\\','/') for solution in solutions ]
+
+def generate(arch, db):
+  solutions = findSolutions(db)
 
   fileDict = dict()
   for file in db.ents("file ~unknown ~unresolved"):
@@ -30,12 +49,14 @@ def parseSolutionFile(filename):
   names = dict()
   paths = dict()
   parents = dict()
-  with open(filename, 'r') as f:
+  with open(filename, 'r', -1, "utf-8") as f:
+    subdir = os.path.normpath(os.path.dirname(filename)).replace('\\','/')+'/'
     for line in f:
       m = projectLineRE.search(line)
       if m:
         names[m.group(3)] = m.group(1)
-        path = m.group(2).replace('\\','/')
+        projPath = m.group(2).replace('\\','/')
+        path = os.path.join(subdir, projPath)
         if os.path.exists(path):
           paths[m.group(3)] = path
       m = parentLineRE.search(line)
@@ -54,7 +75,7 @@ includeRE = re.compile(r'<Cl(Compile|Include)[^>]*Include="([^"]*)"[^>]*>')
 filterRE = re.compile(r'<Filter>([^<]*)</Filter>')
 def parseProjXML(filename, pathDict, defaultFilter):
   dir = os.path.abspath(os.path.dirname(filename))
-  with open(filename, 'r') as f:
+  with open(filename, 'r', -1, "utf-8") as f:
     contents = f.read()
     # Search for ClCompile and ClInclude tags
     for m in includeRE.finditer(contents):
@@ -65,7 +86,7 @@ def parseProjXML(filename, pathDict, defaultFilter):
         if close > m.end():
           fm = filterRE.search(contents[m.end():close])
           if fm:
-            filter += "/" + fm.group(1)
+            filter += "/" + translateFromVSToUnderstand(fm.group(1))
 
       # map path to filter
       inc = m.group(2)
@@ -79,4 +100,3 @@ def filesToArch(projToArch):
     if os.path.exists(proj + ".filters"):
       parseProjXML(proj + ".filters", pathDict, arch)
   return pathDict
-
