@@ -1,0 +1,207 @@
+# An graph that follows assign by references and displays the expressions
+# at each location like the Variable Tracker Graph (see setref.upy in
+# the plugin repository for the opposite direction).
+
+import understand
+
+def name():
+  """
+  Required, the name of the graph.
+  """
+  return "Inverse Variable Tracker"
+
+
+def test_entity(ent):
+  """
+  Optional, return True if the graph exists for the given entity
+
+  If True, this graph will appear in the Graphical Views menu for the
+  entity.
+  """
+  # This graph is valid for entities that are used in assignments
+  return len(ent.refs("c assignby")) > 0;
+
+def init(graph, target):
+  """
+  Initialize the graph
+
+  This function is called once on graph creation. Use it to define the
+  available graph options and/or a legend.
+  """
+
+  # Options
+  graph.options().define("Level", ["1", "2", "3", "4", "5"], "1")
+  graph.options().define("Show Source Locations", ["Off","On"], "Off")
+
+  # Legend
+  graph.legend().define("param", "roundedrect", "Parameter", "#90c4e4", "")
+  graph.legend().define("global", "ellipse", "Global Object", "#90c4e4", "")
+  graph.legend().define("func", "rectangle", "Function", "#569f38", "")
+  graph.legend().define("other", "rectangle", "Other Entities", "#90c4e4", "")
+  graph.legend().define("src", "none", "Source Code", "#90c4e4", "")
+
+
+
+def draw(graph, ent):
+  """
+  Draw the graph
+
+  The second argument can be a database, an architecture or an entity depending
+  on whether the graph was created at a project, architecture, or entity level.
+  """
+
+  # Graph style defaults
+  graph.set("rankdir","LR")
+  graph.default('color', '#90c4e4', 'node')
+  graph.default('shape', 'box', 'node')
+  graph.default('color', '#4e8cb9', 'edge')
+
+  # Cache entity nodes so each entity appears once in the graph
+  nodecache = {}
+  lexercache = {} # cache lexers for speed
+
+  visited = set() # avoid infinite recursion
+  curLevel = [ent]
+  nextLevel = []
+
+  # Expand entities level by level
+  depth = int(graph.options().lookup("Level"))
+  for i in range(depth):
+    for curEnt in curLevel:
+      if curEnt in visited:
+        continue
+      visited.add(curEnt)
+      nextLevel += expand(graph, curEnt, nodecache, lexercache)
+    curLevel = nextLevel
+    nextLevel = []
+
+
+def expand(graph, ent, nodecache, lexercache):
+  # Expanding an entity creates source code nodes and connects them to both
+  # the initial entity and all other entities in that source. The complete
+  # list of other entities is returned to form the next level
+
+  # Complete list of all entities for the next level
+  next = []
+
+  # initial entity
+  tailNode = entNode(graph, ent, nodecache)
+
+  # Create source code nodes for each set reference
+  for ref in ent.refs("c assignby"):
+    lexlist = assignRefLexemes(ref, lexercache)
+    midNode = srcNode(graph, ref, lexlist)
+    graph.edge(tailNode, midNode)
+    graph.edge(midNode, entNode(graph, ref.ent(), nodecache))
+    next.append(ref.ent())
+  return next
+
+def entNode(graph, ent, cache):
+  # Create a node for an entity. Entity nodes are cached so that all
+  # edges to a specific entity go to the same entity node
+  if ent in cache:
+    node = cache[ent]
+  else:
+    # passing an ent to the node object will automatically sync the entity.
+    node = graph.node(ent.name(),ent)
+    cache[ent] = node
+    if ent.kind().check("global object"):
+      node.set("shape","oval")
+    elif ent.kind().check("function"):
+      node.set("color","#569f38")
+    elif ent.kind().check("parameter"):
+      node.set("style","rounded")
+  return node
+
+def srcNode(graph, loc, lexlist):
+  # Create a node from a lexeme list. These nodes are not cached.
+
+  # The text of the node is the source code from the lexemes
+  text = ""
+  for lexeme in lexlist:
+    text += lexeme.text()
+
+  text = text.strip()
+
+  if not text or graph.options().lookup("Show Source Locations") == "On":
+    if isinstance(loc, understand.Ref):
+      text += "\\l[" + loc.file().relname() + " (" + str(loc.line()) + ":" + str(loc.column()) + ")]"
+    else:
+      text += "\\l[" + loc[0].relname() + " (" + str(loc[1]) + ":" + str(loc[2]) + ")]"
+
+  node = graph.node(text)
+
+  # The node syncs to the location in the source code. loc should be either
+  # a reference or a (file, line, column) tuple/list
+  if isinstance(loc, understand.Ref):
+    node.sync(loc)
+  else:
+    node.sync(loc[0].longname(), loc[1], loc[2])
+
+  # Source code node styling
+  node.set("shape","none")
+  return node
+
+def findlexer(file, lexercache):
+  # Lexer creation takes significant time, so keep track of lexers already
+  # created instead of recreating them each time
+  lexer = None
+  if file in lexercache:
+    lexer = lexercache[file]
+  else:
+    try:
+      lexer = file.lexer()
+      lexercache[file] = lexer
+    except:
+      pass
+  return lexer
+
+def findExpression(lexeme, forward):
+  lexlist = []
+  parens = 0
+  braces = 0
+  done = False
+  # Read to the begin/end of the current expression, which may be a comma,
+  # a change in brace/parentheses nesting level, a semicolon, or '=' sign
+  while lexeme:
+    if lexeme.token() == "Punctuation":
+      if lexeme.text() == ';':
+        break # semi colon is always completes
+      elif lexeme.text() == ')':
+        parens -= 1
+      elif lexeme.text() == '(':
+        parens += 1
+      elif lexeme.text() == '}':
+        braces -= 1
+      elif lexeme.text() == '{':
+        braces += 1
+      if (forward and (parens < 0 or braces < 0)) or (not forward and (parens > 0 or braces > 0)):
+        break # exited current nesting level
+    if lexeme.token() == "Operator":
+      if parens == 0 and braces == 0 and lexeme.text() == ',':
+        break # comma completes if at initial nesting level
+      if not forward and lexeme.text() == '=':
+        break # stop at the equal sign when reading backwards
+    if not forward and lexeme.token() == "Keyword" and lexeme.text() == "return":
+      break
+
+
+    lexlist.append(lexeme)
+    if forward:
+      lexeme = lexeme.next()
+    else:
+      lexeme = lexeme.previous()
+  return lexlist
+
+def assignRefLexemes(ref, lexercache):
+  lexlist = []
+  lexer = findlexer(ref.file(), lexercache)
+  if lexer:
+    # Start at the referenced lexeme
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if lexeme:
+      lexlist += reversed(findExpression(lexeme.previous(), False))
+      lexlist.append(lexeme)
+      lexlist += findExpression(lexeme.next(), True)
+
+  return lexlist
