@@ -1,0 +1,635 @@
+import datetime
+import functools
+import os
+import re
+import sys
+
+import understand
+
+
+#######
+# All #
+#######
+
+
+refKinds = 'Modify, Set, Use'
+funKinds = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
+objKinds = 'Global Object'
+
+
+KEY, DESCRIPTION, DEFAULT, CHOICES = 0, 1, 2, 3
+DEFAULT_FILE_NAME_TEMPLATE = 'Shared_Tasks_for_{arch}_{date}_{time}.csv'
+requiredArguments = (
+#    Key     Description
+    ('arch', 'Architecture long name'),
+    ('db',   'Path of .und folder'),
+)
+optionalArguments = (
+#    Key                    Description                         Default                         Choices
+    ('autoExport',          'Automatically export CSV file',    False),
+    ('csvFileLocation',     'CSV file location',                os.getcwd()),
+    ('csvFileName',         'CSV file name',                    DEFAULT_FILE_NAME_TEMPLATE),
+    ('filterModifySetOnly', 'Filter out modify/set only',       False),
+    ('filterUseOnly',       'Filter out use only',              False),
+    ('objects',             'Object to show',                   'All',                          ['All', 'Shared only']),
+    ('reference',           'References to show',               'All',                          ['All', 'Simple']),
+)
+
+
+def refComparator(a, b):
+    if a.line() < b.line() or a.line() == b.line() and a.column() < b.column():
+        return -1
+    if a.line() > b.line() or a.line() == b.line() and a.column() > b.column():
+        return 1
+    return 0
+refComparator = functools.cmp_to_key(refComparator)
+
+
+def entComparator(a, b):
+    if a.name() < b.name():
+        return -1
+    if a.name() > b.name():
+        return 1
+    return 0
+entComparator = functools.cmp_to_key(entComparator)
+
+
+def getFunctionCallsOrGlobalObjectRefs(function):
+    refs = function.refs('Call', 'Function')
+    refs += function.refs(refKinds, objKinds)
+    refs.sort(key=refComparator)
+    return refs
+
+
+def checkControlledFunction(outerFunction, enableDisableFunctions, controlledFunctions, interruptDisabledRefs):
+    # Base case: already checked
+    if outerFunction in controlledFunctions:
+        return
+    controlledFunctions.add(outerFunction)
+
+    # Function call or global object modify/set/use
+    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction):
+        ent = ref.ent()
+
+        # Recurse for each function called, ignoring enable/disable functions
+        if ent.kind().check('Function'):
+            if ent not in enableDisableFunctions and ent not in controlledFunctions:
+                interruptDisabledRefs.add(str(ref))
+                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+
+        # Global object ref
+        else:
+            interruptDisabledRefs.add(str(ref))
+
+
+def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, controlledFunctions, interruptDisabledRefs):
+    # Disable functions that are making the code interrupt-protected
+    interruptDisabledFunctions = set() # { ent, ...  }
+
+    # Function call or global object modify/set/use
+    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction):
+        ent = ref.ent()
+
+        # Function called
+        if ent.kind().check('Function'):
+            # Add/remove the disable outerFunction
+            if ent in enableDisableFunctions:
+                if enableDisableFunctions[ent]['disable']:
+                    disable = ent
+                    interruptDisabledFunctions.add(ent)
+                else:
+                    disable = enableDisableFunctions[ent]['other']
+                    interruptDisabledFunctions.remove(disable)
+
+            # Recurse for each function called in an interrupt-protected area,
+            # ignoring enable/disable functions
+            elif len(interruptDisabledFunctions) and ent not in controlledFunctions:
+                interruptDisabledRefs.add(str(ref))
+                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+
+        # Global object ref with interrupt disabled
+        elif len(interruptDisabledFunctions):
+            interruptDisabledRefs.add(str(ref))
+
+
+def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options):
+    # Base case: visiting a function again from the same root
+    funKey = str(root) + ' ' + str(fun)
+    if funKey in visited:
+        return
+    visited.add(funKey)
+
+    # References to global objects
+    for ref in fun.refs(refKinds, objKinds):
+        scope = root if options['reference'] == 'simple' else fun
+        ent = ref.ent()
+
+        edgeKey = str(scope) + ' ' + str(ent)
+
+        kindname = ref.kindname().split(' ').pop()
+
+        # Add to edge info
+        if edgeKey not in edgeInfo:
+            edgeInfo[edgeKey] = {
+                'root': scope in tasks,
+                'scope': scope,
+                'ent': ent,
+                'kindnames': set(),
+                'from': set(),
+                'filtered': False,
+                'ref': ref,
+            }
+        edgeObj = edgeInfo[edgeKey]
+        edgeObj['kindnames'].add(kindname)
+        edgeObj['from'].add(root)
+
+        # Add to incoming node edges
+        if ent not in incoming:
+            incoming[ent] = set()
+        incoming[ent].add(edgeKey)
+
+        # Add to outgoing node edges
+        if scope not in outgoing:
+            outgoing[scope] = set()
+        outgoing[scope].add(edgeKey)
+
+    # Function calls
+    for call in fun.refs('Call', funKinds, True):
+        if options['reference'] == 'all':
+            scope = call.scope()
+            ent = call.ent()
+
+            edgeKey = str(scope) + ' ' + str(ent)
+
+            # Add to edge info
+            if edgeKey not in edgeInfo:
+                edgeInfo[edgeKey] = {
+                    'root': ent in tasks,
+                    'scope': scope,
+                    'ent': ent,
+                    'kindnames': set(),
+                    'from': set(),
+                    'filtered': False,
+                    'ref': call,
+                }
+            edgeInfo[edgeKey]['from'].add(root)
+
+            # Add to incoming node edges
+            if ent not in incoming:
+                incoming[ent] = set()
+            incoming[ent].add(edgeKey)
+
+            # Add to outgoing node edges
+            if scope not in outgoing:
+                outgoing[scope] = set()
+            outgoing[scope].add(edgeKey)
+
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
+
+
+def filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options):
+    # Object
+    if ent.kind().check(objKinds):
+        # Get all kindnames for incoming edges
+        allEdgeKindnames = set()
+        for edgeKey in incoming[ent]:
+            edgeObj = edgeInfo[edgeKey]
+            allEdgeKindnames.update(edgeObj['kindnames'])
+
+        # See if the object should be filtered out
+        filtered = False
+        if options['filterUseOnly'] and 'Set' not in allEdgeKindnames and 'Modify' not in allEdgeKindnames \
+        or options['filterModifySetOnly'] and 'Use' not in allEdgeKindnames:
+            filtered = True
+
+    # Function
+    else:
+        # Get all outgoing edges
+        filtered = True
+        for edgeKey in outgoing[ent]:
+            edgeObj = edgeInfo[edgeKey]
+            if not edgeObj['filtered']:
+                filtered = False
+                break
+
+    # Base case: stop filtering out edges
+    if not filtered or ent not in incoming:
+        return
+
+    # Filter out all incoming edges
+    for edgeKey in incoming[ent]:
+        edgeObj = edgeInfo[edgeKey]
+        edgeObj['filtered'] = True
+
+    # Recurse for all scope nodes of incoming edges
+    for edgeKey in incoming[ent]:
+        edgeObj = edgeInfo[edgeKey]
+        scope = edgeObj['scope']
+        filterIncomingEdges(incoming, outgoing, edgeInfo, scope, options)
+
+
+def printEnt(report, ent):
+    report.entity(ent)
+    report.print(ent.name())
+    report.entity()
+
+
+def printFile(report, file):
+    report.entity(file)
+    report.print(file.relname())
+    report.entity()
+
+
+def generateCSVRows(db, arch, options, lines, report):
+    # Setup data for getEdgeInfo
+    visited     = set()  # { funKey, ... }
+    tasks       = dict() # { ent: integer, ... }
+    incoming    = dict() # { ent: set, ... }
+    outgoing    = dict() # { ent: set, ... }
+    edgeInfo    = dict() # { edgeKey: {
+                         #     'root': boolean,
+                         #     'scope': ent,
+                         #     'ent': ent,
+                         #     'kindnames': set,
+                         #     'from': set,
+                         #     'filtered': boolean,
+                         #     'ref': ref
+                         # }, ... }
+
+    # Setup data for checkFunctionForInterruptControl
+    enableDisableFunctions = dict() # { ent: { 'disable': boolean, 'other': ent }, ... }
+    controlledFunctions    = set()  # { ent, ... }
+    interruptDisabledRefs  = set()  # { str(ref), ... }
+
+    # Parse the architecture
+    for group in arch.children():
+        name = group.name().lower()
+        # ARCH_NAME/.*interrupt.*/GROUP_NAME/.*disable.*/FUNCTION_NAME
+        # ARCH_NAME/.*interrupt.*/GROUP_NAME/.*enable.*/FUNCTION_NAME
+        if 'interrupt' in name or 'control' in name:
+            for interruptPair in group.children():
+                disableAndEnableGroups = interruptPair.children()
+                if len(disableAndEnableGroups) != 2:
+                    continue
+                disable = None
+                enable = None
+                for disableOrEnableGroup in disableAndEnableGroups:
+                    name = disableOrEnableGroup.name().lower()
+                    ents = disableOrEnableGroup.ents(False)
+                    if len(ents) != 1:
+                        continue
+                    ent = ents[0]
+                    if not ent.kind().check('Function'):
+                        continue
+                    if 'disable' in name:
+                        disable = ent
+                    elif 'enable' in name:
+                        enable = ent
+                if not disable or not enable:
+                    continue
+                enableDisableFunctions[disable] = {'disable': True, 'other': enable}
+                enableDisableFunctions[enable] = {'disable': False, 'other': disable}
+
+        # ARCH_NAME/.*priority.*/INTEGER/FUNCTION_NAME
+        elif 'task' in name or 'priority' in name:
+            # Priority groups
+            for priorityGroup in group.children():
+                try:
+                    priority = int(priorityGroup.name())
+                except:
+                    priority = None
+
+                # Tasks
+                for ent in priorityGroup.ents(True):
+                    if not ent.kind().check(funKinds):
+                        continue
+                    tasks[ent] = priority
+
+            # Tasks
+            for ent in group.ents(False):
+                if not ent.kind().check(funKinds):
+                    continue
+                tasks[ent] = None
+
+    # Get the refs going to each object/function
+    for ent in tasks.keys():
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options)
+
+    # See which edges are filtered out
+    if options['filterModifySetOnly'] or options['filterUseOnly']:
+        for edgeObj in edgeInfo.values():
+            ent = edgeObj['ent']
+            if ent.kind().check(objKinds):
+                filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
+
+    # See which refs are interrupt-protected
+    for fun in db.ents(funKinds):
+        checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+
+    # Sort the objects
+    objects = set()
+    for edgeObj in edgeInfo.values():
+        ent = edgeObj['ent']
+        if not ent.kind().check(objKinds):
+            continue
+        objects.add(ent)
+    objects = list(objects)
+    objects.sort(key=entComparator)
+
+    # Sort the edge keys
+    edgeKeysForObjects = dict()
+    for obj in objects:
+        edgeKeysForObjects[obj] = list(incoming[obj])
+        edgeKeysForObjects[obj].sort()
+
+    # Make rows for each object
+    for obj in objects:
+
+        # See how many tasks it is from
+        fromTasks         = set()
+        fromTasksFiltered = set()
+        edgeKeys = incoming[obj] if obj in incoming else set()
+        for edgeKey in edgeKeys:
+            info = edgeInfo[edgeKey]
+            if not info['filtered'] and str(info['ref']) not in interruptDisabledRefs:
+                fromTasksFiltered.update(info['from'])
+            fromTasks.update(info['from'])
+        shared = len(fromTasks) > 1
+        if options['objects'] == 'shared only' and not shared:
+            continue
+
+        # Info for each column for all rows of the object
+        objectName = obj.name()
+        shared = 'x' if len(fromTasksFiltered) > 1 else '-'
+
+        # Make rows for each incoming edge to the object
+        for edgeKey in edgeKeysForObjects[obj]:
+            edgeObj = edgeInfo[edgeKey]
+
+            # Info for each column for all rows of the edge
+            protected = 'x' if str(edgeObj['ref']) in interruptDisabledRefs else '-'
+            function = edgeObj['scope']
+            functionName = edgeObj['scope'].name()
+            reference = []
+            for kindname in edgeObj['kindnames']:
+                reference.append(kindname[0])
+            reference.sort()
+            reference = ''.join(reference)
+            file = edgeObj['ref'].file()
+            relname = file.relname()
+
+            # Sort the tasks that this edge is from
+            fromTasks = list(edgeObj['from'])
+            fromTasks.sort(key=entComparator)
+
+            # Make a single row for each task the edges are from
+            for task in fromTasks:
+
+                # Info for each column for this single row
+                taskName = task.name()
+                taskPriority = tasks[task]
+
+                # Make the clickable row for interactive report
+                if report:
+                    printEnt(report, obj)
+                    report.print(f', {shared}, {protected}, ')
+                    printEnt(report, function)
+                    report.print(f', {reference}, ')
+                    printFile(report, file)
+                    report.print(', ')
+                    printEnt(report, task)
+                    report.print(f', {taskPriority}\n')
+
+                # Make the row for the file
+                if lines:
+                    line = f'{objectName}, {shared}, {protected}, {functionName}, {reference}, {relname}, {taskName}, {taskPriority}\n'
+                    lines.append(line)
+
+
+def generateCSV(db, arch, options, report=None):
+    lines = ['Global Object, Shared, Protected, Function, Reference(M=Modify/S=Set/U=Use), File, Task, Task Priority\n']
+
+    if report:
+        report.print(lines[0])
+
+    if not options['autoExport']:
+        lines = None
+
+    generateCSVRows(db, arch, options, lines, report)
+
+    if options['autoExport']:
+        # Default file name
+        if not options['csvFileName']:
+            options['csvFileName'] = DEFAULT_FILE_NAME_TEMPLATE
+
+        # Substitute {arch}
+        if re.search('{arch}', options['csvFileName'], flags=re.IGNORECASE):
+            archSimplified = re.sub(r'\W|_', '', arch.name())
+            options['csvFileName'] = re.sub('{arch}', archSimplified, options['csvFileName'], flags=re.IGNORECASE)
+
+        # Substitute {date}
+        now = None
+        if re.search('{date}', options['csvFileName'], flags=re.IGNORECASE):
+            if not now:
+                now = datetime.datetime.now()
+            date = now.strftime('%Y_%m_%d')
+            options['csvFileName'] = re.sub('{date}', date, options['csvFileName'], flags=re.IGNORECASE)
+
+        # Substitute {time}
+        if re.search('{time}', options['csvFileName'], flags=re.IGNORECASE):
+            if not now:
+                now = datetime.datetime.now()
+            time = now.strftime('%H_%M_%S')
+            options['csvFileName'] = re.sub('{time}', time, options['csvFileName'], flags=re.IGNORECASE)
+
+        # Append .csv to file name
+        if not re.search('\.csv$', options['csvFileName']):
+            options['csvFileName'] += '.csv'
+
+        # Export lines to a new file
+        file = open(os.path.join(options['csvFileLocation'], options['csvFileName']), 'w')
+        file.writelines(lines)
+        file.close()
+
+
+######################
+# Interactive Report #
+######################
+
+
+def name():
+    return 'Shared Tasks CSV'
+
+
+def test_architecture(arch):
+    return True
+
+
+def init(report):
+    for option in optionalArguments:
+        # Checkbox
+        if isinstance(option[DEFAULT], bool):
+            report.options().checkbox(option[KEY], option[DESCRIPTION], option[DEFAULT])
+        # Choice
+        elif len(option) > CHOICES:
+            report.options().choice(option[KEY], option[DESCRIPTION], option[CHOICES], option[DEFAULT])
+        # Text
+        elif isinstance(option[DEFAULT], str):
+            report.options().text(option[KEY], option[DESCRIPTION], option[DEFAULT])
+
+
+def generate(report, target):
+    # Options
+    options = dict()
+    for option in optionalArguments:
+        key = option[KEY]
+        options[key] = report.options().lookup(key)
+
+    # Export file and print lines to report
+    generateCSV(report.db(), target, options, report)
+
+#######
+# CLI #
+#######
+
+
+def printArguments(arguments):
+    for option in arguments:
+        # Key
+        key          = option[KEY]
+        print(f'    -{key} VALUE')
+
+        # Description
+        description  = option[DESCRIPTION]
+        print(f'        {description}')
+
+        # Default value
+        if len(option) > DEFAULT:
+            default = option[DEFAULT]
+            print(f'        Default: {default}')
+
+            # Choices
+            if len(option) > CHOICES:
+                choices = option[CHOICES]
+            elif isinstance(default, bool):
+                choices = '[\'False\', \'True\']'
+            else:
+                continue
+            print(f'        Choices: {choices} (case-insensitive)')
+
+
+def printHelpAndExit(expected=None, actual=None):
+    if expected:
+        print('Error parsing arguments:')
+        print(f'    expected: {expected}')
+        if actual:
+            print(f'    actual:   {actual}')
+        print('    help: [\'-h\']')
+
+    else:
+        print('Required arguments:')
+        printArguments(requiredArguments)
+        print()
+        print('Optional arguments:')
+        printArguments(optionalArguments)
+
+    exit()
+
+
+def parseArguments():
+    # Argument keys, default values, allowed value choices
+    keys    = set()
+    options = dict()
+    choices = dict()
+    for option in requiredArguments:
+        keys.add(f'-{option[KEY]}')
+    for option in optionalArguments:
+        keys.add(f'-{option[KEY]}')
+        options[option[KEY]] = option[DEFAULT]
+        if len(option) > CHOICES:
+            choices[option[KEY]] = set()
+            for choice in option[CHOICES]:
+                choices[option[KEY]].add(choice.lower())
+
+    # Get arguments
+    argKey = None
+    for i in range(1, len(sys.argv)):
+        arg = sys.argv[i]
+
+        # Help argument
+        if arg in {'-h', '-help', 'help'}:
+            printHelpAndExit()
+
+        # Argument key
+        elif arg in keys:
+            argKey = arg
+            continue
+        elif not argKey:
+            printHelpAndExit('key', arg)
+
+        # Argument value
+        if argKey:
+            argKey = argKey[1:]
+
+            # Remove quotes from beginning/end
+            if re.match(r'^\'.*\'$|^\".*\"$', arg):
+                arg = arg[1:-1]
+
+            # Type: bool
+            if argKey in options and isinstance(options[argKey], bool):
+                arg = arg.lower()
+                if arg == 'true':
+                    options[argKey] = True
+                elif arg == 'false':
+                    options[argKey] = False
+                else:
+                    printHelpAndExit(f'value for -{argKey}', arg)
+            # Type: string from choices
+            elif argKey in choices:
+                arg = arg.lower()
+                if arg in choices[argKey]:
+                    options[argKey] = arg
+                else:
+                    printHelpAndExit(f'value for -{argKey}', arg)
+            # Type: string
+            else:
+                options[argKey] = arg
+        argKey = None
+
+    # Required arguments
+    missingArguments = []
+    for option in requiredArguments:
+        key = option[KEY]
+        if key not in options:
+            missingArguments.append(f'-{key}')
+    if missingArguments:
+        printHelpAndExit(f'required arguments: {missingArguments}')
+
+    return options
+
+
+if __name__ == '__main__':
+    # Parse arguments
+    optionalArguments = optionalArguments[1:]
+    options = parseArguments()
+    options['autoExport'] = True
+
+    # Get the database
+    try:
+        dbPath = options['db']
+        db = understand.open(dbPath)
+    except:
+        print('Error opening database:')
+        print(f'    {dbPath}')
+        exit(1)
+
+    # Get the architecture
+    archLongName = options['arch']
+    arch = db.lookup_arch(archLongName)
+    if not arch:
+        print('Error getting architecture:')
+        print(f'    {archLongName}')
+        exit(1)
+
+    # Export file
+    generateCSV(db, arch, options)

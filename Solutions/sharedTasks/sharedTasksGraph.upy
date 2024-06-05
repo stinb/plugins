@@ -1,0 +1,441 @@
+import functools
+
+import understand
+
+
+orange = '#e45721'
+green  = '#569f38'
+blue   = '#4e8cb9'
+purple = '#974eb9'
+gray   = '#777777'
+
+opacity = '55'
+
+refKinds = 'Modify, Set, Use'
+funKinds = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
+objKinds = 'Global Object'
+
+
+def name():
+    return 'Shared Tasks'
+
+
+def test_architecture(arch):
+    return True
+
+
+def init(graph, target):
+    # Options
+    graph.options().define('Filter out modify/set only', ['On', 'Off'], 'Off')
+    graph.options().define('Filter out use only', ['On', 'Off'], 'Off')
+    graph.options().define('Objects', ['All', 'Shared only'], 'All')
+    graph.options().define('Reference', ['All', 'Simple'], 'All')
+
+    # Legend - Nodes
+    graph.legend().define('function', 'rectangle', 'Function', '', '', 0, 0)
+    graph.legend().define('globalObject', 'ellipse', 'Global Object', '', gray + opacity, 1, 0)
+    graph.legend().define('sharedGlobalObject', 'ellipse', 'Shared Global Object', '', blue + opacity, 2, 0)
+    # Legend - Edges
+    graph.legend().define('refCall', 'arrow', 'Ref: Call', '', '', 0, 1)
+    graph.legend().define('refModify', 'arrow', 'Ref: Modify', orange, orange, 1, 1)
+    graph.legend().define('refSet', 'arrow', 'Ref: Set', green, green, 2, 1)
+    graph.legend().define('refUse', 'arrow', 'Ref: Use', blue, blue, 3, 1)
+    graph.legend().define('refMany', 'arrow', 'Ref: (Many)', purple, purple, 4, 1)
+    graph.legend().define('interruptProtected', 'dasharrow', 'Interrupt Protected (All Colors)', '', '', 5, 1)
+    graph.legend().define('filtered', 'dotarrow', 'Filtered Out (All Colors)', '', '', 6, 1)
+
+
+def drawNode(graph, ent, name, **kwargs):
+    node = graph.node(name, ent)
+
+    if 'box' in kwargs and kwargs['box']:
+        node.set('shape', 'box')
+    if 'bold' in kwargs and kwargs['bold']:
+        node.set('penwidth', '5')
+    if 'color' in kwargs and kwargs['color']:
+        node.set('fillcolor', kwargs['color'])
+
+    return node
+
+
+def drawEdge(graph, head, tail, name, **kwargs):
+    edge = graph.edge(head, tail, name)
+
+    if 'color' in kwargs and kwargs['color']:
+        edge.set('color', kwargs['color'])
+    if 'style' in kwargs and kwargs['style']:
+        edge.set('style', kwargs['style'])
+        if kwargs['style'] == 'dotted':
+            edge.set('penwidth', '2')
+
+    return edge
+
+
+def refComparator(a, b):
+    if a.line() < b.line() or a.line() == b.line() and a.column() < b.column():
+        return -1
+    if a.line() > b.line() or a.line() == b.line() and a.column() > b.column():
+        return 1
+    return 0
+refComparator = functools.cmp_to_key(refComparator)
+
+
+def getFunctionCallsOrGlobalObjectRefs(function):
+    refs = function.refs('Call', 'Function')
+    refs += function.refs(refKinds, objKinds)
+    refs.sort(key=refComparator)
+    return refs
+
+
+def checkControlledFunction(outerFunction, enableDisableFunctions, controlledFunctions, interruptDisabledRefs):
+    # Base case: already checked
+    if outerFunction in controlledFunctions:
+        return
+    controlledFunctions.add(outerFunction)
+
+    # Function call or global object modify/set/use
+    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction):
+        ent = ref.ent()
+
+        # Recurse for each function called, ignoring enable/disable functions
+        if ent.kind().check('Function'):
+            if ent not in enableDisableFunctions and ent not in controlledFunctions:
+                interruptDisabledRefs.add(str(ref))
+                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+
+        # Global object ref
+        else:
+            interruptDisabledRefs.add(str(ref))
+
+
+def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, controlledFunctions, interruptDisabledRefs):
+    # Disable functions that are making the code interrupt-protected
+    interruptDisabledFunctions = set() # { ent, ...  }
+
+    # Function call or global object modify/set/use
+    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction):
+        ent = ref.ent()
+
+        # Function called
+        if ent.kind().check('Function'):
+            # Add/remove the disable outerFunction
+            if ent in enableDisableFunctions:
+                if enableDisableFunctions[ent]['disable']:
+                    disable = ent
+                    interruptDisabledFunctions.add(ent)
+                else:
+                    disable = enableDisableFunctions[ent]['other']
+                    interruptDisabledFunctions.remove(disable)
+
+            # Recurse for each function called in an interrupt-protected area,
+            # ignoring enable/disable functions
+            elif len(interruptDisabledFunctions) and ent not in controlledFunctions:
+                interruptDisabledRefs.add(str(ref))
+                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+
+        # Global object ref with interrupt disabled
+        elif len(interruptDisabledFunctions):
+            interruptDisabledRefs.add(str(ref))
+
+
+def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options):
+    # Base case: visiting a function again from the same root
+    funKey = str(root) + ' ' + str(fun)
+    if funKey in visited:
+        return
+    visited.add(funKey)
+
+    # References to global objects
+    for ref in fun.refs(refKinds, objKinds):
+        scope = root if options['simple'] else fun
+        ent = ref.ent()
+
+        edgeKey = str(scope) + ' ' + str(ent)
+
+        kindname = ref.kindname().split(' ').pop()
+
+        # Add to edge info
+        if edgeKey not in edgeInfo:
+            edgeInfo[edgeKey] = {
+                'root': scope in tasks,
+                'scope': scope,
+                'ent': ent,
+                'kindnames': set(),
+                'from': set(),
+                'filtered': False,
+                'ref': ref,
+            }
+        edgeObj = edgeInfo[edgeKey]
+        edgeObj['kindnames'].add(kindname)
+        edgeObj['from'].add(root)
+
+        # Add to incoming node edges
+        if ent not in incoming:
+            incoming[ent] = set()
+        incoming[ent].add(edgeKey)
+
+        # Add to outgoing node edges
+        if scope not in outgoing:
+            outgoing[scope] = set()
+        outgoing[scope].add(edgeKey)
+
+    # Function calls
+    for call in fun.refs('Call', funKinds, True):
+        if not options['simple']:
+            scope = call.scope()
+            ent = call.ent()
+
+            edgeKey = str(scope) + ' ' + str(ent)
+
+            # Add to edge info
+            if edgeKey not in edgeInfo:
+                edgeInfo[edgeKey] = {
+                    'root': ent in tasks,
+                    'scope': scope,
+                    'ent': ent,
+                    'kindnames': set(),
+                    'from': set(),
+                    'filtered': False,
+                    'ref': call,
+                }
+            edgeInfo[edgeKey]['from'].add(root)
+
+            # Add to incoming node edges
+            if ent not in incoming:
+                incoming[ent] = set()
+            incoming[ent].add(edgeKey)
+
+            # Add to outgoing node edges
+            if scope not in outgoing:
+                outgoing[scope] = set()
+            outgoing[scope].add(edgeKey)
+
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
+
+
+def filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options):
+    # Object
+    if ent.kind().check(objKinds):
+        # Get all kindnames for incoming edges
+        allEdgeKindnames = set()
+        for edgeKey in incoming[ent]:
+            edgeObj = edgeInfo[edgeKey]
+            allEdgeKindnames.update(edgeObj['kindnames'])
+
+        # See if the object should be filtered out
+        filtered = False
+        if options['filterUseOnly'] and 'Set' not in allEdgeKindnames and 'Modify' not in allEdgeKindnames \
+        or options['filterModifySetOnly'] and 'Use' not in allEdgeKindnames:
+            filtered = True
+
+    # Function
+    else:
+        # Get all outgoing edges
+        filtered = True
+        for edgeKey in outgoing[ent]:
+            edgeObj = edgeInfo[edgeKey]
+            if not edgeObj['filtered']:
+                filtered = False
+                break
+
+    # Base case: stop filtering out edges
+    if not filtered or ent not in incoming:
+        return
+
+    # Filter out all incoming edges
+    for edgeKey in incoming[ent]:
+        edgeObj = edgeInfo[edgeKey]
+        edgeObj['filtered'] = True
+
+    # Recurse for all scope nodes of incoming edges
+    for edgeKey in incoming[ent]:
+        edgeObj = edgeInfo[edgeKey]
+        scope = edgeObj['scope']
+        filterIncomingEdges(incoming, outgoing, edgeInfo, scope, options)
+
+
+def getNodeName(ent, tasks):
+    if ent in tasks and tasks[ent] != None:
+        return f'{ent.name()}\nPriority: {tasks[ent]}'
+    else:
+        return ent.name()
+
+
+def draw(graph, target):
+    # Get options
+    options = {
+        'filterModifySetOnly': graph.options().lookup('Filter out modify/set only') == 'On',
+        'filterUseOnly': graph.options().lookup('Filter out use only') == 'On',
+        'sharedOnly': graph.options().lookup('Objects') == 'Shared only',
+        'simple': graph.options().lookup('Reference') == 'Simple',
+    }
+
+    # Setup data for getEdgeInfo
+    visited     = set()  # { funKey, ... }
+    tasks       = dict() # { ent: integer, ... }
+    incoming    = dict() # { ent: set, ... }
+    outgoing    = dict() # { ent: set, ... }
+    edgeInfo    = dict() # { edgeKey: {
+                         #     'root': boolean,
+                         #     'scope': ent,
+                         #     'ent': ent,
+                         #     'kindnames': set,
+                         #     'from': set,
+                         #     'filtered': boolean,
+                         #     'ref': ref
+                         # }, ... }
+
+    # Setup data for checkFunctionForInterruptControl
+    enableDisableFunctions = dict() # { ent: { 'disable': boolean, 'other': ent }, ... }
+    controlledFunctions    = set()  # { ent, ... }
+    interruptDisabledRefs  = set()  # { str(ref), ... }
+
+    # Parse the architecture
+    for group in target.children():
+        name = group.name().lower()
+        # ARCH_NAME/.*interrupt.*/GROUP_NAME/.*disable.*/FUNCTION_NAME
+        # ARCH_NAME/.*interrupt.*/GROUP_NAME/.*enable.*/FUNCTION_NAME
+        if 'interrupt' in name or 'control' in name:
+            for interruptPair in group.children():
+                disableAndEnableGroups = interruptPair.children()
+                if len(disableAndEnableGroups) != 2:
+                    continue
+                disable = None
+                enable = None
+                for disableOrEnableGroup in disableAndEnableGroups:
+                    name = disableOrEnableGroup.name().lower()
+                    ents = disableOrEnableGroup.ents(False)
+                    if len(ents) != 1:
+                        continue
+                    ent = ents[0]
+                    if not ent.kind().check('Function'):
+                        continue
+                    if 'disable' in name:
+                        disable = ent
+                    elif 'enable' in name:
+                        enable = ent
+                if not disable or not enable:
+                    continue
+                enableDisableFunctions[disable] = {'disable': True, 'other': enable}
+                enableDisableFunctions[enable] = {'disable': False, 'other': disable}
+
+        # ARCH_NAME/.*priority.*/INTEGER/FUNCTION_NAME
+        elif 'task' in name or 'priority' in name:
+            # Priority groups
+            for priorityGroup in group.children():
+                try:
+                    priority = int(priorityGroup.name())
+                except:
+                    priority = None
+
+                # Tasks
+                for ent in priorityGroup.ents(True):
+                    if not ent.kind().check(funKinds):
+                        continue
+                    tasks[ent] = priority
+
+            # Tasks
+            for ent in group.ents(False):
+                if not ent.kind().check(funKinds):
+                    continue
+                tasks[ent] = None
+
+    # Get the refs going to each object/function
+    for ent in tasks.keys():
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options)
+
+    # See which edges are filtered out
+    if options['filterModifySetOnly'] or options['filterUseOnly']:
+        for edgeObj in edgeInfo.values():
+            ent = edgeObj['ent']
+            if ent.kind().check(objKinds):
+                filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
+
+    # See which refs are interrupt-protected
+    for fun in graph.db().ents(funKinds):
+        checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+
+    # Draw the graph
+    nodes = dict()
+    graph.set('rankdir', 'LR')
+    for edgeObj in edgeInfo.values():
+
+        # Draw or get head node
+        ent = edgeObj['scope']
+        if ent not in nodes:
+            # Style node
+            name = getNodeName(ent, tasks)
+            box = ent.kind().check(funKinds)
+            bold = edgeObj['root'] and box
+            color = None
+
+            # Draw and add
+            head = drawNode(graph, ent, name, box=box, bold=bold, color=color)
+            nodes[ent] = head
+        else:
+            head = nodes[ent]
+
+        # Draw or get tail node
+        ent = edgeObj['ent']
+        isFunction = ent.kind().check(funKinds)
+        if ent not in nodes:
+            # See how many root functions it is from
+            fromRoots         = set()
+            fromRootsFiltered = set()
+            edgeKeys = incoming[ent] if ent in incoming else set()
+            for edgeKey in edgeKeys:
+                info = edgeInfo[edgeKey]
+                if not info['filtered'] and str(info['ref']) not in interruptDisabledRefs:
+                    fromRootsFiltered.update(info['from'])
+                fromRoots.update(info['from'])
+            shared = len(fromRoots) > 1
+            if options['sharedOnly'] and not shared and not isFunction:
+                continue
+
+            # Edge options
+            name = getNodeName(ent, tasks)
+            box = isFunction
+            bold = edgeObj['root'] and isFunction
+            # Edge option: color
+            if not isFunction:
+                color = gray + opacity
+                if len(fromRootsFiltered) > 1:
+                    color = blue + opacity
+            else:
+                color = None
+
+            # Draw and add
+            tail = drawNode(graph, ent, name, box=box, bold=bold, color=color)
+            nodes[ent] = tail
+        else:
+            tail = nodes[ent]
+
+        # Edge option: color
+        kindnames = edgeObj['kindnames']
+        if len(kindnames) == 1:
+            if 'Modify' in kindnames:
+                color = orange
+            elif 'Set' in kindnames:
+                color = green
+            elif 'Use' in kindnames:
+                color = blue
+            else:
+                color = None
+        elif len(kindnames) > 1:
+            color = purple
+        else:
+            color = None
+        # Edge option: style
+        if str(edgeObj['ref']) in interruptDisabledRefs:
+            style = 'dashed'
+        elif edgeObj['filtered']:
+            style = 'dotted'
+        else:
+            style = None
+
+        # Edge text
+        kindnames = list(kindnames)
+        kindnames.sort()
+
+        # Draw edge
+        edge = drawEdge(graph, head, tail, '/'.join(kindnames), color=color, style=style)
