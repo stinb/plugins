@@ -1,71 +1,56 @@
 # Overview
 
-Visualize an architecture of functions with the Shared Tasks graph. See how tasks interact with global objects, and when interrupt control functions are involved.
+Calls graphs with global objects are useful for finding all global objects accessed by a call tree. But, what if you want to find which global objects are shared between multiple call trees? The shared tasks plugins find global objects accessed from multiple call trees.
 
-# Setup: Install the Graph Plugin
+The plugin [sharedTasksGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) displays all the call trees and objects in a single graph, highlighting global objects that are accessed from multiple root functions. The plugin [sharedTasksCSV.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) displays each reference in a table in an interactive report. It can also export a CSV file at the same time as the interactive report or when run directly from the command line.
 
-1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) the Shared Tasks graph.
+All plugin scripts in this folder use the common [sharedTasks.py](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/sharedTAsks.py) so if a script is installed individually, the common file must be installed as well. Instead of installing individual scripts, it's recommended to copy the entire folder to the plugin directory:
 
-2. Drag and drop it into Understand.
+- Windows – C:\Program Files\SciTools\conf\plugin\User\
+- Mac – /Users/username/Library/Application Support/SciTools/plugin/
+- Linux – /home/username/.config/SciTools/plugin/
 
-# Setup: Install the CSV Interactive Report Plugin
+# Architectures
 
-1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks CSV script.
+Working with multiple call trees means working with multiple root functions. To pass multiple entities to a plugin, the entities must be grouped together in an architecture. A simple architecture can have the format:
 
-2. Drag and drop it into Understand.
+- Name of root architecture can be anything
+  - Any name containing the word tasks case insensitive
+    - function1()
+    - function2()
 
-3. To have a dynamic file name, you can add {arch}, {date}, or {time} (case-insensitive) to the "CSV file name" option.
+The shared tasks plugins also support additional fields for the tasks. These fields are displayed on the graph under the task name, and in the table as columns. Currently supported fields are 'core' and 'priority'. A field can be used instead of an architecture name containing the word tasks.
 
-# Setup: Use the CSV Script in the Command Line Interface
+- Name of root architecture can be anything
+  - Any name containing the field name case insensitive like priority
+    - Field value like 1
+      - function1()
+    - Another field value like 2
+      - function2()
 
-1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) the Shared Tasks CSV script.
+Finally, the architecture can be used to identify functions that enable and disable interrupts. References protected by these functions (preceeded by a call to the disable function and followed by a call to the enable function) are identified by the plugins. The naming pattern interrupt control is (ommitting the tasks):
 
-2. Run it with upython. Give it the `-h`, `--help`, or `help` argument for help.
+- Name of root architecture can be anything
+  - name containing the word interrupt or the word control case insensitive
+    - any name here. This layer allows multiple pairs of interrupt functions
+      - enable
+        - enableFunction()
+      - disable
+        - disableFunction()
+
+There are a lot of options for building an architecture:
+
+- Use the Architecture Designer in the GUI
+- Right click on entities and select "Add to Architecture". The architecture name can be typed and does not have to already exist
+- Create architecture nodes in the Architecture Browser and drag and drop entities into the nodes
+- Run the helper [archBuilderForSharedTasks.py](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/archBuilderForSharedTasks.py) script in this folder from the command line.
+
+# Exports
+
+The interactive report plugin can be used to generate a CSV file while running the report or from the command line.
+
 ```sh
 upython sharedTasksCSV.upy -h
 ```
 
-3. To have a dynamic file name, you can add {arch}, {date}, or {time} (case-insensitive) to the value of the `-csvFileName` argument.
-
-# Setup: Create an Architecture
-
-## Automatic Architecture Creation
-
-**Tasks & Priorities**
-
-1. [Download](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/archBuilderForSharedTasks.py) the Architecture Builder for Shared Tasks script.
-
-2. Run it with upython.
-```sh
-upython archBuilderForSharedTasks.py
-```
-
-3. Follow the prompts to add functions as tasks.
-
-**Interrupt Control Functions (Optional):**
-
-1. Follow the prompts to add functions as interrupt control.
-
-## Manual Architecture Creation
-
-**Tasks & Priorities:**
-
-1. Create a new architecture in Understand.
-
-2. In this architecture, create a group with "task" or "priority" in the name (capitalization doesn't matter whenever a specific group name is needed.)
-
-3. In this Task Priority group, add a function. Optionally, you can put these functions in an integer group, which indicates the priority of the task.
-
-**Interrupt Control Functions (Optional):**
-
-1. In the architecture, create a group with "interrupt" or "control" in the name.
-
-2. In the Interrupt Control group, make a group with any name. It will be the ancestor of a pair of interrupt control functions.
-
-3. In the group with any name, add 2 groups: one with "disable" in the name and another with "enable" in the name.
-
-4. Finally, add 1 function to the Disable group and a different function to the Enable group.
-
-# Usage
-
-Once an architecture is created, right click it to visualize the shared tasks.
+To have a dynamic file name, you can add {arch}, {date}, or {time} (case-insensitive) to the "CSV file name" option (IReport) or `-csvFileName` argument (command line)
