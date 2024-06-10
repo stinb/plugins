@@ -16,6 +16,8 @@ refKinds = 'Modify, Set, Use'
 funKinds = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
 objKinds = 'Global Object'
 
+taskFields = ['priority', 'core']
+
 
 KEY, DESCRIPTION, DEFAULT, CHOICES = 0, 1, 2, 3
 DEFAULT_FILE_NAME_TEMPLATE = 'Shared_Tasks_for_{arch}_{date}_{time}.csv'
@@ -260,6 +262,7 @@ def generateCSVRows(db, arch, options, lines, report):
     enableDisableFunctions = dict() # { ent: { 'disable': boolean, 'other': ent }, ... }
     controlledFunctions    = set()  # { ent, ... }
     interruptDisabledRefs  = set()  # { str(ref), ... }
+    foundFields = set()
 
     # Parse the architecture
     for group in arch.children():
@@ -291,25 +294,24 @@ def generateCSVRows(db, arch, options, lines, report):
                 enableDisableFunctions[enable] = {'disable': False, 'other': disable}
 
         # ARCH_NAME/.*priority.*/INTEGER/FUNCTION_NAME
-        elif 'task' in name or 'priority' in name:
-            # Priority groups
-            for priorityGroup in group.children():
-                try:
-                    priority = int(priorityGroup.name())
-                except:
-                    priority = None
-
+        elif 'task' in name or any(field in name for field in taskFields):
+            # Priority/Core groups
+            field = next((field for field in taskFields if field in name), "")
+            foundFields.add(field)
+            for fieldGroup in group.children():
                 # Tasks
-                for ent in priorityGroup.ents(True):
+                for ent in fieldGroup.ents(True):
                     if not ent.kind().check(funKinds):
                         continue
-                    tasks[ent] = priority
+                    if ent not in tasks:
+                      tasks[ent] = dict()
+                    tasks[ent][field] = fieldGroup.name()
 
             # Tasks
             for ent in group.ents(False):
-                if not ent.kind().check(funKinds):
+                if ent in tasks or not ent.kind().check(funKinds):
                     continue
-                tasks[ent] = None
+                tasks[ent] = dict()
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
@@ -341,6 +343,20 @@ def generateCSVRows(db, arch, options, lines, report):
     for obj in objects:
         edgeKeysForObjects[obj] = list(incoming[obj])
         edgeKeysForObjects[obj].sort()
+
+    # header
+    headerFields = [field for field in taskFields if field in foundFields]
+
+    header = 'Global Object, Shared, Protected, Function, Reference(M=Modify/S=Set/U=Use), File, Task'
+    if headerFields:
+      header += ', ' + ', '.join(field.capitalize() for field in headerFields)
+    header += '\n'
+
+    if report:
+      report.print(header)
+    if lines:
+      lines.append(header)
+
 
     # Make rows for each object
     for obj in objects:
@@ -387,7 +403,7 @@ def generateCSVRows(db, arch, options, lines, report):
 
                 # Info for each column for this single row
                 taskName = task.name()
-                taskPriority = tasks[task]
+                entFields = [tasks[task].get(field,"") for field in headerFields]
 
                 # Make the clickable row for interactive report
                 if report:
@@ -398,19 +414,21 @@ def generateCSVRows(db, arch, options, lines, report):
                     printFile(report, file)
                     report.print(', ')
                     printEnt(report, task)
-                    report.print(f', {taskPriority}\n')
+                    if entFields:
+                      report.print(', ' + ', '.join(entFields))
+                    report.print('\n')
 
                 # Make the row for the file
                 if lines:
-                    line = f'{objectName}, {shared}, {protected}, {functionName}, {reference}, {relname}, {taskName}, {taskPriority}\n'
+                    line = f'{objectName}, {shared}, {protected}, {functionName}, {reference}, {relname}, {taskName}'
+                    if entFields:
+                      line += ', ' +  ', '.join(entFields)
+                    line += '\n'
                     lines.append(line)
 
 
 def generateCSV(db, arch, options, report=None):
-    lines = ['Global Object, Shared, Protected, Function, Reference(M=Modify/S=Set/U=Use), File, Task, Task Priority\n']
-
-    if report:
-        report.print(lines[0])
+    lines = []
 
     if not options['autoExport']:
         lines = None
