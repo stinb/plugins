@@ -16,9 +16,12 @@ def refComparator(a, b):
 refComparator = functools.cmp_to_key(refComparator)
 
 
-def getFunctionCallsOrGlobalObjectRefs(function):
+def getFunctionCallsOrGlobalObjectRefs(function, enableDisableFunctions):
     refs = function.refs('Call', 'Function')
     refs += function.refs(refKinds, objKinds)
+    for ref in function.refs('use', 'macro'):
+      if ref.ent() in enableDisableFunctions:
+        refs.append(ref)
     refs.sort(key=refComparator)
     return refs
 
@@ -30,7 +33,7 @@ def checkControlledFunction(outerFunction, enableDisableFunctions, controlledFun
     controlledFunctions.add(outerFunction)
 
     # Function call or global object modify/set/use
-    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction):
+    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction, enableDisableFunctions):
         ent = ref.ent()
 
         # Recurse for each function called, ignoring enable/disable functions
@@ -40,7 +43,7 @@ def checkControlledFunction(outerFunction, enableDisableFunctions, controlledFun
                 checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
 
         # Global object ref
-        else:
+        elif ent.kind().check(objKinds):
             interruptDisabledRefs.add(str(ref))
 
 
@@ -49,28 +52,26 @@ def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, cont
     interruptDisabledFunctions = set() # { ent, ...  }
 
     # Function call or global object modify/set/use
-    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction):
+    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction, enableDisableFunctions):
         ent = ref.ent()
 
-        # Function called
-        if ent.kind().check('Function'):
-            # Add/remove the disable outerFunction
-            if ent in enableDisableFunctions:
-                if enableDisableFunctions[ent]['disable']:
-                    disable = ent
-                    interruptDisabledFunctions.add(ent)
-                else:
-                    disable = enableDisableFunctions[ent]['other']
-                    interruptDisabledFunctions.remove(disable)
+        # Add/remove the disable outerFunction
+        if ent in enableDisableFunctions:
+            if enableDisableFunctions[ent]['disable']:
+                disable = ent
+                interruptDisabledFunctions.add(ent)
+            else:
+                disable = enableDisableFunctions[ent]['other']
+                interruptDisabledFunctions.remove(disable)
 
-            # Recurse for each function called in an interrupt-protected area,
-            # ignoring enable/disable functions
-            elif len(interruptDisabledFunctions) and ent not in controlledFunctions:
-                interruptDisabledRefs.add(str(ref))
-                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+        # Recurse for each function called in an interrupt-protected area,
+        # ignoring enable/disable functions
+        elif ent.kind().check('Function') and len(interruptDisabledFunctions) and ent not in controlledFunctions:
+            interruptDisabledRefs.add(str(ref))
+            checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
 
         # Global object ref with interrupt disabled
-        elif len(interruptDisabledFunctions):
+        elif not ent.kind().check('Function') and len(interruptDisabledFunctions):
             interruptDisabledRefs.add(str(ref))
 
 def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options):
@@ -228,7 +229,7 @@ def buildEdgeInfo(db, arch, options):
                     if len(ents) != 1:
                         continue
                     ent = ents[0]
-                    if not ent.kind().check('Function'):
+                    if not ent.kind().check('Function, Macro'):
                         continue
                     if 'disable' in name:
                         disable = ent
