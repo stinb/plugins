@@ -16,6 +16,11 @@ def refComparator(a, b):
 refComparator = functools.cmp_to_key(refComparator)
 
 
+def refStr(ref):
+  if ref.isforward():
+    return f'{ref.scope().uniquename()} {ref.kind().longname()} {ref.ent().uniquename()} {ref.line()} {ref.column()}'
+  return f'{ref.ent().uniquename()} {ref.kind().inv().longname()} {ref.scope().uniquename()} {ref.line()} {ref.column()}'
+
 def getFunctionCallsOrGlobalObjectRefs(function, enableDisableFunctions):
     refs = function.refs('Call', 'Function')
     refs += function.refs(refKinds, objKinds)
@@ -39,12 +44,12 @@ def checkControlledFunction(outerFunction, enableDisableFunctions, controlledFun
         # Recurse for each function called, ignoring enable/disable functions
         if ent.kind().check('Function'):
             if ent not in enableDisableFunctions and ent not in controlledFunctions:
-                interruptDisabledRefs.add(str(ref))
+                interruptDisabledRefs.add(refStr(ref))
                 checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
 
         # Global object ref
         elif ent.kind().check(objKinds):
-            interruptDisabledRefs.add(str(ref))
+            interruptDisabledRefs.add(refStr(ref))
 
 
 def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, controlledFunctions, interruptDisabledRefs):
@@ -62,17 +67,17 @@ def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, cont
                 interruptDisabledFunctions.add(ent)
             else:
                 disable = enableDisableFunctions[ent]['other']
-                interruptDisabledFunctions.remove(disable)
+                interruptDisabledFunctions.discard(disable)
 
         # Recurse for each function called in an interrupt-protected area,
         # ignoring enable/disable functions
         elif ent.kind().check('Function') and len(interruptDisabledFunctions) and ent not in controlledFunctions:
-            interruptDisabledRefs.add(str(ref))
+            interruptDisabledRefs.add(refStr(ref))
             checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
 
         # Global object ref with interrupt disabled
         elif not ent.kind().check('Function') and len(interruptDisabledFunctions):
-            interruptDisabledRefs.add(str(ref))
+            interruptDisabledRefs.add(refStr(ref))
 
 def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options):
     # Base case: visiting a function again from the same root
@@ -189,26 +194,10 @@ def filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options):
         scope = edgeObj['scope']
         filterIncomingEdges(incoming, outgoing, edgeInfo, scope, options)
 
-def buildEdgeInfo(db, arch, options):
-    # Setup data for getEdgeInfo
-    visited     = set()  # { funKey, ... }
+def parseArch(arch):
     tasks       = dict() # { ent: integer, ... }
-    incoming    = dict() # { ent: set, ... }
-    outgoing    = dict() # { ent: set, ... }
-    edgeInfo    = dict() # { edgeKey: {
-                         #     'root': boolean,
-                         #     'scope': ent,
-                         #     'ent': ent,
-                         #     'kindnames': set,
-                         #     'from': set,
-                         #     'filtered': boolean,
-                         #     'ref': ref
-                         # }, ... }
 
-    # Setup data for checkFunctionForInterruptControl
     enableDisableFunctions = dict() # { ent: { 'disable': boolean, 'other': ent }, ... }
-    controlledFunctions    = set()  # { ent, ... }
-    interruptDisabledRefs  = set()  # { str(ref), ... }
     foundFields = set()
 
     # Parse the architecture
@@ -259,6 +248,23 @@ def buildEdgeInfo(db, arch, options):
                 if ent in tasks or not ent.kind().check(funKinds):
                     continue
                 tasks[ent] = dict()
+    return (tasks, enableDisableFunctions, foundFields)
+
+def buildEdgeInfo(db, arch, options):
+    # Setup data for getEdgeInfo
+    visited     = set()  # { funKey, ... }
+    incoming    = dict() # { ent: set, ... }
+    outgoing    = dict() # { ent: set, ... }
+    edgeInfo    = dict() # { edgeKey: {
+                         #     'root': boolean,
+                         #     'scope': ent,
+                         #     'ent': ent,
+                         #     'kindnames': set,
+                         #     'from': set,
+                         #     'filtered': boolean,
+                         #     'ref': ref
+                         # }, ... }
+    tasks, enableDisableFunctions, foundFields = parseArch(arch)
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
@@ -271,9 +277,19 @@ def buildEdgeInfo(db, arch, options):
             if ent.kind().check(objKinds):
                 filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
 
+    interruptDisabledRefs =  findInterruptDisabledRefs(db, enableDisableFunctions)
+
+    return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
+
+def findInterruptDisabledRefs(db, enableDisableFunctions):
+    # Setup data for checkFunctionForInterruptControl
+    controlledFunctions    = set()  # { ent, ... }
+    interruptDisabledRefs  = set()  # { str(ref), ... }
+
     # See which refs are interrupt-protected
     for fun in db.ents(funKinds):
         checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
 
-    return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
+    return interruptDisabledRefs
+
 
