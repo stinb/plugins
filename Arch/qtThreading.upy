@@ -1,0 +1,69 @@
+# Find functions that are probably run on another thread with Qt threading
+# mechanisms
+
+import re
+import understand
+
+def name():
+  return "Qt Threaded Functions"
+
+def generate(arch, db):
+  funcObjectRefs = functionObjects(db)
+  threaded = set()
+
+  # Find functions passed to QtConcurrent functions
+  twoArgFunctions = [ "mappedReduced", "blockingMappedReduced", "filteredReduced", "blockingFilteredReduced"]
+  for ent in db.lookup("QtConcurrent", "function"):
+    cnt = 2 if ent.name() in twoArgFunctions else 1
+    findFunctionArgs(ent, funcObjectRefs, threaded, cnt)
+
+
+  # Find run overloads
+  for ent in db.lookup(re.compile(r"(QThread|QRunnable)::run"), "function"):
+    for ref in ent.refs("overriddenby"):
+      threaded.add(ref.ent())
+
+  for ent in threaded:
+    arch.map(ent, "tasks")
+
+
+def functionObjects(db):
+  # Find potential function object arguments, mapping from scope to
+  # tuple with line, column, operator() entity
+  funcObjectRefs = dict()
+  for ent in db.lookup(re.compile(r"operator\(\)"), "function"):
+    obj = ent.parent()
+    if obj and obj.longname() != "[unnamed]":
+      for potConstructor in obj.refs("define", "member function"):
+        if potConstructor.ent().name() == obj.name():
+          # Is a constructor, a call could be an argument to a concurrency function
+          for callbyRef in potConstructor.ent().refs("callby"):
+            funcObjectRefs.setdefault(callbyRef.ent(), []).append((callbyRef.line(), callbyRef.column(), ent))
+      for objRef in obj.refs("typedby"):
+        # For each variable of the object type, the variable may be passed as an
+        # argument to the concurrency function
+        for useRef in objRef.ent().refs("useby"):
+          funcObjectRefs.setdefault(useRef.ent(), []).append((useRef.line(), useRef.column(), ent))
+  return funcObjectRefs
+
+def findFunctionArgs(ent, funcObjectRefs, found, expectedCount = 1):
+  # For each place this function is called
+  for callbyref in ent.refs("callby"):
+    # Need to find function pointers or lambda functions passed as arguments
+    # so most accurate would be to use the lexer to find the range to look
+    # for references. But, the lexer doesn't seem to report the define in
+    # reference for lambda functions so grab all the references for the scope
+    # function
+    potArgRefs = [ (ref.line(), ref.column(), ref.ent()) for ref in callbyref.ent().refs("c define, c use ptr", "function") ]
+
+    # Also grab any locations that indicate a function object for the scope function
+    potArgRefs += funcObjectRefs.get(callbyref.ent(), [])
+
+    # Find the first expectedCount number of applicableReferences
+    foundCount = expectedCount
+    for potArgRef in sorted(potArgRefs):
+      if potArgRef[0] > callbyref.line() or (potArgRef[0] == callbyref.line() and potArgRef[1] > callbyref.column()):
+        found.add(potArgRef[2])
+        foundCount -= 1
+      if foundCount <= 0:
+        break
