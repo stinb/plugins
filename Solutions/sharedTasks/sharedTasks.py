@@ -3,7 +3,7 @@ import understand
 
 refKinds = 'Modify, Set, Use'
 funKinds = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
-objKinds = 'Global Object'
+objKinds = 'Object'
 
 taskFields = ['priority', 'core']
 
@@ -23,11 +23,38 @@ def refStr(ref):
 
 def getFunctionCallsOrGlobalObjectRefs(function, enableDisableFunctions):
     refs = function.refs('Call', 'Function')
-    refs += function.refs(refKinds, objKinds)
+    refs += globalObjRefs(function)
     for ref in function.refs('use', 'macro'):
       if ref.ent() in enableDisableFunctions:
         refs.append(ref)
     refs.sort(key=refComparator)
+    return refs
+
+def globalObjRefs(function):
+    refs = []
+    objRefs = function.refs(refKinds, objKinds)
+    objRefs.sort(key=refComparator)
+    i = len(objRefs) - 1
+    while i >= 0:
+      ref = objRefs[i]
+      if ref.ent().kind().check("Global"):
+        # Keep references to global objects, like before
+        refs.append(ref)
+
+      elif (ref.ent().refs("c instanceof") and
+            ref.ent().parent() and
+            ref.ent().parent().kind().check("Global")):
+        # If member object settings are on, then members of global structs will
+        # have associated entities with an "instanceof" reference. So, if this
+        # object has an instanceof reference to a global object parent, keep
+        # the reference
+        refs.append(ref)
+
+        if i > 0 and objRefs[i-1].kind() == ref.kind() and objRefs[i-1].ent() == ref.ent().parent():
+          # Both the object and the member get the reference so skip the
+          # reference to the parent object if it exists
+          i -= 1
+      i -= 1
     return refs
 
 
@@ -87,7 +114,7 @@ def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options
     visited.add(funKey)
 
     # References to global objects
-    for ref in fun.refs(refKinds, objKinds):
+    for ref in globalObjRefs(fun):
         scope = root if options['reference'] == 'Simple' else fun
         ent = ref.ent()
 
