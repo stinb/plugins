@@ -34,8 +34,9 @@ class Match:
 def fileLines(file, ignoredTokens = ["Whitespace", "Comment", "Newline"]):
   '''Return a list of lines to be considered and their corresponding original
      line numbers, skipping tokens in ignoredTokens'''
-  lexer = file.lexer(False)
-  if not lexer:
+  try:
+    lexer = file.lexer(False)
+  except understand.Error:
     return []
 
   lineDict = dict()

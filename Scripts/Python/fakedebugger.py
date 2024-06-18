@@ -359,8 +359,9 @@ def enterFunc(func, line = -1):
     print ("Error: no control flow information for function")
     return
 
-  lexer = defFile(func).lexer()
-  if not lexer:
+  try:
+    lexer = defFile(func).lexer()
+  except understand.Error:
     print ("Error: no lexer for function's file")
     return
 
