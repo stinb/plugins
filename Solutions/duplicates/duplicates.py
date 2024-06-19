@@ -38,7 +38,7 @@ def fileLines(file, ignoredTokens = ["Whitespace", "Comment", "Newline"]):
   try:
     lexer = file.lexer(False)
   except understand.UnderstandError:
-    return []
+    return [[],[]]
 
   lineDict = dict()
   for lexeme in lexer:
