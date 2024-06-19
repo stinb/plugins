@@ -361,7 +361,7 @@ def enterFunc(func, line = -1):
 
   try:
     lexer = defFile(func).lexer()
-  except understand.Error:
+  except understand.UnderstandError:
     print ("Error: no lexer for function's file")
     return
 

@@ -37,7 +37,7 @@ def fileLines(file, ignoredTokens = ["Whitespace", "Comment", "Newline"]):
      line numbers, skipping tokens in ignoredTokens'''
   try:
     lexer = file.lexer(False)
-  except understand.Error:
+  except understand.UnderstandError:
     return []
 
   lineDict = dict()
