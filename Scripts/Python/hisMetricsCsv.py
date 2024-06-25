@@ -130,7 +130,7 @@ def addFunctionToReport(fileReport, ref):
 	if (ent.language() == 'VHDL'):
 		if (ent.library() == 'std' or ent.library() == 'ieee'):
 			return
-	
+
 	# If the function is defined in the project, it has as parent
 	if (ent.parent()):
 		functionId = ent.id()
@@ -170,7 +170,7 @@ def check1(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		ccRatio = checkForViolatingMin(ccRatio, minimumCommentPercentage)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'COMF', ccRatio)
@@ -187,7 +187,7 @@ def check2(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		paths = checkForViolatingMax(paths, maxPathsAllowed)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'PATH', paths)
@@ -207,7 +207,7 @@ def check3(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		gotoStatements = checkForViolatingMax(gotoStatements, 0)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'GOTO', gotoStatements)
@@ -231,7 +231,7 @@ def check4(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		complexity = checkForViolatingMax(complexity, maxComplexity)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'vG', complexity)
@@ -248,7 +248,7 @@ def check5(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		callingFunctions = checkForViolatingMax(callingFunctions, maxCallingFunctions)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'CALLING', callingFunctions)
@@ -265,7 +265,7 @@ def check6(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		calls = checkForViolatingMax(calls, maxCalls)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'CALLS', calls)
@@ -281,11 +281,11 @@ def check7(fileReport, defineRefs, args):
 		parameters = ent.parameters()
 		paramCount = None
 		if parameters != None:
-			paramCount = len(parameters.split(','))			
+			paramCount = len(parameters.split(','))
 
 		# Add a star for violations
 		paramCount = checkForViolatingMax(paramCount, maxNumberOfParameters)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'PARAM', paramCount)
@@ -302,7 +302,7 @@ def check8(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		statements = checkForViolatingMax(statements, maxStatements)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'STMT', statements)
@@ -314,7 +314,7 @@ def getDepth(functionEnt, knownFunctions):
 		return 'Recursive'
 	if functionEnt.id() in knownFunctions:
 		return knownFunctions[functionEnt.id()]
-		
+
 	knownFunctions[functionEnt.id()] = -1 # Marker for recursion
 
 	calls = functionEnt.refs('call ~inactive, use ptr ~inactive', entDefineKinds, True)
@@ -325,7 +325,7 @@ def getDepth(functionEnt, knownFunctions):
 			return 'Recursive'
 		if depth > knownFunctions[functionEnt.id()]:
 			knownFunctions[functionEnt.id()] = depth
-	
+
 	knownFunctions[functionEnt.id()] += 1
 	return knownFunctions[functionEnt.id()]
 
@@ -347,7 +347,7 @@ def check9(fileReport, defineRefs, args):
 			# Add a star for violations
 			depth += 1
 			depth = checkForViolatingMax(depth, maxCallLevels)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'LEVEL', depth)
@@ -369,16 +369,16 @@ def passLambda(parent, lexeme, allDefines):
 			inLambda = True
 		elif lexeme.line_begin() == end.line() and lexeme.line_begin() == define.line() and lexeme.column_begin() >= define.column() and lexeme.column_begin() <= end.column():
 			inLambda = True
-		
+
 		# If we are inside a lambda, move through that lambda
 		if inLambda:
 
 			while lexeme.line_begin() > define.line():
 				lexeme = lexeme.previous()
-			
+
 			while lexeme.column_begin() > define.column() or lexeme.line_begin() < define.line():
 				lexeme = lexeme.previous()
-	
+
 	return lexeme
 
 def check10(fileReport, file, args):
@@ -395,9 +395,9 @@ def check10(fileReport, file, args):
 	if not lexer:
 		return
 
-	for funEnd in funEnds:		
+	for funEnd in funEnds:
 		ent = funEnd.ent()
-		
+
 		# Determine if we are testing this function
 		if ignoreConstructorsDestructors and ent.parent() and ent.parent.name() == ent.name():
 			continue
@@ -410,7 +410,7 @@ def check10(fileReport, file, args):
 		# Skip funcitons defined with MACROS
 		if start.line() == funEnd.line():
 			continue
-		
+
 		# Initialize tracking variables and options
 		atEnd = False
 		statementCount = 0
@@ -435,7 +435,7 @@ def check10(fileReport, file, args):
 				statementCount += 1
 			if statementCount == 2 and exitCount:
 				atEnd = True
-			
+
 			lexeme = lexeme.previous()
 
 		# Add a star for violations
@@ -446,7 +446,7 @@ def check10(fileReport, file, args):
 			result = 'No exit point in function*'
 		elif exitCount == 1 and not atEnd:
 			result = 'Exit point not at end of function*'
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'RETURN', result)
@@ -454,7 +454,7 @@ def check10(fileReport, file, args):
 def getDeclRef(ent):
 	if not ent:
 		return
-	
+
 	decl = ent.refs('definein', '', True)
 	if not decl:
 		decl = ent.refs('declarein', '', True)
@@ -467,7 +467,7 @@ def getVOCF(fun):
 		return
 	startRef = startRef[0]
 	endRef = endRef[0]
-	file = startRef.file()	
+	file = startRef.file()
 	fileId = file.id()
 	lexer = file.lexer()
 	n1 = {}
@@ -483,7 +483,7 @@ def getVOCF(fun):
 		elif lexeme.token() == 'Identifier' or lexeme.token() == 'Literal' or lexeme.token() == 'String':
 			n2[lexeme.text()] = 1
 			N2 += 1
-	
+
 	n1 = len(n1)
 	n2 = len(n2)
 	if n1 + n2 > 0:
@@ -504,7 +504,7 @@ def check11(fileReport, defineRefs, args):
 
 		# Add a star for violations
 		vocfLevel = checkForViolatingMax(vocfLevel, maxVocfLevel)
-		
+
 		# Report the result
 		functionId = ent.id()
 		reportFunction(fileReport, functionId, 'VOCF', vocfLevel)
@@ -514,13 +514,13 @@ def discoverRecursion(fileReport, ent, firstTime, seen, originalEnt):
 		return
 
 	for callRef in ent.refs(refCallKinds, entCallKinds, True):
-		callEnt = callRef.ent()		
+		callEnt = callRef.ent()
 		if callEnt.uniquename() not in seen:
 			seen[callEnt.uniquename()] = 0
 		seen[callEnt.uniquename()] += 1
 		if seen[callEnt.uniquename()] > 1:
 			continue
-		
+
 		# Not sure if this commented line works, but it's slow
 		if callEnt.uniquename() == originalEnt.uniquename():
 			# It's possible the following line was intentional, but I can't think why you would want a random ref when callRef should be the call site of the recursion
@@ -535,7 +535,7 @@ def discoverRecursion(fileReport, ent, firstTime, seen, originalEnt):
 				else:
 					reportFunction(fileReport, functionId, 'AP_CG_CYCLE', 'Violation: function ' + originalEnt.longname() + ' is indirectly recursive through ' + ent.longname() + ', which is unsafe.*')
 			return
-	
+
 		discoverRecursion(fileReport, callEnt, False, seen, originalEnt)
 
 def check12(fileReport, file, args):
@@ -624,10 +624,10 @@ if __name__ == '__main__':
 			if functionId not in functionIds:
 				reportFile(csv, fileReport[functionId])
 				functionIds[functionId] = True
-		
+
 		progressBar.progress()
-	
+
 	print()
-		
+
 	# Close csv file
 	csv.close()
