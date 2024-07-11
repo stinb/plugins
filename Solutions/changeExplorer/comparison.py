@@ -1,4 +1,4 @@
-import understand 
+import understand
 import glob
 import os
 import sys
@@ -20,7 +20,7 @@ import re
 # When calling computeData, you can pass an options targets
 # This is an array of "ids" (understand id) of possible entities you are looking
 # to reach. If you pass targets, an extra information will be added to a link or node, i.e.
-# "toTarget" will be set to true 
+# "toTarget" will be set to true
 #
 # The data structure is a TREE with the following element:
 # AFTER_Entity,BEFORE_Entity,isComputed,isAdded,isRemoved,isSameContent,hasChangedInTree,ListOfLinks]
@@ -29,12 +29,12 @@ import re
 # isComputed: True|False (was it computed or did we stop before)
 # isAdded: True|False
 # isRemoved: True|False
-# isSameContent: True|False 
+# isSameContent: True|False
 # hasChangedInTree: True|False
 # ListOfLinks: A [,,,] list of Link
 # toTarget: True|False (only valid if "targets" was passed to computeData)
 #
-# A Link, is 
+# A Link, is
 # Reference Kind: String
 # ListOfBEFORE_Refs: [,,,] of Understand.Ref
 # ListOfAFTER_Refs: [,,,] of Understand.Ref
@@ -69,17 +69,17 @@ class Loader:
     return ent.uniquename()
   # ##################################################################
   # REGEX we will use in content comparison
-  regexC1 = re.compile('\/\/.*?\n')
-  regexC2 = re.compile('\/\*.*?\*\/')
-  regexADA = re.compile('\-\-.*?\n')
-  regexFORTRAN = re.compile('\!.*?\n')
-  regex3 = re.compile('[\s\r\n]+')
+  regexC1 = re.compile(r'\/\/.*?\n')
+  regexC2 = re.compile(r'\/\*.*?\*\/')
+  regexADA = re.compile(r'\-\-.*?\n')
+  regexFORTRAN = re.compile(r'\!.*?\n')
+  regex3 = re.compile(r'[\s\r\n]+')
   # ##################################################################
   searchRelationship = "Call"
   searchKind = ""
   # ##################################################################
   # Our function to determine if the "Code" of an entity have changed
-  # we use contents (if exist), otherwise we check the value.. 
+  # we use contents (if exist), otherwise we check the value..
   def isSameContent(self, AFTER_ent, BEFORE_ent):
     if not AFTER_ent:
         return False
@@ -99,32 +99,32 @@ class Loader:
             return False
         return AFTER_value == BEFORE_value
     if not AFTER_content:
-        return False   
+        return False
     if not BEFORE_content:
         return False
     language = AFTER_ent.language()
-    # Removing comments in content 
-    if language == "C++" or language == "C" or language == "C#" or language == "Java" or language == "Plm":    
+    # Removing comments in content
+    if language == "C++" or language == "C" or language == "C#" or language == "Java" or language == "Plm":
       AFTER_content = self.regexC1.sub('',AFTER_content)
       AFTER_content = self.regexC2.sub('',AFTER_content)
       BEFORE_content = self.regexC1.sub('',BEFORE_content)
       BEFORE_content = self.regexC2.sub('',BEFORE_content)
     if language == "Fortran":
       AFTER_content = self.regexFORTRAN.sub('',AFTER_content)
-      BEFORE_content = self.regexFORTRAN.sub('',BEFORE_content)        
+      BEFORE_content = self.regexFORTRAN.sub('',BEFORE_content)
     if language == "Ada" or language == "VHDL":
       AFTER_content = self.regexADA.sub('',AFTER_content)
       BEFORE_content = self.regexADA.sub('',BEFORE_content)
     # Removing blanks and eol
     AFTER_content = self.regex3.sub('',AFTER_content)
-    BEFORE_content = self.regex3.sub('',BEFORE_content)      
+    BEFORE_content = self.regex3.sub('',BEFORE_content)
     return (AFTER_content == BEFORE_content)
   # ##################################################################
   # Note: the cache will contains a map of dataset for all entities
   # using their id() as a key..
   cache = {} # cache for entities
   dataset = None  # The dataset we are trying to compute.
-  # ##################################################################     
+  # ##################################################################
   def addReferenceToDataset(self,ref,tag,cache_relations):
     uniquename = ref.ent().uniquename()
     if not uniquename in cache_relations:
@@ -135,7 +135,7 @@ class Loader:
       data[ref_kindname] = {"BEFORE":[],"AFTER":[]}
     data = data[ref_kindname]
     data[tag].append(ref)
-   
+
   def computeDataForEntity(self,AFTER_ent,MAX,targets=None):
     # Are we computed already? If yes, we quit
     if AFTER_ent.id() in self.cache:
@@ -146,7 +146,7 @@ class Loader:
     self.cache[AFTER_ent.id()] = data
     if (MAX == 0):
       data["isComputed"] = False
-      return self.cache[AFTER_ent.id()]      
+      return self.cache[AFTER_ent.id()]
     MAX = MAX-1
     data["isComputed"] = True
     # Finding a BEFORE_ent
@@ -157,7 +157,7 @@ class Loader:
       data["BEFORE_Entity"] = BEFORE_ent
     # Checking if content is the same...
     data["isSameContent"] = self.isSameContent(AFTER_ent,BEFORE_ent)
-    # Analyzing relationships that were added and removed... 
+    # Analyzing relationships that were added and removed...
     # The cache is structure as [uniquename] => [ref_kindname] => ["BEFORE" or "AFTER"] => LIST OF REFS
     cache_relations = {}
     for ref in AFTER_ent.refs(self.searchRelationship,self.searchKind):
@@ -168,7 +168,7 @@ class Loader:
     # Talling those relationships...
     for uniquename in cache_relations:
       # We prep the entities...
-      # BUG HERE: With uniquename @lBUF_strlcpy@kBUF_strlcpy@f./source_code/crypto/buffer/buffer.c, I will get an entity 
+      # BUG HERE: With uniquename @lBUF_strlcpy@kBUF_strlcpy@f./source_code/crypto/buffer/buffer.c, I will get an entity
       # with ID @lBUF_strlcpy@kBUF_strlcpy@f./source_code/crypto/buffer/buf_str.c (TO BE RESOLVED)
       BEFORE_Target = self.BEFORE_db.lookup_uniquename(uniquename)
       AFTER_Target = self.AFTER_db.lookup_uniquename(uniquename)
@@ -181,18 +181,18 @@ class Loader:
         data_for_AFTER_Target = self.computeDataForEntity(AFTER_Target,MAX,targets)
         if BEFORE_Target: # we have before and after.
           data_for_BEFORE_Target = {"AFTER_Entity":AFTER_Target,"BEFORE_Entity":BEFORE_Target,"isComputed":False,"isAdded":False,"isRemoved":False,"isSameContent":data_for_AFTER_Target["isSameContent"],"hasChangedInTree":False,"ListOfLinks":[]}
-          data["hasChangedInTree"] = data["hasChangedInTree"] or data_for_AFTER_Target["hasChangedInTree"] or (not data_for_AFTER_Target["isSameContent"])          
+          data["hasChangedInTree"] = data["hasChangedInTree"] or data_for_AFTER_Target["hasChangedInTree"] or (not data_for_AFTER_Target["isSameContent"])
         else:
           data["hasChangedInTree"] = True
         if targets:
             data["toTarget"] = data["toTarget"] or data_for_AFTER_Target["toTarget"]
       else:
         if BEFORE_Target: # we only have a before
-          data_for_BEFORE_Target = {"AFTER_Entity":AFTER_Target,"BEFORE_Entity":BEFORE_Target,"isComputed":False,"isAdded":False,"isRemoved":True,"isSameContent":False,"hasChangedInTree":False,"ListOfLinks":[]}   
+          data_for_BEFORE_Target = {"AFTER_Entity":AFTER_Target,"BEFORE_Entity":BEFORE_Target,"isComputed":False,"isAdded":False,"isRemoved":True,"isSameContent":False,"hasChangedInTree":False,"ListOfLinks":[]}
           data["hasChangedInTree"] = True
         if targets:
           data["toTarget"] = False
-      for ref_kindname in cache_relations[uniquename]:        
+      for ref_kindname in cache_relations[uniquename]:
         newLink = { "Reference Kind":ref_kindname,"ListOfBEFORE_Refs":cache_relations[uniquename][ref_kindname]["BEFORE"],\
                                                   "ListOfAFTER_Refs":cache_relations[uniquename][ref_kindname]["AFTER"],"isChanged":False,"isAdded":False,"isRemoved":False,\
                                                   "targetdata_BEFORE":None, "targetdata_AFTER":None, "toTarget":False }
@@ -205,74 +205,74 @@ class Loader:
           else:
             newLink["toTarget"] = False
         data["hasChangedInTree"] = data["hasChangedInTree"] or (newLink["isAdded"] or newLink["isRemoved"] or newLink["isChanged"])
-        data["ListOfLinks"].append(newLink)                      
+        data["ListOfLinks"].append(newLink)
         newLink["targetdata_BEFORE"] = data_for_BEFORE_Target
-        newLink["targetdata_AFTER"] = data_for_AFTER_Target    
+        newLink["targetdata_AFTER"] = data_for_AFTER_Target
     return data
-  # ##################################################################    
+  # ##################################################################
   def computeData(self,ent,MAX,targets=None): # Compute for an entity. MAX=-1 for no limit.
     # Reset the DATASET
     self.cache = {}
     self.computeDataWithoutCacheCleaning(ent,MAX,targets)
   def computeDataWithoutCacheCleaning(self,ent,MAX,targets=None):
     # Reset the DATASET
-    self.dataset = None  
+    self.dataset = None
     if not self.AFTER_db or not self.BEFORE_db:
       return
-    self.dataset = self.computeDataForEntity(ent,MAX,targets)    
+    self.dataset = self.computeDataForEntity(ent,MAX,targets)
   # ##################################################################
   def computeMetricsInternal(self,dataset):
-    result = { "NbAddedLink":0,"NbRemovedLink":0,"NbChangedLink":0,"NbItemChanged":0,"NbItemTotal":0,"NbNonComputed":0 }   
+    result = { "NbAddedLink":0,"NbRemovedLink":0,"NbChangedLink":0,"NbItemChanged":0,"NbItemTotal":0,"NbNonComputed":0 }
     if not dataset:
-        return result 
-    # ##################################################################  
-    key="KEY"  
+        return result
+    # ##################################################################
+    key="KEY"
     if dataset["AFTER_Entity"]:
       key=key+str(dataset["AFTER_Entity"].id())+","
     if dataset["BEFORE_Entity"]:
       key=key+str(dataset["BEFORE_Entity"].id())
-    # ##################################################################   
+    # ##################################################################
     if key in self.cacheDraw:
       return result; # Already counted for, no need to add...
     self.cacheDraw[key] = True
     # ##################################################################
-    if not dataset["isRemoved"]:    
-      result["NbItemTotal"] = 1    
+    if not dataset["isRemoved"]:
+      result["NbItemTotal"] = 1
       if not dataset["isSameContent"]:
-        result["NbItemChanged"] = 1     
+        result["NbItemChanged"] = 1
       if not dataset["isComputed"]:
-        result["NbNonComputed"] = 1 
+        result["NbNonComputed"] = 1
     for link in dataset["ListOfLinks"]:
       if link["isAdded"]:
-        result["NbAddedLink"] = result["NbAddedLink"] + 1 
+        result["NbAddedLink"] = result["NbAddedLink"] + 1
       if link["isRemoved"]:
         result["NbRemovedLink"] = result["NbRemovedLink"] + 1
       if link["isChanged"]:
         result["NbChangedLink"] = result["NbChangedLink"] + 1
       if link["targetdata_AFTER"]:
-        result_next = self.computeMetricsInternal(link["targetdata_AFTER"])  
+        result_next = self.computeMetricsInternal(link["targetdata_AFTER"])
       else:
-        result_next = self.computeMetricsInternal(link["targetdata_BEFORE"]) 
+        result_next = self.computeMetricsInternal(link["targetdata_BEFORE"])
       result["NbAddedLink"] = result["NbAddedLink"] + result_next["NbAddedLink"]
       result["NbRemovedLink"] = result["NbRemovedLink"] + result_next["NbRemovedLink"]
       result["NbChangedLink"] = result["NbChangedLink"] + result_next["NbChangedLink"]
       result["NbItemChanged"] = result["NbItemChanged"] + result_next["NbItemChanged"]
       result["NbItemTotal"] = result["NbItemTotal"] + result_next["NbItemTotal"]
       result["NbNonComputed"] = result["NbNonComputed"] + result_next["NbNonComputed"]
-    # ##################################################################      
+    # ##################################################################
     return result
   # ##################################################################
   def printDataSetInternal(self,tab,dataset):
     if not dataset:
       print(tab+"No DATASET")
       return
-    # ##################################################################  
-    key="KEY"  
+    # ##################################################################
+    key="KEY"
     if dataset["AFTER_Entity"]:
       key=key+str(dataset["AFTER_Entity"].id())+","
     if dataset["BEFORE_Entity"]:
       key=key+str(dataset["BEFORE_Entity"].id())
-    # ##################################################################  
+    # ##################################################################
     if dataset["AFTER_Entity"]:
       #print(tab+self.getFullDescriptionOfFunction(dataset["AFTER_Entity"]))
       print(tab+dataset["AFTER_Entity"].longname()+"(...)",end="")
@@ -280,12 +280,12 @@ class Loader:
       if dataset["BEFORE_Entity"]:
         #print(tab+self.getFullDescriptionOfFunction(dataset["BEFORE_Entity"]))
         print(tab+dataset["BEFORE_Entity"].longname()+"(...)",end="")
-    # ##################################################################  
+    # ##################################################################
     if key in self.cacheDraw:
       print(" [<-already shown]")
       return;
     self.cacheDraw[key] = True
-    # ##################################################################  
+    # ##################################################################
     if dataset["isAdded"]:
       print(" ADDED",end="")
     if dataset["isRemoved"]:
@@ -293,7 +293,7 @@ class Loader:
     if not dataset["isSameContent"]:
       print(" CHANGED",end="")
     if dataset["hasChangedInTree"]:
-      print(" TREE",end="")      
+      print(" TREE",end="")
     if not dataset["isComputed"]:
       print(" [STOP]",end="")
     if "toTarget" in dataset:
@@ -313,10 +313,10 @@ class Loader:
         print("CHANGED("+str(len(link["ListOfBEFORE_Refs"]))+" to "+str(len(link["ListOfAFTER_Refs"]))+")",end="")
       print("=>")
       if link["targetdata_AFTER"]:
-        self.printDataSetInternal(tab+"     ",link["targetdata_AFTER"])           
+        self.printDataSetInternal(tab+"     ",link["targetdata_AFTER"])
       else:
         self.printDataSetInternal(tab+"     ",link["targetdata_BEFORE"])
-  # ################################################################## 
+  # ##################################################################
   cacheDraw = {}
   # ##################################################################
   # Print the internal dataset (for debug)
@@ -336,8 +336,8 @@ class Loader:
   # want to see. May be ok as a removed node will not have any more links..
   def computeMetrics(self):
     self.cacheDraw = {}
-    return self.computeMetricsInternal(self.dataset)    
-  # ################################################################## 
+    return self.computeMetricsInternal(self.dataset)
+  # ##################################################################
   def __init__(self, db):
     self.AFTER_db = db
     if not self.AFTER_db:
@@ -345,18 +345,18 @@ class Loader:
     self.BEFORE_db = db.comparison_db()
     if not self.BEFORE_db:
       self.BEFORE_db = self.AFTER_db
-  # ################################################################## 
+  # ##################################################################
   def setComparisonDb(self, beforedb): # Optional
     self.BEFORE_db = beforedb
     if not self.BEFORE_db:
       self.BEFORE_db = self.AFTER_db
-  # ################################################################## 
+  # ##################################################################
   def setSearchOptions(self, relationship, kind): # Optional
     self.searchRelationship = relationship
     self.searchKind = kind
-  # ################################################################## 
-    
-      
-      
-      
-      
+  # ##################################################################
+
+
+
+
+

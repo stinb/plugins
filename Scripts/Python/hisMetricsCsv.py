@@ -477,7 +477,7 @@ def getVOCF(fun):
 
     for lexeme in lexer.lexemes(startRef.line(), endRef.line()):
         if lexeme.token() == 'Operator' or lexeme.token() == 'Keyword' or lexeme.token() == 'Punctuation':
-            if not re.search('[)}\]]', lexeme.text()):
+            if not re.search(r'[)}\]]', lexeme.text()):
                 n1[lexeme.text()] = 1
                 N1 += 1
         elif lexeme.token() == 'Identifier' or lexeme.token() == 'Literal' or lexeme.token() == 'String':

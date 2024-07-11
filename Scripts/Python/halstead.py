@@ -1,15 +1,15 @@
-# Sample Understand Python API program 
+# Sample Understand Python API program
 #
 # Synopsis: Report Halstead Complexity for each function/file in project
 #
 # Language: Ada, C/C++, Java, Fortran
 #
 # Description:
-#  Report Halstead Complexity for each function/file in project. 
+#  Report Halstead Complexity for each function/file in project.
 #  See http://www.sei.cmu.edu/activities/str/descriptions/halstead_body.html
 #  Any identifier, constant, or string is considered an operand. Any operator
 #  or keyword or punctuation (except for )}]) is considered an operator.
-#  Specify the -comma option to report in a comma-delimited format for 
+#  Specify the -comma option to report in a comma-delimited format for
 #  importing into a spreadsheet.
 #  Requires an existing Understand database
 #
@@ -69,10 +69,10 @@ def scanEntity(lexer, func):
     begin, end = getFunctionDefnLines(func.ent())
 
     lexemes = lexer.lexemes(begin, end)
-    
+
     for lexeme in lexemes:
         if lexeme.token() == "Operator" or lexeme.token() == "Keyword" or lexeme.token() == "Punctuation":
-            if not re.search('[)}\]]', lexeme.text()):
+            if not re.search(r'[)}\]]', lexeme.text()):
                 n1Dict[lexeme.text()] = 1
                 N1 += 1
 
@@ -152,7 +152,7 @@ if __name__ == '__main__':
 
             # Print metrics for this function
             print(sep.join([func.ent().name(), str(n1), str(n2), str(N1), str(N2), str(N), str(n), str(V), str(D), str(E)]))
-            
+
             # Add the function metrics to the file_metric dictionary
             file_metric['n1'] += n1
             file_metric['n2'] += n2
@@ -168,18 +168,18 @@ if __name__ == '__main__':
         if funcs:
             print("\nFile Totals:")
             print(sep.join([file.name(), str(file_metric['n1']), str(file_metric['n2']), str(file_metric['N1']), str(file_metric['N2']), str(file_metric['N']), str(file_metric['n']), str(file_metric['V']), str(file_metric['D']), str(file_metric['E']), '\n\n']))
-        
+
 
             # Add the file_metric dictionary metrics to the project_metric dictionary
             project_metric['n1'] += file_metric['n1']
             project_metric['n2'] += file_metric['n2']
             project_metric['N1'] += file_metric['N1']
             project_metric['N2'] += file_metric['N2']
-            project_metric['N'] += file_metric['N'] 
-            project_metric['n'] += file_metric['n'] 
-            project_metric['V'] += file_metric['V'] 
-            project_metric['D'] += file_metric['D'] 
-            project_metric['E'] += file_metric['E'] 
+            project_metric['N'] += file_metric['N']
+            project_metric['n'] += file_metric['n']
+            project_metric['V'] += file_metric['V']
+            project_metric['D'] += file_metric['D']
+            project_metric['E'] += file_metric['E']
 
     # Print metrics for the project
     print("Project Totals:\n")
