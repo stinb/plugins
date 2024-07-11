@@ -41,6 +41,7 @@ def entComparator(a, b):
     return 0
 entComparator = functools.cmp_to_key(entComparator)
 
+
 def printEnt(report, ent):
     report.entity(ent)
     report.print(ent.name())
@@ -197,42 +198,6 @@ def generateCSV(db, arch, options, report=None):
         file.writelines(lines)
         file.close()
 
-
-######################
-# Interactive Report #
-######################
-
-
-def name():
-    return 'Shared Tasks CSV'
-
-
-def test_architecture(arch):
-    return True
-
-
-def init(report):
-    for option in optionalArguments:
-        # Checkbox
-        if isinstance(option[DEFAULT], bool):
-            report.options().checkbox(option[KEY], option[DESCRIPTION], option[DEFAULT])
-        # Choice
-        elif len(option) > CHOICES:
-            report.options().choice(option[KEY], option[DESCRIPTION], option[CHOICES], option[DEFAULT])
-        # Text
-        elif isinstance(option[DEFAULT], str):
-            report.options().text(option[KEY], option[DESCRIPTION], option[DEFAULT])
-
-
-def generate(report, target):
-    # Options
-    options = dict()
-    for option in optionalArguments:
-        key = option[KEY]
-        options[key] = report.options().lookup(key)
-
-    # Export file and print lines to report
-    generateCSV(report.db(), target, options, report)
 
 #######
 # CLI #
