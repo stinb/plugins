@@ -43,12 +43,12 @@ def globalObjRefs(function: Ent) -> list[Ref]:
     objRefs.sort(key=refComparator)
     i = len(objRefs) - 1
     while i >= 0:
-      ref = objRefs[i]
-      if ref.ent().kind().check('Global'):
-        # Keep references to global objects, like before
-        refs.append(ref)
+        ref = objRefs[i]
+        if ref.ent().kind().check('Global'):
+            # Keep references to global objects, like before
+            refs.append(ref)
 
-      elif (ref.ent().refs('C instanceof') and
+        elif (ref.ent().refs('C Instanceof') and
             ref.ent().parent() and
             ref.ent().parent().kind().check('Global')):
         # If member object settings are on, then members of global structs will
@@ -58,10 +58,10 @@ def globalObjRefs(function: Ent) -> list[Ref]:
         refs.append(ref)
 
         if i > 0 and objRefs[i-1].kind() == ref.kind() and objRefs[i-1].ent() == ref.ent().parent():
-          # Both the object and the member get the reference so skip the
-          # reference to the parent object if it exists
-          i -= 1
-      i -= 1
+            # Both the object and the member get the reference so skip the
+            # reference to the parent object if it exists
+            i -= 1
+        i -= 1
     return refs
 
 
