@@ -5,6 +5,7 @@ import re
 import sys
 
 import understand
+from understand import Arch, Db, Ent, IReport
 
 import sharedTasks
 
@@ -33,7 +34,7 @@ optionalArguments = (
 )
 
 
-def entComparator(a, b):
+def entComparator(a: Ent, b: Ent) -> int:
     if a.name() < b.name():
         return -1
     if a.name() > b.name():
@@ -42,26 +43,26 @@ def entComparator(a, b):
 entComparator = functools.cmp_to_key(entComparator)
 
 
-def printEnt(report, ent):
+def printEnt(report: IReport, ent: Ent):
     report.entity(ent)
     report.print(ent.name())
     report.entity()
 
 
-def printFile(report, file):
+def printFile(report: IReport, file: Ent):
     report.entity(file)
     report.print(file.relname())
     report.entity()
 
 
-def generateCSVRows(db, arch, options, lines, report):
+def generateCSVRows(db: Db, arch: Arch, options: dict, lines: list[str], report: IReport | None):
     edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields = sharedTasks.buildEdgeInfo(db, arch, options)
 
     # Sort the objects
     objects = set()
     for edgeObj in edgeInfo.values():
         ent = edgeObj['ent']
-        if not ent.kind().check(sharedTasks.objKinds):
+        if not ent.kind().check(sharedTasks.objEntKinds):
             continue
         objects.add(ent)
     objects = list(objects)
@@ -82,16 +83,16 @@ def generateCSVRows(db, arch, options, lines, report):
     header += '\n'
 
     if report:
-      report.print(header)
+        report.print(header)
     if lines is not None:
-      lines.append(header)
+        lines.append(header)
 
 
     # Make rows for each object
     for obj in objects:
 
         # See how many tasks it is from
-        fromTasks         = set()
+        fromTasks = set()
         fromTasksFiltered = set()
         edgeKeys = incoming[obj] if obj in incoming else set()
         for edgeKey in edgeKeys:
@@ -132,7 +133,7 @@ def generateCSVRows(db, arch, options, lines, report):
 
                 # Info for each column for this single row
                 taskName = task.name()
-                entFields = [tasks[task].get(field,"") for field in headerFields]
+                entFields = [tasks[task].get(field, '') for field in headerFields]
 
                 # Make the clickable row for interactive report
                 if report:
@@ -156,7 +157,7 @@ def generateCSVRows(db, arch, options, lines, report):
                     lines.append(line)
 
 
-def generateCSV(db, arch, options, report=None):
+def generateCSV(db: Db, arch: Arch, options: dict, report: IReport | None = None):
     lines = []
 
     if not options['autoExport']:
@@ -204,14 +205,14 @@ def generateCSV(db, arch, options, report=None):
 #######
 
 
-def printArguments(arguments):
+def printArguments(arguments: tuple[tuple]):
     for option in arguments:
         # Key
-        key          = option[KEY]
+        key = option[KEY]
         print(f'    -{key} VALUE')
 
         # Description
-        description  = option[DESCRIPTION]
+        description = option[DESCRIPTION]
         print(f'        {description}')
 
         # Default value
@@ -229,7 +230,7 @@ def printArguments(arguments):
             print(f'        Choices: {choices} (case-insensitive)')
 
 
-def printHelpAndExit(expected=None, actual=None):
+def printHelpAndExit(expected: str | None = None, actual: str | None =None):
     if expected:
         print('Error parsing arguments:')
         print(f'    expected: {expected}')
@@ -249,7 +250,7 @@ def printHelpAndExit(expected=None, actual=None):
 
 def parseArguments():
     # Argument keys, default values, allowed value choices
-    keys    = set()
+    keys = set()
     options = dict()
     choices = dict()
     for option in requiredArguments:

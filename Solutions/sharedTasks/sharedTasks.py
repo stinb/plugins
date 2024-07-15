@@ -1,13 +1,18 @@
 import functools
-import understand
 
-refKinds = 'Modify, Set, Use'
-funKinds = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
-objKinds = 'Object'
+import understand
+from understand import Arch, Db, Ent, Ref
+
+
+funRefKinds = 'Call, Use Ptr'
+funEntKinds = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
+objEntKinds = 'Object'
+objRefKinds = 'Modify, Set, Use'
 
 taskFields = ['priority', 'core']
 
-def refComparator(a, b):
+
+def refComparator(a: Ref, b: Ref) -> int:
     if a.line() < b.line() or a.line() == b.line() and a.column() < b.column():
         return -1
     if a.line() > b.line() or a.line() == b.line() and a.column() > b.column():
@@ -16,34 +21,36 @@ def refComparator(a, b):
 refComparator = functools.cmp_to_key(refComparator)
 
 
-def refStr(ref):
-  if ref.isforward():
-    return f'{ref.scope().uniquename()} {ref.kind().longname()} {ref.ent().uniquename()} {ref.line()} {ref.column()}'
-  return f'{ref.ent().uniquename()} {ref.kind().inv().longname()} {ref.scope().uniquename()} {ref.line()} {ref.column()}'
+def refStr(ref: Ref) -> str:
+    if ref.isforward():
+        return f'{ref.scope().uniquename()} {ref.kind().longname()} {ref.ent().uniquename()} {ref.line()} {ref.column()}'
+    return f'{ref.ent().uniquename()} {ref.kind().inv().longname()} {ref.scope().uniquename()} {ref.line()} {ref.column()}'
 
-def getFunctionCallsOrGlobalObjectRefs(function, enableDisableFunctions):
-    refs = function.refs('Call', 'Function')
+
+def getFunctionCallsOrGlobalObjectRefs(function: Ent, enableDisableFunctions: dict) -> list[Ref]:
+    refs = function.refs(funRefKinds, 'Function')
     refs += globalObjRefs(function)
-    for ref in function.refs('use', 'macro'):
-      if ref.ent() in enableDisableFunctions:
-        refs.append(ref)
+    for ref in function.refs('Use', 'Macro'):
+        if ref.ent() in enableDisableFunctions:
+            refs.append(ref)
     refs.sort(key=refComparator)
     return refs
 
-def globalObjRefs(function):
+
+def globalObjRefs(function: Ent) -> list[Ref]:
     refs = []
-    objRefs = function.refs(refKinds, objKinds)
+    objRefs = function.refs(objRefKinds, objEntKinds)
     objRefs.sort(key=refComparator)
     i = len(objRefs) - 1
     while i >= 0:
       ref = objRefs[i]
-      if ref.ent().kind().check("Global"):
+      if ref.ent().kind().check('Global'):
         # Keep references to global objects, like before
         refs.append(ref)
 
-      elif (ref.ent().refs("c instanceof") and
+      elif (ref.ent().refs('C instanceof') and
             ref.ent().parent() and
-            ref.ent().parent().kind().check("Global")):
+            ref.ent().parent().kind().check('Global')):
         # If member object settings are on, then members of global structs will
         # have associated entities with an "instanceof" reference. So, if this
         # object has an instanceof reference to a global object parent, keep
@@ -58,7 +65,7 @@ def globalObjRefs(function):
     return refs
 
 
-def checkControlledFunction(outerFunction, enableDisableFunctions, controlledFunctions, interruptDisabledRefs):
+def checkControlledFunction(outerFunction: Ent, enableDisableFunctions: dict, controlledFunctions: set[Ent], interruptDisabledRefs: set[str]):
     # Base case: already checked
     if outerFunction in controlledFunctions:
         return
@@ -75,11 +82,11 @@ def checkControlledFunction(outerFunction, enableDisableFunctions, controlledFun
                 checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
 
         # Global object ref
-        elif ent.kind().check(objKinds):
+        elif ent.kind().check(objEntKinds):
             interruptDisabledRefs.add(refStr(ref))
 
 
-def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, controlledFunctions, interruptDisabledRefs):
+def checkFunctionForInterruptControl(outerFunction: Ent, enableDisableFunctions: dict, controlledFunctions: set[Ent], interruptDisabledRefs: set[str]):
     # Disable functions that are making the code interrupt-protected
     interruptDisabledFunctions = set() # { ent, ...  }
 
@@ -106,7 +113,8 @@ def checkFunctionForInterruptControl(outerFunction, enableDisableFunctions, cont
         elif not ent.kind().check('Function') and len(interruptDisabledFunctions):
             interruptDisabledRefs.add(refStr(ref))
 
-def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options):
+
+def getEdgeInfo(visited: set[str], tasks: dict, incoming: dict, outgoing: dict, edgeInfo: dict, root: Ent, fun: Ent, options: dict):
     # Base case: visiting a function again from the same root
     funKey = str(root) + ' ' + str(fun)
     if funKey in visited:
@@ -148,7 +156,7 @@ def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options
         outgoing[scope].add(edgeKey)
 
     # Function calls
-    for call in fun.refs('Call', funKinds, True):
+    for call in fun.refs(funRefKinds, funEntKinds, True):
         if options['reference'] == 'All':
             scope = call.scope()
             ent = call.ent()
@@ -181,9 +189,9 @@ def getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, fun, options
         getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
 
 
-def filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options):
+def filterIncomingEdges(incoming: dict, outgoing: dict, edgeInfo: dict, ent: Ent, options: dict):
     # Object
-    if ent.kind().check(objKinds):
+    if ent.kind().check(objEntKinds):
         # Get all kindnames for incoming edges
         allEdgeKindnames = set()
         for edgeKey in incoming[ent]:
@@ -221,9 +229,9 @@ def filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options):
         scope = edgeObj['scope']
         filterIncomingEdges(incoming, outgoing, edgeInfo, scope, options)
 
-def parseArch(arch):
-    tasks       = dict() # { ent: integer, ... }
 
+def parseArch(arch: Arch) -> (dict, dict, set[str]):
+    tasks = dict() # { ent: integer, ... }
     enableDisableFunctions = dict() # { ent: { 'disable': boolean, 'other': ent }, ... }
     foundFields = set()
 
@@ -259,12 +267,12 @@ def parseArch(arch):
         # ARCH_NAME/.*priority.*/INTEGER/FUNCTION_NAME
         elif 'task' in name or any(field in name for field in taskFields):
             # Priority/Core groups
-            field = next((field for field in taskFields if field in name), "")
+            field = next((field for field in taskFields if field in name), '')
             foundFields.add(field)
             for fieldGroup in group.children():
                 # Tasks
                 for ent in fieldGroup.ents(True):
-                    if not ent.kind().check(funKinds):
+                    if not ent.kind().check(funEntKinds):
                         continue
                     if ent not in tasks:
                       tasks[ent] = dict()
@@ -272,25 +280,26 @@ def parseArch(arch):
 
             # Tasks
             for ent in group.ents(False):
-                if ent in tasks or not ent.kind().check(funKinds):
+                if ent in tasks or not ent.kind().check(funEntKinds):
                     continue
                 tasks[ent] = dict()
     return (tasks, enableDisableFunctions, foundFields)
 
-def buildEdgeInfo(db, arch, options):
+
+def buildEdgeInfo(db: Db, arch: Arch, options: dict) -> (dict, dict, set[str], set[str], set[str]):
     # Setup data for getEdgeInfo
-    visited     = set()  # { funKey, ... }
-    incoming    = dict() # { ent: set, ... }
-    outgoing    = dict() # { ent: set, ... }
-    edgeInfo    = dict() # { edgeKey: {
-                         #     'root': boolean,
-                         #     'scope': ent,
-                         #     'ent': ent,
-                         #     'kindnames': set,
-                         #     'from': set,
-                         #     'filtered': boolean,
-                         #     'ref': ref
-                         # }, ... }
+    visited = set()   # { funKey, ... }
+    incoming = dict() # { ent: set, ... }
+    outgoing = dict() # { ent: set, ... }
+    edgeInfo = dict() # { edgeKey: {
+                      #     'root': boolean,
+                      #     'scope': ent,
+                      #     'ent': ent,
+                      #     'kindnames': set,
+                      #     'from': set,
+                      #     'filtered': boolean,
+                      #     'ref': ref
+                      # }, ... }
     tasks, enableDisableFunctions, foundFields = parseArch(arch)
 
     # Get the refs going to each object/function
@@ -301,22 +310,21 @@ def buildEdgeInfo(db, arch, options):
     if options['filterModifySetOnly'] or options['filterUseOnly']:
         for edgeObj in edgeInfo.values():
             ent = edgeObj['ent']
-            if ent.kind().check(objKinds):
+            if ent.kind().check(objEntKinds):
                 filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
 
-    interruptDisabledRefs =  findInterruptDisabledRefs(db, enableDisableFunctions)
+    interruptDisabledRefs = findInterruptDisabledRefs(db, enableDisableFunctions)
 
     return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
 
-def findInterruptDisabledRefs(db, enableDisableFunctions):
+
+def findInterruptDisabledRefs(db: Db, enableDisableFunctions: dict) -> set[str]:
     # Setup data for checkFunctionForInterruptControl
-    controlledFunctions    = set()  # { ent, ... }
-    interruptDisabledRefs  = set()  # { str(ref), ... }
+    controlledFunctions = set()   # { ent, ... }
+    interruptDisabledRefs = set() # { str(ref), ... }
 
     # See which refs are interrupt-protected
-    for fun in db.ents(funKinds):
+    for fun in db.ents(funEntKinds):
         checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
 
     return interruptDisabledRefs
-
-

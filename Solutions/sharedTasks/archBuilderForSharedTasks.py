@@ -1,24 +1,22 @@
 # CLI to create architectures for the Shared Tasks graph
 
 
-import understand
 import sys
 
+import understand
+from understand import Ent
 
-def error(string):
+
+def error(string: str):
     print(f'\033[91m{string}\033[0m')
 
 
-def getNum(string, minimum=None, maximum=None):
+def getNum(prompt: str):
     while True:
         num = input(string)
         if num:
             try:
                 num = int(num)
-                if minimum != None and num < minimum:
-                    raise IndexError(f'Minimum {minimum}')
-                if maximum != None and num > maximum:
-                    raise IndexError(f'Maximum {maximum}')
             except:
                 error('Not a valid number')
                 continue
@@ -28,7 +26,7 @@ def getNum(string, minimum=None, maximum=None):
     return num
 
 
-def getFunction(functions, functionType):
+def getFunction(functions: dict[str, list[Ent]], functionType: str):
     while True:
         name = input(f'{functionType} function name: ')
         # Try again if function found
@@ -47,7 +45,7 @@ def getFunction(functions, functionType):
         return functions[name][n]
 
 
-def getChar(prompt, chars):
+def getChar(prompt: str, chars: set[str]):
     while True:
         char = input(prompt)
         if char:
@@ -132,4 +130,5 @@ def main():
             enable.add_to_arch(f'{arch}/Interrupt Control/{group}/Enable')
 
 
-main()
+if __name__ == '__main__':
+    main()
