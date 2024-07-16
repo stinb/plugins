@@ -51,11 +51,11 @@ def globalObjRefs(function: Ent) -> list[Ref]:
         elif (ref.ent().refs('C Instanceof') and
             ref.ent().parent() and
             ref.ent().parent().kind().check('Global')):
-        # If member object settings are on, then members of global structs will
-        # have associated entities with an "instanceof" reference. So, if this
-        # object has an instanceof reference to a global object parent, keep
-        # the reference
-        refs.append(ref)
+            # If member object settings are on, then members of global structs will
+            # have associated entities with an "instanceof" reference. So, if this
+            # object has an instanceof reference to a global object parent, keep
+            # the reference
+            refs.append(ref)
 
         if i > 0 and objRefs[i-1].kind() == ref.kind() and objRefs[i-1].ent() == ref.ent().parent():
             # Both the object and the member get the reference so skip the
