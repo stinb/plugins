@@ -44,6 +44,9 @@ OPTION_BOOL_CHOICES = [OPTION_BOOL_TRUE, OPTION_BOOL_FALSE]
 COMMON_OPTIONS = (
     Option(FILTER_MODIFY_SET_ONLY, 'Filter out modify/set only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FILTER_USE_ONLY, 'Filter out use only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
+    Option(MEMBER_FUNCTIONS, 'Member functions', ['Longer name', 'Long name', 'Name'], 'Long name'),
+    Option(MEMBER_OBJECT_PARENTS, 'Member object parents', OPTION_BOOL_CHOICES, OPTION_BOOL_TRUE),
+    Option(MEMBER_OBJECTS, 'Member objects', ['Long name', 'Name', 'Off'], 'Long name'),
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
     Option(REFERENCE, 'Reference', ['All', 'Simple'], 'All'),
 )
@@ -64,9 +67,51 @@ def refStr(ref: Ref) -> str:
     return f'{ref.ent().uniquename()} {ref.kind().inv().longname()} {ref.scope().uniquename()} {ref.line()} {ref.column()}'
 
 
-def getFunctionCallsOrGlobalObjectRefs(function: Ent, enableDisableFunctions: dict) -> list[Ref]:
+def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
+    result = ent.name()
+
+    # Member function
+    entKind = ent.kind()
+    if entKind.check('Member Function'):
+        if MEMBER_FUNCTIONS not in options:
+            return ent.name()
+        optionValue = options[MEMBER_FUNCTIONS]
+        if optionValue == 'Longer name':
+            return getLongerName(ent, ent.parent())
+        elif optionValue == 'Long name':
+            return ent.longname()
+    # Member object parent
+    elif entKind.check('Member Object'):
+        if MEMBER_OBJECTS not in options:
+            return ent.name()
+        optionValue = options[MEMBER_OBJECTS]
+        if optionValue == 'Long name':
+            return ent.longname()
+
+    return result
+
+
+def getLongerName(ent: Ent, parentEnt: Ent) -> str:
+    longname = ent.longname()
+
+    parent = ent.parent()
+    if not parent:
+        return longname
+
+    parentTypes = parent.ents('Typed')
+    if len(parentTypes) != 1:
+        return longname
+
+    return f'{parentTypes[0].name()}::{longname}'
+
+
+def getFnOrObjRefs(
+        function: Ent,
+        enableDisableFunctions: dict,
+        options: dict[str, str | bool] | None = None) -> list[Ref]:
+
     refs = function.refs(FUN_REF_KINDS, 'Function')
-    refs += globalObjRefs(function)
+    refs += globalObjRefs(function, options)
     for ref in function.refs('Use', 'Macro'):
         if ref.ent() in enableDisableFunctions:
             refs.append(ref)
@@ -74,61 +119,117 @@ def getFunctionCallsOrGlobalObjectRefs(function: Ent, enableDisableFunctions: di
     return refs
 
 
-def globalObjRefs(function: Ent) -> list[Ref]:
-    refs = []
-    objRefs = function.refs(OBJ_REF_KINDS, OBJ_ENT_KINDS)
-    objRefs.sort(key=refComparator)
-    i = len(objRefs) - 1
-    while i >= 0:
-        ref = objRefs[i]
-        if ref.ent().kind().check('Global'):
-            # Keep references to global objects, like before
-            refs.append(ref)
-
-        elif (ref.ent().refs('C Instanceof') and
-            ref.ent().parent() and
-            ref.ent().parent().kind().check('Global')):
-            # If member object settings are on, then members of global structs will
-            # have associated entities with an "instanceof" reference. So, if this
-            # object has an instanceof reference to a global object parent, keep
-            # the reference
-            refs.append(ref)
-
-        if i > 0 and objRefs[i-1].kind() == ref.kind() and objRefs[i-1].ent() == ref.ent().parent():
-            # Both the object and the member get the reference so skip the
-            # reference to the parent object if it exists
-            i -= 1
-        i -= 1
-    return refs
+def entHasMembers(ent: Ent) -> bool:
+    for entType in ent.ents('Typed'):
+        if entType.ref('Define', 'Member Object'):
+            return True
+    return False
 
 
-def checkControlledFunction(outerFunction: Ent, enableDisableFunctions: dict, controlledFunctions: set[Ent], interruptDisabledRefs: set[str]):
+# Recursively see if this entity is a (unique instance of a) member object of a
+# global object
+def isMemberOfGlobal(ent: Ent) -> bool:
+    return isGeneralMemberOfGlobal(ent) or isUniqueMemberOfGlobal(ent)
+
+
+# Recursively see if this entity is a member object of a global object
+def isGeneralMemberOfGlobal(ent: Ent) -> bool:
+    parent = ent.parent()
+    if not parent:
+        return False
+
+    parentKind = parent.kind()
+    if parentKind.check('Global Object'):
+        return True
+    elif parentKind.check('Member Object') and isMemberOfGlobal(parentInstance):
+        return True
+
+    return False
+
+
+# Recursively see if this entity is a unique instance of a member object of a
+# global object
+def isUniqueMemberOfGlobal(ent: Ent) -> bool:
+    parentType = ent.parent()
+    if not parentType:
+        return False
+
+    if parentType.ref('Typedby', 'Object'):
+        return True
+
+    for parentInstance in parentType.ents('Typedby', 'Member Object'):
+        if isMemberOfGlobal(parentInstance):
+            return True
+
+    return False
+
+
+def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -> list[Ref]:
+    result = []
+
+    # Get options
+    memberObjectParents = not options or MEMBER_OBJECT_PARENTS not in options \
+        or options[MEMBER_OBJECT_PARENTS]
+    memberObjects = not options or MEMBER_OBJECTS not in options \
+        or options[MEMBER_OBJECTS] != 'Off'
+
+    for otherFunction in [function] + function.ents('Instanceof'):
+        # Global objects
+        if memberObjectParents:
+            for ref in otherFunction.refs(OBJ_REF_KINDS, 'Global Object'):
+                if entHasMembers(ref.ent()):
+                    continue
+                result.append(ref)
+        # Members of global objects
+        if memberObjects:
+            for ref in otherFunction.refs(OBJ_REF_KINDS, 'Member Object'):
+                if not isMemberOfGlobal(ref.ent()):
+                    continue
+                result.append(ref)
+
+    result.sort(key=refComparator)
+    return result
+
+
+def checkControlledFunction(
+        outerFunction: Ent,
+        enableDisableFunctions: dict,
+        controlledFunctions: set[Ent],
+        interruptDisabledRefs: set[str],
+        options: dict[str, str | bool] | None = None):
+
     # Base case: already checked
     if outerFunction in controlledFunctions:
         return
     controlledFunctions.add(outerFunction)
 
     # Function call or global object modify/set/use
-    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction, enableDisableFunctions):
+    for ref in getFnOrObjRefs(outerFunction, enableDisableFunctions, options):
         ent = ref.ent()
 
         # Recurse for each function called, ignoring enable/disable functions
         if ent.kind().check('Function'):
             if ent not in enableDisableFunctions and ent not in controlledFunctions:
                 interruptDisabledRefs.add(refStr(ref))
-                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
         # Global object ref
         elif ent.kind().check(OBJ_ENT_KINDS):
             interruptDisabledRefs.add(refStr(ref))
 
 
-def checkFunctionForInterruptControl(outerFunction: Ent, enableDisableFunctions: dict, controlledFunctions: set[Ent], interruptDisabledRefs: set[str]):
+def checkFunctionForInterruptControl(
+        outerFunction: Ent,
+        enableDisableFunctions: dict,
+        controlledFunctions: set[Ent],
+        interruptDisabledRefs: set[str],
+        options: dict[str, str | bool] | None = None):
+
     # Disable functions that are making the code interrupt-protected
     interruptDisabledFunctions = set() # { ent, ...  }
 
     # Function call or global object modify/set/use
-    for ref in getFunctionCallsOrGlobalObjectRefs(outerFunction, enableDisableFunctions):
+    for ref in getFnOrObjRefs(outerFunction, enableDisableFunctions, options):
         ent = ref.ent()
 
         # Add/remove the disable outerFunction
@@ -144,14 +245,23 @@ def checkFunctionForInterruptControl(outerFunction: Ent, enableDisableFunctions:
         # ignoring enable/disable functions
         elif ent.kind().check('Function') and len(interruptDisabledFunctions) and ent not in controlledFunctions:
             interruptDisabledRefs.add(refStr(ref))
-            checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+            checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
         # Global object ref with interrupt disabled
         elif not ent.kind().check('Function') and len(interruptDisabledFunctions):
             interruptDisabledRefs.add(refStr(ref))
 
 
-def getEdgeInfo(visited: set[str], tasks: dict, incoming: dict, outgoing: dict, edgeInfo: dict, root: Ent, fun: Ent, options: dict[str, str | bool]):
+def getEdgeInfo(
+        visited: set[str],
+        tasks: dict,
+        incoming: dict,
+        outgoing: dict,
+        edgeInfo: dict,
+        root: Ent,
+        fun: Ent,
+        options: dict[str, str | bool]):
+
     # Base case: visiting a function again from the same root
     funKey = str(root) + ' ' + str(fun)
     if funKey in visited:
@@ -159,7 +269,7 @@ def getEdgeInfo(visited: set[str], tasks: dict, incoming: dict, outgoing: dict, 
     visited.add(funKey)
 
     # References to global objects
-    for ref in globalObjRefs(fun):
+    for ref in globalObjRefs(fun, options):
         scope = root if options[REFERENCE] == 'Simple' else fun
         ent = ref.ent()
 
@@ -226,7 +336,13 @@ def getEdgeInfo(visited: set[str], tasks: dict, incoming: dict, outgoing: dict, 
         getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
 
 
-def filterIncomingEdges(incoming: dict, outgoing: dict, edgeInfo: dict, ent: Ent, options: dict[str, str | bool]):
+def filterIncomingEdges(
+        incoming: dict,
+        outgoing: dict,
+        edgeInfo: dict,
+        ent: Ent,
+        options: dict[str, str | bool]):
+
     # Object
     if ent.kind().check(OBJ_ENT_KINDS):
         # Get all kindnames for incoming edges
@@ -323,7 +439,11 @@ def parseArch(arch: Arch) -> (dict, dict, set[str]):
     return (tasks, enableDisableFunctions, foundFields)
 
 
-def buildEdgeInfo(db: Db, arch: Arch, options: dict[str, str | bool]) -> (dict, dict, set[str], set[str], set[str]):
+def buildEdgeInfo(
+        db: Db,
+        arch: Arch,
+        options: dict[str, str | bool]) -> (dict, dict, set[str], set[str], set[str]):
+
     # Setup data for getEdgeInfo
     visited = set()   # { funKey, ... }
     incoming = dict() # { ent: set, ... }
@@ -350,18 +470,22 @@ def buildEdgeInfo(db: Db, arch: Arch, options: dict[str, str | bool]) -> (dict, 
             if ent.kind().check(OBJ_ENT_KINDS):
                 filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
 
-    interruptDisabledRefs = findInterruptDisabledRefs(db, enableDisableFunctions)
+    interruptDisabledRefs = findInterruptDisabledRefs(db, enableDisableFunctions, options)
 
     return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
 
 
-def findInterruptDisabledRefs(db: Db, enableDisableFunctions: dict) -> set[str]:
+def findInterruptDisabledRefs(
+        db: Db,
+        enableDisableFunctions: dict,
+        options: dict[str, str | bool] | None = None) -> set[str]:
+
     # Setup data for checkFunctionForInterruptControl
     controlledFunctions = set()   # { ent, ... }
     interruptDisabledRefs = set() # { str(ref), ... }
 
     # See which refs are interrupt-protected
     for fun in db.ents(FUN_ENT_KINDS):
-        checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs)
+        checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
     return interruptDisabledRefs
