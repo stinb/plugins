@@ -2,15 +2,23 @@
 
 Calls graphs with global objects are useful for finding all global objects accessed by a call tree. But, what if you want to find which global objects are shared between multiple call trees? The shared tasks plugins find global objects accessed from multiple call trees.
 
-The plugin [sharedTasksGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) displays all the call trees and objects in a single graph, highlighting global objects that are accessed from multiple root functions. The plugin [sharedTasksCSV.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) displays each reference in a table in an interactive report. It can also export a CSV file at the same time as the interactive report or when run directly from the command line.
+The plugin [sharedTasksGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) displays all the call trees and objects in a single graph, highlighting global objects that are accessed from multiple root functions. The plugin [sharedTasksObjectGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksObjectGraph.upy) does is the reverse - it starts from objects and goes to root functions. The plugin [sharedTasksCSV.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) displays each reference in a table in an interactive report. It can also export a CSV file at the same time as the interactive report or when run directly from the command line.
 
 <img width="886" alt="image" src="https://github.com/stinb/plugins/assets/7937320/ff1f01b2-4970-4c34-ad12-ada42ee13c22">
 
-All plugin scripts in this folder use the common [sharedTasks.py](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/sharedTAsks.py) so if a script is installed individually, the common file must be installed as well. Instead of installing individual scripts, it's recommended to copy the entire folder to the plugin directory:
+All plugin scripts in this folder use the common [sharedTasks.py](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/sharedTAsks.py) so if a script is installed individually, the common file must be installed as well. Instead of installing individual scripts, it's recommended to copy the entire folder to a plugin directory:
 
-- Windows – C:\Program Files\SciTools\conf\plugin\User\
-- Mac – /Users/username/Library/Application Support/SciTools/plugin/
-- Linux – /home/username/.config/SciTools/plugin/
+Install directory (write access is usually administrator-protected):
+
+- Windows – `%SystemDrive%\Program Files\SciTools\conf\plugin\User\`
+- Mac – `/Applications/SciTools/conf/plugin/User/`
+- Linux – `/usr/local/bin/SciTools/conf/plugin/User/`
+
+App data directory (write access is usually NOT administrator-protected)
+
+- Windows – `%AppData%\SciTools\conf\plugin\User\`
+- Mac – `~/Library/Application Support/SciTools/plugin/User/`
+- Linux – `~/.config/SciTools/plugin/User/`
 
 # Architectures
 
