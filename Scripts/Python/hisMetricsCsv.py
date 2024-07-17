@@ -1,12 +1,21 @@
-#!/usr/bin/env python3
+#!/usr/bin/env upython
 
-import understand
+
+# Command line interface to get the Hersteller Initiative Software metrics and
+# export them in a CSV file
+
+
 import argparse
 import datetime
+import io
 import re
 import sys
 
-defaultCheckArguments = {
+import understand
+from understand import Ent, Lexeme, Ref
+
+
+DEFAULT_ARGUMENT_VALUES: dict[str, int | bool] = {
     # Check 1: COMF
     'minimumCommentPercentage': 20,
     # Check 2: PATH
@@ -32,64 +41,47 @@ defaultCheckArguments = {
     'maximumVocfLevel': 4,
 }
 
-# Main Arguments:p
-parser = argparse.ArgumentParser()
-parser.add_argument('db', help='Specify Understand database. Example: upython hisMetricsCsv.py project/project.und')
-parser.add_argument('-csv', help='Specify CSV Name. Default is the timestamp. Example: upython hisMetricsCsv.py project/project.und -csv hisMetrics.csv')
+CHECK_CODES: list[str] = ['COMF', 'PATH', 'GOTO', 'vG', 'CALLING', 'CALLS', 'PARAM', 'STMT', 'LEVEL', 'RETURN', 'VOCF', 'AP_CG_CYCLE']
 
-# Check Arguments:
-parser.add_argument('-mcp', help='Minimum Comment Percentage. Default is 20. Example: upython hisMetricsCsv.py project/project.und -mcp 20')
-parser.add_argument('-mpa', help='Maximum Paths Allowed. Default is 80. Example: upython hisMetricsCsv.py project/project.und -mpa 70')
-parser.add_argument('-mco', help='Maximum Complexity. Default is 20. Example: upython hisMetricsCsv.py project/project.und -mco 15')
-parser.add_argument('-v', help='Variant of normal modified, or strict. Default is modified. Example: upython hisMetricsCsv.py project/project.und -v normal')
-parser.add_argument('-mcf', help='Maximum Calling Functions. Default is 5. Example: upython hisMetricsCsv.py project/project.und -mcf 6')
-parser.add_argument('-mca', help='Maximum Calls. Default is 7. Example: upython hisMetricsCsv.py project/project.und -mca 4')
-parser.add_argument('-mnp', help='Maximum Number of Parameters. Default is 5. Example: upython hisMetricsCsv.py project/project.und -mnp 6')
-parser.add_argument('-msa', help='Maximum Statements Allowed. Default is 8. Example: upython hisMetricsCsv.py project/project.und -msa 8')
-parser.add_argument('-mcl', help='Maximum Call Levels. Default is 4. Example: upython hisMetricsCsv.py project/project.und -mcl 3')
-parser.add_argument('-srf', help='Skip Recursive Functions. Default is 0. Example: upython hisMetricsCsv.py project/project.und -srf 1')
-parser.add_argument('-icd', help='Ignore Constructors & Destructors. Default is 0. Example: upython hisMetricsCsv.py project/project.und -icd 1')
-parser.add_argument('-iic', help='Ignore Inactive Code. Default is 0. Example: upython hisMetricsCsv.py project/project.und -iic 1')
-parser.add_argument('-mvl', help='Maximum VOCF Level. Default is 4. Example: upython hisMetricsCsv.py project/project.und -mvl 3')
-args = parser.parse_args()
+REF_DEFINE_KINDS: str = 'define, ada declare body, vhdl declare'
+ENT_DEFINE_KINDS: str = 'ada entry, ada function, ada procedure, ada protected, ada task, c function, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial subroutine, pascal compunit, pascal function, pascal procedure, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function, web method'
 
-checkCodes = ['COMF', 'PATH', 'GOTO', 'vG', 'CALLING', 'CALLS', 'PARAM', 'STMT', 'LEVEL', 'RETURN', 'VOCF', 'AP_CG_CYCLE']
+REF_CALL_KINDS: str = 'ada call ~dispatch, c call ~virtual, c use ptr, cobol call, csharp call ~virtual, csharp use ptr, fortran call, java call jovial call, jovial asm use, pascal call ~virtual, vhdl call, web call'
+ENT_CALL_KINDS: str = 'ada entry, ada function, ada package, ada procedure, ada protected, ada task, c function, cobol program, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial file, jovial subroutine, pascal compunit, pascal function, pascal procedure, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function, web method'
 
-# Function Types
-refDefineKinds = 'define, ada declare body, vhdl declare'
-entDefineKinds = 'ada entry, ada function, ada procedure, ada protected, ada task, c function, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial subroutine, pascal compunit, pascal function, pascal procedure, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function, web method'
-
-refCallKinds = 'ada call ~dispatch, c call ~virtual, c use ptr, cobol call, csharp call ~virtual, csharp use ptr, fortran call, java call jovial call, jovial asm use, pascal call ~virtual, vhdl call, web call'
-entCallKinds = 'ada entry, ada function, ada package, ada procedure, ada protected, ada task, c function, cobol program, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial file, jovial subroutine, pascal compunit, pascal function, pascal procedure, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function, web method'
 
 class ProgressBar:
-    def __init__(self, max):
-        self.i = 0
-        self.max = max
+    def __init__(self, maximum: int):
+        self.i = 1
+        self.maximum = maximum
 
     def progress(self):
-        print('   ', round(self.i / self.max * 100), '%', end='\r')
+        print('   ', round(self.i / self.maximum * 100), '%', end='\r')
         sys.stdout.flush()
         self.i += 1
 
-def timeStamp():
+
+def timeStamp() -> str:
     return datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
 
-def checkForViolatingMin(value, min):
-    if value == None:
-        return str(value)
-    if value < min:
-        return str(value) + '*'
-    return str(value)
 
-def checkForViolatingMax(value, max):
-    if value == None:
-        return str(value)
-    if value > max:
-        return str(value) + '*'
-    return str(value)
+def checkForViolatingMin(metricValue: int | str | None, minimum: int) -> str:
+    if metricValue == None:
+        return str(metricValue)
+    if metricValue < minimum:
+        return str(metricValue) + '*'
+    return str(metricValue)
 
-def sanitizeForCSV(oldString):
+
+def checkForViolatingMax(metricValue: int | str | None, minimum: int) -> str:
+    if metricValue == None:
+        return str(metricValue)
+    if metricValue > minimum:
+        return str(metricValue) + '*'
+    return str(metricValue)
+
+
+def sanitizeForCSV(oldString: str) -> str:
     newString = ''
     containsCommas = False
     for c in oldString:
@@ -101,11 +93,13 @@ def sanitizeForCSV(oldString):
         return '"' + newString + '"'
     return newString
 
-def reportFunction(fileReport, functionId, checkKey, checkResult):
+
+def reportFunction(fileReport: dict, functionId: int, checkKey: str, checkResult: str):
     if functionId in fileReport:
         fileReport[functionId][checkKey] = checkResult
 
-def reportFile(csv, functionReport):
+
+def reportFile(csv: io.TextIOWrapper, functionReport: dict):
     # Excel doesn't allow for a comma and a space for seperating strings in cells. Just do a comma to separate cells.
 
     # Meta-data of function
@@ -115,15 +109,16 @@ def reportFile(csv, functionReport):
     csv.write(sanitizeForCSV(functionReport['function']) + ',')
 
     # Results of each check on function
-    for i in range(len(checkCodes)):
-        code = checkCodes[i]
+    for i in range(len(CHECK_CODES)):
+        code = CHECK_CODES[i]
         if code in functionReport:
             csv.write(sanitizeForCSV(functionReport[code]))
-        if i < len(checkCodes) - 1:
+        if i < len(CHECK_CODES) - 1:
             csv.write(',')
     csv.write('\n')
 
-def addFunctionToReport(fileReport, ref):
+
+def addFunctionToReport(fileReport: dict, ref: Ref):
     ent = ref.ent()
 
     # Skip the standard library in VHDL
@@ -140,12 +135,14 @@ def addFunctionToReport(fileReport, ref):
         fileReport[functionId]['line'] = str(ref.line())
         fileReport[functionId]['function'] = str(ent)
 
-def addFileToReport(fileReport, defineRefs):
+
+def addFileToReport(fileReport: dict, defineRefs: list[Ref]):
     # Check all functions in defineRefs
     for ref in defineRefs:
         addFunctionToReport(fileReport, ref)
 
-def check1(fileReport, defineRefs, args):
+
+def check1(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     minimumCommentPercentage = int(args.mcp)
 
@@ -175,7 +172,8 @@ def check1(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'COMF', ccRatio)
 
-def check2(fileReport, defineRefs, args):
+
+def check2(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxPathsAllowed = int(args.mpa)
 
@@ -192,7 +190,8 @@ def check2(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'PATH', paths)
 
-def check3(fileReport, defineRefs, args):
+
+def check3(fileReport: dict, defineRefs: list[Ref]):
     # Check all functions in defineRefs
     for ref in defineRefs:
         # Do the check
@@ -212,7 +211,8 @@ def check3(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'GOTO', gotoStatements)
 
-def check4(fileReport, defineRefs, args):
+
+def check4(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxComplexity = int(args.mco)
     variant = args.v
@@ -236,7 +236,8 @@ def check4(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'vG', complexity)
 
-def check5(fileReport, defineRefs, args):
+
+def check5(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxCallingFunctions = int(args.mcf)
 
@@ -253,7 +254,8 @@ def check5(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'CALLING', callingFunctions)
 
-def check6(fileReport, defineRefs, args):
+
+def check6(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxCalls = int(args.mca)
 
@@ -270,7 +272,8 @@ def check6(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'CALLS', calls)
 
-def check7(fileReport, defineRefs, args):
+
+def check7(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxNumberOfParameters = int(args.mnp)
 
@@ -290,7 +293,8 @@ def check7(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'PARAM', paramCount)
 
-def check8(fileReport, defineRefs, args):
+
+def check8(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxStatements = int(args.msa)
 
@@ -307,29 +311,30 @@ def check8(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'STMT', statements)
 
-def getDepth(functionEnt, knownFunctions):
-    if not functionEnt:
-        return
-    if functionEnt.id() in knownFunctions and knownFunctions[functionEnt.id()] == -1:
+
+# Get a depth number or the string 'Recursive'
+def getDepth(function: Ent, knownFunctions: dict[int, int]) -> int | str:
+    if function.id() in knownFunctions and knownFunctions[function.id()] == -1:
         return 'Recursive'
-    if functionEnt.id() in knownFunctions:
-        return knownFunctions[functionEnt.id()]
+    if function.id() in knownFunctions:
+        return knownFunctions[function.id()]
 
-    knownFunctions[functionEnt.id()] = -1 # Marker for recursion
+    knownFunctions[function.id()] = -1 # Marker for recursion
 
-    calls = functionEnt.refs('call ~inactive, use ptr ~inactive', entDefineKinds, True)
+    calls = function.refs('call ~inactive, use ptr ~inactive', ENT_DEFINE_KINDS, True)
 
     for call in calls:
         depth = getDepth(call.ent(), knownFunctions)
         if depth == 'Recursive':
             return 'Recursive'
-        if depth > knownFunctions[functionEnt.id()]:
-            knownFunctions[functionEnt.id()] = depth
+        if depth > knownFunctions[function.id()]:
+            knownFunctions[function.id()] = depth
 
-    knownFunctions[functionEnt.id()] += 1
-    return knownFunctions[functionEnt.id()]
+    knownFunctions[function.id()] += 1
+    return knownFunctions[function.id()]
 
-def check9(fileReport, defineRefs, args):
+
+def check9(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxCallLevels = int(args.mcl)
     skipRecursiveFunctions = int(args.srf)
@@ -352,9 +357,10 @@ def check9(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'LEVEL', depth)
 
+
 # This function takes a lexeme and an end function reference and determines if we are inside a lambda function
 # If we are inside a lambda function, then we walk through it and return a new lexeme
-def passLambda(parent, lexeme, allDefines):
+def passLambda(lexeme: Lexeme, allDefines: list[Ref]) -> Lexeme | None:
     for define in allDefines:
         end = define.ent().ref('C End')
         if not end:
@@ -381,7 +387,8 @@ def passLambda(parent, lexeme, allDefines):
 
     return lexeme
 
-def check10(fileReport, file, args):
+
+def check10(fileReport: dict, file: Ent, args: argparse.Namespace):
     # Arguments
     ignoreConstructorsDestructors = int(args.icd)
     ignoreInactiveCode = int(args.iic)
@@ -426,7 +433,7 @@ def check10(fileReport, file, args):
 
             # lambdas break this check so we detect if we are in one and move the lexeme past it if we are
             if testLexeme and lambdas:
-                lexeme = passLambda(funEnd, lexeme, lambdas)
+                lexeme = passLambda(lexeme, lambdas)
 
             # Count function exits and statements
             if lexeme.token() == 'Keyword' and re.search('Exit|return|goto', lexeme.text()) and testLexeme:
@@ -451,18 +458,17 @@ def check10(fileReport, file, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'RETURN', result)
 
-def getDeclRef(ent):
-    if not ent:
-        return
 
+def getDeclRef(ent: Ent) -> Ent:
     decl = ent.refs('definein', '', True)
     if not decl:
         decl = ent.refs('declarein', '', True)
     return decl
 
-def getVOCF(fun):
-    startRef = getDeclRef(fun)
-    endRef = fun.refs('end', '', True)
+
+def getVOCF(function: Ent) -> int | None:
+    startRef = getDeclRef(function)
+    endRef = function.refs('end', '', True)
     if not (startRef and endRef):
         return
     startRef = startRef[0]
@@ -492,7 +498,8 @@ def getVOCF(fun):
         result = 0
     return result
 
-def check11(fileReport, defineRefs, args):
+
+def check11(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
     # Arguments
     maxVocfLevel = int(args.mvl)
 
@@ -509,11 +516,12 @@ def check11(fileReport, defineRefs, args):
         functionId = ent.id()
         reportFunction(fileReport, functionId, 'VOCF', vocfLevel)
 
-def discoverRecursion(fileReport, ent, firstTime, seen, originalEnt):
-    if not ent.kind().check(entCallKinds):
+
+def discoverRecursion(fileReport: dict, ent: Ent, firstTime: bool, seen: dict[str, int], originalEnt: Ent):
+    if not ent.kind().check(ENT_CALL_KINDS):
         return
 
-    for callRef in ent.refs(refCallKinds, entCallKinds, True):
+    for callRef in ent.refs(REF_CALL_KINDS, ENT_CALL_KINDS, True):
         callEnt = callRef.ent()
         if callEnt.uniquename() not in seen:
             seen[callEnt.uniquename()] = 0
@@ -538,43 +546,66 @@ def discoverRecursion(fileReport, ent, firstTime, seen, originalEnt):
 
         discoverRecursion(fileReport, callEnt, False, seen, originalEnt)
 
-def check12(fileReport, file, args):
+
+def check12(fileReport: dict, file: Ent):
     # Check all functions in defineRefs
-    for ref in file.filerefs('define, body declare', entCallKinds, True):
+    for ref in file.filerefs('define, body declare', ENT_CALL_KINDS, True):
         # Do the check
         ent = ref.ent()
         discoverRecursion(fileReport, ent, True, {}, ent)
 
+
 if __name__ == '__main__':
+    # Main Arguments:
+    parser: argparse.ArgumentParser = argparse.ArgumentParser()
+    parser.add_argument('db', help='Specify Understand database. Example: upython hisMetricsCsv.py project/project.und')
+    parser.add_argument('-csv', help='Specify CSV Name. Default is the timestamp. Example: upython hisMetricsCsv.py project/project.und -csv hisMetrics.csv')
+
+    # Check Arguments:
+    parser.add_argument('-mcp', help='Minimum Comment Percentage. Default is 20. Example: upython hisMetricsCsv.py project/project.und -mcp 20')
+    parser.add_argument('-mpa', help='Maximum Paths Allowed. Default is 80. Example: upython hisMetricsCsv.py project/project.und -mpa 70')
+    parser.add_argument('-mco', help='Maximum Complexity. Default is 20. Example: upython hisMetricsCsv.py project/project.und -mco 15')
+    parser.add_argument('-v', help='Variant of normal modified, or strict. Default is modified. Example: upython hisMetricsCsv.py project/project.und -v normal')
+    parser.add_argument('-mcf', help='Maximum Calling Functions. Default is 5. Example: upython hisMetricsCsv.py project/project.und -mcf 6')
+    parser.add_argument('-mca', help='Maximum Calls. Default is 7. Example: upython hisMetricsCsv.py project/project.und -mca 4')
+    parser.add_argument('-mnp', help='Maximum Number of Parameters. Default is 5. Example: upython hisMetricsCsv.py project/project.und -mnp 6')
+    parser.add_argument('-msa', help='Maximum Statements Allowed. Default is 8. Example: upython hisMetricsCsv.py project/project.und -msa 8')
+    parser.add_argument('-mcl', help='Maximum Call Levels. Default is 4. Example: upython hisMetricsCsv.py project/project.und -mcl 3')
+    parser.add_argument('-srf', help='Skip Recursive Functions. Default is 0. Example: upython hisMetricsCsv.py project/project.und -srf 1')
+    parser.add_argument('-icd', help='Ignore Constructors & Destructors. Default is 0. Example: upython hisMetricsCsv.py project/project.und -icd 1')
+    parser.add_argument('-iic', help='Ignore Inactive Code. Default is 0. Example: upython hisMetricsCsv.py project/project.und -iic 1')
+    parser.add_argument('-mvl', help='Maximum VOCF Level. Default is 4. Example: upython hisMetricsCsv.py project/project.und -mvl 3')
+    args: argparse.Namespace = parser.parse_args()
+
     # Get arguments, or the defaults
     if not args.csv: # CSV Name
         args.csv = args.db[:-4] + '-' + timeStamp() + '.csv'
     if not args.mcp:
-        args.mcp = defaultCheckArguments['minimumCommentPercentage']
+        args.mcp = DEFAULT_ARGUMENT_VALUES['minimumCommentPercentage']
     if not args.mpa:
-        args.mpa = defaultCheckArguments['maximumPathsAllowed']
+        args.mpa = DEFAULT_ARGUMENT_VALUES['maximumPathsAllowed']
     if not args.mco:
-        args.mco = defaultCheckArguments['maximumComplexity']
+        args.mco = DEFAULT_ARGUMENT_VALUES['maximumComplexity']
     if not args.v:
-        args.v = defaultCheckArguments['variant']
+        args.v = DEFAULT_ARGUMENT_VALUES['variant']
     if not args.mcf:
-        args.mcf = defaultCheckArguments['maximumCallingFunctions']
+        args.mcf = DEFAULT_ARGUMENT_VALUES['maximumCallingFunctions']
     if not args.mca:
-        args.mca = defaultCheckArguments['maximumCalls']
+        args.mca = DEFAULT_ARGUMENT_VALUES['maximumCalls']
     if not args.mnp:
-        args.mnp = defaultCheckArguments['maximumNumberOfParameters']
+        args.mnp = DEFAULT_ARGUMENT_VALUES['maximumNumberOfParameters']
     if not args.msa:
-        args.msa = defaultCheckArguments['maximumStatementsAllowed']
+        args.msa = DEFAULT_ARGUMENT_VALUES['maximumStatementsAllowed']
     if not args.mcl:
-        args.mcl = defaultCheckArguments['maximumCallLevel']
+        args.mcl = DEFAULT_ARGUMENT_VALUES['maximumCallLevel']
     if not args.srf:
-        args.srf = defaultCheckArguments['skipRecursiveFunctions']
+        args.srf = DEFAULT_ARGUMENT_VALUES['skipRecursiveFunctions']
     if not args.icd:
-        args.icd = defaultCheckArguments['ignoreConstructorsAndDestructors']
+        args.icd = DEFAULT_ARGUMENT_VALUES['ignoreConstructorsAndDestructors']
     if not args.iic:
-        args.iic = defaultCheckArguments['ignoreInactiveCode']
+        args.iic = DEFAULT_ARGUMENT_VALUES['ignoreInactiveCode']
     if not args.mvl:
-        args.mvl = defaultCheckArguments['maximumVocfLevel']
+        args.mvl = DEFAULT_ARGUMENT_VALUES['maximumVocfLevel']
 
     # Open database
     db = understand.open(args.db)
@@ -596,7 +627,7 @@ if __name__ == '__main__':
         fileReport = {}
 
         # Get all the function define refs
-        defineRefs = file.filerefs(refDefineKinds, entDefineKinds, True)
+        defineRefs = file.filerefs(REF_DEFINE_KINDS, ENT_DEFINE_KINDS, True)
         addFileToReport(fileReport, defineRefs)
 
         # Figure out the language
@@ -607,7 +638,7 @@ if __name__ == '__main__':
         check1(fileReport, defineRefs, args)
         check2(fileReport, defineRefs, args)
         if cOrCpp:
-            check3(fileReport, defineRefs, args) # c++
+            check3(fileReport, defineRefs) # c++
         check4(fileReport, defineRefs, args)
         check5(fileReport, defineRefs, args)
         check6(fileReport, defineRefs, args)
@@ -617,7 +648,7 @@ if __name__ == '__main__':
         if cOrCpp:
             check10(fileReport, file, args) # c++
         check11(fileReport, defineRefs, args)
-        check12(fileReport, file, args)
+        check12(fileReport, file)
 
         # Output the results of the 12 checks for the file
         for functionId in fileReport:
