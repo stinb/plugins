@@ -1,15 +1,26 @@
-# Library for shared tasks CSV scripts
+#! /usr/bin/env upython
+
+
+# Two scripts for creating a CSV of an architecture of shared tasks:
+# - Interactive report which can show the CSV and optionally export it
+# - Command line interface that creates a CSV
 
 
 import datetime
 import functools
 import os
 import re
+import sys
 
+import understand
 from understand import Arch, Db, Ent, IReport
 
 from sharedTasks import *
-from sharedTasksCSVLib import *
+
+
+#######
+# All #
+#######
 
 
 # Option keys
@@ -190,3 +201,195 @@ def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: IRep
     file = open(os.path.join(options[CSV_FILE_LOCATION], options[CSV_FILE_NAME]), 'w')
     file.writelines(lines)
     file.close()
+
+
+######################
+# Interactive Report #
+######################
+
+
+def name() -> str:
+    return 'Shared Tasks CSV'
+
+
+def test_architecture(arch: Arch) -> bool:
+    return True
+
+
+def init(report: IReport):
+    for option in CSV_OPTIONS:
+        # Checkbox
+        if option.choices == OPTION_BOOL_CHOICES:
+            report.options().checkbox(option.key, option.name, option.default == OPTION_BOOL_TRUE)
+        # Choice
+        elif option.choices:
+            report.options().choice(option.key, option.name, option.choices, option.default)
+        # Text
+        else:
+            report.options().text(option.key, option.name, option.default)
+
+
+def generate(report: IReport, target: Arch | Ent | Db):
+    # Options
+    options = dict() # type: dict[str, str | bool]
+    for option in CSV_OPTIONS:
+        options[option.key] = report.options().lookup(option.key)
+
+    # Export file and print lines to report
+    generateCSV(report.db(), target, options, report)
+
+
+##########################
+# Command Line Interface #
+##########################
+
+
+# Required option keys
+ARCH = 'arch'
+DB = 'db'
+
+# Options required for the CSV command line interface
+REQUIRED_CLI_OPTIONS = (
+    Option(ARCH, 'Architecture long name', [], ''),
+    Option(DB, 'Path of .und folder', [], ''),
+)
+
+
+def printArguments(options: tuple[Option]):
+    for option in options:
+        # Key and value
+        print(f'    -{option.key} VALUE')
+        print(f'        {option.value}')
+
+        # Skip if no default value
+        if not option.default:
+            continue
+
+        # Default value
+        print(f'        Default: {option.default}')
+
+        # Choices
+        if option.choices == OPTION_BOOL_CHOICES:
+            choices = "('False', 'True')"
+        elif option.choices:
+            choices = option.choices
+        else:
+            continue
+        print(f'        Choices: {choices} (case-insensitive)')
+
+
+def printHelpAndExit(expected: str | None = None, actual: str | None = None):
+    if expected:
+        print('Error parsing arguments:')
+        print(f'    expected: {expected}')
+        if actual:
+            print(f'    actual:   {actual}')
+        print('    help: [\'-h\']')
+
+    else:
+        print('Required arguments:')
+        printArguments(CSV_OPTIONS)
+        print()
+        print('Optional arguments:')
+        printArguments(REQUIRED_CLI_OPTIONS)
+
+    exit()
+
+
+def parseArguments() -> dict[str, str | bool]:
+    result: dict[str, str | bool] = dict()
+
+    # Get the CLI options as a dictionary
+    optionDict: dict[str, Option] = dict()
+    for option in REQUIRED_CLI_OPTIONS + CSV_OPTIONS:
+        optionDict[f'-{option.key}'] = option
+
+    # Get arguments
+    argKey: str | None = None
+    for arg in sys.argv[1:]:
+        # Help argument
+        if arg in {'-h', '-help', 'help'}:
+            printHelpAndExit()
+
+        # Argument key
+        elif arg in optionDict:
+            argKey = arg
+            continue
+        # Fail if there's no previous argument key
+        elif not argKey:
+            printHelpAndExit('key', arg)
+
+        # Get the option information
+        option: Option = optionDict[argKey]
+
+        # Remove the leading dash
+        optionKey = argKey[1:]
+
+        # Remove quotes from the beginning and end
+        if re.match(r'^\'.*\'$|^\".*\"$', arg):
+            arg = arg[1:-1]
+
+        # Option type: bool
+        if option.choices == OPTION_BOOL_CHOICES:
+            arg = arg.lower()
+            if arg in {'true', '1'}:
+                result[optionKey] = True
+            elif arg in {'false', '0'}:
+                result[optionKey] = False
+            # Fail if the boolean value was bad
+            else:
+                printHelpAndExit(f'value for -{optionKey}', arg)
+        # Option type: string from choices
+        elif option.choices:
+            lowerChoices = set(map(str.lower, option.choices))
+            if arg in lowerChoices:
+                result[optionKey] = arg
+            # Fail if the choice was bad
+            else:
+                printHelpAndExit(f'value for -{optionKey}', arg)
+        # Option type: string
+        else:
+            result[optionKey] = arg
+
+        argKey = None
+
+    # Fail if there are missing required arguments
+    missingRequiredArgs: list[str] = []
+    for option in REQUIRED_CLI_OPTIONS:
+        if option.key not in result:
+            missingRequiredArgs.append(f'-{option.key}')
+    if missingRequiredArgs:
+        printHelpAndExit(f'required arguments: {missingRequiredArgs}')
+
+    # Add missing optional arguments
+    for option in CSV_OPTIONS:
+        if option.key not in result:
+            result[option.key] = option.default
+
+    return result
+
+
+if __name__ == '__main__':
+    # Parse arguments
+    options = parseArguments()
+    options[AUTO_EXPORT] = True
+
+    # Get the database
+    try:
+        dbPath = options[DB]
+        db = understand.open(dbPath)
+    except:
+        print('Error opening database:')
+        print(f'    {dbPath}')
+        exit(1)
+
+    # Get the architecture
+    archLongName = options[ARCH]
+    arch = db.lookup_arch(archLongName)
+    if not arch:
+        print('Error getting architecture:')
+        print(f'    {archLongName}')
+        exit(1)
+
+    # Export file
+    generateCSV(db, arch, options)

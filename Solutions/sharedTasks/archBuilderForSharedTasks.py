@@ -1,4 +1,7 @@
-# CLI to create architectures for the Shared Tasks graph
+#! /usr/bin/env upython
+
+
+# Command line interface to create architectures for the Shared Tasks graph
 
 
 import sys
