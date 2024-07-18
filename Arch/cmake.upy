@@ -4,18 +4,32 @@ import glob
 import os.path
 import re
 
-# Directory path update for automatically generated files
-buildDirBefore = "/src/"
-buildDirAfter = "/build/release/src/"
-
 def name():
   return "CMake"
+
+def define_options(arch):
+  # Builds 1194 and later allow defining architecture options
+  arch.options().label("label1", (
+    "Specify the directory to search for CMakeLists.txt files. Separate multiple "
+    "directories with a semicolon (;). If empty, the project directory will be used"))
+  arch.options().text("directories", "Directories")
+
+  arch.options().label("label2", (
+    "Look for QT generated designer files (.ui -> .h) and moc files by replacing "
+    "the before directory string with the after directory"))
+  arch.options().text("buildDirBefore", "Before", "/src/")
+  arch.options().text("buildDirAfter", "After", "/build/release/src/")
 
 def generate(arch, db):
   # This finds CMakeLists files recursively from the directory of the project.
   # Update this to look for the files somewhere else
-  cmakeGlob = os.path.join(os.path.dirname(db.name()), "**","CMakeLists.txt")
-  cmakefiles = glob.glob(cmakeGlob, recursive=True)
+  dirs = [os.path.dirname(db.name())]
+  if hasattr(arch, "options") and arch.options().lookup("directories"):
+    dirs = arch.options().lookup("directories").split(';')
+  cmakefiles = []
+  for d in dirs:
+    cmakeGlob = os.path.join(d, "**","CMakeLists.txt")
+    cmakefiles.extend(glob.glob(cmakeGlob, recursive=True))
 
   # Map paths to entity
   fileDict = dict()
@@ -52,7 +66,7 @@ def generate(arch, db):
         sets["${"+myList[0]+"}"]= expand(myList[1:], sets)
 
       # map generated qt designer files
-      builddir = dirname.replace(buildDirBefore,buildDirAfter)
+      builddir = replaceBuildDir(arch, dirname)
       for result in uiRe.findall(filetext):
         myList = deCommentRe.sub("",result).split()
         sets["${"+myList[0]+"}"]= [builddir + "ui_" + s[:-3] + ".h" for s in expand(myList[1:], sets)]
@@ -74,6 +88,14 @@ def expand(initialList, sets):
       finalList.append(item)
   return finalList
 
+def replaceBuildDir(arch, name):
+  # Directory path update for automatically generated files
+  buildDirBefore = "/src/"
+  buildDirAfter = "/build/release/src/"
+  if hasattr(arch, "options"):
+    buildDirBefore = arch.options().lookup("buildDirBefore")
+    buildDirAfter = arch.options().lookup("buildDirAfter")
+  return name.replace(buildDirBefore, buildDirAfter)
 
 # Function for adding child architectures to the root
 def addArch(dirname, result, addHeaders, sets, arch, fileDict, deCommentRe):
@@ -104,7 +126,7 @@ def addArch(dirname, result, addHeaders, sets, arch, fileDict, deCommentRe):
           filelist.add(fileDict[s])
 
         # Check for moc file
-        s = s.replace(buildDirBefore,buildDirAfter)
+        s = replaceBuildDir(arch, s)
         s = s.replace('.inl','.cpp')
         for s2 in glob.glob(os.path.join(os.path.dirname(s), "**", "moc_" + os.path.basename(s)), recursive=True):
           if s2 in fileDict:
