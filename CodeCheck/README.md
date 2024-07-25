@@ -42,7 +42,7 @@ CodeCheck has several directories it checks for scripts. The first location gets
 MacOSX users: ~/Library/Application Support/SciTools/plugin/User/Custom/ 
 
 # Write Your First Custom Check
-1. Save the _templatePython.upy file to the Understand installation directory under conf/plugin/User/CodeCheck/myscript.upl and open the file in a text Editor or in Understand
+1. Save the [CodeCheck Template example](https://documentation.scitools.com/html/python/codecheck.html) to the Understand installation directory under conf/plugin/User/CodeCheck/myscript.upy and open the file in a text Editor or in Understand
 
 2. Modify the name, checkID unique identifier, description and detailed_description subroutines to reflect our test.
 

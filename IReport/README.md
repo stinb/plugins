@@ -10,11 +10,10 @@ To install a Report plugin, simply drag the .upy or .upl file into the Understan
 After installation, project level reports can be run by selecting Project->Interactive Reports -> [Plugin Name]. Entity Specific reports can be run by selecting the entity and then Interactive Reports -> [Plugin Name].
 
 # Making Your Own Custom Reports
-You can customize any of these reports, or make your own from scratch. We recommend starting with [_templatePython.upy](https://github.com/stinb/plugins/blob/main/IReport/_templatePython.upy), included for that purpose. The full Interactive Report API documentation is accessible in Understand by selecting Help->Python API Documentation and navigating to the IReports section. There are also several tutorials on building graphs on our [support site](https://support.sciools.com).
+You can customize any of these reports, or make your own from scratch. We recommend starting with our [sample IReport plugin](https://documentation.scitools.com/html/python/ireport.html), included for that purpose. The full Interactive Report API documentation is accessible in Understand by selecting Help->Python API Documentation and navigating to the IReports section. There are also several tutorials on building graphs on our [support site](https://support.sciools.com).
 
 # Popular Interactive Reports
 Here are some of the more popular reports you'll find here.
-* [_templatePython.upy](https://github.com/stinb/plugins/blob/main/IReport/_templatePython.upy): A small script that shows how to exercise all of the IReport functionality. A very useful starting place for making your own reports.
 * [astyle.upl](https://github.com/stinb/plugins/blob/main/IReport/astyle.upl): Works with the open source project [astyle](https://astyle.sourceforge.net/) to reformat and beautify your code.
 * [batch_graphs.upl](https://github.com/stinb/plugins/blob/main/IReport/batch_graphs.upl): Generates all the graphs of the selected type and saves them to the specified folder; also creates an index.html file to view them all with.
 * [change_impact.upl](https://github.com/stinb/plugins/blob/main/IReport/change_impact.upl): See what impact changing a particular entity will have on the codebase.
