@@ -8,14 +8,6 @@ The plugin [sharedTasksGraph.upy](https://raw.githubusercontent.com/stinb/plugin
 
 All plugin scripts in this folder use the common [sharedTasks.py](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/sharedTAsks.py) so if a script is installed individually, the common file must be installed as well. Instead of installing individual scripts, it's recommended to copy the entire folder to a plugin directory:
 
-Install directory (write access is usually administrator-protected):
-
-- Windows – `%SystemDrive%\Program Files\SciTools\conf\plugin\User\`
-- Mac – `/Applications/SciTools/conf/plugin/User/`
-- Linux – `/usr/local/bin/SciTools/conf/plugin/User/`
-
-App data directory (write access is usually NOT administrator-protected)
-
 - Windows – `%AppData%\SciTools\conf\plugin\User\`
 - Mac – `~/Library/Application Support/SciTools/plugin/User/`
 - Linux – `~/.config/SciTools/plugin/User/`
