@@ -39,9 +39,20 @@ DEFAULT_ARGUMENT_VALUES: dict[str, int | bool] = {
     'ignoreInactiveCode': False,
     # Check 11: VOCF
     'maximumVocfLevel': 4,
+    # Check 13: SCHG
+    'maximumChangedStatements': 100,
+    # Check 14: SDEL
+    'maximumDeletedStatements': 100,
+    # Check 15: SNEW
+    'maximumNewStatements': 100,
+    # Check 16: S
+    'minimumStabilityIndex': 0.5,
 }
 
-CHECK_CODES: list[str] = ['COMF', 'PATH', 'GOTO', 'vG', 'CALLING', 'CALLS', 'PARAM', 'STMT', 'LEVEL', 'RETURN', 'VOCF', 'AP_CG_CYCLE']
+CHECK_CODES: list[str] = [
+    'COMF', 'PATH', 'GOTO', 'vG', 'CALLING', 'CALLS', 'PARAM', 'STMT', 'LEVEL',
+    'RETURN', 'VOCF', 'AP_CG_CYCLE', 'SCHG', 'SDEL', 'SNEW', 'S',
+]
 
 REF_DEFINE_KINDS: str = 'define, ada declare body, vhdl declare'
 ENT_DEFINE_KINDS: str = 'ada entry, ada function, ada procedure, ada protected, ada task, c function, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial subroutine, pascal compunit, pascal function, pascal procedure, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function, web method'
@@ -109,8 +120,7 @@ def reportFile(csv: io.TextIOWrapper, functionReport: dict):
     csv.write(sanitizeForCSV(functionReport['function']) + ',')
 
     # Results of each check on function
-    for i in range(len(CHECK_CODES)):
-        code = CHECK_CODES[i]
+    for i, code in enumerate(CHECK_CODES):
         if code in functionReport:
             csv.write(sanitizeForCSV(functionReport[code]))
         if i < len(CHECK_CODES) - 1:
@@ -555,6 +565,108 @@ def check12(fileReport: dict, file: Ent):
         discoverRecursion(fileReport, ent, True, {}, ent)
 
 
+def check13(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
+    # Get the argument
+    maxValue = int(args.mcs)
+
+    # Do the check
+    METRIC = 'CountLineChanged'
+    for ref in defineRefs:
+        ent = ref.ent()
+        actualValue = ent.metric([METRIC])[METRIC]
+        actualValue = checkForViolatingMax(actualValue, maxValue)
+        reportFunction(fileReport, ent.id(), 'SCHG', actualValue)
+
+
+def check14(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
+    # Get the argument
+    maxValue = int(args.mds)
+
+    # Do the check
+    METRIC = 'CountLineRemoved'
+    for ref in defineRefs:
+        ent = ref.ent()
+        actualValue = ent.metric([METRIC])[METRIC]
+        actualValue = checkForViolatingMax(actualValue, maxValue)
+        reportFunction(fileReport, ent.id(), 'SDEL', actualValue)
+
+
+def check15(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
+    # Get the argument
+    maxValue = int(args.mns)
+
+    # Do the check
+    METRIC = 'CountLineNew'
+    for ref in defineRefs:
+        ent = ref.ent()
+        actualValue = ent.metric([METRIC])[METRIC]
+        actualValue = checkForViolatingMax(actualValue, maxValue)
+        reportFunction(fileReport, ent.id(), 'SNEW', actualValue)
+
+
+def check16(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
+    # Get the argument
+    minValue = args.msi
+
+    # Do the check
+    for ref in defineRefs:
+        ent = ref.ent()
+        actualValue = calculateStabilityIndex(ent)
+        actualValue = checkForViolatingMin(actualValue, minValue)
+        reportFunction(fileReport, ent.id(), 'S', actualValue)
+
+
+# Given an ent that has the required metrics, see how stable it is
+def calculateStabilityIndex(ent: Ent) -> float | None:
+    # Get metrics
+    METRIC_CHANGED = 'CountLineChanged'
+    METRIC_NEW = 'CountLineNew'
+    METRIC_REMOVED = 'CountLineRemoved'
+    METRIC_TOTAL = 'CountLine'
+    metrics: dict = ent.metric([METRIC_CHANGED, METRIC_NEW, METRIC_REMOVED, METRIC_TOTAL])
+    new_stmts: float = clampNonNegative(metrics[METRIC_NEW])
+    changed_stmts: float = clampNonNegative(metrics[METRIC_CHANGED])
+    removed_stmts: float = clampNonNegative(metrics[METRIC_REMOVED])
+    total_stmts: float = clampNonNegative(metrics[METRIC_TOTAL])
+
+    # Fail if any weren't real floats
+    if new_stmts == None or changed_stmts == None \
+    or removed_stmts == None or total_stmts == None:
+        return None
+
+    # Calculate the result
+    dividend = total_stmts - new_stmts - changed_stmts
+    divisor = total_stmts + removed_stmts
+
+    # Divide by the divisor if it's not zero
+    if divisor == 0.0:
+        result = dividend
+    else:
+        result = dividend / divisor
+
+    # Clamp the result to [0.0, 1.0]
+    return max(0.0, min(result, 1.0))
+
+
+# Clamp the metric value to [0.0, ∞), otherwise None
+def clampNonNegative(metricValue: int | str | None) -> float | None:
+    # Handle non-float types
+    if metricValue == None:
+        return None
+    elif isinstance(metricValue, int):
+        return float(metricValue)
+
+    # Handle float string
+    try:
+        metricValue = float(metricValue)
+    except:
+        return None
+    if metricValue == float('nan') or abs(metricValue) == float('inf'):
+        return None
+    else:
+        return max(0.0, metricValue)
+
+
 if __name__ == '__main__':
     # Main Arguments:
     parser: argparse.ArgumentParser = argparse.ArgumentParser()
@@ -575,6 +687,10 @@ if __name__ == '__main__':
     parser.add_argument('-icd', help='Ignore Constructors & Destructors. Default is 0. Example: upython hisMetricsCsv.py project/project.und -icd 1')
     parser.add_argument('-iic', help='Ignore Inactive Code. Default is 0. Example: upython hisMetricsCsv.py project/project.und -iic 1')
     parser.add_argument('-mvl', help='Maximum VOCF Level. Default is 4. Example: upython hisMetricsCsv.py project/project.und -mvl 3')
+    parser.add_argument('-mcs', help='Maximum Changed Statements. Default is 100. Example: upython hisMetricsCsv.py project/project.und -mcs 75')
+    parser.add_argument('-mds', help='Maximum Deleted Statements. Default is 100. Example: upython hisMetricsCsv.py project/project.und -mds 75')
+    parser.add_argument('-mns', help='Maximum New Statements. Default is 100. Example: upython hisMetricsCsv.py project/project.und -mns 75')
+    parser.add_argument('-msi', help='Minimum Stability Index. Default is 0.5. Example: upython hisMetricsCsv.py project/project.und -msi 0.5')
     args: argparse.Namespace = parser.parse_args()
 
     # Get arguments, or the defaults
@@ -606,13 +722,22 @@ if __name__ == '__main__':
         args.iic = DEFAULT_ARGUMENT_VALUES['ignoreInactiveCode']
     if not args.mvl:
         args.mvl = DEFAULT_ARGUMENT_VALUES['maximumVocfLevel']
+    if not args.mcs:
+        args.mcs = DEFAULT_ARGUMENT_VALUES['maximumChangedStatements']
+    if not args.mds:
+        args.mds = DEFAULT_ARGUMENT_VALUES['maximumDeletedStatements']
+    if not args.mns:
+        args.mns = DEFAULT_ARGUMENT_VALUES['maximumNewStatements']
+    if not args.msi:
+        args.msi = DEFAULT_ARGUMENT_VALUES['minimumStabilityIndex']
 
-    # Open database
+    # Open database(s)
     db = understand.open(args.db)
+    comparisonDb = db.comparison_db()
 
     # Open csv file for appending and add table header
     csv = open(args.csv, 'w')
-    csv.write('Parent, File, Line, Function, Comment Density (COMF), Number of Paths (PATH), Number of Goto Statements (GOTO), Cyclomatic Complexity (v(G)), Calling Functions (CALLING), Called Funcitons (CALLS), Function Parameters (PARAM), Number of Statements (STMT), Number of Call Levels (LEVEL), Number of Return Points (RETURN), Language Scope (VOCF), Recursion (AP_CG_CYCLE)\n')
+    csv.write('Parent, File, Line, Function, Comment Density (COMF), Number of Paths (PATH), Number of Goto Statements (GOTO), Cyclomatic Complexity (v(G)), Calling Functions (CALLING), Called Funcitons (CALLS), Function Parameters (PARAM), Number of Statements (STMT), Number of Call Levels (LEVEL), Number of Return Points (RETURN), Language Scope (VOCF), Recursion (AP_CG_CYCLE), Statements Changed (SCHG), Statements Deleted (SDEL), New Statements (SNEW), Stability Index (S)\n')
 
     # Report on each function only once
     functionIds = {}
@@ -620,7 +745,11 @@ if __name__ == '__main__':
     # Check each file
     fileFilter = 'File ~unknown ~unresolved ~jar'
     fileCount = len(db.ents(fileFilter))
-    print('Analyzing', fileCount, 'files using Hersteller Initiative Software (HIS) Metrics')
+    print(f'Analyzing {fileCount} files using Hersteller Initiative Software (HIS) Metrics')
+    if comparisonDb:
+        print(f'Comparison database: {comparisonDb}')
+    else:
+        print('No comparison database')
     progressBar = ProgressBar(fileCount)
     for file in db.ents(fileFilter):
         # A fileReport dictionary of functionReport dictionaries
@@ -649,6 +778,11 @@ if __name__ == '__main__':
             check10(fileReport, file, args) # c++
         check11(fileReport, defineRefs, args)
         check12(fileReport, file)
+        if comparisonDb:
+            check13(fileReport, defineRefs, args)
+            check14(fileReport, defineRefs, args)
+            check15(fileReport, defineRefs, args)
+            check16(fileReport, defineRefs, args)
 
         # Output the results of the 12 checks for the file
         for functionId in fileReport:
