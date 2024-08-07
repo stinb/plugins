@@ -17,14 +17,14 @@ All plugin scripts in this folder use the common [sharedTasks.py](https://github
 Working with multiple call trees means working with multiple root functions. To pass multiple entities to a plugin, the entities must be grouped together in an architecture. A simple architecture can have the format:
 
 - Name of root architecture can be anything
-  - Any name containing the word tasks case insensitive
+  - Any name containing the word `tasks` (case insensitive)
     - function1()
     - function2()
 
 The shared tasks plugins also support additional fields for the tasks. These fields are displayed on the graph under the task name, and in the table as columns. Currently supported fields are 'core' and 'priority'. A field can be used instead of an architecture name containing the word tasks.
 
 - Name of root architecture can be anything
-  - Any name containing the field name case insensitive like priority
+  - Any name containing the the word `core` or `priority` (case insensitive)
     - Field value like 1
       - function1()
     - Another field value like 2
@@ -33,7 +33,7 @@ The shared tasks plugins also support additional fields for the tasks. These fie
 Finally, the architecture can be used to identify functions that enable and disable interrupts. References protected by these functions (preceeded by a call to the disable function and followed by a call to the enable function) are identified by the plugins. The naming pattern interrupt control is (ommitting the tasks):
 
 - Name of root architecture can be anything
-  - name containing the word interrupt or the word control case insensitive
+  - name containing the word `interrupt` or the word `control` (case insensitive)
     - any name here. This layer allows multiple pairs of interrupt functions
       - enable
         - enableFunction()

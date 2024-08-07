@@ -14,8 +14,8 @@ You can customize any of these graphs, or make your own from scratch. We recomme
 
 # Popular Graphs
 Here are some of the more popular graphs you'll find here.
-* [invocation.upl](https://github.com/stinb/plugins/blob/main/Graph/invocation.upl): This graph creates the call trees for all functions/methods in the project. It is very large, looks like spaghetti, and can be very slow. Use at your own risk.
-* [flowchart.upl](https://github.com/stinb/plugins/blob/main/Graph/flowchart.upl): This is a version of the Function/Method Control flow graph that uses the Perl API
+* [allCalls.upl](https://github.com/stinb/plugins/blob/main/Graph/allCalls.upl): This graph creates the call trees for all functions/methods in the project.
+* [controlFlow.upl](https://github.com/stinb/plugins/blob/main/Graph/controlFlow.upl): This is a version of the Function/Method Control flow graph that uses the Perl API
 * [assignment_tree.upl](https://github.com/stinb/plugins/blob/main/Graph/assignment_tree.upl): This graph shows where each object is assigned, and where it assigns others.
 
 ![image](https://user-images.githubusercontent.com/6586272/193376858-3e304851-dcb3-4280-9d03-e9ba75185bde.png)
