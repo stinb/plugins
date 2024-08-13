@@ -2,7 +2,7 @@
 The ability to draw custom graphs is a core feature of the Understand PERL API. Using the Understand Plugin system, advanced users can develop their own custom graphs addressing specific information needs.
 
 # Installing  Graph Plugins
-To install a graph plugin manually place it in one of the following locations:
+To install a graph plugin, simply drag the .upy or .upl file into the Understand GUI, it will ask if you want to install it. Alternatively, you can manually place it in one of the following locations:
 * Windows – C:\Program Files\SciTools\conf\plugin\User\Graph
 * Mac – /Users/username/Library/Application Support/SciTools/plugin/Graph
 * Linux – /home/username/.config/SciTools/plugin/Graph
