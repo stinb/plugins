@@ -12,7 +12,7 @@ For example, [arch_last_author.upy](https://github.com/stinb/plugins/blob/main/S
 
 
 ## Installation
-To install an Architecture plugin manually place it in one of the following locations:
+To install an Architecture plugin, simply drag the .upy or .upl file into the Understand GUI, it will ask if you want to install it. Alternatively, you can manually place it in one of the following locations:
 
 - Windows – C:\Program Files\SciTools\conf\plugin\User\Arch
 - Mac – /Users/username/Library/Application Support/SciTools/plugin/Arch
