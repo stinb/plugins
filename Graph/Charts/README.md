@@ -174,7 +174,7 @@ def draw(graph, db):
 
 <img width="130" alt="image" src="https://github.com/user-attachments/assets/1747c847-70b8-432d-97e2-a22d99fb0718">
 
-A stacked bar chart is possible using clusters. Each cluster is a bar, with the cluster label appearing as the axis label for the bar. Each node is stacked in that clusters bar. Check out [bar_demo.upy](https://github.com/stinb/plugins/7.0/Graph/Charts/bar_demo.upy) for an example. Note that the scale is always linear, so the bar_demo.upy plugin suffers from huge chart areas when there's a mix of small and large values.
+A stacked bar chart is possible using clusters. Each cluster is a bar, with the cluster label appearing as the axis label for the bar. Each node is stacked in that clusters bar. Check out [bar_demo.upy](https://github.com/stinb/plugins/blob/7.0/Graph/Charts/bar_demo.upy)for an example. Note that the scale is always linear, so the bar_demo.upy plugin suffers from huge chart areas when there's a mix of small and large values.
 
 ## Matrix layout
 The "matrix" layout is intended to display a graph as a matrix. So, nodes are displayed as the axis and edges are squares inside the matrix. Clusters are supported and form frames around the edge squares. The x and y axis can be different by setting an "axis" attribute on the cluster equal to x or y.
