@@ -1,0 +1,101 @@
+# A sample treemap chart
+import colorsys
+
+minColor = (158, 202, 225)    # RGB for #9ECAE1
+maxColor = (8, 69, 148)       # RGB for #084594
+sizeMetric = "CountLineCode"
+colorMetric = "MaxCyclomatic"
+
+def name():
+  return "Treemap Demo"
+
+def test_architecture(arch):
+  return True;
+
+def draw(graph, arch):
+  graph.set("layout","treemap")
+
+  # find min and max color values
+  minColorValue = None
+  maxColorValue = None
+
+  for ent in arch.ents(True):
+    val = ent.metric(colorMetric)
+    if val is None:
+      continue
+    if minColorValue is None or val < minColorValue:
+      minColorValue = val
+    if maxColorValue is None or val > maxColorValue:
+      maxColorValue = val
+
+  # Recursively draw the architecture
+  clusters = {arch.parent() : graph}
+  drawArch(arch, clusters, minColorValue, maxColorValue)
+
+def drawArch(arch, clusters, minColorValue, maxColorValue):
+  # create a cluster for this architecture
+  par = clusters.get(arch.parent())
+  cluster = par.cluster(arch.name(),arch)
+  clusters[arch] = cluster
+
+  # Recurse on architecture children. This treemap colors clusters by the max
+  # color of it's children, so track max color value
+  archColorValue = 0
+  for child in arch.children():
+    childColorValue = drawArch(child, clusters, minColorValue, maxColorValue)
+    archColorValue = max(archColorValue, childColorValue)
+
+  # Add the entity nodes
+  for ent in arch.ents(False):
+    # Size value
+    size = ent.metric(sizeMetric)
+    if not size:
+      continue
+
+    # Color Value
+    entColorValue = ent.metric(colorMetric)
+    if entColorValue is not None:
+      archColorValue = max(archColorValue, entColorValue)
+
+    n = cluster.node(ent.name(),ent)
+    n.set("area", str(size))
+    setColors(n, entColorValue, minColorValue, maxColorValue)
+
+  # Set the color for this architecture
+  setColors(cluster, archColorValue, minColorValue, maxColorValue)
+
+  # Return the max for the parent
+  return archColorValue
+
+def setColors(object, value, min, max):
+  if value is None or max is None or min is None:
+    return # leave color as default
+
+  # Find the r,g,b value on the color scale
+  r,g,b = maxColor if value >= max else minColor
+  if (max - min) != 0 and value > min:
+    percent = (value - min) / (max - min)
+    r = minColor[0] + percent * (maxColor[0] - minColor[0])
+    g = minColor[1] + percent * (maxColor[1] - minColor[1])
+    b = minColor[2] + percent * (maxColor[2] - minColor[2])
+
+  # Gradient fill, find colors lighter and darker, requires converting to hsv
+  h,s,v = colorsys.rgb_to_hsv(r/255.0,g/255.0,b/255.0)
+
+  vLight = v * 1.2 # 20% lighter
+  sLight = s
+  if vLight > 1.0:
+    sLight = sLight - vLight + 1.0
+    if sLight < 0:
+      sLight = 0
+    vLight = 1.0
+
+  light = [ int(255*x) for x in colorsys.hsv_to_rgb(h, sLight, vLight) ]
+  dark =  [ int(255*x) for x in colorsys.hsv_to_rgb(h, s, v*0.714) ] # 40% (140/100) darker
+
+  # Set graphviz attributes.
+  object.set("style", "radial")  # radial gradient
+  object.set("fillcolor", '#%02x%02x%02x;#%02x%02x%02x' % tuple(light + dark))
+  object.set("color", '#%02x%02x%02x' % (int(r), int(g), int(b)))
+  object.set("fontcolor", "#FFFFFF")
+
