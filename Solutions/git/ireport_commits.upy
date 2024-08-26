@@ -1,0 +1,127 @@
+import git_util
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Git Commits"
+
+def description():
+  return '''
+Report on the commits for a given target in a Git repository.
+
+<p>This plugin analyzes the Git history of your project and provides detailed
+ information about the commits and date range of the target.</p>
+'''
+
+#
+# Report object is not provided to test functions, so always return True and
+# test for Git in generate
+#
+def test_global(db):
+  """
+  Optional method, return true for project level reports
+  """
+  return True
+
+def test_entity(ent):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  return ent.kind().check("file ~unknown ~unresolved")
+
+def test_architecture(arch):
+  """
+  Optional method, return true if report is valid for the architecture
+  """
+  return True
+
+def init(report):
+  report.options().choice("dformat", "Date Format", ["Day", "Complete"], "Day")
+  report.options().choice("cformat", "Commit Hash", ["Prefix", "Complete"], "Prefix")
+
+# Report generation
+def generate(report, target):
+  """
+  Required, generate the report
+  """
+  if not git_util.hasGit(report):
+    report.print("No Git Repository Found\n")
+    return
+
+  data = git_util.targetGitValues(report, target, ("commits", "dates","authors",), ("%H", "%aI", "%an"))
+
+
+    # First pass, find author counts and date range
+  commits = len(data)
+  if not commits:
+    report.print("No Git commits for {}\n".format(target.name()))
+    return
+
+  min_date = None
+  max_date = None
+  authors = dict()
+  for commit, date, author in data:
+    # date is iso date string, so string sort will work
+    if not min_date or date < min_date:
+      min_date = date
+    if not max_date or date > max_date:
+      max_date = date
+    authors[author] = authors.get(author,0) + 1
+
+  # Find ownership values
+  cutoff = 0.05 * commits
+  owner = max(authors.values())
+
+  report.heading(2)
+  report.print("{} Commits ({} to {})".format(commits, min_date[:10], max_date[:10]))
+  report.heading()
+
+  report.draw(target, "Git History Bar Chart")
+
+  report.table("""
+    [{
+      "name" : "Date",
+      "filtertype": "string",
+      "sort" : "descending"
+     },{
+      "name" : "Author",
+      "filtertype": "string"
+     },{
+      "name" : "Role",
+      "filtertype": ["Owner","Major Contributor", "Minor Contributor"]
+     },{
+      "name" : "Commit",
+      "filtertype": "string"
+    }]""")
+
+  dLen = 10 if report.options().lookup("dformat") == "Day" else None
+  cLen = 8 if report.options().lookup("cformat") == "Prefix" else None
+  for commit, date, author in data:
+    cnt = authors.get(author)
+    if cnt == owner:
+      color = "#569f38"
+      role = "Owner"
+    elif cnt > cutoff:
+      color = "#4e8cb9"
+      role = "Major Contributor"
+    else:
+      color ="#e45721"
+      role = "Minor Contributor"
+
+    report.tablecell()
+    report.print(date[:dLen])
+
+    report.tablecell()
+    report.print(author)
+
+    report.tablecell()
+    report.fontcolor(color)
+    report.print(role)
+    report.fontcolor()
+
+    report.tablecell()
+    report.print(commit[:cLen])
+
+  report.table()
+

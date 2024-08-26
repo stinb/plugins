@@ -1,0 +1,108 @@
+# The bar layout this graph plugin uses requires build 1191 or later
+
+import bisect
+import datetime
+import understand
+
+import git_util
+
+
+owner_color = "#569f38"
+major_color = "#4e8cb9"
+minor_color = "#e45721"
+
+def name():
+  return "Git History Bar Chart"
+
+def test_architecture(arch):
+  return True;
+
+def test_entity(ent):
+  return ent.kind().check("file ~unknown ~unresolved")
+
+def test_global(db):
+  return True
+
+def init(graph, arch):
+  graph.options().define("Legend", ["None", "top", "left", "right", "bottom"], "top")
+  graph.options().define("RankDir", ["LR", "RL", "TB", "BT"], "BT")
+  graph.options().define("Node Labels", ["Off", "On"], "Off")
+
+def draw(graph, target):
+  graph.set("layout", "bar") # Override default layout algorithm (Usually dot)
+  graph.set("rankdir", graph.options().lookup("RankDir"))
+
+  legend = graph.options().lookup("Legend")
+  if legend != "None":
+    legendCluster = graph.cluster()
+    legendCluster.set("legend", legend)
+
+    for name,color in [ ("Owner",owner_color), ("Major Contributor", major_color), ("Minor Contributor", minor_color) ]:
+      n = legendCluster.node(name)
+      n.set("color", color)
+      n.set("fillcolor", color)
+
+  data = git_util.targetGitValues(graph, target, ("dates","authors"), ("%aI", "%an"))
+  commits = len(data)
+  if not commits:
+    return
+
+  # First pass, find author counts and date range
+  min_date = None
+  max_date = None
+  authors = dict()
+  for date, author in data:
+    # date is iso date string, so string sort will work
+    if not min_date or date < min_date:
+      min_date = date
+    if not max_date or date > max_date:
+      max_date = date
+    authors[author] = authors.get(author,0) + 1
+
+  # Find ownership values
+  cutoff = 0.05 * commits
+  owner = max(authors.values())
+
+  # determine chart range
+  min_date_date = datetime.datetime.fromisoformat(min_date).date()
+  max_date_date = datetime.datetime.fromisoformat(max_date).date()
+  days = (max_date_date - min_date_date).days
+  daysPerBin = int(days/10) if days > 10 else 1
+  bins = [min_date_date.isoformat()]
+  while bins[-1] < max_date:
+    next_date = min_date_date + datetime.timedelta(days=daysPerBin*len(bins))
+    bins.append(next_date.isoformat())
+
+  owner_cnts = [0] * len(bins)
+  major_cnts = [0] * len(bins)
+  minor_cnts = [0] * len(bins)
+
+  # Second pass, find counts
+  for date, author in data:
+    idx = max(0, bisect.bisect_left(bins, date)-1)
+    author_cnt = authors.get(author)
+    if author_cnt == owner:
+      owner_cnts[idx] += 1
+    elif author_cnt > cutoff:
+      major_cnts[idx] += 1
+    else:
+      minor_cnts[idx] += 1
+
+  # Create stacked bar chart from counts
+  node_labels = graph.options().lookup("Node Labels") == "On"
+  for i in range(len(bins)-1):
+    c = graph.cluster(bins[i])
+
+    createNode(c, owner_cnts[i], owner_color, node_labels)
+    createNode(c, major_cnts[i], major_color, node_labels)
+    createNode(c, minor_cnts[i], minor_color, node_labels)
+
+def createNode(par, area, color, node_labels):
+  if not area:
+    return
+
+  n = par.node(str(area)) if node_labels else par.node()
+  n.set("area", str(area))
+  n.set("color", color)
+  n.set("fillcolor", color)
+  n.set("tooltip", "{} Commits".format(area))

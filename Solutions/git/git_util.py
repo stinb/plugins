@@ -149,6 +149,14 @@ def targetAuthorCounts(plugin, target):
     sum = len(authorList)
   return authors, sum
 
+def cache_vals(cacheKey, und_cache, file):
+  if isinstance(cacheKey, str):
+    return und_cache.value(key=cacheKey, file = file, value=[])
+  lists = []
+  for key in cacheKey:
+    lists.append(und_cache.value(key=key, file = file, value=[]))
+  return tuple(zip(*lists))
+
 def targetGitValues(plugin, target, cacheKey, logKey):
   """
   If a cache is available and there are multiple files, return a set of values.
@@ -158,14 +166,20 @@ def targetGitValues(plugin, target, cacheKey, logKey):
     und_cache = plugin.cache("Git")
     files = targetToFileList(target)
     if len(files) == 1:
-      return und_cache.value(key=cacheKey, file = files[0], value=[])
+      return cache_vals(cacheKey, und_cache, files[0])
+
     values = set()
     for file in files:
-      for val in und_cache.value(key=cacheKey, file = files[0], value=[]):
+      for val in cache_vals(cacheKey, und_cache, file):
         values.add(val)
     return values
   else:
-    return listFromLog(plugin.db(), target, logKey)
+    if isinstance(logKey, str):
+      return listFromLog(plugin.db(), target, logKey)
+    lists = []
+    for key in logKey:
+      lists.append(listFromLog(plugin.db(), target, key))
+    return tuple(zip(*lists))
 
 def kindstringHasGit(plugin, entkindstr):
   if not hasGit(plugin):
