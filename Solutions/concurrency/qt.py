@@ -8,7 +8,7 @@ TWO_ARG_FUNCTIONS = [
   "blockingFilteredReduced"
 ]
 
-class Qt:
+class QtConcurrency:
   def __init__(self, db):
     self.db = db
 
