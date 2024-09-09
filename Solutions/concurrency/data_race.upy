@@ -13,7 +13,7 @@ import understand
 import itertools
 from qt import QtConcurrency
 
-ERR = "Potential data race on variable `{}`"
+ERR = "Potential data race on variable `{}` from thread entry points: {}"
 
 def id():
   return "STI_DATA_RACE"
@@ -45,18 +45,18 @@ def check(check, file):
   if not main_entry_points or not thread_entry_points:
     return
 
-  # Build a set of all shared variables.
-  shared_vars = set()
-
   # Compare main entry points with all other threads separately. This is the
   # Cartesian product of main entry points with thread entry points. Compare
   # all other thread entry points with each other. This is all two element
   # subsequences of the thread entry points.
-  for args in itertools.product(main_entry_points, thread_entry_points):
-    shared_vars |= find_shared_variables(cache, *args)
+  main_iterator = itertools.product(main_entry_points, thread_entry_points)
+  thread_iterator = itertools.combinations(thread_entry_points, r=2)
 
-  for args in itertools.combinations(thread_entry_points, r=2):
-    shared_vars |= find_shared_variables(cache, *args)
+  # Build a mapping of shared variables to thread entry points.
+  shared_vars = {}
+  for args in itertools.chain(main_iterator, thread_iterator):
+    for shared_var in find_shared_variables(cache, *args):
+      shared_vars.setdefault(shared_var, set()).update(set(args))
 
   if not shared_vars:
     return
@@ -64,8 +64,9 @@ def check(check, file):
   # Emit violations for shared variables referenced in this file.
   for ref in file.filerefs("use,modify,set ~init", "object ~local"):
     var = ref.ent()
-    if var in shared_vars:
-      err = ERR.format(var.name())
+    if entry_points := shared_vars.get(var):
+      names = ["`{}`".format(ent.name()) for ent in entry_points]
+      err = ERR.format(var.name(), ", ".join(names))
       check.violation(var, file, ref.line(), ref.column(), err)
 
 def find_shared_variables(cache, lhs_entry_point, rhs_entry_point):
