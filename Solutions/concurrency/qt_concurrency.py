@@ -1,16 +1,46 @@
+#
+#          Copyright (c) 2024, Scientific Toolworks, Inc.
+#
+# This file contains proprietary information of Scientific Toolworks, Inc.
+# and is protected by federal copyright law. It may not be copied or
+# distributed in any form or medium without prior written authorization
+# from Scientific Toolworks, Inc.
+#
+# Author: Natasha Stander
+#
+
 import re
 import understand
+import concurrency
 
-TWO_ARG_FUNCTIONS = [
-  "mappedReduced",
-  "blockingMappedReduced",
-  "filteredReduced",
-  "blockingFilteredReduced"
-]
+LOCK_FUNCTIONS = {
+  "QBasicMutex::lock",
+  "QMutexLocker::QMutexLocker" 
+}
 
-class QtConcurrency:
+UNLOCK_FUNCTIONS = {
+  "QBasicMutex::unlock",
+  "QMutexLocker::~QMutexLocker"
+}
+
+TWO_ARG_FUNCTIONS = {
+  "QtConcurrent::mappedReduced",
+  "QtConcurrent::blockingMappedReduced",
+  "QtConcurrent::filteredReduced",
+  "QtConcurrent::blockingFilteredReduced"
+}
+
+class QtConcurrency(concurrency.Concurrency):
   def __init__(self, db):
     self.db = db
+
+  def lock_functions(self):
+    return [function for name in LOCK_FUNCTIONS
+            for function in self.db.lookup(name, "function")]
+
+  def unlock_functions(self):
+    return [function for name in UNLOCK_FUNCTIONS
+            for function in self.db.lookup(name, "function")]
 
   def thread_entry_points(self):
     result = set()
@@ -18,7 +48,7 @@ class QtConcurrency:
 
     # Find functions passed to QtConcurrent functions.
     for function in self.db.lookup("QtConcurrent", "function"):
-      count = 2 if function.name() in TWO_ARG_FUNCTIONS else 1
+      count = 2 if function.longname() in TWO_ARG_FUNCTIONS else 1
       self._find_function_args(result, function, function_object_refs, count)
 
     # Find run overloads.

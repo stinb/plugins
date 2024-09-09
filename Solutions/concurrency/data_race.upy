@@ -11,7 +11,7 @@
 
 import understand
 import itertools
-from qt import QtConcurrency
+from qt_concurrency import QtConcurrency
 
 ERR = "Potential data race on variable `{}` from thread entry points: {}"
 
@@ -39,9 +39,10 @@ def define_options(check):
 def check(check, file):
   db = check.db()
   cache = check.cache()
+  model = QtConcurrency(db) # FIXME
 
-  main_entry_points = lookup_main_entry_points(db, cache)
-  thread_entry_points = lookup_thread_entry_points(db, cache)
+  main_entry_points = lookup_main_entry_points(db, cache, model)
+  thread_entry_points = lookup_thread_entry_points(db, cache, model)
   if not main_entry_points or not thread_entry_points:
     return
 
@@ -62,7 +63,15 @@ def check(check, file):
     return
 
   # Emit violations for shared variables referenced in this file.
+  critical_sections = model.critical_sections(file)
   for ref in file.filerefs("use,modify,set ~init", "object ~local"):
+    # FIXME: The reference occurring inside of a critical section is not the
+    # same thing as both threads holding the same lock when the variable is
+    # referenced. The lockset algorithm defines a potential race to happen
+    # when the intersection of locksets held by the two threads is empty.
+    if any(section.contains(ref) for section in critical_sections):
+      continue
+
     var = ref.ent()
     if entry_points := shared_vars.get(var):
       names = ["`{}`".format(ent.name()) for ent in entry_points]
@@ -87,19 +96,20 @@ def find_shared_variables(cache, lhs_entry_point, rhs_entry_point):
   # reads and writes from the other thread.
   return ((lhs_writes & rhs_reads_writes) | (rhs_writes & lhs_reads_writes))
 
-def lookup_main_entry_points(db, cache):
+def lookup_main_entry_points(db, cache, model):
   result = cache.value("main_entry_points")
   if result is None:
     result = []
+    # FIXME: Lookup main entry points from model?
     if arch := db.lookup_arch("Main Entry Points"):
       result = arch.ents()
     cache.insert(result, "main_entry_points")
   return result
 
-def lookup_thread_entry_points(db, cache):
+def lookup_thread_entry_points(db, cache, model):
   result = cache.value("thread_entry_points")
   if result is None:
-    result = QtConcurrency(db).thread_entry_points()
+    result = model.thread_entry_points()
     cache.insert(result, "thread_entry_points")
   return result
 
