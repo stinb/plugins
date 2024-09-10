@@ -30,9 +30,17 @@ UNLOCK_FUNCTIONS = {
   "QMutexLocker::~QMutexLocker"
 }
 
-class QtConcurrency(concurrency.Concurrency):
+class Qt(concurrency.Concurrency):
   def __init__(self, db):
     self.db = db
+
+
+  def lock_functions(self):
+    return LOCK_FUNCTIONS
+
+  def unlock_functions(self):
+    return UNLOCK_FUNCTIONS
+
 
   def thread_entry_points(self):
     result = set()
@@ -76,7 +84,7 @@ class QtConcurrency(concurrency.Concurrency):
             result.setdefault(use_ref.ent(), []).append((line, column, ent))
 
     return result
-  
+
   def _find_function_args(self, result, function, function_object_refs, count):
     # For each place this function is called
     for callby_ref in function.refs("callby"):
@@ -102,11 +110,3 @@ class QtConcurrency(concurrency.Concurrency):
           found_count -= 1
         if found_count <= 0:
           break
-
-  def critical_sections(self, file):
-    calls = file.filerefs("call", "function")
-    calls.sort(key=understand.Ref.line)
-
-    locks = [ref for ref in calls if ref.ent().longname() in LOCK_FUNCTIONS]
-    unlocks = [ref for ref in calls if ref.ent().longname() in UNLOCK_FUNCTIONS]
-    return [CriticalSection(*args) for args in zip(locks, unlocks)]
