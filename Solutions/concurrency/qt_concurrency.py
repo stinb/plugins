@@ -13,6 +13,13 @@ import re
 import understand
 import concurrency
 
+TWO_ARG_FUNCTIONS = {
+  "QtConcurrent::mappedReduced",
+  "QtConcurrent::blockingMappedReduced",
+  "QtConcurrent::filteredReduced",
+  "QtConcurrent::blockingFilteredReduced"
+}
+
 LOCK_FUNCTIONS = {
   "QBasicMutex::lock",
   "QMutexLocker::QMutexLocker" 
@@ -23,24 +30,9 @@ UNLOCK_FUNCTIONS = {
   "QMutexLocker::~QMutexLocker"
 }
 
-TWO_ARG_FUNCTIONS = {
-  "QtConcurrent::mappedReduced",
-  "QtConcurrent::blockingMappedReduced",
-  "QtConcurrent::filteredReduced",
-  "QtConcurrent::blockingFilteredReduced"
-}
-
 class QtConcurrency(concurrency.Concurrency):
   def __init__(self, db):
     self.db = db
-
-  def lock_functions(self):
-    return [function for name in LOCK_FUNCTIONS
-            for function in self.db.lookup(name, "function")]
-
-  def unlock_functions(self):
-    return [function for name in UNLOCK_FUNCTIONS
-            for function in self.db.lookup(name, "function")]
 
   def thread_entry_points(self):
     result = set()
@@ -110,3 +102,11 @@ class QtConcurrency(concurrency.Concurrency):
           found_count -= 1
         if found_count <= 0:
           break
+
+  def critical_sections(self, file):
+    calls = file.filerefs("call", "function")
+    calls.sort(key=understand.Ref.line)
+
+    locks = [ref for ref in calls if ref.ent().longname() in LOCK_FUNCTIONS]
+    unlocks = [ref for ref in calls if ref.ent().longname() in UNLOCK_FUNCTIONS]
+    return [CriticalSection(*args) for args in zip(locks, unlocks)]

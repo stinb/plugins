@@ -26,19 +26,8 @@ class CriticalSection:
     return line > self.lock.line() and line < self.unlock.line()
 
 class Concurrency:
-  def lock_functions(self) -> list[understand.Ent]:
-    raise NotImplementedError
-
-  def unlock_functions(self) -> list[understand.Ent]:
-    raise NotImplementedError
-
   def thread_entry_points(self) -> list[understand.Ent]:
     raise NotImplementedError
 
   def critical_sections(self, file: understand.Ent) -> list[CriticalSection]:
-    calls = file.filerefs('call', 'function')
-    calls.sort(key=understand.Ref.line)
-
-    locks = [ref for ref in calls if ref.ent() in self.lock_functions()]
-    unlocks = [ref for ref in calls if ref.ent() in self.unlock_functions()]
-    return [CriticalSection(*args) for args in zip(locks, unlocks)]
+    raise NotImplementedError
