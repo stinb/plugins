@@ -54,6 +54,8 @@ elif 'linux64' in undPath:
   ldTest = True
 elif 'MacOS' in undPath:
   understandBit = 64
+elif 'macosx' in undPath:
+  understandBit = 64  
 else:
   print ('  Error: Unexpected Directory Structure, the Understand install directory should not be modified. ',undPath)
   quit()
