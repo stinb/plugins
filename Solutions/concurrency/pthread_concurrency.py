@@ -21,9 +21,13 @@ UNLOCK_FUNCTIONS = {
   "pthread_mutex_unlock"
 }
 
+CREATE_FUNCTIONS = {
+  "pthread_create"
+}
+
 class Pthread(concurrency.Concurrency):
   def __init__(self, db):
-    self.db = db
+    super().__init__(db)
 
 
   def lock_functions(self):
@@ -34,23 +38,5 @@ class Pthread(concurrency.Concurrency):
 
 
   def thread_entry_points(self):
-    create_functions = self.db.lookup("pthread_create", "function")
-    if not create_functions:
-      return []
-
-    start_routine = self._lookup_start_routine(create_functions[0])
-    if not start_routine:
-      return []
-
-    return self._assigned_functions(start_routine)
-
-  def _lookup_start_routine(self, create_function):
     type = re.compile(r"void \*.*\(\*.*\)\(void \*.*\)")
-    for param in self.db.ents("parameter"):
-      if param.parent() == create_function and type.match(param.type()):
-        return param
-    return None
-
-  def _assigned_functions(self, start_routine):
-    # FIXME: Traverse assignment tree recursively.
-    return start_routine.ents("assign", "function")
+    return self.entry_points(CREATE_FUNCTIONS, type)
