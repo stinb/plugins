@@ -44,6 +44,9 @@ class Qt(concurrency.Concurrency):
     super().__init__(db)
 
 
+  def name(self):
+    return "qt"
+
   def lock_functions(self):
     return LOCK_FUNCTIONS
 

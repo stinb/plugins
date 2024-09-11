@@ -25,6 +25,9 @@ class Concurrency:
     self.db = db
 
 
+  def name(self) -> str:
+    raise NotImplementedError
+
   def lock_functions(self) -> set[understand.Ent]:
     raise NotImplementedError
 

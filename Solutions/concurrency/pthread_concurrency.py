@@ -30,6 +30,9 @@ class Pthread(concurrency.Concurrency):
     super().__init__(db)
 
 
+  def name(self):
+    return "pthreads"
+
   def lock_functions(self):
     return LOCK_FUNCTIONS
 
