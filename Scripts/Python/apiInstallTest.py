@@ -6,6 +6,7 @@ import shutil
 import re
 import os
 
+
 #Verify Python version
 
 requiredPythonVersionNums = (3, 12) # (major, minor)
@@ -30,6 +31,7 @@ undPath = os.path.normcase(re.sub(r'und(\.exe)*$','',undPath,flags=re.IGNORECASE
 if(undPath):
   print("Checking for Understand in PATH: Pass")
   print("  found at ",undPath)
+  os.add_dll_directory(undPath)
 else:
   print("Checking for Understand in PATH: Fail")
   print ("  Error: Add scitools/bin/[SYSTEM] to PATH and restart your session")
@@ -40,10 +42,7 @@ else:
 understandBit = 0
 caseSensitive = True;
 ldTest = False
-if 'pc-win32' in undPath:
-  understandBit = 32
-  caseSensitive = False;
-elif 'pc-win64' in undPath:
+if 'pc-win64' in undPath:
   understandBit = 64
   caseSensitive = False;
 elif 'linux32' in undPath:
