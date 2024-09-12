@@ -40,10 +40,12 @@ def define_options(check):
 def check(check, file):
   db = check.db()
   cache = check.cache()
+
+  shared_vars = {}
+  critical_sections = []
   for model in [ Pthread(db), Qt(db) ]:
     main_entry_points = lookup_main_entry_points(db, cache, model)
     thread_entry_points = lookup_thread_entry_points(db, cache, model)
-
     if not main_entry_points or not thread_entry_points:
       continue
 
@@ -55,29 +57,27 @@ def check(check, file):
     thread_iterator = itertools.combinations(thread_entry_points, r=2)
 
     # Build a mapping of shared variables to thread entry points.
-    shared_vars = {}
     for args in itertools.chain(main_iterator, thread_iterator):
       for shared_var in find_shared_variables(cache, *args):
         shared_vars.setdefault(shared_var, set()).update(set(args))
 
-    if not shared_vars:
+    # Remember critical sections.
+    critical_sections.extend(model.critical_sections(file))
+
+  # Emit violations for shared variables referenced in this file.
+  for ref in file.filerefs("use,modify,set ~init", "object ~local"):
+    # FIXME: The reference occurring inside of a critical section is not the
+    # same thing as both threads holding the same lock when the variable is
+    # referenced. The lockset algorithm defines a potential race to happen
+    # when the intersection of locksets held by the two threads is empty.
+    if any(section.contains(ref) for section in critical_sections):
       continue
 
-    # Emit violations for shared variables referenced in this file.
-    critical_sections = model.critical_sections(file)
-    for ref in file.filerefs("use,modify,set ~init", "object ~local"):
-      # FIXME: The reference occurring inside of a critical section is not the
-      # same thing as both threads holding the same lock when the variable is
-      # referenced. The lockset algorithm defines a potential race to happen
-      # when the intersection of locksets held by the two threads is empty.
-      if any(section.contains(ref) for section in critical_sections):
-        continue
-
-      var = ref.ent()
-      if entry_points := shared_vars.get(var):
-        names = thread_names(main_entry_points, entry_points)
-        err = ERR.format(var.name(), ", ".join(names))
-        check.violation(var, file, ref.line(), ref.column(), err)
+    var = ref.ent()
+    if entry_points := shared_vars.get(var):
+      names = thread_names(main_entry_points, entry_points)
+      err = ERR.format(var.name(), ", ".join(names))
+      check.violation(var, file, ref.line(), ref.column(), err)
 
 def find_shared_variables(cache, lhs_entry_point, rhs_entry_point):
   lhs_calls = lookup_calls(cache, lhs_entry_point)
