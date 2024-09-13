@@ -67,7 +67,7 @@ def addToPluginCache(duplLines, plugin):
   cache.clear()
   total = 0
   for file, lineset in duplLines.items():
-    cache.insert(len(lineset), file=file)
+    cache.insert(len(lineset), ent=file)
     total += len(lineset)
   cache.insert(total)
 

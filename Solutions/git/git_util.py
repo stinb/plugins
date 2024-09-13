@@ -71,7 +71,7 @@ def listFromLog(db, target, format):
 def fileToListFromCache(und_cache, db, key):
   fileToList = dict()
   for file in db.ents("file ~unknown ~unresolved"):
-    keyList = und_cache.value(file=file,key=key)
+    keyList = und_cache.value(ent=file,key=key)
     if keyList:
       fileToList[file] = keyList
   return fileToList
@@ -135,8 +135,8 @@ def targetAuthorCounts(plugin, target):
     und_cache = plugin.cache("Git")
     commits = set()
     for file in targetToFileList(target):
-      fileCommits = und_cache.value(key="commits", file=file, value=[])
-      fileAuthors = und_cache.value(key="authors", file=file, value=[])
+      fileCommits = und_cache.value(key="commits", ent=file, value=[])
+      fileAuthors = und_cache.value(key="authors", ent=file, value=[])
       for i in range(len(fileCommits)):
         if fileCommits[i] not in commits:
           commits.add(fileCommits[i])

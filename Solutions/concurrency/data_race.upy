@@ -1,0 +1,159 @@
+#
+#          Copyright (c) 2024, Scientific Toolworks, Inc.
+#
+# This file contains proprietary information of Scientific Toolworks, Inc.
+# and is protected by federal copyright law. It may not be copied or
+# distributed in any form or medium without prior written authorization
+# from Scientific Toolworks, Inc.
+#
+# Author: Jason Haslam
+#
+
+import understand
+import itertools
+from qt_concurrency import Qt
+from pthread_concurrency import Pthread
+
+ERR = "Potential data race on variable `{}` ({})"
+
+def id():
+  return "STI_DATA_RACE"
+
+def name():
+  return "SciTools/Data Race"
+
+def tags():
+  return [ "Severity: 0" ]
+
+def description():
+  return "Find variables with potential data races"
+
+def test_entity(file):
+  return file.kind().check("c file")
+
+def test_global(file):
+  return False
+
+def define_options(check):
+  pass
+
+def check(check, file):
+  db = check.db()
+  cache = check.cache()
+
+  shared_vars = {}
+  critical_sections = []
+  for model in [ Pthread(db), Qt(db) ]:
+    main_entry_points = lookup_main_entry_points(db, cache, model)
+    thread_entry_points = lookup_thread_entry_points(db, cache, model)
+    if not main_entry_points or not thread_entry_points:
+      continue
+
+    # Compare main entry points with all other threads separately. This is the
+    # Cartesian product of main entry points with thread entry points. Compare
+    # all other thread entry points with each other. This is all two element
+    # subsequences of the thread entry points.
+    main_iterator = itertools.product(main_entry_points, thread_entry_points)
+    thread_iterator = itertools.combinations(thread_entry_points, r=2)
+
+    # Build a mapping of shared variables to thread entry points.
+    for args in itertools.chain(main_iterator, thread_iterator):
+      for shared_var in find_shared_variables(cache, *args):
+        shared_vars.setdefault(shared_var, set()).update(set(args))
+
+    # Remember critical sections.
+    critical_sections.extend(model.critical_sections(file))
+
+  # Emit violations for shared variables referenced in this file.
+  for ref in file.filerefs("use,modify,set ~init", "object ~local"):
+    # FIXME: The reference occurring inside of a critical section is not the
+    # same thing as both threads holding the same lock when the variable is
+    # referenced. The lockset algorithm defines a potential race to happen
+    # when the intersection of locksets held by the two threads is empty.
+    if any(section.contains(ref) for section in critical_sections):
+      continue
+
+    var = ref.ent()
+    if entry_points := shared_vars.get(var):
+      names = thread_names(main_entry_points, entry_points)
+      err = ERR.format(var.name(), ", ".join(names))
+      check.violation(var, file, ref.line(), ref.column(), err)
+
+def find_shared_variables(cache, lhs_entry_point, rhs_entry_point):
+  lhs_calls = lookup_calls(cache, lhs_entry_point)
+  lhs_reads = set(lookup_reads(cache, lhs_entry_point, lhs_calls))
+  lhs_writes = set(lookup_writes(cache, lhs_entry_point, lhs_calls))
+  lhs_reads_writes = lhs_reads | lhs_writes
+
+  rhs_calls = lookup_calls(cache, rhs_entry_point)
+  rhs_reads = set(lookup_reads(cache, rhs_entry_point, rhs_calls))
+  rhs_writes = set(lookup_writes(cache, rhs_entry_point, rhs_calls))
+  rhs_reads_writes = rhs_reads | rhs_writes
+
+  # Shared variables are the the ones that are written on the LHS thread and
+  # read or written on the RHS thread, *or* the ones that are written on the
+  # RHS thread and read or written on the LHS thread. That is, the union
+  # of the intersections of writes from one thread with the union of the
+  # reads and writes from the other thread.
+  return ((lhs_writes & rhs_reads_writes) | (rhs_writes & lhs_reads_writes))
+
+def lookup_main_entry_points(db, cache, model):
+  key = "main_entry_points"
+  result = cache.value(key)
+  if result is None:
+    result = []
+    # FIXME: Lookup main entry points from model?
+    if arch := db.lookup_arch("Main Entry Points"):
+      result = arch.ents()
+    cache.insert(result, key)
+  return result
+
+def lookup_thread_entry_points(db, cache, model):
+  key = "thread_entry_points_{}".format(model.name())
+  result = cache.value(key)
+  if result is None:
+    result = model.thread_entry_points()
+    cache.insert(result, key)
+  return result
+
+def lookup_calls(cache, entry_point):
+  key = "calls"
+  result = cache.value(key, entry_point)
+  if result is None:
+    calls = set()
+    visit_call_tree(calls, entry_point)
+    result = list(calls)
+    cache.insert(result, key, entry_point)
+  return result
+
+def lookup_reads(cache, entry_point, calls):
+  key = "reads"
+  result = cache.value(key, entry_point)
+  if result is None:
+    reads = set()
+    for call in calls:
+      reads |= set(call.ents("use,modify", "object ~local"))
+    result = list(reads)
+    cache.insert(result, key, entry_point)
+  return result
+
+def lookup_writes(cache, entry_point, calls):
+  key = "writes"
+  result = cache.value(key, entry_point)
+  if result is None:
+    writes = set()
+    for call in calls:
+      writes |= set(call.ents("modify,set ~init", "object ~local"))
+    result = list(writes)
+    cache.insert(result, key, entry_point)
+  return result
+
+def visit_call_tree(result, root):
+  if root not in result:
+    result.add(root)
+    for callee in root.ents("call", "function"):
+      visit_call_tree(result, callee)
+
+def thread_names(main_entry_points, entry_points):
+  f = lambda arg: "main" if arg in main_entry_points else arg.longname()
+  return {f(entry_point) for entry_point in entry_points}
