@@ -1,0 +1,145 @@
+
+def name():
+  return 'Calls'
+
+def is_enabled_by_default():
+  return true
+  
+def style():
+  return 'With Global Objects (Classic)'
+
+def description():
+  return '''
+Creates a graph visualizing the call relationships of a selected function and its relationships with global objects
+
+<p>Key features:</p>
+<ul>
+<li>Customizable call depth to control the level of detail.</li>
+<li>Options for displaying entity names and file names.</li>
+<li>Control over the types of references to global objects (set, use/call, modify).</li>
+</ul>
+<br>
+<b>Example:</b><br>
+<img src=".doc/CallsWithObjects.png">
+'''
+
+def test_global():
+  return False
+
+ent_filter = ("function ~unknown ~unresolved,"
+              "method ~unknown ~unresolved,"
+              "procedure ~unknown ~unresolved,"
+              "vhdl process, vhdl architecture,"
+              "cobol paragraph, cobol section"
+             )
+ref_filter = "call, cobol perform, cobol goto"
+
+def test_entity(entity):
+  return entity.kind().check(ent_filter)
+
+def init(graph, entity):
+  # Options
+  graph.options().define("Calls Depth", [ "1", "2", "3", "4", "5", "All" ], "3")
+  graph.options().define("Name", ["Shortname", "Fullname", "None (Overview Mode)"], "Shortname")
+  graph.options().define("File Name", ["Shortname", "Fullname", "Relative", "None"], "None")
+  graph.options().define("References", ["Simple", "All"], "All")
+
+  # Legend
+  graph.legend().define("func", "rectangle", entity.kindname(), '#90c4e4', '', 0, 0)
+  graph.legend().define("global", "ellipse", "Global Object", '#90c4e4', '', 1, 0)
+  graph.legend().define("set", "arrow", "Set", '#569f38', '', 0, 1)
+  graph.legend().define("modify", "arrow", "Modify", '#e45721', '', 1, 1)
+  graph.legend().define("use", "arrow", "Use/Call", '#4e8cb9', '', 2, 1)
+
+def draw(graph, entity):
+  graph.default('rankdir', 'LR', 'graph')
+  graph.default('color', '#90c4e4', 'node')
+  graph.default('shape', 'box', 'node')
+  graph.default('color', '#4e8cb9', 'edge')
+
+  depth = graph.options().lookup("Calls Depth")
+  if depth == "All":
+    depth = -1
+  else:
+    depth = int(depth)
+
+  curLevel = []
+  curLevel.append(entity)
+  visited = set()
+  nodes = dict()
+
+  # Loop over the levels of the tree
+  while curLevel:
+    nextLevel = []
+    for ent in curLevel:
+      # avoid visiting nodes multiple times
+      if ent in visited:
+        continue
+      visited.add(ent)
+
+      # Get a graphviz node for the entity
+      tail = grab_node(graph,nodes,ent)
+
+      # Call Edges
+      if depth != 0:
+        for ref in ent.refs(ref_filter,ent_filter,True):
+          headEnt = ref.ent()
+          nextLevel.append(headEnt)
+          head = grab_node(graph,nodes,headEnt)
+          edge = graph.edge(tail,head)
+
+      # Global Object edges
+      globals = set()
+      global_edges(graph, globals, nodes, ent, "~modify set, ~modify init", "#569f38")
+      global_edges(graph, globals, nodes, ent, "~modify ~set ~init", "#4e8cb9")
+      global_edges(graph, globals, nodes, ent, "modify ~set ~init", "#e45721")
+
+    if depth == 0:
+      curLevel = []
+    else:
+      curLevel = nextLevel
+    depth -= 1
+
+def global_edges(graph, visited, nodes, ent, refkindstr, color):
+  tail = grab_node(graph,nodes,ent)
+  for ref in ent.refs(refkindstr,"global object",True):
+    headEnt = ref.ent()
+    if graph.options().lookup("References") == "Simple" and headEnt in visited:
+      continue
+    visited.add(headEnt)
+    edge = graph.edge(tail, grab_node(graph,nodes,headEnt))
+    edge.set("color", color)
+    if graph.options().lookup("References") == "All":
+      edge.set("label", ref.kindname())
+      edge.sync(ref)
+
+def grab_node(graph, nodes, ent):
+  if ent in nodes:
+    node = nodes[ent]
+  else:
+    if ent.kind().check("global object"):
+      # Global Object Style
+      node = graph.node(ent.name(), ent)
+      node.set("shape","oval")
+    else:
+      # Function Style
+      label = ""
+      if graph.options().lookup("Name") == "Fullname":
+        label = ent.longname()
+      elif graph.options().lookup("Name") == "Shortname":
+        label = ent.name()
+
+      filename = graph.options().lookup("File Name")
+      if filename != "None" and not ent.kind().check("file"):
+        defref = ent.ref("definein,declarein")
+        if defref:
+          if filename == "Relative":
+            label += "\n" + defref.file().relname()
+          elif filename == "Fullname":
+            label += "\n" + defref.file().longname()
+          else:
+            label += "\n" + defref.file().name()
+      node = graph.node(label, ent)
+    nodes[ent] = node
+  return node
+

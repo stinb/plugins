@@ -1,0 +1,429 @@
+use base ("Understand::Extension");
+use strict;
+
+sub language { return "Assembly"; }
+sub name { return "1750A"; }
+sub description { return ""; }
+
+sub parse_supports_includes { return 0; }
+
+
+# Tokens
+use constant {
+  _EOF         => 0,
+  _WS          => 1,
+  _NEWLINE     => 2,
+  _COMMENT     => 3,
+  _IDENTIFIER  => 4,
+  _NUMBER      => 5,
+  _LABEL       => 6,
+  _INSTRUCTION => 7,
+  _DIRECTIVE   => 8,
+  _REGISTER    => 9,
+  _KEYWORD     => 10,
+  _OPERATOR    => 11,
+  _LPAREN      => 12,
+  _RPAREN      => 13,
+  _DOLLAR      => 14,
+  _MISC        => 15,
+  _UNKNOWN     => 16,
+};
+
+# Map tokens to standard editor styles
+sub token_styles {
+  return (
+    _WS, "whitespace",
+    _COMMENT, "comment",
+    _IDENTIFIER, "identifier",
+    _NUMBER,"number",
+    _LABEL, "label",
+    _INSTRUCTION, "keyword",
+    _DIRECTIVE, "keyword",
+    _OPERATOR, "operator"
+  );
+}
+
+# Indicate valid characters in editor words.
+sub editor_word_definition {
+  return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@#\$\'";
+}
+
+
+our %alt_instructions = map {$_=>1} qw(
+  abs absf absl add addf addl addx and bc bcge bcle bcn bcnz bcp bcz bge ble
+  bn bnz bp br brk bz call clri cmp cmpf cmpl cmprng cmpx decbnz div divf
+  divl divq divx float floatl halt intgr intgrx ld ldb ldl ldm ldst ldx movbk
+  mul mulf mull mulq mulx nand neg negf negl nop or popm pushm ret rol roll
+  rolr rolrl seti shl shll shlr shlra shlral shlrl shr shra shral shrl st stb
+  stl stm stmi stx sub subf subl subx testi testseti xch xchb xio xiom xor
+);
+
+our %std_instructions = map {$_=>1} qw(
+  a ab abs abx aim aisp and andb andm andr andx ar bex bez bge bgt blt bnz
+  br bpt c cb cbl cbx cim cisn cisp cr d da dabs dar db dbx dc dcr dd ddr
+  decm dim disn disp dl dlb dlbx dli dlr dm dmr dneg dr ds dsar dscr dslc
+  dsll dslr dsr dsra dsrl dst dstb dsti dstx dv dvim dvr efa efar efc efcr
+  efd efdr efix efl eflt efm efmr efs efsr efst fa fab fabs fabx far fc fcb
+  fcbx fcr fd fdb fdbx fdr fix flt fm fmb fmbx fmr fneg fs fsb fsbx fsr incm
+  jc jci js l lb lbx li lim lisn lisp llb llbi lm lr lst lsti lub lubi m mb
+  mbx mim mov mr ms msim msin msr n neg nim nop nr or orb orbx orim orr popm
+  pshm rb rbi rbr rvbr s sar sb sbb sbbx sbi sbr scr sim sisp sjs slbi slc
+  sll slr soj sr sra srl srm st stb stbx stc stci sti stlb stm stub subi svbr
+  tb tbi tbr tsb tvbr urs vio xbr xio xor xorm xorr xwr
+);
+
+# last operand is modify ref
+our %mod_instructions = map {$_=>1} qw(
+  a ab abx add addf addl addx aim aisp and and andb andm andr andx ar d da
+  dar db dbx dd ddr decm dim disn disp div divf divl divq divx dm dmr dr ds
+  dsar dscr dslc dsll dslr dsr dsra dsrl dv dvim efa efar efd efdr efm efmr
+  efs efsr fa fab fabx far fd fdb fdbx fdr fm fmb fmbx fmr fs fsb fsbx fsr
+  incm m mb mbx mim misn misp mr ms msim msr mul mulf mull mulq mulx n nand
+  nim nr or or orb orbx orim orr rol roll rolr rolrl s sar sbb sbbx scr shl
+  shll shlr shlra shlral shlrl shr shra shral shrl sim sisp slc sll slr sr
+  sra srl sub subf subl subx xor xorm xorr
+);
+
+# last operand is set ref
+our %set_instructions = map {$_=>1} qw(
+  abs absf absl clri dabs dneg dst dstb dsti dstx efix efl eflt fabs fix
+  float floatl flt fneg intgr intgrx ldb ldx llb llbi lub lubi neg negf
+  negl rb rbi rbr rsirvbr sb sbi sbr seti slbi st stb stb stbx stc stci
+  sti stl stlb stub subi svbr
+);
+
+# non-standard set/modify
+our %mod1_instructions = map {$_=>1} qw(
+  decbnz ldm lm mov movbk popm soj xbr xch xchb xwr
+);
+
+
+our %directives = map {$_=>1} qw(
+  absolute accept adjust alias amend ameta base bi#dec binary bound cbase
+  checksum cmnd column common compool csect datum debug define dictionary
+  data drop dsect dualmeta else end endif equ error fixed floats gen goto
+  heading if ifs inst jumpsym jumpval ksize label lend length libmode
+  libname library lines list listmode listing litorg logical loop loopexit
+  looptest mend mended meta metaprint module negative numbase origin output
+  page pend physical print printoff printval prohol punch range refer
+  refroutine release relocate rename resend reserve reservnum searchproc
+  segref set size space spunch status string structure subroutine tabset
+  title undefine using value values version void warning wend withhold
+);
+
+our %keywords = map {$_=>1} qw(
+  abs addr adr af bcd bin bit br by by# c c# ca cf ch char cv da dbl dec
+  dep disp ef el exp fl frac fx gf ha hb hex hol holc is lb lf line lmask
+  lsv mask n# nc nl num oct off op macpass pagcon page par rel rem sc sn
+  sp sv type uv vs wa
+);
+
+
+sub lex {
+  my ($self,$lexer,$input,$line) = @_;
+  $_ = $input;
+
+  # beginning of line
+  my $column = $lexer->column();
+  if ($column == 0) {
+
+    # continuation line
+    if ($self->{lex_cache_continuing}[$line-1]) {
+      $self->{lex_field} = $self->{lex_cache_field}[$line-1];
+      $self->{lex_paren} = $self->{lex_cache_paren}[$line-1];
+    }
+
+    # non-continuation line
+    else {
+      $self->{lex_field} = 0;
+      $self->{lex_paren} = 0;
+    }
+  }
+
+  my $token;
+  my $text;
+
+  # newline
+  if (/^[\r\n]+/o) {
+    $token = _NEWLINE;
+    $self->{lex_cache_field}[$line] = 0;
+    $self->{lex_cache_paren}[$line] = 0;
+    $self->{lex_cache_continuing}[$line] = 0;
+  }
+
+  # comment field
+  elsif ($self->{lex_field} >= 3) {
+    /^[^\r\n]*/o; # match everything to EOL
+    $token = _COMMENT;
+    $text = $&;
+  }
+
+  # comment line
+  elsif ($column == 0 && /^\*[^\r\n]*/o) {
+    $token = _COMMENT;
+  }
+
+  # . comment
+  elsif (!$self->{lex_paren} && /^([ \t]+)\.[ \t]+/o) {
+    $token = _WS;
+    $text = $1;
+    $self->{lex_field} = 3;
+  }
+
+  # whitespace
+  elsif (/^[ \t]+/o) {
+    # comment to EOL
+    if (!$self->{lex_paren} &&
+        ((length $& >= 15 && $lexer->optionLeadingSpaces()) || $self->{lex_field} >= 2)) {
+      /^.*/o; # match everything to EOL
+      $token = _COMMENT;
+      $text = $&;
+    }
+    else {
+      $token = _WS;
+      $self->{lex_field} = $self->{lex_field} + 1 if !$self->{lex_paren};
+    }
+  }
+
+  # number
+  elsif (/^[0-9][0-9a-zA-Z]*/o) {
+    $token = _NUMBER;
+  } elsif (/^(hex|oct|bin|fl|fx)\([^)]*\)/io) {
+    $token = _NUMBER;
+  }
+
+  # register
+  elsif (/^R(B)?(0|1[0-5]?|[2-9])/io) {
+    $token = _REGISTER;
+  }
+
+  # identifier
+  elsif (/^[a-zA-Z_\$][a-zA-Z_\$0-9@#\']*/o) {
+    if ($& =~ /^\$$/) {
+      $token = _DOLLAR;
+    } elsif ($self->{lex_field} == 0) {
+      $token = _LABEL;
+    } elsif ($self->{lex_field} == 2) {
+      $token = _IDENTIFIER;
+    } elsif (exists $std_instructions{lc $&} ||
+        exists $alt_instructions{lc $&}) {
+      $token = _INSTRUCTION;
+    } elsif (exists $directives{lc $&}) {
+      $token = _DIRECTIVE;
+    } elsif (exists $keywords{lc $&}) {
+      $token = _KEYWORD;
+    } else {
+      $token = _UNKNOWN;
+    }
+  }
+
+  # (
+  elsif (/^\(/o) {
+    $token = _LPAREN;
+    $self->{lex_paren}++;
+  }
+
+  # )
+  elsif (/^\)/o) {
+    $token = _RPAREN;
+    $self->{lex_paren}--;
+  }
+
+  # operator
+  elsif (/^\.(not|nq|lq|lt|gq|gt|eq|eor|or|and)\./io ||
+         /^\*[\*]?/o ||
+         /^\+|-|\//o) {
+    $token = _OPERATOR;
+  }
+
+  # line continuation
+  elsif (/^;$/o) {
+    $token = _MISC;
+    $self->{lex_cache_continuing}[$line] = 1;
+    $self->{lex_cache_field}[$line] = $self->{lex_field};
+    $self->{lex_cache_paren}[$line] = $self->{lex_paren};
+  }
+
+  # unknown
+  elsif (/^./o) {
+    $token = _UNKNOWN;
+  }
+
+  # eof
+  else {
+    $token = _EOF;
+  }
+
+  $text = $& if !$text;
+  $lexer->set($token,length $text);
+}
+
+
+sub parse {
+  my ($self,$parser,$lexer) = @_;
+
+  $self->{globals} = {};
+  $self->{locals} = {};
+
+  # entity and reference kinds
+  my $fileKind = "assembly file ~unknown ~unresolved";
+  my $globalKind = "assembly global label";
+  my $localKind = "assembly local label";
+  my $externalKind = "assembly unresolved symbol";
+  my $declareKind = "assembly declare";
+  my $defineKind = "assembly define";
+  my $useKind = "assembly use";
+
+  # get entity id for file
+  my $file = $parser->file();
+
+  # scope for call refs
+  my $scope = $file;
+
+  my $token = $lexer->token();
+  while ($token != _EOF) {
+    if ($token == _DIRECTIVE) {
+      my $text = $lexer->text();
+
+      # DEFINE
+      if ($text =~ /define/i) {
+        $token = $lexer->next();
+        while ($token != _EOF && $self->{lex_field} == 2) {
+          if ($lexer->token() == _IDENTIFIER) {
+            my $text = $lexer->text();
+            my $lc_text = lc($text);
+            my $linkname = $lc_text;
+            $linkname =~ s/\'/_/g;
+            my $entity = $parser->entity($globalKind,$text,"","","",$linkname);
+            $parser->ref($declareKind,$file,$entity,$lexer->line(),$lexer->column());
+            $self->{globals}{$lc_text} = $entity;
+          }
+          $token = $lexer->next();
+        }
+      }
+
+      # REFER/SUBROUTINE
+      elsif ($text =~ /refer|subroutine/i) {
+        $token = $lexer->next();
+        while ($token != _EOF && $self->{lex_field} == 2) {
+          if ($lexer->token() == _IDENTIFIER) {
+            my $text = $lexer->text();
+            my $lc_text = lc($text);
+            my $linkname = $lc_text;
+            $linkname =~ s/\'/_/g;
+            my $entity = $parser->entity($externalKind,$text,"","","",$linkname);
+            $parser->ref($declareKind,$file,$entity,$lexer->line(),$lexer->column());
+            $self->{globals}{$lc_text} = $entity;
+          }
+          $token = $lexer->next();
+        }
+      }
+    }
+
+    elsif ($token == _INSTRUCTION) {
+      parse_instruction($self,$parser,$lexer,$scope);
+    }
+
+    # Label
+    elsif ($token  == _LABEL) {
+      my $text = $lexer->text();
+      my $lc_text = lc($text);
+
+      # global
+      if (exists $self->{globals}{$lc_text}) {
+        my $entity = $self->{globals}{$lc_text};
+        $parser->ref($defineKind,$file,$entity,$lexer->line(),$lexer->column());
+        $scope = $entity;
+      }
+
+      # local
+      else {
+        my $text = $lexer->text();
+        my $lc_text = lc($text);
+        my $entity;
+        if (exists $self->{locals}{$lc_text}) {
+          $entity = $self->{locals}{$lc_text};
+        } else {
+          $entity = $parser->entity($localKind,$text,"","","","");
+          $self->{locals}{$lc_text} = $entity;
+        }
+        $parser->ref($defineKind,$file,$entity,$lexer->line(),$lexer->column());
+        $scope = $entity;
+      }
+    }
+
+    # Identifier
+    elsif ($token == _IDENTIFIER) {
+      my $text = $lexer->text();
+      my $lc_text = lc($text);
+      my $entity;
+      if (exists $self->{globals}{$lc_text}) {
+        $entity = $self->{globals}{$lc_text};
+      } elsif (exists $self->{locals}{$lc_text}) {
+        $entity = $self->{locals}{$lc_text};
+      } else {
+        $entity = $parser->entity($localKind,$text,"","","","");
+        $self->{locals}{$lc_text} = $entity;
+      }
+      $parser->ref($useKind,$scope,$entity,$lexer->line(),$lexer->column());
+    }
+
+    $token = $lexer->next();
+  }
+}
+
+
+sub parse_instruction {
+  my ($self,$parser,$lexer,$scope) = @_;
+
+  my $callKind = "assembly call";
+  my $useKind = "assembly use";
+  my $setKind = "assembly set";
+  my $modKind = "assembly modify";
+
+  my $instruction = lc $lexer->text();
+  $lexer->next();
+
+  # gather id's
+  my @ids;
+  while ($lexer->token != _EOF && $self->{lex_field} == 2) {
+    if ($lexer->token() == _IDENTIFIER) {
+      my $token = {};
+      $token->{text} = $lexer->text();
+      $token->{line} = $lexer->line();
+      $token->{column} = $lexer->column();
+      push @ids,$token;
+    }
+    $lexer->next();
+  }
+
+  # last id of modify or set instruction
+  if (exists $mod_instructions{$instruction}) {
+    ref_id($self,$parser,$scope,$modKind,pop @ids);
+  } elsif (exists $set_instructions{$instruction}) {
+    ref_id($self,$parser,$scope,$setKind,pop @ids);
+  }
+
+  my $kind = $useKind;
+  $kind = $callKind if ($instruction =~ /call/);
+
+  for my $token (@ids) {
+    ref_id($self,$parser,$scope,$kind,$token);
+  }
+}
+
+
+sub ref_id {
+  my ($self,$parser,$scope,$kind,$token) = @_;
+  return if !$token;
+
+  my $text = lc $token->{text};
+  my $line = $token->{line};
+  my $column = $token->{column};
+
+  if (exists $self->{globals}{$text}) {
+    $parser->ref($kind,$scope,$self->{globals}{$text},$line,$column);
+  } elsif (exists $self->{locals}{$text}) {
+    $parser->ref($kind,$scope,$self->{locals}{$text},$line,$column);
+  }
+}

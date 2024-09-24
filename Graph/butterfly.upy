@@ -1,0 +1,259 @@
+import re
+import random
+
+
+def name():
+    return 'Butterfly'
+
+def is_enabled_by_default():
+  return True
+  
+def style():
+    return 'Classic'
+
+def description():
+    return '''
+Explore call relationships, class hierarchies, and other dependencies between entities in your code.
+
+<p><b>Features:</b></p>
+<ul>
+    <li>Displays forward and inverse relationships (e.g., "Calls" and "Called By," "Base Classes" and "Derived Classes").</li>
+    <li>Configurable depth for exploring relationships.</li>
+    <li>Options to display entity short names, full names, or filename.</li>
+    <li>Toggle for showing unresolved entities.</li>
+    <li>Random edge color option for visual distinction.</li>
+    <li>Support for virtual calls.</li>
+</ul>
+<br>
+<b>Example:</b><br>
+<img src=".doc/butterfly.png">
+'''
+
+def test_entity(entity):
+    return entity.kind().check('ada entry, ada function, ada package, ada procedure, ada protected, ada task, ada type, assembly label, basic method, basic class, basic struct, c function, c class, c struct, c union, c file, csharp method, csharp class, csharp struct, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, fortran file, java method, java class ~anonymous, java interface, jovial file, jovial subroutine, pascal compunit, pascal function, pascal procedure, pascal class, pascal interface, pascal file, python function, vhdl procedure, vhdl function, vhdl process, vhdl architecture, vhdl entity, vhdl architecture, vhdl package, vhdl configuration, web function')
+
+
+def test_global():
+    return False
+
+
+def init(graph, entity):
+    global forward, inverse, forwardRel, inverseRel
+
+    if entity.kind().check('ada entry, ada function, ada package, ada procedure, ada protected, ada task, assembly label, basic method, c function, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial file, jovial subroutine, pascal compunit, pascal function, pascal procedure, python function, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function'):
+        forward = 'Calls'
+        forwardRel = 'ada call ~dispatch, ada with, assembly call, basic call ~virtual, basic use ptr, c call ~virtual, c use ptr, csharp call ~virtual, csharp use ptr, fortran call, java call, jovial call, jovial asm use, pascal call ~virtual, python call, vhdl call, web call'
+        inverse = 'Called By'
+        inverseRel = 'ada callby, ada withby, assembly callby, basic callby, basic useby ptr, c callby ~inactive, c useby ptr, csharp callby, csharp useby ptr, fortran callby, java callby, jovial callby, jovial asm useby, pascal callby, python callby, vhdl callby, web callby'
+    elif entity.kind().check('basic class, basic struct, csharp class, csharp struct, c class, c struct, c union'):
+        forward = 'Derived Classes'
+        forwardRel = 'derive'
+        inverse = 'Base Classes'
+        inverseRel = 'base'
+    elif entity.kind().check('pascal class, pascal interface, java class ~anonymous, java interface'):
+        forward = 'Extended By'
+        forwardRel = 'derive, extendby ~implicit'
+        inverse = 'Extends'
+        inverseRel = 'derivefrom, extend ~implicit'
+    elif entity.kind().check('ada type'):
+        forward = 'Type'
+        forwardRel = 'derive'
+        inverse = 'Type Derived From'
+        inverseRel = 'derivefrom'
+    elif entity.kind().check('c file, fortran file, pascal file'):
+        forward = 'Include'
+        forwardRel = 'include ~inactive'
+        inverse = 'Includeby'
+        inverseRel = 'includeby ~inactive'
+    elif entity.kind().check('vhdl entity, vhdl architecture, vhdl package, vhdl configuration'):
+        forward = 'Use'
+        forwardRel = 'vhdl use name'
+        inverse = 'Useby'
+        inverseRel = 'vhdl useby name'
+    else:
+        return
+
+    graph.options().define(forward + ' Depth', ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], '3')
+    graph.options().define(inverse + ' Depth', ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'], '3')
+    graph.options().define('Name', ['Shortname', 'Fullname', 'None (Overview Mode)'], 'Shortname')
+    graph.options().define('Filename', ['None','Shortname', 'Fullname', 'Relative'], 'None')
+    graph.options().define('Unresolved', ['Off', 'On'], 'On')
+    graph.options().define('Random Edge Color', ['Off', 'On'], 'Off')
+    if forward == 'Calls':
+        graph.options().define('Virtual Calls', ['Off', 'On'], 'Off')
+    graph.options().define('Intrinsic', ['Off', 'On'], 'On')
+
+
+def draw(graph, entity):
+    graph.default('rankdir', 'LR', 'graph')
+    graph.default('color', '#90c4e4', 'node')
+    graph.default('shape', 'box', 'node')
+    graph.default('color', '#4e8cb9', 'edge')
+
+    # create start node
+    nodes = {}
+    start = get_node(nodes, graph, entity, True)
+    save_nodes = nodes.copy()
+    start.set('fillcolor', '#1976d2')
+    start.set('fontcolor', 'white')
+
+    # draw forward relations
+    draw_tree(graph, entity, nodes, 0, forward, forwardRel, True)
+
+    # draw inverse relations
+    nodes = save_nodes
+    draw_tree(graph, entity, nodes, 0, inverse, inverseRel, False)
+
+
+def get_node(nodes, graph, ent, create):
+    # build id
+    id = ent.id()
+
+    # return existing node
+    if id in nodes:
+        return nodes[id]
+
+    # don't create new node
+    if not create:
+        return None
+
+    # build label
+    label = ' '
+    if graph.options().lookup('Name') == 'Fullname':
+        label = ent.longname()
+    elif graph.options().lookup('Name') == 'Shortname':
+        label = ent.name()
+
+    filenameopt = graph.options().lookup('Filename')
+    deffile = ent.ref('definein, declarein')
+
+    if deffile and filenameopt != 'None' and not ent.kind().check('file'):
+        if filenameopt == 'Shortname':
+            label += '\n' + deffile.file().name()
+        elif filenameopt == 'Fullname':
+            label += '\n' + deffile.file().longname()
+        elif filenameopt == 'Relative':
+            label += '\n' + deffile.file().relname()
+    label = re.sub('\\\\','\\\\\\\\', label)
+
+    # build node
+    node = graph.node(label, ent)
+    nodes[id] = node
+
+    # set attributes
+    if ent.kind().check('unresolved, unknown, undefined'):
+        node.set('shape', 'octagon')
+        node.set('color', 'gray')
+
+    return node
+
+
+def get_virtual_node(nodes, graph, ent, create):
+    # build id
+    id = 'v' + str(ent.id())
+
+    # return existing node
+    if id in nodes:
+        return nodes[id]
+
+    # don't create new node
+    if not create:
+        return None
+
+    # build label
+    label = 'Virtual'
+
+    # build node
+    node = graph.node(label, ent)
+    nodes[id] = node
+
+    # set attributes
+    node.set('shape', 'plaintext')
+    node.set('style', 'bold')
+
+    return node
+
+
+def new_edge(graph, start, end, dir):
+    if dir:
+        edge = graph.edge(start, end)
+    else:
+        edge = graph.edge(end, start)
+    if graph.options().lookup('Random Edge Color') == 'On':
+        edge.set('color', randomColor())
+
+    return edge
+
+
+def draw_tree(graph, ent, nodes, depth, type, typelist, dir):
+    # don't draw some entities
+    if depth > int(graph.options().lookup(type + ' Depth')):
+        return None
+    if graph.options().lookup('Unresolved') == 'Off' and ent.kind().check('unresolved, unknown, undefined'):
+        return None
+    if graph.options().lookup('Intrinsic Functions') == 'Off' and ent.kind().check('intrinsic'):
+        return None
+
+    # lookup existing node
+    start = get_node(nodes, graph, ent, False)
+    if start and depth > 0:
+        return start
+
+    # create node
+    if not start:
+        start = get_node(nodes, graph, ent, True)
+
+    # build list of main refs to follow
+    refs = ent.refs(typelist, '', True)
+
+    # process refs
+    children = set()
+    refs.sort(key=lambda x: x.line())
+    for childRef in refs:
+        child = childRef.ent()
+        node = draw_tree(graph, child, nodes, depth+1, type, typelist, dir)
+        if node and node not in children:
+            new_edge(graph, start, node, dir)
+            children.add(node)
+
+    # handle virtual calls
+    if graph.options().lookup('Virtual Calls') == 'On' and dir:
+        virtuals = ent.refs('java call, call virtual', 'function, method', True)
+        if virtuals:
+            virNode = get_virtual_node(nodes, graph, ent, True)
+            edge = new_edge(graph, start, virNode, dir)
+            virtEnts = virtuals
+            for childRef in virtuals:
+                for orRef in childRef.ent().refs('overriddenby, overrideby', '', True):
+                    virtEnts.append(orRef)
+            for childRef in virtEnts:
+                child = childRef.ent()
+                child_node = draw_tree(graph, child, nodes, depth+1, type, typelist, dir)
+                if child_node:
+                    new_edge(graph, virNode, child_node, dir)
+
+    # handle virtual callbys
+    elif graph.options().lookup('Virtual Calls') == 'On' and not dir:
+        virtEnts = []
+        for orRef in ent.refs('overrides, override', '', True):
+            virtuals = orRef.ent().refs('java callby, callby virtual', 'function, method', True)
+            virtEnts += virtuals
+        if virtEnts:
+            virNode = get_virtual_node(nodes, graph, ent, True)
+            edge = new_edge(graph, start, virNode, dir)
+            for childRef in virtEnts:
+                child = childRef.ent()
+                child_node = draw_tree(graph, child, nodes, depth+1, type, typelist, dir)
+                if child_node:
+                    new_edge(graph, virNode, child_node, dir)
+
+    return start
+
+
+def randomColor():
+    bgc = ['', '', '']
+    for c in bgc:
+        r = random.randint(0, 180)
+        c = format(140, 'X')
+    color = ''.join(bgc)
+    return '#' + color

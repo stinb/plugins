@@ -1,0 +1,441 @@
+import re
+
+def name():
+  return 'Butterfly'
+
+def is_enabled_by_default():
+  return True
+
+def style():
+  return 'Compare (Classic)'
+
+def description():
+    return '''
+Explore changes to call relationships, class hierarchies, and other dependencies over time.
+
+<p><b>Features:</b></p>
+<ul>
+    <li>Highlight added, removed, or modified code elements.</li>
+    <li>Displays forward and inverse relationships (e.g., "Calls" and "Called By," "Base Classes" and "Derived Classes").</li>
+    <li>Configurable depth for exploring relationships.</li>
+    <li>Options to display entity short names, full names, or filename.</li>
+    <li>Toggle for showing unresolved entities.</li>
+</ul>
+<br>
+<b>Example:</b><br>
+<img src=".doc/butterfly_compare.png">
+
+'''
+
+colors = ("#4e8cb9", "#afd870", "#e45721", "#8f8f8f")
+kBoth = -1
+kMod = 0
+kNew = 1
+kOld = 2
+kUnknown = 3
+
+kDashDashComments = re.compile(r"\-\-.*?\n") # -- style comments
+kSlashSlashComments = re.compile(r"\/\/.*?\n") # // style comments
+kSlashStarComments = re.compile(r"\/\*.*?\*\/", re.DOTALL) # /* */ style comments
+kExclamationComments = re.compile(r"\!.*?\n") # ! style comments
+kFirstCharComments = re.compile(r"^[cC*dD].*?\n") # (c,C,*,d,D) first character comments
+kQuoteComments = re.compile(r"\".*?\"") # " " style comments
+kPercentComments = re.compile(r"\%.*?\%") # % % style comments
+kParenStarComments = re.compile(r"\(\*.*?\*\)") # (* *) style comments
+kCurlyBraceComments = re.compile(r"\{.*?\}") # { } style comments
+kHtmlComments = re.compile(r"\<\!\-\-.*?\-\-\>") # <~-- --> style comments
+kWhitespace = re.compile(r"[\s\r\n]+")
+
+kLangComments = {
+  "Ada"     : [kDashDashComments],
+  "C++"     : [kSlashSlashComments, kSlashStarComments],
+  "C#"      : [kSlashSlashComments, kSlashStarComments],
+  "Fortran" : [kExclamationComments,kFirstCharComments],
+  "Java"    : [kSlashSlashComments, kSlashStarComments],
+  "Jovial"  : [kQuoteComments, kPercentComments],
+  "Pascal"  : [kSlashSlashComments, kParenStarComments, kCurlyBraceComments],
+  "PL/M"    : [kSlashSlashComments, kSlashStarComments],
+  "VHDL"    : [kDashDashComments],
+  "Web"     : [kHtmlComments, kSlashSlashComments, kSlashStarComments]
+}
+
+kEntKind = 0
+kForwardName = 1
+kForwardKind = 2
+kReverseName = 3
+kReverseKind = 4
+kKinds = [
+  [("ada entry, ada function, ada package, ada procedure, ada protected, ada task,"
+    "assembly label,"
+    "basic method,"
+    "c function,"
+    "cobol program,"
+    "csharp method,"
+    "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+    "java method,"
+    "jovial file, jovial subroutine,"
+    "pascal compunit, pascal function, pascal procedure,"
+    "php function,"
+    "vhdl procedure, vhdl function, vhdl process, vhdl architecture"),
+   "Calls",
+   ("ada call ~dispatch,"
+    "ada with,"
+    "assembly call,"
+    "basic call, basic use ptr,"
+    "c call, c use ptr,"
+    "cobol call,"
+    "csharp call, csharp use ptr,"
+    "fortran call,"
+    "java call,"
+    "jovial call, jovial asm use,"
+    "pascal call,"
+    "php call,"
+    "vhdl call"),
+   "Called By",
+   ("ada callby,"
+    "ada withby,"
+    "assembly callby,"
+    "basic callby, basic useby ptr,"
+    "c callby ~inactive, c useby ptr,"
+    "cobol callby,"
+    "csharp callby, csharp useby ptr,"
+    "fortran callby,"
+    "java callby,"
+    "jovial callby, jovial asm useby,"
+    "pascal callby,"
+    "php callby,"
+    "vhdl callby")
+  ],
+  ["basic class, basic struct,csharp class, csharp struct,c class, c struct, c union",
+   "Derive",
+   "derive",
+   "Base",
+   "base"
+  ],
+  ["pascal class, pascal interface,java class ~anonymous, java interface",
+   "Extended By",
+   "derive,extendby ~implicit",
+   "Extends",
+   "derivefrom,extend ~implicit"
+  ],
+  ["ada type",
+   "Derive",
+   "derive",
+   "Derive From",
+   "derivefrom"
+  ],
+  ["c file, fortran file, pascal file",
+   "Include",
+   "include ~inactive",
+   "Includeby",
+   "includeby ~inactive"
+  ],
+  ["vhdl entity,vhdl architecture,vhdl package,vhdl configuration",
+   "Use",
+   "vhdl use name",
+   "Useby",
+   "vhdl useby name"
+  ],
+  ["cobol paragraph, cobol section",
+   "Perform",
+   "cobol perform,cobol goto",
+   "Performby",
+   "cobol performby,cobol gotoby",
+  ]
+]
+
+
+def test_entity(entity):
+  for kindDef in kKinds:
+    if entity.kind().check(kindDef[kEntKind]):
+      return True
+  return False
+
+def init(graph, entity):
+  forward = ""
+  reverse = ""
+  for kindDef in kKinds:
+    if entity.kind().check(kindDef[kEntKind]):
+      forward = kindDef[kForwardName]
+      reverse = kindDef[kReverseName]
+      break
+
+  # Options
+  graph.options().define(forward +" Depth",[ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" ], "3")
+  graph.options().define(reverse + " Depth",[ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" ], "3")
+  graph.options().define("Name", ["Shortname", "Fullname", "None (Overview Mode)"], "Shortname")
+  graph.options().define("File Name",["Shortname","Fullname","Relative","None"],"None")
+  graph.options().define("Unresolved",["On","Off"],"On")
+  if forward == "Calls":
+    graph.options().define("Virtual Calls",["On","Off"],"Off")
+  graph.options().define("Intrinsic Functions",["On","Off"],"On")
+  graph.options().define("Modified Entities", ["Ignore comments/spaces/newlines", "Include all modifications"], "Ignore comments/spaces/newlines")
+  graph.options().define("Background Colors",["On","Off"],"On")
+  graph.options().define("Show Version Differences",["Both","Added Only","Removed Only"],"Both")
+
+  # Legend
+  graph.legend().define("refBoth", "arrow", "Reference in Both", "", "", 0,0);
+  graph.legend().define("refNew", "arrow", "Added Reference", colors[kNew], colors[kNew], 1,0);
+  graph.legend().define("refOld", "arrow", "Removed Reference", colors[kOld], colors[kOld], 2,0);
+
+  graph.legend().define("entBoth", "roundedrect", "Entity in Both", "", "", 0,1);
+  graph.legend().define("entMod", "roundedrect", "Modified Entity", "", colors[kMod], 1,1);
+  graph.legend().define("entNew", "roundedrect", "Added Entity", "", colors[kNew], 2,1);
+  graph.legend().define("entOld", "roundedrect", "Removed Entity", "", colors[kOld], 3,1);
+  graph.legend().define("entUnknown", "roundedrect", "Unresolved Entity", "", colors[kUnknown], 4,1);
+
+def draw(graph, entity):
+  cmp_db = graph.db().comparison_db()
+  if not cmp_db:
+    return
+
+  # Defaults
+  graph.default('rankdir', 'LR', 'graph')
+  graph.default('shape', 'box', 'node')
+
+  # Update legend based on "Background Colors" setting
+  emptycolor = "fillcolor"
+  changecolor = "color"
+  if graph.options().lookup("Background Colors") == "On":
+    emptycolor = "color"
+    changecolor = "fillcolor"
+
+  for colorval, legendKey in enumerate(["entMod","entNew","entOld","entUnknown"]):
+    graph.legend().set(legendKey,emptycolor,"")
+    graph.legend().set(legendKey,changecolor, colors[colorval])
+
+  # Initial Node
+  initid = entity.uniquename()
+  cur_ents = { initid : entity  }
+  cmp_ents = { initid : cmp_db.lookup_uniquename(initid) }
+  forward_nodes = dict()
+  grab_node(graph,forward_nodes,initid, cur_ents, cmp_ents)
+  reverse_nodes = forward_nodes.copy()
+
+  # Trees
+  for kindDef in kKinds:
+    if entity.kind().check(kindDef[kEntKind]):
+      forward_depth = int(graph.options().lookup(kindDef[kForwardName] +" Depth"))
+      forward_kinds = kindDef[kForwardKind]
+      drawtree(graph, forward_nodes, initid, cur_ents, cmp_ents, forward_kinds, True, forward_depth)
+
+      reverse_depth = int(graph.options().lookup(kindDef[kReverseName] +" Depth"))
+      reverse_kinds = kindDef[kReverseKind]
+      drawtree(graph, reverse_nodes, initid, cur_ents, cmp_ents, reverse_kinds, False, reverse_depth)
+      break
+
+def drawtree(graph, nodes, initid, cur_ents, cmp_ents, kindstr, forward, depth):
+  curLevel = [ initid ]
+  visited = set()
+
+  blockStatus = kMod # Block nothing, kMod is never an edge status
+  if graph.options().lookup("Show Version Differences") == "Added Only":
+    blockStatus = kOld
+  if graph.options().lookup("Show Version Differences") == "Removed Only":
+    blockStatus = kNew
+
+  for i in range(depth):
+    nextLevel = []
+    for entid in curLevel:
+      # Don't expand nodes twice
+      if entid in visited:
+        continue
+      visited.add(entid)
+
+      node = grab_node(graph, nodes, entid, cur_ents, cmp_ents)
+      edges = children(graph, entid, kindstr, cur_ents, cmp_ents, forward)
+
+      # Add edges for each child
+      for childid, status in edges.items():
+        if status == blockStatus:
+          continue
+        nextLevel.append(childid)
+        childnode = grab_node(graph, nodes, childid, cur_ents, cmp_ents)
+        if forward:
+          edge = graph.edge(node, childnode)
+        else:
+          edge = graph.edge(childnode, node)
+        if status != kBoth:
+          edge.set("color", colors[status])
+        edge.set("penwidth","2")
+    curLevel = nextLevel
+
+def idForRef(graph, ref):
+  # Check Filtering Options
+  if ((graph.options().lookup("Unresolved") == "Off" and
+       ref.ent().kind().check("unresolved,unknown,undefined")) or
+      (graph.options().lookup("Intrinsic Functions") == "Off" and
+       ref.ent().kind().check("intrinsic"))):
+    return ""
+
+  # Virtual nodes for the forward direction
+  id = ref.ent().uniquename()
+  virtual = graph.options().lookup("Virtual Calls")
+  if virtual and ref.kind().check("call"):
+    kindstr = "overriddenby, overrideby"
+    if virtual == "On" and (ref.kind().check("virtual") or len(ref.ent().refs(kindstr))):
+      id = kindstr + "\n" + id
+    if virtual == "Off" and ref.kind().check("virtual"):
+      id = "" # Edge not shown
+  return id
+
+def idToEntMap(graph, ent, selfid, kindstr):
+  map = dict()
+  # Virtual -> Self Edge
+  if selfid:
+    if not "\n" in selfid: # Forward always shown
+      map[selfid] = ent
+    else: # Reverse shown if edges exist
+      for ref in ent.refs(selfid.split("\n")[0]):
+        if len(ref.ent().refs("java callby, callby virtual")):
+          map[selfid] = ent
+          break
+
+  # Reference Edges
+  for ref in ent.refs(kindstr, unique=True):
+    id = idForRef(graph,ref)
+    if id:
+      map[id] = ref.ent()
+  return map
+
+def children(graph, entid, kindstr, cur_ents, cmp_ents,forward):
+  childrendict = dict()
+
+  # Handle Virtual Calls option.
+  selfid = None
+  skipSelf = False
+  virtual = graph.options().lookup("Virtual Calls")
+  if "\n" in entid: # This node appears as the text "Virtual"
+    kindstr = entid.split("\n")[0]
+    if forward: # Forward draw edge from "Virtual" to initial entity
+      selfid = entid.split("\n")[0] #
+    else: # Reverse uses grandchildren instead of children for edges
+      skipSelf = True
+  elif not forward and virtual and virtual == "On":
+    # Detect the presence of a "Virtual" node for this current node in
+    # the reverse tree
+    selfid = "overrides,override" + "\n" + entid
+
+  # current edges
+  cur_ent = cur_ents.get(entid)
+  if cur_ent:
+    for childid, childent in idToEntMap(graph, cur_ent, selfid, kindstr).items():
+      cur_ents[childid] = childent
+      childrendict[childid] = kNew
+
+  # compare edges
+  cmp_ent = cmp_ents.get(entid)
+  if cmp_ent:
+    for childid, childent in idToEntMap(graph, cmp_ent, selfid, kindstr).items():
+      cmp_ents[childid] = childent
+      status = childrendict.get(childid, kOld)
+      if status == kNew:
+        status = kBoth
+      childrendict[childid] = status
+
+  # make sure cur_ents and cmp_ents is up to date
+  for childid in childrendict:
+    uniquename = childid.split("\n")[-1]
+    if not childid in cur_ents:
+      cur_ents[childid] = graph.db().lookup_uniquename(uniquename)
+    if not childid in cmp_ents:
+      cmp_ents[childid] = graph.db().comparison_db().lookup_uniquename(uniquename)
+
+  # Virtual callby nodes
+  if skipSelf:
+    grandchildren = dict()
+    for childid, childstatus in childrendict.items():
+      for grandchild in children(graph, childid, "java callby, callby virtual", cur_ents, cmp_ents, forward):
+        grandchildren[grandchild] = childstatus
+    childrendict = grandchildren
+
+  return childrendict
+
+def grab_node(graph,nodes,id,cur_ents, cmp_ents):
+  if id in nodes:
+    return nodes[id]
+
+  # Virtual node
+  if "\n" in id:
+    node = graph.node("Virtual")
+    node.set("shape","plaintext")
+    node.set("style","bold")
+    nodes[id] = node
+    return node
+
+  # Entity node
+  cur_ent = cur_ents.get(id)
+  cmp_ent = cmp_ents.get(id)
+
+  ent = cur_ent
+  if not ent:
+    ent = cmp_ent
+
+  # Label
+  label = ""
+
+  # Name Option
+  if graph.options().lookup("Name") == "Fullname":
+    label += ent.longname()
+  elif graph.options().lookup("Name") == "Shortname":
+    label += ent.name()
+
+  # Filename option
+  filename = graph.options().lookup("File Name")
+  if filename != "None" and not ent.kind().check("file"):
+    defref = ent.ref("definein,declarein")
+    if defref:
+      if filename == "Relative":
+        label += "\n" + defref.file().relname()
+      elif filename == "Fullname":
+        label += "\n" + defref.file().longname()
+      else:
+        label += "\n" + defref.file().name()
+
+  label = re.sub('\\\\','\\\\\\\\', label)
+
+  # Create Node
+  node = graph.node(label)
+  node.sync(cur_ent,cmp_ent)
+
+  # Compare Status
+  kind = kBoth
+  if ent.kind().check("unresolved,unknown,undefined"):
+    kind = kUnknown
+    node.set("shape","octagon")
+  elif not cur_ent:
+    kind = kOld
+  elif not cmp_ent:
+    kind = kNew
+  else:
+    kind = contents_status(graph, cur_ent, cmp_ent)
+
+  if kind != kBoth:
+    if graph.options().lookup("Background Colors") == "On":
+      node.set("style","filled")
+      node.set("fillcolor", colors[kind])
+    else:
+      node.set("color", colors[kind])
+
+  nodes[id] = node
+  return node
+
+def contents_status(graph, cur_ent, cmp_ent):
+  # Determine if the status is modified or not modified
+  cur_contents = cur_ent.contents()
+  cmp_contents = cmp_ent.contents()
+
+  if graph.options().lookup("Modified Entities") == "Ignore comments/spaces/newlines":
+    # Edit contents based on regular expressions
+    to_remove = []
+    to_remove += kLangComments.get(cur_ent.language(), [])
+    to_remove.append(kWhitespace)
+
+    for pattern in to_remove:
+      cur_contents = re.sub(pattern, "", cur_contents)
+      cmp_contents = re.sub(pattern, "", cmp_contents)
+
+  if cur_contents == cmp_contents:
+    return kBoth
+  return kMod
+

@@ -1,0 +1,162 @@
+import re
+
+def name():
+  return 'Object References'
+
+def is_enabled_by_default():
+  return true
+
+def description():
+  return '''
+Graphs object reference relationships between entities along with callby relationships.
+
+<p>This plugin creates a graph based around the object references in the code.  The entity initially graphed can be any 
+type of object: struct, class, etc.  In addition to the initial object, all objects that it references, are referenced by, 
+or are declared/defined in, are graphed as well.  From these additional objects, the graph can optionally continue to add objects 
+referenced by the objects added in the previous levels.
+<br>
+<b>Example:</b><br>
+<img src=".doc/objectReferencesWithCalledby.png">
+'''
+
+def style():
+  return 'With Called By (Classic)'
+callbykind = ("ada callby,"
+              "c callby ~inactive, c useby ptr, c assignby functionptr,"
+              "cobol callby,"
+              "csharp callby, csharp useby ptr,"
+              "fortran callby,"
+              "java callby,"
+              "jovial callby, jovial asm useby,"
+              "pascal callby,"
+              "vhdl callby,"
+              "php callby")
+objectrefkind = "setby, useby, modifyby, definein"
+
+def test_entity(entity):
+  return entity.kind().check("Object, Macro, Variable, Field, Property")
+
+def init(graph, entity):
+  # Options
+  graph.options().define("Type", ["Off", "On"], "Off")
+  graph.options().define("Called By Depth", [ "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" ], "3")
+  graph.options().define("Name", ["Shortname", "Fullname", "None (Overview Mode)"], "Shortname")
+  graph.options().define("Filename", ["Shortname", "Fullname", "Relative", "None"], "None")
+  graph.options().define("Unresolved", ["On", "Off"], "On")
+  graph.options().define("References", ["Simple", "All"], "All")
+
+  # Legend
+  graph.legend().define("entStart", "ellipse", "Object Graphed", "#90c4e4", "", 0,0)
+  graph.legend().define("entOther", "roundedrect", "General Entity", "#90c4e4", "", 1,0)
+
+  graph.legend().define("refUseby", "arrow", "Ref: Use by", "#4e8cb9", "#4e8cb9", 0,1)
+  graph.legend().define("refSetby", "arrow", "Ref: Set by", "#569f38", "#569f38", 1,1)
+  graph.legend().define("refModby", "arrow", "Ref: Modify by", "#e45721", "#e45721", 2,1)
+  graph.legend().define("refDefDec", "arrow", "Ref: Define/Declare in", "#8f8f8f", "#8f8f8f", 3,1)
+
+
+def draw(graph, entity):
+  # Defaults
+  graph.default('rankdir', 'LR', 'graph')
+  graph.default('color', '#90c4e4', 'node')
+  graph.default('shape', 'box', 'node')
+  graph.default('color', '#4e8cb9', 'edge')
+
+  depth = int(graph.options().lookup("Called By Depth"))
+
+  curLevel = []
+  curLevel.append(entity)
+  visited = set()
+  nodes = dict()
+
+  # Make sure initial node shows when depth = 0
+  grab_node(graph,nodes,entity)
+
+  for i in range(depth):
+    nextLevel = []
+    for ent in curLevel:
+      # Avoid visiting nodes multiple times
+      if ent in visited:
+        continue
+      visited.add(ent)
+
+      # Get a graphviz node for the entity
+      head = grab_node(graph,nodes,ent)
+
+      if i == 0:
+        refs = ent.refs(objectrefkind, unique=False)
+      else:
+        refs = ent.refs(callbykind, unique=True)
+
+      for ref in refs:
+        tailEnt = ref.ent()
+        if (graph.options().lookup("Unresolved") == "Off" and
+            tailEnt.kind().check("unresolved, unknown, undefined")):
+          continue
+        nextLevel.append(tailEnt)
+        tail = grab_node(graph,nodes,tailEnt)
+        edge = graph.edge(tail,head)
+
+        if ref.kind().check("UseBy"):
+          edge.set("color", "#4e8cb9")
+        if ref.kind().check("Setby"):
+          edge.set("color", "#569f38")
+        if ref.kind().check("Modifyby"):
+          edge.set("color", "#e45721")
+        if ref.kind().check("Definein, Declarein"):
+          edge.set("color", "#8f8f8f")
+
+        if (graph.options().lookup("References") == "All" and
+            not ref.kind().check("Callby")):
+          edge.set("label", ref.kindname())
+          edge.sync(ref)
+    # End of loop over current level
+    curLevel = nextLevel
+
+def grab_node(graph, nodes, ent):
+  if ent in nodes:
+    return nodes[ent]
+
+  label = ""
+
+  # Type Option
+  if (graph.options().lookup("Type") == "On" and
+      ent.kind().check("Object, Variable, Field, Property")):
+    type = ent.type()
+    if not type:
+      type = "unknown"
+    label += type + "\n"
+
+  # Name Option
+  if graph.options().lookup("Name") == "Fullname":
+    label += ent.longname()
+  elif graph.options().lookup("Name") == "Shortname":
+    label += ent.name()
+
+  # Filename option
+  filename = graph.options().lookup("Filename")
+  if filename != "None" and not ent.kind().check("file"):
+    defref = ent.ref("definein,declarein")
+    if defref:
+      if filename == "Relative":
+        label += "\n" + defref.file().relname()
+      elif filename == "Fullname":
+        label += "\n" + defref.file().longname()
+      else:
+        label += "\n" + defref.file().name()
+
+  label = re.sub('\\\\','\\\\\\\\', label)
+
+  # Create node
+  node = graph.node(label, ent)
+  if ent.kind().check("Object, Variable, Field, Property"):
+    node.set("shape","oval")
+  if ent.kind().check("unresolved, unknown, undefined"):
+    node.set("shape","octagon")
+    node.set("color","#8f8f8f")
+  nodes[ent] = node
+  return node
+
+
+
+

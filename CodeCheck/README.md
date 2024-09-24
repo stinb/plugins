@@ -35,11 +35,8 @@ And here are some areas it's not so good at:
 # Script Locations
 CodeCheck has several directories it checks for scripts. The first location gets overwritten with a new install of Understand so don't save any changes to that directory, but it's a good place to look for examples of existing checks.
 
-* C:\Program Files\SciTools\conf\plugin\SciTools\CodeCheck
-* C:\Program Files\SciTools\conf\plugin\User\CodeCheck
-* C:\Users\USERID\AppData\Roaming\SciTools\plugin\CodeCheck
-
-MacOSX users: ~/Library/Application Support/SciTools/plugin/User/Custom/ 
+* Windows C:\Users\USERID\AppData\Roaming\SciTools\plugin\CodeCheck
+* MacOS users: ~/Library/Application Support/SciTools/plugin/User/Custom/ 
 
 # Write Your First Custom Check
 1. Save the [CodeCheck Template example](https://documentation.scitools.com/html/python/codecheck.html) to the Understand installation directory under conf/plugin/User/CodeCheck/myscript.upy and open the file in a text Editor or in Understand

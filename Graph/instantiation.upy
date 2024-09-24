@@ -1,0 +1,94 @@
+def name():
+  return 'Instantiation'
+
+def is_enabled_by_default():
+  return true
+
+def description():
+    return '''
+VHDL Entity Instantiation
+
+<p>This plugin creates a graph that visualizes the instantiation hierarchy within VHDL entities and architectures. It shows how entities are instantiated within architectures, and how those instantiations lead to further instantiations, forming a tree-like structure.</p>
+
+<p>Features:</p>
+<ul>
+    <li>Displays entity and architecture names in a clear format.</li>
+    <li>Shows the relationships between entities and their instantiations.</li>
+    <li>Optionally displays the count of each instantiation.</li>
+    <li>Handles binding of components to entities.</li>
+    <li>Indicates unresolved, unknown, or component entities with a different shape and color.</li>
+</ul>
+<br>
+<b>Example:</b><br>
+<img src=".doc/instantiation.png">
+'''
+
+
+def test_entity(entity):
+  return entity.kind().check("vhdl entity,vhdl architecture")
+
+def init(graph, entity):
+  graph.options().define("Show Count",["On","Off"],"Off")
+
+def draw(graph, entity):
+  graph.default('rankdir', 'LR', 'graph')
+  graph.default('color', '#90c4e4', 'node')
+  graph.default('shape', 'record', 'node')
+  graph.default('color', '#4e8cb9', 'edge')
+
+  nodes = dict()
+  if entity.kind().check("architecture"):
+    draw_arch_tree(graph, entity.ents("implement")[0], entity, nodes)
+  else:
+    draw_ent_tree(graph, entity, nodes)
+
+def draw_ent_tree(graph, ent, nodes):
+  result = []
+  if ent in nodes:
+    result.append(nodes[ent])
+    return result
+
+  if ent.kind().check("unresolved,unknown,component"):
+    node = graph.node(ent.longname(), ent)
+    node.set("shape","octagon")
+    node.set("color","gray")
+    nodes[ent] = node
+    result.append(node)
+  else:
+    for arch in ent.ents("implementby"):
+      result.append(draw_arch_tree(graph, ent, arch, nodes))
+  return result
+
+def draw_arch_tree(graph, ent, arch, nodes):
+  if arch in nodes:
+    return nodes[arch]
+
+  label = ent.name() + "|" + arch.name()
+  node = graph.node(label, ent)
+  nodes[arch] = node
+
+  refs = dict()
+  instantiate_refs(arch,refs)
+  for refent,count in refs.items():
+    comps = []
+    bound_ents = refent.ents("bind","entity")
+    if refent.kind().check("entity") or not bound_ents:
+      comps.append(refent)
+    else:
+      comps = bound_ents
+
+    for comp in comps:
+      children = draw_ent_tree(graph,comp,nodes)
+      for child in children:
+        edge = graph.edge(node, child)
+        if graph.options().lookup("Show Count") == "On":
+          edge.set("label", str(count))
+  return node
+
+def instantiate_refs(arch, refs):
+  for ref in arch.refs("instantiate"):
+    refs[ref.ent()] = refs.get(ref.ent(),0) + 1
+
+  for child in arch.ents("declare","block,generate"):
+    instantiate_refs(child, refs)
+

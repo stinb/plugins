@@ -1,0 +1,225 @@
+import re
+
+colors = ("#4e8cb9", "#afd870", "#e45721")
+kBoth = -1
+kMod = 0
+kNew = 1
+kOld = 2
+
+kDashDashComments = re.compile(r"\-\-.*?\n") # -- style comments
+kSlashSlashComments = re.compile(r"\/\/.*?\n") # // style comments
+kSlashStarComments = re.compile(r"\/\*.*?\*\/") # /* */ style comments
+kExclamationComments = re.compile(r"\!.*?\n") # ! style comments
+kFirstCharComments = re.compile(r"^[cC*dD].*?\n") # (c,C,*,d,D) first character comments
+kQuoteComments = re.compile(r"\".*?\"") # " " style comments
+kPercentComments = re.compile(r"\%.*?\%") # % % style comments
+kParenStarComments = re.compile(r"\(\*.*?\*\)") # (* *) style comments
+kCurlyBraceComments = re.compile(r"\{.*?\}") # { } style comments
+kHtmlComments = re.compile(r"\<\!\-\-.*?\-\-\>") # <~-- --> style comments
+kWhitespace = re.compile(r"[\s\r\n]+")
+
+kLangComments = {
+  "Ada"     : [kDashDashComments],
+  "C++"     : [kSlashSlashComments, kSlashStarComments],
+  "C#"      : [kSlashSlashComments, kSlashStarComments],
+  "Fortran" : [kExclamationComments,kFirstCharComments],
+  "Java"    : [kSlashSlashComments, kSlashStarComments],
+  "Jovial"  : [kQuoteComments, kPercentComments],
+  "Pascal"  : [kSlashSlashComments, kParenStarComments, kCurlyBraceComments],
+  "PL/M"    : [kSlashSlashComments, kSlashStarComments],
+  "VHDL"    : [kDashDashComments],
+  "Web"     : [kHtmlComments, kSlashSlashComments, kSlashStarComments]
+}
+
+def name():
+  return 'Object References'
+
+def is_enabled_by_default():
+  return True
+
+def description():
+  return '''
+<p>Generate a graph comparing how an object is used between versions and how it uses other objects.</p>
+
+<p>This graph is based on Understand's object references. The object can be any kind of entity (a class, a struct, a macro, etc).
+The graph shows how the object is used (by other objects) and how it uses other objects. It compares how those uses have changed between 
+a previous version of the project and now</p>
+
+<br>
+<b>Example:</b><br>
+<img src=".doc/objectReferencesCompare.png">
+'''
+
+
+def style():
+  return 'Compare (Classic)'
+
+def test_entity(entity):
+  return entity.kind().check("Object, Macro, Variable, Field, Property")
+
+def init(graph, entity):
+  # Options
+  graph.options().define("Layout", ["Horizontal", "Vertical"], "Vertical")
+  graph.options().define("Type", ["Off", "On"], "Off")
+  graph.options().define("References", ["Simple", "All"], "All")
+  graph.options().define("Define/Declare", ["Off", "On"], "Off")
+  graph.options().define("Modified Entities", ["Ignore comments/spaces/newlines", "Include all modifications"], "Ignore comments/spaces/newlines");
+
+
+  # Legend
+  graph.legend().define("entBoth", "roundedrect", "Entity in Both", "", "", 0,0)
+  graph.legend().define("entMod", "roundedrect", "Modified Entity", "", colors[kMod], 1,0)
+  graph.legend().define("entNew", "roundedrect", "New Entity", "", colors[kNew], 2,0)
+  graph.legend().define("entOld", "roundedrect", "Old Entity", "", colors[kOld], 3,0)
+
+  graph.legend().define("refUseby", "arrow", "Ref: Use by", "#4e8cb9", "#4e8cb9", 0,1)
+  graph.legend().define("refSetby", "arrow", "Ref: Set by", "#569f38", "#569f38", 1,1)
+  graph.legend().define("refModby", "arrow", "Ref: Modify by", "#e45721", "#e45721", 2,1)
+  graph.legend().define("refDefDec", "arrow", "Ref: Define/Declare in", "#8f8f8f", "#8f8f8f", 3,1)
+
+  graph.legend().define("entStart", "ellipse", "Object Graphed", "", "", 0,2)
+  graph.legend().define("entFn", "roundedrect", "Function/Method", "#90c4e4", "", 1,2)
+  graph.legend().define("entOther", "roundedrect", "General Entity", "", "", 2,2)
+  graph.legend().define("refInactive", "arrow", "Ref: Inactive (Gray Text)", "#8f8f8f", "#8f8f8f", 3,2)
+
+
+
+def draw(graph, entity):
+  cmp_db = graph.db().comparison_db()
+  if not cmp_db:
+    return
+
+  # defaults
+  graph.default('shape', 'box', 'node')
+  if graph.options().lookup("Layout") == "Horizontal":
+    graph.default('rankdir', 'LR', 'graph')
+  else:
+    graph.default('rankdir', 'TB', 'graph')
+
+  # start node
+  label = ""
+  if graph.options().lookup("Type") == "On":
+    type = entity.type()
+    if not type:
+      type = "unknown"
+    label += type + "\n"
+  label += entity.longname()
+  node = graph.node(label, entity)
+  node.set("shape","oval")
+
+  cmp_ent = cmp_db.lookup_uniquename(entity.uniquename())
+  startent_status = kNew
+  if cmp_ent:
+    startent_status = contents_status(graph, entity, cmp_ent)
+
+  if startent_status != kBoth:
+    node.set("fillcolor", colors[startent_status])
+    graph.legend().set("entStart", "back", colors[startent_status])
+
+
+  # build refs and compare status
+  uniq = graph.options().lookup("References") == "Simple"
+  decl = graph.options().lookup("Define/Declare") == "On"
+
+  ent_status = dict()
+  cur_refs = dict()
+  cur_ents = dict()
+  for ref in object_refs(entity, decl, uniq):
+    cur_refs[reference_key(ref)] = ref
+    cur_ents[ref.ent().uniquename()] = ref.ent()
+    ent_status[ref.ent().uniquename()] = kNew
+
+  cmp_refs = dict()
+  cmp_ents = dict()
+  for ref in object_refs(cmp_ent, decl, uniq):
+    cmp_refs[reference_key(ref)] = ref
+    ent_key = ref.ent().uniquename()
+    cmp_ents[ent_key] = ref.ent()
+    stat = ent_status.get(ent_key, kOld)
+    if stat == kNew:
+      stat = contents_status(graph, cur_ents.get(ent_key), ref.ent())
+    ent_status[ent_key] = stat
+
+  # Add edges for refs
+  refs = cur_refs.keys() | cmp_refs.keys()
+  for ref_key in refs:
+    ref = cur_refs.get(ref_key,cmp_refs.get(ref_key))
+    refent = ref.ent()
+    label = ""
+    if refent.kind().check("file"):
+      label = refent.name()
+    else:
+      label = refent.longname()
+
+    if not uniq:
+      label += "\n" + ref.file().name() + "(" + str(ref.line()) + ")"
+
+    # Node
+    refnode = graph.node(label, refent)
+    refnode.set("shape", "rectangle")
+    if refent.kind().check("Function, Method"):
+      refnode.set("color", "#90c4e4")
+
+    ent_key = refent.uniquename()
+    refent_status = ent_status.get(ent_key, kBoth)
+    if refent_status != kBoth:
+      refnode.set("fillcolor",colors[refent_status])
+    refnode.sync(cur_ents.get(ent_key), cmp_ents.get(ent_key))
+
+    # Edge
+    if ref.kind().check("UseBy, TypedBy"):
+      edge = graph.edge(node, refnode)
+    else:
+      edge = graph.edge(refnode, node)
+    edge.set("label", ref.kindname())
+    if not uniq:
+      edge.sync(ref)
+
+    if ref.kind().check("UseBy"):
+      edge.set("color", "#4e8cb9")
+    if ref.kind().check("Setby"):
+      edge.set("color", "#569f38")
+    if ref.kind().check("Modifyby"):
+      edge.set("color", "#e45721")
+    if ref.kind().check("Definein, Declarein"):
+      edge.set("color", "#8f8f8f")
+    if ref.kind().check("Inactive"):
+      edge.set("color", "#8f8f8f")
+      edge.set("fontcolor", "#8f8f8f")
+
+def object_refs(entity, decl, uniq):
+  refs = []
+  if not entity:
+    return refs
+  if decl:
+    refs += entity.refs("Definein,Declarein", unique=uniq)
+  refs += entity.refs("SetBy Init",unique=uniq)
+  refs += entity.refs("SetBy ~Init, Modifyby",unique=uniq)
+  refs += entity.refs("UseBy Return", unique=uniq)
+  refs += entity.refs("UseBy ~Return", unique=uniq)
+  return refs
+
+def reference_key(ref):
+  return ref.ent().uniquename() + ref.kind().longname()
+
+def contents_status(graph, cur_ent, cmp_ent):
+  cur_contents = cur_ent.contents()
+  cmp_contents = cmp_ent.contents()
+
+  if graph.options().lookup("Modified Entities") == "Ignore comments/spaces/newlines":
+    to_remove = []
+    to_remove += kLangComments.get(cur_ent.language(), [])
+    to_remove.append(kWhitespace)
+
+    for pattern in to_remove:
+      cur_contents = re.sub(pattern, "", cur_contents)
+      cmp_contents = re.sub(pattern, "", cmp_contents)
+
+  if cur_contents == cmp_contents:
+    return kBoth
+  return kMod
+
+
+
+
+
