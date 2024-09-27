@@ -1,0 +1,137 @@
+# Compliance Report
+
+def name():
+  return "CodeCheckResultsByTable"
+
+def test_inspection(inspection):
+  return True
+
+def init(report):
+  report.options().label("error", "")
+  report.options().checkbox("showignored",  "Show Ignored", False)
+  report.options().checkbox("showexcluded",  "Show Excluded", False)
+  report.options().checkbox("ignoredonlyresults",  "Ignored Only Results", False)
+  report.options().checkbox("showbaselineignored",  "Show Baseline Ignored", False)
+  report.options().checkbox("showbaselineignored",  "Show Baseline Ignored", False)
+  report.options().choice("reportnameformat",  "Report Name Format", ["absolute", "relative", "short"], "absolute")
+
+def test_options(report):
+  report.options().label("error", "")
+
+  showIgnored = report.options().lookup("showignored")
+  onlyFPResults = report.options().lookup("ignoredonlyresults")
+  if showIgnored and onlyFPResults:
+    report.options().label("error", "Error: cannot check \"Show Ignored\" and \"Ignored Only Results\". Only \"Show Ignored\" will apply.")
+  # No critical errors with und
+  return True
+
+# Report generation
+def generate(report, inspection):
+  showIgnored = report.options().lookup("showignored")
+  showExcluded = report.options().lookup("showexcluded")
+  showBaseline = report.options().lookup("showbaselineignored")
+  onlyFPResults = report.options().lookup("ignoredonlyresults")
+
+  files = inspection.files()
+  vlist = []
+  if showIgnored:
+    if showBaseline:
+      vlist = inspection.violations()
+    else:
+      for v in inspection.violations():
+        isBaseline = False
+        isExcluded = False
+        for source,note in v.ignores():
+          if source == "Excluded":
+            isExcluded = True
+          if source == "Baseline":
+            isBaseline = True
+        if not isBaseline:
+          if isExcluded:
+            if showExcluded and v.file() in files:
+              vlist.append(v)
+          else:
+            vlist.append(v)
+  else:
+    for v in inspection.violations():
+      if bool(v.ignores()) == onlyFPResults:
+        isExcluded = False
+        for source,note in v.ignores():
+          if source == "Excluded":
+            isExcluded = True
+        if isExcluded:
+          if showExcluded and v.file() in files:
+            vlist.append(v)
+        else:
+          vlist.append(v)
+
+  # file name format
+  filenames = dict()
+  format = report.options().lookup("reportnameformat")
+  if format == "short":
+    for file in report.db().files():
+      filenames[file.longname()] = file.name()
+  elif format == "relative":
+    for file in report.db().files():
+      filenames[file.longname()] = file.relname()
+
+  # check info
+  checkname = dict()
+  checkseverity = dict()
+  conf = inspection.config()
+  if conf:
+    for check_id in conf.checks():
+      checkname[check_id] = conf.check_name(check_id)
+      severity = ""
+      for tag in conf.check_tags(check_id):
+        if tag.startswith("Severity: "):
+          severity = tag[10:]
+      checkseverity[check_id] = severity
+
+  cols = ["File", "Violation", "Line", "Column", "Entity", "Kind", "CheckID", "Check Name", "Check Short Description", "Severity"]
+  if showIgnored or onlyFPResults:
+    cols.append("Ignored")
+
+  report.table(cols)
+  for v in vlist:
+    report.tablecell()
+    report.print(filenames.get(v.file(), v.file()))
+
+    report.tablecell()
+    report.print(v.text())
+
+    report.tablecell()
+    report.print(str(v.line()))
+
+    report.tablecell()
+    report.print(str(v.column()))
+
+    report.tablecell()
+    ent = None
+    if v.ent_uniquename():
+      ent = report.db().lookup_uniquename(v.ent_uniquename())
+    if ent:
+      report.print(ent.longname())
+
+    report.tablecell()
+    if ent:
+      report.print(ent.kind().name())
+
+    report.tablecell()
+    report.print(v.check_id())
+
+    report.tablecell()
+    report.print(checkname.get(v.check_id(), ""))
+
+    report.tablecell()
+    # The check short description field is deprecated and is unset for most
+    # checks
+
+    report.tablecell()
+    report.print(checkseverity.get(v.check_id(), ""))
+
+    if showIgnored or onlyFPResults:
+      report.tablecell()
+      if v.ignores():
+        report.print("true")
+
