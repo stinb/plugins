@@ -1,0 +1,383 @@
+# Compliance Report
+import datetime
+import pathlib
+import re
+
+import understand
+
+
+def name():
+  return "Compliance"
+
+def test_inspection(inspection):
+  return inspection.config() # config is required
+
+def init(report):
+  report.options().checkbox_vert("sections",  "Report Sections", ["Summary","Coverage","Violations","Ignores"],["Summary","Coverage","Violations","Ignores"])
+
+def pages(report):
+  pages = ["index"]
+  pages.extend(report.options().lookup("sections"))
+  return pages
+
+# Report generation
+def generate(report, inspection, page):
+  if page == "Summary":
+    summaryPage(report, inspection)
+  elif page == "Coverage":
+    coveragePage(report, inspection)
+  elif page== "Violations":
+    violationsPage(report, inspection)
+  elif page == "Ignores":
+    ignoresPage(report, inspection)
+  else:
+    tocPage(report, inspection)
+
+def tocPage(report, inspection):
+  report.breadcrumbs(["index"], 0, ["Table of Contents"])
+  printheading(report, inspection, "Table of Contents")
+
+  for section in report.options().lookup("sections"):
+    report.pagelink(section)
+    report.print(section + "\n")
+    report.pagelink()
+
+def summaryPage(report, inspection):
+  report.breadcrumbs(["index", "Summary"], 1, ["Table of Contents", "Summary"])
+  printheading(report, inspection, "Compliance Summary")
+
+  # Find Violation Counts By Check
+  ignoreCnts = {}
+  violCnts = {}
+  allIgnored = 0
+  allViolations = 0
+  for v in inspection.violations():
+    if v.ignores():
+      ignoreCnts[v.check_id()] = ignoreCnts.get(v.check_id(), 0) + 1
+      allIgnored += 1
+    else:
+      violCnts[v.check_id()] = violCnts.get(v.check_id(), 0) + 1
+      allViolations += 1
+
+  # Other Counts
+  analysis_errors = 0
+  for viol in report.db().violations():
+    if viol.check_id() == "UND_ERROR":
+      analysis_errors += 1
+
+  inspection_errors = len(inspection.errors())
+
+  compliance = "Compliant"
+  if violCnts or analysis_errors > 0 or inspection_errors > 0:
+    compliance = "Not Compliant"
+  printSummaryRow(report, [("Compliance", compliance),
+                   ("Analysis Errors", analysis_errors),
+                   ("Inspection Errors", inspection_errors)])
+
+  # Categories Table
+  checks = inspection.config().checks()
+  categoryIgnored = dict()
+  categoryViolations = dict()
+  checkCategory = dict()
+  for check in checks:
+    category = "Other"
+    for tag in inspection.config().check_tags(check):
+      if tag.startswith("Category: "):
+        category = tag[10:]
+    checkCategory[check] = category
+    categoryIgnored[category] = categoryIgnored.get(category,0) + ignoreCnts.get(check, 0)
+    categoryViolations[category] = categoryViolations.get(category,0) + violCnts.get(check, 0)
+
+  categories = sorted(categoryViolations.keys())
+  cols = [" ", "All Rules"] + categories
+  report.table(cols)
+
+  report.tablecell()
+  report.print("Non Ignored Violations")
+  report.tablecell()
+  report.print(str(allViolations))
+  for category in categories:
+    report.tablecell()
+    report.print(str(categoryViolations.get(category,0)))
+
+  report.tablecell()
+  report.print("Ignored Violations")
+  report.tablecell()
+  report.print(str(allIgnored))
+  for category in categories:
+    report.tablecell()
+    report.print(str(categoryIgnored.get(category,0)))
+
+  report.tablecell()
+  report.print("Total Violations")
+  report.tablecell()
+  report.print(str(allViolations + allIgnored))
+  for category in categories:
+    report.tablecell()
+    report.print(str(categoryViolations.get(category,0) + categoryIgnored.get(category,0)))
+
+  report.table()
+
+  # Checks Table
+  show_footnote = False
+  report.table(["Check ID", "Category", "Violations", "Ignored", "Compliance"])
+  for check in natural_sort(checks):
+    report.tablecell()
+    report.print(check)
+
+    report.tablecell()
+    category = checkCategory.get(check, "Other")
+    if category == "Other":
+      category = ""
+    report.print(category)
+
+    kind = inspection.config().check_kind(check)
+    if kind == "Implicitly Supported" or kind == "Not Supported":
+      report.tablecell()
+      report.print("N/A")
+      report.tablecell()
+      report.print("N/A")
+
+      report.tablecell()
+      if kind == "Not Supported":
+        report.print(kind)
+      elif inspection_errors:
+        report.print("Inspection Errors({})".format(inspection_errors))
+      else:
+        report.print("Compliant*")
+        show_footnote = True
+    else:
+      report.tablecell()
+      report.print(str(ignoreCnts.get(check, 0) + violCnts.get(check, 0)))
+
+      report.tablecell()
+      report.print(str(ignoreCnts.get(check, 0)))
+
+      report.tablecell()
+      cnt = violCnts.get(check, 0)
+      if cnt == 0:
+        report.print("Compliant")
+      elif category == "Required":
+        report.print("Not Compliant ({})".format(cnt))
+      else:
+        report.print("Violations ({})".format(cnt))
+
+  report.table()
+  if show_footnote:
+    report.print("* This check is always run by the Understand strict parser and violations are included as Analysis errors.")
+
+def coveragePage(report, inspection):
+  report.breadcrumbs(["index", "Coverage"], 1, ["Table of Contents", "Coverage"])
+  printheading(report, inspection, "Coverage", True)
+
+  # Categories Table
+  checks = inspection.config().checks()
+  categorySupported = dict()
+  categoryTotal = dict()
+  checkCategory = dict()
+  supported = 0
+  total = len(checks)
+  for check in checks:
+    category = "Other"
+    for tag in inspection.config().check_tags(check):
+      if tag.startswith("Category: "):
+        category = tag[10:]
+    checkCategory[check] = category
+    if inspection.config().check_kind(check) != "Not Supported":
+      categorySupported[category] = categorySupported.get(category,0) + 1
+      supported += 1
+    categoryTotal[category] = categoryTotal.get(category,0) + 1
+
+  categories = sorted(categoryTotal.keys())
+  if "Other" in categories:
+    categories.remove("Other")
+
+  cols = [" ", "All Rules"] + categories
+  report.table(cols)
+
+  report.tablecell()
+  report.print("Understand % Coverage")
+  report.tablecell()
+  report.print("{:.0%}".format(supported/total if total else 0))
+  for category in categories:
+    report.tablecell()
+    t = categoryTotal.get(category,0)
+    report.print("{:.0%}".format(categorySupported.get(category,0)/t if t else 0))
+
+  report.tablecell()
+  report.print("Understand Coverage")
+  report.tablecell()
+  report.print(str(supported))
+  for category in categories:
+    report.tablecell()
+    report.print(str(categorySupported.get(category,0)))
+
+  report.tablecell()
+  report.print("Total Rules")
+  report.tablecell()
+  report.print(str(total))
+  for category in categories:
+    report.tablecell()
+    report.print(str(categoryTotal.get(category,0)))
+
+  report.table()
+
+  # Checks Table
+  report.table(["Check ID", "Description", "Category", "Supported"])
+  for check in natural_sort(checks):
+    report.tablecell()
+    report.print(check)
+
+    report.tablecell()
+    report.print(inspection.config().check_name(check))
+
+    report.tablecell()
+    category = checkCategory.get(check, "Other")
+    if category == "Other":
+      category = ""
+    report.print(category)
+
+    report.tablecell()
+    if inspection.config().check_kind(check) == "Not Supported":
+      report.print("No")
+    else:
+      report.print("Yes")
+
+def violationsPage(report, inspection):
+  report.breadcrumbs(["index", "Violations"], 1, ["Table of Contents", "Violations"])
+  printheading(report, inspection, "Violation List")
+
+  # Find not ignored violations
+  vlist = []
+  for v in inspection.violations():
+    if not v.ignores():
+      vlist.append(v)
+
+  # Other Counts
+  analysis_errors = 0
+  for viol in report.db().violations():
+    if viol.check_id() == "UND_ERROR":
+      analysis_errors += 1
+
+  inspection_errors = len(inspection.errors())
+
+  printSummaryRow(report,[("Analysis Errors", analysis_errors),
+                   ("Inspection Errors", inspection_errors),
+                   ("Violations", len(vlist))])
+
+  report.heading(1)
+  report.bold()
+  report.print("Violations")
+  report.nobold()
+  report.heading()
+
+  severities = dict()
+  report.table(["Check ID", "File", "Entity", "Violation", "Severity"])
+  for v in vlist:
+    report.tablecell()
+    report.print(v.check_id())
+
+    report.tablecell()
+    report.print(v.file())
+
+    report.tablecell()
+    if v.ent_uniquename():
+      ent = report.db().lookup_uniquename(v.ent_uniquename())
+      if ent:
+        report.print(ent.longname())
+
+    report.tablecell()
+    report.print(v.text())
+
+    report.tablecell()
+    if not v.check_id() in severities:
+      severity = ""
+      for tag in inspection.config().check_tags(v.check_id()):
+        if tag.startswith("Severity: "):
+          severity = tag[10:]
+      severities[v.check_id()] = severity
+    report.print(severities[v.check_id()])
+
+def ignoresPage(report, inspection):
+  report.breadcrumbs(["index", "Ignores"], 1, ["Table of Contents", "Ignores"])
+  printheading(report, inspection, "Ignores List")
+
+  # Find not ignored violations
+  vlist = []
+  for v in inspection.violations():
+    if v.ignores():
+      vlist.append(v)
+
+  # Other Counts
+  analysis_errors = 0
+  for viol in report.db().violations():
+    if viol.check_id() == "UND_ERROR":
+      analysis_errors += 1
+
+  inspection_errors = len(inspection.errors())
+
+  printSummaryRow(report,[("Analysis Errors", analysis_errors),
+                   ("Inspection Errors", inspection_errors),
+                   ("Ignores", len(vlist))])
+
+  severities = dict()
+  report.table(["Check ID", "File", "Entity", "Violation", "Notes"])
+  for v in vlist:
+    report.tablecell()
+    report.print(v.check_id())
+
+    report.tablecell()
+    report.print(v.file())
+
+    report.tablecell()
+    if v.ent_uniquename():
+      ent = report.db().lookup_uniquename(v.ent_uniquename())
+      if ent:
+        report.print(ent.longname())
+
+    report.tablecell()
+    report.print(v.text())
+
+    report.tablecell()
+    notes = []
+    for source,note in v.ignores():
+      if note:
+        notes.append(note)
+    if notes:
+      report.print('\n'.join(notes))
+
+
+def natural_sort(l):
+    convert = lambda text: int(text) if text.isdigit() else text.lower()
+    alphanum_key = lambda key: [convert(c) for c in re.split('([0-9]+)', key)]
+    return sorted(l, key=alphanum_key)
+
+def printheading(report, inspection, name, configOnly = False):
+  report.heading(1)
+  report.print("{} {}".format(inspection.config().name(), name))
+
+  report.align("center")
+  if not configOnly:
+    report.heading(6)
+    report.print("for the")
+
+    report.heading(1)
+    report.print("{} Project".format(pathlib.Path(report.db().name()).stem))
+
+  report.heading(2)
+  report.print("Understand Version: {}".format(understand.version()))
+
+  report.heading(3)
+  report.print(datetime.datetime.now().strftime("%c"))
+  report.heading()
+  report.align()
+
+def printSummaryRow(report, fields):
+  report.align("center")
+  for name,value in fields:
+    report.bold()
+    report.print(" {}: ".format(name))
+    report.nobold()
+    report.print(str(value))
+  report.print("\n")
+  report.align()
