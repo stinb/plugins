@@ -1,0 +1,107 @@
+# The layout this graph plugin uses requires build 1191 or later
+
+import understand
+
+colors = [ "#569f38","#4e8cb9","#90c4e4","#a1d870","#e46721" ]
+
+
+def name():
+  return "Unused Lines"
+
+
+def test_global(db):
+  return True;
+
+
+def init(graph, db):
+  graph.options().define("Legend", ["None", "top", "left", "right", "bottom"], "bottom")
+
+
+def normalize_scaling(data):
+    """
+    Scale values to have exactly 1 significant digit on the left side of the decimal.
+
+    Args:
+        data (list): List of values to normalize.
+
+    Returns:
+        list: Normalized values.
+    """
+
+    # Find maximum value
+    max_value = max(data)
+
+    # Normalize values
+    normalized_data = [x / max_value * 100 for x in data]
+
+    # Increase values by factors of 10 if less than 1.0
+    for i, value in enumerate(normalized_data):
+        scaling_factor = 1
+        while value * scaling_factor < 1:
+            scaling_factor *= 10
+        normalized_data[i] = value * scaling_factor
+
+    return normalized_data
+
+
+def draw(graph, db):
+  graph.set("layout", "sunburst") # Override default layout algorithm (Usually dot)
+  graph.set("r1","40")
+  graph.set("sweep","180")
+
+  legendCluster = None
+  legend = graph.options().lookup("Legend")
+  if legend != "None":
+    legendCluster = graph.cluster()
+    legendCluster.set("legend", legend)
+
+  metrics = []
+
+  lines_of_code    = db.metric("CountLineCode")
+  duplicate_code   = 0
+  commented_code   = 0
+  unreachable_code = 0
+
+  ents = db.ents("file ~unknown ~unresolved")
+  for ent in ents:
+
+    # Gather violations from the database for populating graph
+    viol_list = ent.violations()
+
+    for viol in viol_list:
+      check_id = viol.check_id()
+      
+      if check_id == "RECOMMENDED_20":      # Duplicate lines of code
+        duplicate_code += 1
+      elif check_id == "RECOMMENDED_00":    # Commented lines of code
+        commented_code += 1
+      elif check_id == "RECOMMENDED_12":    # Unreachable code
+        unreachable_code += 1
+
+  used_code_lines = lines_of_code - (duplicate_code + commented_code + unreachable_code)
+
+  metrics.append(used_code_lines)
+  metrics.append(duplicate_code)
+  metrics.append(commented_code)
+  metrics.append(unreachable_code)
+
+  normalized_metrics = normalize_scaling(metrics)
+
+  # Sort data by the second parameter (index 1) in descending order
+  data = [("Used Code",normalized_metrics[0],colors[0]),
+          ("Duplicate Code",normalized_metrics[1],colors[1]),
+          ("Commented Out Code",normalized_metrics[2],colors[2]),
+          ("Unreachable Code",normalized_metrics[3],colors[3])]
+
+  sorted_data = sorted(data, key=lambda x: x[1],reverse=True)
+
+  # Draw the sunburst chart
+  for name, area, color in sorted_data:
+    n = graph.node()
+    n.set("color", color)
+    n.set("fillcolor", color)
+    n.set("area", str(area))
+    if legendCluster:
+      ln = legendCluster.node(name)
+      ln.set("color", color)
+      ln.set("fillcolor", color)
