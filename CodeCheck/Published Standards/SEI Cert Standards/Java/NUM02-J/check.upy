@@ -1,0 +1,220 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 6-21-22
+
+
+import re
+
+
+ERR1 = 'Division by zero'
+ERR2 = 'Variable may cause a division by zero and isn\'t checked'
+ERR3 = 'Expression may cause a division by zero'
+ERR4 = 'Method call may cause a division by zero'
+
+
+def ids():
+    return ('NUM02-J', 'JAVA_NUM02')
+
+
+
+def name(id):
+    return {
+        'NUM02-J': 'Published Standards/SEI Cert Standards/Java/Ensure that division and remainder operations do not result in divide-by-zero errors',
+        'JAVA_NUM02': 'All Checks/Language Specific/Java/Numeric Types and Operations/Ensure that division and remainder operations do not result in divide-by-zero errors',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'NUM02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'JAVA_NUM02': [
+            'Language: Java',
+            'Numeric Types and Operations',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Ensure that division and remainder operations do not result in divide-by-zero\
+ errors
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+A division or remainder by zero can result in abnormal program termination and\
+ denial-of-service (DoS).
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/NUM02-J.+Ensure+that+division+\
+and+remainder+operations+do+not+result+in+divide-by-zero+errors
+</i>
+</p>
+
+<p><b>Noncompliant Code Example (Division)</b></p>
+<pre><code language="Java">long num1, num2, result;
+
+/* Initialize num1 and num2 */
+
+result = num1 / num2;
+</code></pre>
+
+<p><b>Noncompliant Code Example (Remainder)</b></p>
+<pre><code language="Java">long num1, num2, result;
+
+/* Initialize num1 and num2 */
+
+result = num1 % num2;
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+This check does not use an abstract syntax tree, so it has a limitation - it
+ doesn't evaluate types of divisors that are expressions. It doesn't see if
+ expressions are tested to be non-zero. It also doesn't track variables to prove
+ that they may not ever be able to be zero.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('ignoreVariables', 'Ignore variables', False)
+    check.options().checkbox('ignoreExpressions', 'Ignore expressions', False)
+    check.options().checkbox('ignoreMethods', 'Ignore method calls', False)
+
+
+def getLiteralType(text):
+    if re.match(r'\w+[l|L]$', text):
+        return 'long'
+    if re.match(r'\d+\.\d*|\d*\.\d+|\w+[f|F]', text) and 'x' not in text:
+        return 'float'
+    if re.match(r'\w+$', text):
+        return 'int'
+
+
+def getType(lex):
+    # Identifier ent type
+    ent = lex.ent()
+    if ent and ent.type():
+        return ent.type().lower()
+
+    # Literal type
+    if lex.token() == 'Literal':
+        return getLiteralType(lex.text())
+
+
+def check(check, file):
+    if not re.search(r'\/|%', file.contents()):
+        return
+
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+
+    for lex in lexemes:
+        if lex.text() not in {'/', '%'}:
+            continue
+
+        # Get types of each operand
+        l = lex.previous(True, True)
+        lType = getType(l)
+        r = lex.next(True, True)
+        rType = getType(r)
+
+        # Get type of right operand after cast
+        if not rType and r.text() == '(':
+            r = r.next(True, True)
+            if r and r.token() == 'Keyword':
+                rType = r.text()
+
+        # Get type of left operand after cast
+        l = l.previous(True, True)
+        if lType and l.text() == ')':
+            l = l.previous(True, True)
+            if l and l.token() == 'Keyword':
+                lType = l.text()
+
+        # Skip if either type is a float
+        floats = {'float', 'double'}
+        if lType in floats or rType in floats:
+            continue
+
+        lex = lex.next(True, True)
+
+        # Division by an expression
+        if lex.text() == '(':
+            if check.options().lookup('ignoreExpressions'):
+                break
+            check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR3)
+
+        while lex and lex.token() not in {'Operator', 'Punctuation'}:
+            # Division by zero
+            if lex.text() == '0':
+                check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+            # Division by a variable
+            elif lex.ent() and lex.ent().kind().check('Variable, Parameter'):
+                # See if there is an expression
+                nextLex = lex.next(True, True)
+                if nextLex and nextLex.text() in {'[', '.'}:
+                    if check.options().lookup('ignoreExpressions'):
+                        break
+                    check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR3)
+                    break
+                # Special case if the divisor is a final
+                ent = lex.ent()
+                if ent.kind().check('Final'):
+                    if ent.value() != '0':
+                        break
+                    check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR1)
+                    break
+                # See if the variable is checked
+                if check.options().lookup('ignoreVariables'):
+                    break
+                checked = False
+                refs = ent.refs('Useby')
+                for ref in refs:
+                    prevLex = lexer.lexeme(ref.line(), ref.column())
+                    while prevLex and prevLex.text() not in {';', '{', '}'}:
+                        if prevLex.text() == 'if':
+                            checked = True
+                            break
+                        prevLex = prevLex.previous(True, True)
+
+                    if checked:
+                        break
+                if not checked:
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR2)
+
+            # Division by a method call
+            elif lex.ent() and lex.ent().kind().check('Method'):
+                if check.options().lookup('ignoreMethods'):
+                    break
+                check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR4)
+
+            lex = lex.next(True, True)

@@ -1,0 +1,143 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 7-27-2020
+
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => 'Lowercase character used in literal suffix %1';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "CPP_PR002";}
+
+sub name { 
+  return "All Checks\\Language Specific\\C and C++\\Preprocessor\\Constants defined by #define shall be explicitly declared with uppercase suffixes";
+}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Preprocessor',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { 
+  return "Long and long long constants defined by #define shall be explicitly declared to be long or long long using uppercase  'L' or 'LL', along with uppercase 'U' if unsigned.";
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { 
+  return <<"END_DESC"
+
+<p><b>Rationale</b></p>
+Long and long long constants defined by #define shall be explicitly declared to be long or long long using uppercase 
+'L' or 'LL', along with uppercase 'U' if unsigned.<br>
+This designation tells both the compiler and the code reader that the intent is for the constant to be treated as a long, or long
+long, even though the constant definition would fit into a smaller size.</p>
+<br>
+
+<p><b>Example</b></p><pre><code language="C++">  #define const unsigned int a = 0U; 
+  #define const unsigned int b = 0u; // Non-compliant
+  #define const long int c = 0L;
+  #define const long int d = 0l; // Non-compliant
+  #define const unsigned long int e = 0UL;
+  #define const unsigned long int f = 0Ul; // Non-compliant
+  #define const unsigned int g = 0x12bU;
+  #define const unsigned int h = 0x12bu; // Non-compliant
+  #define const float m = 1.2F;
+  #define const float n = 2.4f; // Non-compliant
+  #define const double o = 1.2L;
+  #define const double p = 2.4l; // Non-compliant
+  #define const double q = o;
+  #define const double r = p;
+</code></pre>
+
+<p><b>See also</b><br>
+ISO/IEC 14882:2003 [1] Â§2.13</p>
+<br>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the check and file from calling function, return unless file
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check( 'c file' );
+  
+  # Pull all lexemes for this file
+  my $lexer = $file->lexer( 0 );
+  my @lexemes = $lexer->lexemes if $lexer;
+  
+  # Loop through all lexemes
+  foreach my $lexeme ( @lexemes ) {
+
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+
+    # Skip inactive code
+    next if $lexeme->inactive;
+
+    # Next unless we are looking at a literal that is not a string
+    next unless $lexeme->token eq 'Literal';
+    next if $lexeme->text =~ /\'\"/;
+    # Next unless it was defined by #define
+    my $prevLex = $lexeme;
+    while ($prevLex && ($prevLex->token() ne "Preprocessor" && $prevLex->token() ne "Newline")) {
+      $prevLex = $prevLex->previous();
+    }
+    next unless ($prevLex && $prevLex->token() eq "Preprocessor");
+
+    # Create test phrase through regex
+    my $suffix = $lexeme->text;
+    $suffix =~ s/(^0[0-8]+)|(^0x[0-9a-fA-F]+)|(^[1-9][0-9]*\.[0-9]+)|(^[1-9][0-9]*)//;
+
+    # Test test phrase
+    my $violation;
+    if ($suffix =~ /l|f|u/) {
+    $violation = $check->violation( 0, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1, $lexeme->text );
+    my $replace = $lexeme->text;
+    $replace =~ s/l/L/;
+    $replace =~ s/f/F/;
+    $replace =~ s/u/U/;
+    $violation->add_fixit_hint($lexeme->line_begin, $lexeme->column_begin, $lexeme->line_begin, $lexeme->column_begin + length($lexeme->text), $replace);
+    }
+  }
+}

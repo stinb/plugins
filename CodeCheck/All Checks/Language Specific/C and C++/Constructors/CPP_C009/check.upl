@@ -1,0 +1,159 @@
+use base ("Understand::Codecheck");
+use strict;
+use constant ERR1 => "Constructor with Single Argument is not explicit";
+use constant ERR2 => "Possible Violation: Constructor with Single Argument is not explicit and not defined";
+use constant { 
+          NODEFOPT => "Violations found in declared but not defined functions should be:",
+          OPT1VIOLATION => "reported as a violation",
+          OPT2POSSIBLE =>"reported as a possible violation",
+          OPT3IGNORE => "ignored",
+          };
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+  $check->add_tr_text(ERR2);
+}
+
+
+
+
+sub checkID { return "CPP_C009";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Constructors\\Explicit Constructors";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Constructors',
+  );
+}
+
+sub description {
+  return "One argument constructors must be declared explicit.";
+}
+
+sub detailed_description {
+  return "One argument constructors must be declared explicit. C++ Only
+  Assumes that Constructors with default arguments that result in contexts ".
+  "where they appear to require a single argument are not considered violations if they are not explicit. This is because default ".
+ "argument declarations are visible only within their exact context ".
+ "of declaration, so the parser/db does not attempt to preserve ".
+ "this (context-sensitive) information. Thus to consider these ".
+ "possible violations would require very significant parsing during ".
+ "this check, most likely not feasible.";
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+sub define_options{
+  my $check = shift;
+  my @choices = [OPT1VIOLATION,OPT2POSSIBLE,OPT3IGNORE];
+  $check->option->radio_vert("handleDeclareOnly",NODEFOPT,@choices,OPT3IGNORE);
+
+#     option->lookup($name) - lookup the value or values for an option
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check('c file');
+  my @defRefs = $file->filerefs("define","class,struct,union",1);
+  
+  #Also consider functions declared in this file if they have no definition
+  my @declRefs = $file->filerefs("declare","class,struct,union",1);
+  foreach (@declRefs){
+    next if $_->ent->ents("definein");
+    push @defRefs;
+  }
+  
+  foreach my $classRef(@defRefs){
+    do_one_class($check,$classRef->ent);
+  }
+}
+
+
+# check one class
+sub do_one_class {
+  my $check = shift;
+  my $class = shift;
+
+  foreach my $func ($class->ents("define,declare","member function")) {
+    next if !checkConstructor($class,$func);
+    next if checkConstructorType($func);
+    next if !checkOneArgument($func);
+    next if checkExplicit($func);
+    my $handleDeclareOnly= $check->option->lookup("handleDeclareOnly");
+    
+    if (checkDefined($func) || $handleDeclareOnly eq OPT1VIOLATION) {
+        foreach my $ref ($func->refs("declarein,definein")) {
+          $check->violation($ref->ent,$ref->file,$ref->line,$ref->column,ERR1);
+        }
+    } elsif ($handleDeclareOnly eq OPT2POSSIBLE) {
+        foreach my $ref ($func->refs("declarein")) {
+          $check->violation($ref->ent,$ref->file,$ref->line,$ref->column,ERR2);
+        }
+    }
+  }
+}
+
+
+# check if func is a constructor
+sub checkConstructor {
+    my $class = shift;
+    my $func = shift;
+    return ($class->name() eq $func->name());
+}
+
+
+# check if func has exactly one argument
+sub checkOneArgument {
+    my $func = shift;
+    if ($func->kind->check("unresolved")) {
+  my $params = $func->freetext("Parameters");
+  return 0 if !$params;
+  return $params !~ m/,/;
+    } else {
+  my @ents = $func->ents("define","parameter");
+  return (scalar(@ents) == 1);
+    }
+}
+
+
+# check if func is explicit
+sub checkExplicit {
+    my $func = shift;
+    return $func->kind->check("explicit");
+}
+
+
+# check if func is defined
+sub checkDefined {
+    my $func = shift;
+    return $func->ents("definein");
+}
+
+# check if func is copy constructor
+sub checkConstructorType {
+
+  # Pull in ent to check and declare needed variables
+  my $ent = shift;
+  my $parameters = $ent->parameters;
+  my $name = $ent->name;
+
+  # Test to see if we are looking at a copy constructor or assignment operator
+  return $parameters =~ /^(volatile\s)?(const\s)?$name\s\&(\&)?(\s\w+)?$/;
+
+}

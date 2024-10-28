@@ -1,0 +1,170 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-29-2021
+import re
+
+ERR1 = """\
+Template does not check if a specific template argument is suitable for this
+template"""
+
+def ids():
+    return ('A14-1-1', 'CPP_A017')
+
+def name(id):
+    return {
+        'A14-1-1': 'Published Standards/AUTOSAR/A template should check if a specific template argument is suitable for this template',
+        'CPP_A017': 'All Checks/Language Specific/C and C++/Assignment Operators/A template should check if a specific template argument is suitable for this template',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'A14-1-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Non-automated',
+            'Assignment Operators'
+        ],
+        'CPP_A017': [
+            'Language: C',
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>If a template class or function requires specific characteristics from a
+template type (e.g. if it is move constructible, copyable, etc.), then it needs
+to check whether the type matches the requirements to detect possible faults.
+The goal of this rule is to ensure that a template defines all of the
+preconditions that a template argument needs to fulfill without having any
+information about the specific class. This can be achieved in compile time using
+static_assert assertion.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A14-1-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;utility&gt;
+3 class A
+4 {
+5   public:
+6     A() = default;
+7     ~A() = default;
+8     A(A const&) = delete;
+9     A& operator=(A const&) = delete;
+10    A(A&&) = delete;
+11    A& operator=(A&&) = delete;
+12 };
+13 class B
+14 {
+15   public:
+16     B() = default;
+17     B(B const&) = default;
+18     B& operator=(B const&) = default;
+19     B(B&&) = default;
+20     B& operator=(B&&) = default;
+21 };
+22 template &lt;typename T&gt;
+23 void F1(T const& obj) noexcept(false)
+24 {
+25   static_assert(
+26              std::is_copy_constructible&lt;T&gt;(),
+27              "Given template type is not copy constructible."); // Compliant
+28 }
+29 template &lt;typename T&gt;
+30 class C
+31 {
+32   // Compliant
+33   static_assert(std::is_trivially_copy_constructible&lt;T&gt;(),
+34              "Given template type is not trivially copy constructible.");
+35
+36   // Compliant
+37   static_assert(std::is_trivially_move_constructible&lt;T&gt;(),
+38              "Given template type is not trivially move constructible.");
+39
+40   // Compliant
+41   static_assert(std::is_trivially_copy_assignable&lt;T&gt;(),
+42              "Given template type is not trivially copy assignable.");
+43
+44   // Compliant
+45   static_assert(std::is_trivially_move_assignable&lt;T&gt;(),
+46              "Given template type is not trivially move assignable.");
+47
+48   public:
+49     C() = default;
+50     C(C const&) = default;
+51     C& operator=(C const&) = default;
+52     C(C&&) = default;
+53     C& operator=(C&&) = default;
+54
+55   private:
+56     T c;
+57 };
+58 template &lt;typename T&gt;
+59 class D
+60 {
+61   public:
+62     D() = default;
+63     D(D const&) = default; // Non-compliant - T may not be copyable
+64     D& operator=(D const&) = default; // Non-compliant - T may not be copyable
+65     D(D&&) = default; // Non-compliant - T may not be movable
+66     D& operator=(D&&) = default; // Non-compliant - T may not be movable
+67
+68   private:
+69     T d;
+70 };
+71 void F2() noexcept
+72 {
+73   A a;
+74   B b;
+75   // f1&lt;A&gt;(a); // Class A is not copy constructible, compile-time error
+76   // occurs
+77   F1&lt;B&gt;(b); // Class B is copy constructible
+78   // C&lt;A&gt; c1; // Class A can not be used for template class C, compile-time
+79   // error occurs
+80   C&lt;B&gt; c2; // Class B can be used for template class C
+81   D&lt;A&gt; d1;
+82   // D&lt;A&gt; d2 = d1; // Class D can not be copied, because class A is not
+83   // copyable, compile=time error occurs
+84   // D&lt;A&gt; d3 = std::move(d1); // Class D can not be moved, because class A is
+85   // not movable, compile-time error occurs
+86   D&lt;B&gt; d4;
+87   D&lt;B&gt; d5 = d4;
+88   D&lt;B&gt; d6 = std::move(d4);
+89 }
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    classRefs = file.filerefs('Define', 'Class Template')
+
+    for classRef in classRefs:
+        ok = False
+        defaultRefs = classRef.ent().refs('Declare Default')
+
+        for defaultRef in defaultRefs:
+            if not defaultRef.scope().name() == classRef.ent().name():
+                continue
+
+            if not ok:
+                if not lexer:
+                    lexer = file.lexer()
+
+                lexemes = lexer.lexemes(classRef.ent().ref('Begin').line(), classRef.ent().ref('End').line())
+                for lexeme in lexemes:
+                    if re.search(r'is_trivially', lexeme.text()):
+                        ok = True
+
+            if not ok:
+                check.violation(defaultRef.ent(), file, defaultRef.line(), defaultRef.column(), ERR1)

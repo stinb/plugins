@@ -1,0 +1,233 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 2014-09-23
+# Rewritten by Robby Bennett
+# 2023-03-13
+
+
+import re
+
+
+ERR1 = 'Non-distinct external identifier %1 conflicts with entity %2 at %3:%4:%5'
+
+
+entsSeen = set() # { ent, ... }
+
+typeSubstringsSeen     = dict() # { substring: ent, ... }
+functionSubstringsSeen = dict() # { substring: ent, ... }
+objectSubstringsSeen   = dict() # { substring: ent, ... }
+
+
+def ids():
+    return ('MISRA12_5.1', 'CPP_I002', 'MISRA23_5.1')
+
+
+def name(id):
+    return {
+        'MISRA12_5.1': '''Published Standards/MISRA C 2012/\
+5.1 External identifiers shall be distinct''',
+        'CPP_I002': '''All Checks/Language Specific/C and C++/Headers/\
+External identifiers shall be distinct''',
+        'MISRA23_5.1': '''Published Standards/MISRA C 2023/\
+5.1 External identifiers shall be distinct''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_5.1': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Headers',
+        ],
+        'CPP_I002': [
+            'Language: C',
+            'Language: C++',
+            'Headers',
+        ],
+        'MISRA23_5.1': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Headers',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Amplification</b></p>
+This rule requires that different <i>external identifiers</i> be distinct within
+the limits imposed by the implementation.
+</p>
+
+<p>
+The definition of distinct depends on the implementation and on the version of
+the C language that is being used:
+</p>
+
+<ul>
+
+<li>
+In C90 the <b>minimum</b> requirement is that the first 6 characters of
+<i>external identifiers</i> are significant but their case is not required to be
+significant;
+</li>
+
+<li>
+In C99 the <b>minimum</b> requirement is that the first 31 characters of
+<i>external identifiers</i> are significant, with each universal character or
+corresponding extended source character occupying between 6 and 10 characters.
+</li>
+
+</ul>
+
+<p>
+In practice, many implementations provide greater limits. For example it is
+common for <i>external identifiers</i> in C90 to be case-sensitive and for at
+least the first 31 characters to be significant.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+If two identifiers differ only in non-significant characters, the behaviour is
+undefined.
+</p>
+
+<p>
+If portability is a concern, it would be prudent to apply this rule using the
+minimum limits specified in The Standard.
+</p>
+
+<p>
+Long identifiers may impair the readability of code. While many automatic code
+generation systems produce long identifiers, there is a good argument for
+keeping identifier lengths well below this limit.
+</p>
+
+<p>
+<i>Note</i>: In C99, if an extended source character appears in an <i>external
+identifier</i> and that character does not have a corresponding universal
+character, The Standard does not specify how many characters it occupies.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+In the following example, the definitions all occur in the same translation
+unit. The implementation in question supports 31 significant case-sensitive
+characters in <i>external identifiers</i>.
+</p>
+
+<pre><code language="C++">  /*      1234567890123456789012345678901*********     Characters */
+  int32_t engine_exhaust_gas_temperature_raw;
+  int32_t engine_exhaust_gas_temperature_scaled;    /* Non-compliant */
+  /*      1234567890123456789012345678901*********     Characters */
+  int32_t engine_exhaust_gas_temp_raw;
+  int32_t engine_exhaust_gas_temp_scaled;           /* Compliant */
+</code></pre>
+
+<p>
+In the following non-compliant example, the implementation supports 6
+significant case-insensitive characters in <i>external identifiers</i>. The
+identifiers in the two translation units are different but are not distinct in
+their significant characters.
+</p>
+
+<pre><code language="C++">  /* file1.c */
+  int32_t abc = 0;
+
+  /* file2.c */
+  int32_t ABC = 0;
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Dir 1.1, Rule 5.2, Rule 5.4, Rule 5.5
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('C99', 'Use C99 standard ( default: C99 )', True)
+
+
+def check(check, file):
+    c99 = check.options().lookup('C99')
+
+    # Retrieve global entities from the database
+    refKinds = 'Declare, Define'
+    entKinds0 = '~Static ~Local ~Member ~Unnamed'
+    entKinds1 = '~TemplateParameter ~Parameter'
+    typesDeclarations = file.filerefs(refKinds, f'Type {entKinds0} {entKinds1}', True)
+    functionsDeclarations = file.filerefs(refKinds, f'Function {entKinds0}', True)
+    objectsDeclarations = file.filerefs(refKinds, f'Object {entKinds0}', True)
+
+    # Check each group of global entities
+    checkEnts(check, typesDeclarations, typeSubstringsSeen, False, c99)
+    checkEnts(check, functionsDeclarations, functionSubstringsSeen, True, c99)
+    checkEnts(check, objectsDeclarations, objectSubstringsSeen, False, c99)
+
+
+# Check all the declared global entities
+def checkEnts(check, globalsDeclarations, substringsSeen, areFunctions, c99):
+    # Loop through each global entity
+    for currentRef in globalsDeclarations:
+        currentEnt = currentRef.ent()
+
+        # Skip this entity if it is unresolved and undeclared
+        if currentEnt.kind().check('Unresolved') and not currentEnt.ref('Declarein'):
+            continue
+
+        # Skip if the entity was seen
+        if currentEnt in entsSeen:
+            continue
+        entsSeen.add(currentEnt)
+
+        substring = makeSubstring(currentEnt.name(), c99)
+
+        # Skip if the substring was not yet seen
+        if substring not in substringsSeen:
+            substringsSeen[substring] = currentEnt
+            continue
+
+        firstEnt = substringsSeen[substring]
+
+        # Skip if the function names are identical
+        if areFunctions and currentEnt.name() == firstEnt.name():
+            continue
+
+        refKinds   = 'Declarein, Definein'
+        firstRef   = firstEnt.ref(refKinds)
+        currentRef = currentEnt.ref(refKinds)
+
+        check.violation(firstEnt, firstRef.file(), firstRef.line(),  \
+        firstRef.column(), ERR1, firstEnt.name(), currentEnt.name(), \
+        currentRef.file().name(), currentRef.line(), currentRef.column())
+
+
+# Create a substring of length of significant characters
+def makeSubstring(name, c99):
+    length = 31 if c99 else 6
+    caseInsensitive = not c99
+
+    # Create the substring of the entity name to compare to other entities
+    substring = name[:length]
+    if caseInsensitive:
+        substring = substring.lower()
+    return substring

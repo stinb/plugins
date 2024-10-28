@@ -1,0 +1,126 @@
+ERR1 = 'Perform any string modifications before validation.'
+
+
+# The ID for the check
+def ids():
+    return ('IDS11-J', 'JAVA_IDS11')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'IDS11-J': 'Published Standards/SEI Cert Standards/Java/Perform any string modifications before validation',
+        'JAVA_IDS11': 'All Checks/Language Specific/Java/Input Validation and Data Sanitization/Perform any string modifications before validation',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'IDS11-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+        ],
+        'JAVA_IDS11': [
+            'Language: Java',
+            'Input Validation and Data Sanitization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Perform any string modifications before validation'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Perform any string modifications before validation</p>
+<p><b>Risk Assessment</b></p>
+<p>Validating input before removing or modifying characters in the input string can allow malicious input to bypass validation checks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/IDS11-J.+Perform+any+string+modifications+before+validation</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">import java.text.Normalizer;
+import java.text.Normalizer.Form;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class TagFilter {
+  public static String filterString(String str) {
+    String s = Normalizer.normalize(str, Form.NFKC);
+
+    // Validate input
+    Pattern pattern = Pattern.compile("&lt;script&gt;");
+    Matcher matcher = pattern.matcher(s);
+    if (matcher.find()) {
+      throw new IllegalArgumentException("Invalid input");
+    }
+
+    // Deletes noncharacter code points
+    s = s.replaceAll("[\\p{Cn}]", "");
+    return s;
+  }
+
+  public static void main(String[] args) {
+    // "\uFDEF" is a noncharacter code point
+    String maliciousInput = "&lt;scr" + "\uFDEF" + "ipt&gt;";
+    String sb = filterString(maliciousInput);
+    // sb = "&lt;script&gt;"
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>
+This check assumes that a string is validated when passed to the matcher() method.
+There are several known limitations to this check. The first is when the validation and cleanup are done in separate methods,
+and the second is when the input string is stored in an object after validation, then the stored value is later modified.
+These limitations involve tracking data as it flows through the program, which is beyond the scope of static analysis.
+</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    for meth_ref in file.filerefs("Define", "Method"):
+        for call_ref in meth_ref.ent().refs("Call Nondynamic", "Method Public Member"):
+            if call_ref.ent().name() == "matcher":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and lex.ent().type() == "String":
+                        for set_ref in lex.ent().refs("Setby"):
+                            if (set_ref.line() > call_ref.line()) and (set_ref.scope().parent().id() == meth_ref.ent().id()):
+                                check.violation(
+                                    lex.ent(), file, set_ref.line(), set_ref.column(), ERR1)
+
+                        break
+
+                    lex = lex.next(ignore_whitespace=True)

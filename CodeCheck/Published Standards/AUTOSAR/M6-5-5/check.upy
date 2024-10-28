@@ -1,0 +1,173 @@
+# This script is designed to run with Understand - CodeCheck
+# 10-7-21
+
+import re
+
+ERR1 = 'Non counter loop control variable modified within condition or expression of a for loop'
+
+# The ID for the check
+def ids():
+    return ('M6-5-5', 'MISRA08_6-5-5', 'CPP_C019')
+
+# The short name of the check
+def name(id):
+    return {
+        'M6-5-5': 'Published Standards/AUTOSAR/A loop-control-variable other than the loop-counter shall not be modified within condition or expression',
+        'MISRA08_6-5-5': 'Published Standards/MISRA-C++ 2008/6-5-5 A loop-control-variable other than the loop-counter shall not be modified within condition or expression',
+        'CPP_C019': 'All Checks/Language Specific/C and C++/Control Flow/A loop-control-variable other than the loop-counter shall not be modified within condition or expression',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-5-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'M6-5-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C019': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p><i>loop-control-variables</i> are either the <i>loop-counter</i>, or flags used for early loop termination. The code is easier to understand if these are not modified within <i>condition</i> or <i>expression</i>.</p>
+<p>Note that it is possible for a <i>loop-control-variable</i> with <i>volatile</i> qualification to change value (or have it changed) outside <i>statement</i> due to the volatile nature of the object. Such modification does not break this rule.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">for ( x = 0; ( x &lt; 10 ) && !bool_a; ++x )
+{
+    if ( ... )
+    {
+        bool_a = true;                      // Compliant
+    }
+}
+
+bool test_a ( bool * pB )
+{
+    *pB = ... ? true : false;
+    return *pB;
+}
+
+for ( x = 0;
+    ( x &lt; 10 ) && test_a ( &bool_a );
+    ++x )                                   // Non-compliant
+
+volatile bool status;
+for ( x = 0; ( x &lt; 10 ) && status; ++x)     // Compliant
+for ( x = 0; x &lt; 10; bool_a = test( ++x ) ) // Non-compliant
+</code></pre>
+"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+# def - to check if entity is
+# the actual counter
+def check_entity(ent, ctr_ent):
+    for rec in ctr_ent:
+        if rec == ent:
+            return True
+    return False
+
+# def - function definition checking
+def validate_function(lex):
+    bool_return = False
+    ent_func = lex.ent()
+
+    if ent_func.ref("Return"):
+        bool_return = ent_func.ref("Return").ent().ref("Modifyby, Setby")
+
+    # move lex to the end of function definition to skip parameter entities
+    while lex and lex.text() != "(":
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    paren = 1
+    while lex and paren != 0:
+        if lex.text() == "(":
+            paren = paren + 1
+        if lex.text() == ")":
+            paren = paren - 1
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    # check if return entity value was modified or set
+    # return lex to skip the whole function call
+    return bool_return, lex
+
+def test_language(language):
+    return language == 'C++'
+
+# def - loop definition checking
+def validate_loop(lex, file, check):
+    # get the for loop entity
+    ctr_ent = []
+    while lex and lex.text() != ";":
+        if lex.ent() and lex.ent().kind().check("Object"):
+            ctr_ent.append(lex.ent())
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    # init variables
+    paren = 1
+    is_breach = False
+    ent_breach = None
+    # traverse thru all the entities inside for loop
+    while lex and paren != 0 and len(ctr_ent) != 0:
+        if lex.text() == "(":
+            paren = paren + 1
+        if lex.text() == ")":
+            paren = paren - 1
+
+        if lex.ent() and not check_entity(lex.ent(), ctr_ent):
+            line, column = -1, -1
+            for ref in lex.ent().refs():
+                if lex.ent() and lex.line_begin() == ref.line() and file == ref.file():
+                    # check if modify or set
+                    if ref.kind().check("Modifyby, Setby") and lex.ent().kind().check("Object"):
+                        ent_breach = lex.ent()
+                        line, column = lex.line_begin(), lex.column_begin()
+                        is_breach = True
+                        paren = 0
+                    # if function, check for further details
+                    elif ref.kind().check("Callby") and lex.ent().kind().check("Function"):
+                        ent_breach = lex.ent()
+                        line, column = lex.line_begin(), lex.column_begin()
+                        is_breach, lex = validate_function(lex)
+                        paren = 0
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    # entity validation
+    if is_breach:
+        check.violation(ent_breach, file, line, column, ERR1)
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() == "for" and lex.token() == "Keyword":
+            validate_loop(lex.next(ignore_whitespace=True,ignore_comments=True), file, check)
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)

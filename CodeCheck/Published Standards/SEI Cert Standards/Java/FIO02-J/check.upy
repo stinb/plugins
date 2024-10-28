@@ -1,0 +1,109 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-15-2022
+
+import re
+ERR1 = 'File deletion attempted but success status is unknown'
+
+DEF_NAME = "Detect and handle file-related errors"
+
+# The ID for the check
+def ids():
+    return ('FIO02-J', 'JAVA_FIO02')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'FIO02-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_FIO02': "All Checks/Language Specific/Java/Input Output/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_FIO02': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Detect and handle file-related errors.</p>
+<p><b>Risk Assessment</b></p>
+<p>Java's file-manipulation methods often indicate failure with a return value
+instead of throwing an exception. Consequently, programs that ignore the return
+values from file operations often fail to detect that those operations have
+failed. Java programs must check the return values of methods that perform file
+I/O. This is a specific instance of EXP00-J. Do not ignore values returned by
+methods.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/FIO02-J.+Detect+and+handle+\
+file-related+errors</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">File file = new File(args[0]);
+file.delete();
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    if not re.search(r'file', file.contents().lower()):
+        return
+
+    lexer = None
+
+    methods = ['delete', 'deleteOnExit', 'mkdir', 'mkdirs', 'renameTo', 'setLastModified', 'setReadOnly', 'setWritable', 'setReadable', 'setExecutable']
+    refs = file.filerefs('Define', 'Variable')
+
+    # Go though all file variables
+    for ref in refs:
+        if ref.ent().type() == 'File':
+            vRefs = ref.ent().refs('Useby Deref Partial')
+
+            # Look for any file method to be used on the file
+            for vRef in vRefs:
+                if not lexer:
+                    if not file.lexer():
+                        return
+                    lexer = file.lexer()
+                lexeme = lexer.lexeme(vRef.line(), vRef.column())
+
+                nextLex = lexeme.next(True, True)
+                if nextLex and nextLex.text() == '.':
+                    nextLex = nextLex.next(True, True)
+                    if nextLex and nextLex.text() in methods:
+
+                        ok = False
+                        while lexeme and not re.match(r';|{|}|=', lexeme.text()):
+                            # Skip if completion is checked
+                            if lexeme.text() == 'if':
+                                ok = True
+                                break
+                            lexeme = lexeme.previous(True, True)
+
+                        if not ok:
+                            check.violation(vRef.ent(), file, vRef.line(), vRef.column(), ERR1)
+

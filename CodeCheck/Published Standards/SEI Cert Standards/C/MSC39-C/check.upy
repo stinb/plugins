@@ -1,0 +1,167 @@
+ERR1 = 'Do not call va_arg() on a va_list that has an indeterminate value.'
+
+
+# The ID for the check
+def id():
+    return ('MSC39-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MSC39-C': 'Published Standards/SEI Cert Standards/C/Do not call va_arg() on a va_list that has an indeterminate value',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MSC39-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not call va_arg() on a va_list that has an indeterminate value'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not call va_arg() on a va_list that has an indeterminate value</p>
+<p><b>Risk Assessment</b></p>
+<p>Reading variable arguments using a va_list that has an indeterminate value can have unexpected results.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/MSC39-C.+Do+not+call+va_arg%28%29+on+a+va_list+that+has+an+indeterminate+value</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdarg.h&gt;
+#include &lt;stdio.h&gt;
+
+int contains_zero(size_t count, va_list ap) {
+  for (size_t i = 1; i &lt; count; ++i) {
+    if (va_arg(ap, double) == 0.0) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+int print_reciprocals(size_t count, ...) {
+  va_list ap;
+  va_start(ap, count);
+
+  if (contains_zero(count, ap)) {
+    va_end(ap);
+    return 1;
+  }
+
+  for (size_t i = 0; i &lt; count; ++i) {
+    printf("%f ", 1.0 / va_arg(ap, double));
+  }
+
+  va_end(ap);
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        va_list_ids = {}  # key: ent ID of va_list, value: True if passed as an argument to another function and passed to va_arg directly within that function, False otherwise
+
+        for obj_ref in func_ref.ent().refs("Define", "Object Local"):
+            if obj_ref.ent().type() == "va_list":
+                va_list_ids[obj_ref.ent().id()] = False
+
+        for call_ref in func_ref.ent().refs("Call", "~Unresolved Function"):
+            call_lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_call_param = 0
+
+            while call_lex:
+                if call_lex.text() == "(" and call_lex.token() == "Punctuation":
+                    on_call_param += 1
+                elif call_lex.text() == ")" and call_lex.token() == "Punctuation":
+                    on_call_param -= 1
+
+                    if not on_call_param:
+                        break
+                elif call_lex.ent() and call_lex.ent().id() in va_list_ids:
+                    for param_ref in call_ref.ent().refs("Define", "Parameter"):
+                        if "va_list" in param_ref.ent().type():
+                            for use_ref in call_ref.ent().refs("Use", "Unresolved Macro"):
+                                if use_ref.ent().longname() == "va_arg":
+                                    use_lex = lexer.lexeme(
+                                        use_ref.line(), use_ref.column())
+                                    on_use_param = 0
+
+                                    while use_lex:
+                                        if use_lex.text() == "(" and use_lex.token() == "Punctuation":
+                                            on_use_param += 1
+                                        elif use_lex.text() == ")" and use_lex.token() == "Punctuation":
+                                            on_use_param -= 1
+
+                                            if not on_use_param:
+                                                break
+                                        elif use_lex.ent() and use_lex.ent().id() == param_ref.ent().id():
+                                            va_list_ids[call_lex.ent(
+                                            ).id()] = True
+                                            break
+
+                                        use_lex = next_lex(use_lex)
+
+                call_lex = next_lex(call_lex)
+
+        if not any(va_list_ids.values()):
+            continue
+
+        for use_ref in func_ref.ent().refs("Use", "Unresolved Macro"):
+            if use_ref.ent().longname() == "va_arg":
+                use_lex = lexer.lexeme(use_ref.line(), use_ref.column())
+                on_use_param = 0
+
+                while use_lex:
+                    if use_lex.text() == "(" and use_lex.token() == "Punctuation":
+                        on_use_param += 1
+                    elif use_lex.text() == ")" and use_lex.token() == "Punctuation":
+                        on_use_param -= 1
+
+                        if not on_use_param:
+                            break
+                    elif use_lex.ent() and use_lex.ent().id() in va_list_ids and va_list_ids[use_lex.ent().id()]:
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)
+                        break
+
+                    use_lex = next_lex(use_lex)
+
+
+def next_lex(lex):
+    return lex.next(ignore_whitespace=True, ignore_comments=True)

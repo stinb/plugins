@@ -1,0 +1,184 @@
+ERR1 = 'Tag name shall be a unique identifier.'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_5.7', 'MISRA23_5.7')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_5.7': 'Published Standards/MISRA C 2012/5.7 A tag name shall be a unique identifier',
+        'MISRA23_5.7': 'Published Standards/MISRA C 2023/5.7 A tag name shall be a unique identifier',
+    }[id]
+
+def tags(id):
+    return {
+        'MISRA12_5.7': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Identifiers',
+            ],
+        'MISRA23_5.7': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Identifiers',
+            ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return '5.7 (Global)( Required ) A tag name shall be a unique identifier.'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Amplification</b></p>
+The tag shall be unique across all name spaces and translation units.
+</p>
+
+<p>
+All declarations of the tag shall specify the same type.
+</p>
+
+<p>
+Multiple complete declarations of the same tag are only permitted by this rule if the tag is declared in
+a <i>header file</i> and that <i>header file</i> is included in multiple source files.
+</p>
+
+<p><b>Rationale</b></p>
+Reusing a tag name may lead to developer confusion.
+</p>
+
+<p>
+There is also undefined behaviour associated with reuse of tag names in C90 although this is not
+listed in The Standard's Annex. This undefined behaviour was recognized in C99 as a constraint in
+Section 6.7.2.3.
+</p>
+
+<p><b>Exception</b></p>
+The tag name may be the same as the typedef name with which it is associated.
+</p>
+
+<p><b>Example</b></p>
+</p>
+
+<pre><code language="C++">  struct stag
+  {
+    uint16_t a;
+    uint16_t b;
+  };
+
+  struct stag a1 = { 0, 0 };  /* Compliant - compatible with above */
+  union stag a2 = { 0, 0 };   /* Non-compliant - declares different type
+                               * from struct stag.
+                               * Constraint violation in C99 */
+
+</code></pre>
+
+<p>
+The following example also violates Rule 5.3
+</p>
+
+<pre><code language="C++">  struct deer
+  {
+    uint16_t a;
+    uint16_t b;
+  };
+
+  void foo ( void )
+  {
+    struct deer
+    {
+      uint16_t a;
+    };                    /* Non-compliant - tag "deer" reused */
+  }
+
+  typedef struct coord
+  {
+    uint16_t x;
+    uint16_t y;
+  } coord;                /* Compliant by Exception */
+
+  struct elk
+  {
+    uint16_t x;
+  };
+
+  struct elk              /* Non-compliant - declaration of different type
+                           * Constraint violation in C99 */
+  {
+    uint32_t x;
+  };
+
+</code></pre>
+
+<p><b>See also</b><br>
+Rule 5.6
+</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check):
+    def check_violation(file, ref):
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+    db = check.db()
+    files = check.files()
+    struct_tags = []
+
+    for file in files:
+
+        try:
+            lexer = file.lexer(True, 8, False, False)
+        except:
+            continue
+
+        if not lexer:
+            continue
+
+        for struct_ref in file.filerefs("Define", "Struct Type"):
+            if struct_ref.ent().name() in struct_tags:
+                check_violation(file, struct_ref)
+            elif struct_ref.ent().kind().check("Unnamed"):
+                lex = lexer.lexeme(struct_ref.line(), struct_ref.column())
+
+                if lex.token() == "Identifier":
+                    struct_tag = lex.text()
+
+                    if lex.ent() and lex.ent().kind().check("Macro"):
+                        continue
+                    elif struct_tag not in struct_tags:
+                        struct_tags.append(struct_tag)
+                    else:
+                        check_violation(file, struct_ref)
+            else:
+                struct_tags.append(struct_ref.ent().name())
+
+        for obj_ref in file.filerefs("Define", "Object"):
+            obj_type = obj_ref.ent().freetext("UnderlyingType")
+            if obj_type is None:
+                continue
+
+            # check that struct_tags is iterable
+            ok = hasattr(struct_tags, '__iter__')
+
+            if ok and "union" in obj_ref.ent().type() and obj_type in struct_tags:
+                check_violation(file, obj_ref)

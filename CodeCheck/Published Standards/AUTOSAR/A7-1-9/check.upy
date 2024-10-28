@@ -1,0 +1,140 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-14-2021
+
+import re
+
+ERR1 = 'A class, structure, or enumeration was declared in the definition of its type'
+
+def ids():
+    return ('A7-1-9', 'CPP_D049')
+
+def name(id):
+    return {
+        'A7-1-9': 'Published Standards/AUTOSAR/A class, structure, or enumeration shall not be declared in the definition of its type',
+        'CPP_D049': 'All Checks/Language Specific/C and C++/Declarations and Definitions/A class, structure, or enumeration shall not be declared in the definition of its type',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A7-1-9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D049': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+Combining a type definition with a declaration of another entity can lead to readability problems and can be confusing for a developer.
+</p>
+
+<p><b>Example</p></b>
+
+<pre><code language="C++">// $Id: A7-1-9.cpp 305629 2018-01-29 13:29:25Z piotr.serwa $
+#include &lt;cstdint&gt;
+
+enum class DIRECTION
+{
+    UP,
+    DOWN
+} dir; //non-compliant
+
+class Foo
+{
+public:
+    enum class ONE {AA, BB}; //compliant
+
+    static constexpr enum class TWO {CC, DD} sVar = TWO::CC; // non-compliant
+    static constexpr ONE sVar2 = ONE::AA; //compliant
+};
+
+
+struct Bar
+{
+    std::uint32_t a;
+} barObj; //non-compliant
+
+struct Bar2
+{
+    std::uint32_t a;
+} bar2Obj, *bar2Ptr; //non-compliant, also with A7-1-7
+
+struct Foo2
+{
+    std::uint32_t f;
+};
+
+Foo2 foo2Obj; //compliant
+</code></pre>
+
+<p><b>See also</b></p>
+
+</p>
+• JSF December 2005 [8]: AV Rule 141: A class, structure, or enumeration will not be declared in the definition of its type.
+<p>
+
+<p>
+• C++ Core Guidelines [11]: C.7: Don't define a class or enum and declare a variable of its type in the same statement.
+</p>
+'''
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Enum, Struct')
+
+    # Go through all enum and struct refs
+    for ref in refs:
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        # Find the first opening curly brace
+        while lexeme and lexeme.text() != '{':
+            lexeme = lexeme.next(True, True)
+
+        if not lexeme:
+            continue
+
+        # Go to the corresponding closing curly brace
+        close = findClose(lexeme)
+        close = close.next(True, True)
+
+        if close and close.ent() and re.search(r'object', close.ent().kindname().lower()):
+            check.violation(close.ent(), file, close.line_begin(), close.column_begin(), ERR1)
+
+# Find the corresponding closing curly brace to the given opening curly brace
+def findClose(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == '}' and count == 0):
+        if lexeme.text() == '{':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme.text() == '}':
+            count -= 1
+
+    return lexeme

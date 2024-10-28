@@ -1,0 +1,145 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 12-02-2021
+import re
+
+ERR1 = 'Object %1 does not outlive the function and does not have automatic storage duration'
+
+def ids():
+    return ('A18-5-8', 'CPP_V035')
+
+def name(id):
+    return {
+        'A18-5-8': 'Published Standards/AUTOSAR/Objects that do not outlive a function shall have automatic storage duration',
+        'CPP_V035': 'All Checks/Language Specific/C and C++/Variables/Objects that do not outlive a function shall have automatic storage duration'
+    }[id]
+
+
+def tags(id):
+    return {
+        'A18-5-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Partially Automated',
+            'Variables',
+        ],
+        'CPP_V035': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Creating objects with automatic storage duration implies that there is no
+additional allocation and deallocation cost, which would occur when using
+dynamic storage.</p>
+<p>Note: This rule applies only to objects created in a function scope, it does
+not forbid the object to internally allocate additional memory on heap.</p>
+<p><b>Exception</b></p>
+<p>Objects causing high memory utilization may be allocated on heap using memory
+managing objects.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  //% $Id: A18-5-8.cpp 311792 2018-03-15 04:15:08Z christof.meerwald $
+2  #include &lt;cstdint&gt;
+3  #include &lt;memory&gt;
+4  #include &lt;vector&gt;
+5
+6  class StackBitmap
+7  {
+8  public:
+9    constexpr static size_t maxSize = 65535;
+10   using BitmapRawType = std::array&lt;uint8_t, maxSize&gt;;
+11   StackBitmap(const std::string& path, uint32_t bitmapSize)
+12   {
+13     // read bitmapSize bytes from the file path
+14   }
+15
+16   const BitmapRawType& GetBitmap() const noexcept { return bmp; }
+17
+18 private:
+19   BitmapRawType bmp;
+20 };
+21
+22 void AddWidgetToLayout(int32_t row, int32_t col)
+23 {
+24   auto idx = std::make_pair(row, col); // Compliant
+25   auto spIdx = std::make_shared<std::pair<int32_t, int32_t>>(
+26   row, col); // Non-compliant
+27   // addWidget to index idx
+28 }
+29
+30 uint8_t CalcAverageBitmapColor(const std::string& path, uint32_t bitmapSize)
+31 {
+32   std::vector&lt;uint8_t&gt; bmp1(bitmapSize); // Compliant
+33   // read bitmap from path
+34   StackBitmap bmp2(path, bitmapSize); // Non-compliant
+35   bmp2.GetBitmap();
+36 }
+37
+38 int main(int, char**)
+39 {
+40   AddWidgetToLayout(5, 8);
+41   CalcAverageBitmapColor("path/to/bitmap.bmp", 32000);
+42 }
+</code></pre>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    funcRefs = file.filerefs('Define', 'Function')
+
+    for funcRef in funcRefs:
+        begin = funcRef.ent().ref('Begin')
+        end = funcRef.ent().ref('End')
+        if not begin or not end:
+            continue
+        objRefs = funcRef.ent().refs('Define', 'Object')
+
+        for objRef in objRefs:
+            outLive = False
+            refs = objRef.ent().refs()
+            for ref in refs:
+                # Check if ref is outside of function scope
+                if ref.line() < begin.line() or ref.line() > end.line():
+                    outLive = True
+
+
+            if not outLive:
+                ok = False
+
+                if not lexer:
+                    lexer = file.lexer()
+
+                nextLex = lexer.lexeme(objRef.line(), objRef.column())
+                prevLex = nextLex
+
+                # Check for automatic storage duration
+                while prevLex and not re.search(r';|{|}', prevLex.text()):
+                    if re.search(r'auto|vector', prevLex.text()):
+                        ok = True
+
+                    prevLex = prevLex.previous(True, True)
+
+
+                while nextLex and not re.search(r';|{|}', nextLex.text()):
+                    if nextLex.text() == 'make_shared':
+                        ok = False
+
+                    nextLex = nextLex.next(True, True)
+
+
+                if not ok:
+                    check.violation(objRef.ent(), file, objRef.line(), objRef.column(), ERR1, objRef.ent().name())

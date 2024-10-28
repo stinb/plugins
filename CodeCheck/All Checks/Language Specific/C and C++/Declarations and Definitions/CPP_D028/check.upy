@@ -1,0 +1,186 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-05-25
+
+
+import re
+from Modules import cParseIntLiteral
+
+
+ERR1 = 'Implicit value of enumerator is not unique'
+
+
+def ids():
+    return ('MISRA12_8.12', 'CPP_D028', 'MISRA23_8.12', 'MISRA23_11.6.3')
+
+
+def name(id):
+    return {
+        'MISRA12_8.12': '''Published Standards/MISRA C 2012/\
+8.12 Within an enumerator list, the value of an implicitly-specified \
+enumeration constant shall be unique''',
+        'CPP_D028': '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+Within an enumerator list, the value of an implicitly-specified enumeration \
+constant shall be unique''',
+        'MISRA23_8.12': '''Published Standards/MISRA C 2023/\
+8.12 Within an enumerator list, the value of an implicitly-specified \
+enumeration constant shall be unique''',
+        'MISRA23_11.6.3': '''Published Standards/MISRA C++ 2023/\
+11.6.3 Within an enumerator list, the value of an implicitly-specified
+enumeration constant shall be unique''',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_8.12': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'CPP_D028': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_8.12': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_11.6.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>
+An implicitly-specified enumeration constant has a value 1 greater than its
+predecessor. If the first enumeration constant is implicitly-specified then its
+value is 0.
+</p>
+
+<p>
+An explicitly-specified enumeration constant has the value of the associated
+constant expression.
+</p>
+
+<p>
+If implicitly-specified and explicitly-specified constants are mixed within an
+enumeration list, it is possible for values to be replicated. Such replication
+may be unintentional and may give rise to unexpected behaviour.
+</p>
+
+<p>
+This rule requires that any replication of enumeration constants be made
+explicit, thus making the intent clear.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+In the following examples the green and yellow enumeration constants are given
+the same value.
+</p>
+
+<pre><code language="C++">  /* Non-compliant - yellow replicates implicit green */
+  enum colour { red = 3, blue, green, yellow = 5 }
+  /* Compliant                                        */
+  enum colour { red = 3, blue, green = 5, yellow = 5 }
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+
+    for enumRef in file.filerefs('Define', 'Enum Type'):
+        enumerators = []
+        enumEnt = enumRef.ent()
+
+        if not lexer:
+            lexer = file.lexer(False, 8, False, False)
+
+        # Get values of each enumerator and the implicit enumerators
+        hasExplicitValue = False
+        uniqueValues = dict()
+        implicitEnumeratorsAndValues = []
+        for enumeratorRef in enumEnt.refs('Define', 'Enumerator'):
+            enumeratorEnt = enumeratorRef.ent()
+            enumerators.append(enumeratorEnt.name())
+
+            # Skip if no known value
+            value = enumeratorEnt.freetext("InitValue")
+            if not value:
+                continue
+
+            # Skip if the value couldn't be parsed as an integer
+            try:
+                value = int(value)
+            except:
+                continue
+
+            # Remember if the value is unique
+            if value not in uniqueValues:
+                uniqueValues[value] = True
+            else:
+                # MISRA23_11.6.3 Exception
+                init_text = enumeratorEnt.freetext("InitText")
+                
+                if init_text and (init_text in enumerators):
+                    continue
+
+                uniqueValues[value] = False
+
+            # Skip if the reference is messed up
+            lex = lexer.lexeme(enumeratorRef.line(), enumeratorRef.column())
+            if not lex:
+                continue
+            lex = lex.next(True, True)
+            if not lex:
+                continue
+
+            # If it's explicit, remember that there's an explicit value
+            if lex and lex.text() == '=':
+                hasExplicitValue = True
+            # If it's implicit, append it and its value
+            else:
+                implicitEnumeratorsAndValues.append((enumeratorRef, value))
+
+        # Skip if there's no explicit value (not possible to repeat values)
+        if not hasExplicitValue:
+            continue
+
+        # Now go though only the implicit enumerators
+        for enumeratorRef, value in implicitEnumeratorsAndValues:
+            enumeratorEnt = enumeratorRef.ent()
+
+            # Skip if the value is unique
+            if uniqueValues[value]:
+                continue
+
+            check.violation(enumeratorEnt, file, enumeratorRef.line(), enumeratorRef.column(), ERR1)

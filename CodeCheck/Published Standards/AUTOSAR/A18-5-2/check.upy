@@ -1,0 +1,197 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-07-2021
+import re
+
+ERR1 = 'Non-placement new or delete expression was used'
+
+def ids():
+    return ('A18-5-2', 'CPP_M002')
+
+def name(id):
+    return {
+        'A18-5-2': """\
+Published Standards/AUTOSAR/Non-placement new or delete expressions shall not \
+be used""",
+        'CPP_M002': """\
+All Checks/Language Specific/C and C++/Memory Allocation/Non-placement new or \
+delete expressions shall not be used"""
+
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Partially Automated',
+            'Memory Allocation',
+        ],
+        'CPP_M002': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>If a resource returned by a non-placement new expression is assigned to a
+raw pointer, then a developer's mistake, an exception or a return may lead to
+memory leak. It is highly recommended to follow RAII design pattern or use
+manager objects that manage the lifetime of variables with dynamic storage
+duration, e.g.:</p>
+<ul>
+  <li>std::unique_ptr along with std::make_unique</li>
+  <li>std::shared_ptr along with std::make_shared</li>
+  <li>std::string</li>
+  <li>std::vector</li>
+</ul>
+<p>Note: Functions that do not extend lifetime shall not take parameters as
+smart pointers, see A8-4-11.</p>
+<p><b>Exception</b></p>
+<p>If the result of explicit resource allocation using a new expression is
+immediately passed to a manager object or an RAII class which does not provide
+a safe alternative for memory allocation, then it is not a violation of this
+rule. This rule does not apply to dynamic memory allocation/deallocation
+performed in userdefined RAII classes and managers. Placement new expression is
+allowed, see A18-5-10.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1   // $Id: A18-5-2.cpp 316977 2018-04-20 12:37:31Z christof.meerwald $
+2   #include &lt;cstdint&gt;
+3   #include &lt;memory&gt;
+4   #include &lt;vector&gt;
+5   std::int32_t Fn1()
+6   {
+7       std::int32_t errorCode{0};
+8
+9       std::int32_t* ptr =
+10          new std::int32_t{0}; // Non-compliant - new expression
+11      // ...
+12      if (errorCode != 0)
+13      {
+14          throw std::runtime_error{"Error"}; // Memory leak could occur here
+15      }
+16      // ...
+17
+18      if (errorCode != 0)
+19      {
+20          return 1; // Memory leak could occur here
+21      }
+22
+23      // ...
+24      delete ptr; // Non-compilant - delete expression
+25
+26      return errorCode;
+27  }
+28  std::int32_t Fn2()
+29  {
+30      std::int32_t errorCode{0};
+31
+32      std::unique_ptr&lt;std::int32_t&gt; ptr1 = std::make_unique&lt;std::int32_t&gt;(
+33          0); // Compliant - alternative for 'new std::int32_t(0)'
+34
+35      std::unique_ptr&lt;std::int32_t&gt; ptr2(new std::int32_t{
+36          0}); // Non-compliant - unique_ptr provides make_unique
+37      // function which shall be used instead of explicit
+38      // new expression
+39
+40      std::shared_ptr&lt;std::int32_t&gt; ptr3 =
+41          std::make_shared&lt;std::int32_t&gt;(0); // Compliant
+42
+43      std::vector&lt;std::int32_t&gt; array; // Compliant
+44      // alternative for dynamic array
+45
+46      if (errorCode != 0)
+47      {
+48          throw std::runtime_error{"Error"}; // No memory leaks
+49      }
+50      // ...
+51      if (errorCode != 0)
+52      {
+53          return 1; // No memory leaks
+54      }
+55      // ...
+56      return errorCode; // No memory leaks
+57  }
+58  template &lt;typename T&gt;
+59  class ObjectManager
+60  {
+61      public:
+62          explicit ObjectManager(T* obj) : object{obj} {}
+63          ~ObjectManager() { delete object; } // Compliant by exception
+64          // Implementation
+65
+66      private:
+67          T* object;
+68  };
+69  std::int32_t Fn3()
+70  {
+71      std::int32_t errorCode{0};
+72
+73      ObjectManager&lt;std::int32_t&gt; manager{
+74          new std::int32_t{0}}; // Compliant by exception
+75      if (errorCode != 0)
+76      {
+77          throw std::runtime_error{"Error"}; // No memory leak
+78      }
+79      // ...
+80      if (errorCode != 0)
+81      {
+82          return 1; // No memory leak
+83      }
+84      // ...
+85      return errorCode; // No memory leak
+86  }
+</code></pre>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        ok = False
+        # Look for uses of new and delete
+        if re.match(r'(new|delete)$', lexeme.text()):
+            # Look for use of member function or class template managers and skip
+            if re.match(r'{', lexeme.previous(True, True).text()):
+                prevLex = lexeme
+                prevLex = prevLex.previous(True, True).previous(True, True)
+                while prevLex and not re.match(r';|{|}', prevLex.text()):
+                    if prevLex.ent() and re.search(r'class template|member function', prevLex.ent().kind().longname().lower()):
+                        ok = True
+                        break
+                    prevLex = prevLex.previous(True, True)
+
+                if ok:
+                    continue
+
+            if re.match(r'operator', lexeme.previous(True, True).text()):
+                continue
+
+            prevLex = lexeme
+            # Look for use of std::string and std::vector and skip
+            while prevLex and not re.match(r';|{', prevLex.text()):
+                if re.match(r'string|vector', prevLex.text()) and prevLex.ent() and re.match(r'std::(__1::)?string|std::(__1::)?vector', prevLex.ent().longname()):
+                    ok = True
+                    break
+
+                prevLex = prevLex.previous(True, True)
+
+            if not ok:
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)

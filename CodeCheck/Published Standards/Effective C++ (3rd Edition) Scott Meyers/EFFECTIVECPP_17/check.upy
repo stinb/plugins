@@ -1,0 +1,93 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/11/21
+import re
+
+ERR1 = 'Newed object %1 was not stored in smart pointer'
+
+# The ID for the check
+def id():
+    return 'EFFECTIVECPP_17'
+
+# The short name of the check
+def name():
+    return "Published Standards\\Effective C++ (3rd Edition) Scott Meyers\\17. Store newed objects in smart pointers in standalone statements"
+
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_17': [
+            'Language: C',
+            'Language: C++',
+            'Standard: Effective C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Store newed objects in smart pointers, such as std::tr1::shared_ptr, in
+standalone statements."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>Suppose we have a function to reveal our processing priority and a second
+function to do some processing on a dynamically allocated Widget in accord
+with a priority:</p>
+<pre><code language="C++">    int priority();
+    void processWidget(std::tr1::shared_ptr&lt;Widget&gt; pw, int priority);
+</code></pre>
+<p>Mindful of the wisdom of using objects to manage resources, processWidget
+uses a smart pointer (here, a tr1::shared_ptr) for the dynamically allocated
+Widget it processes.</p>
+<p>Consider now a call to processWidget:</p>
+<pre><code language="C++">    processWidget(new Widget, priority());
+</code></pre>
+<p> Wait, don't consider that call. It won't compile, tr::shared_ptr's
+constructor taking a raw pointer is explicit, so there's no implicit
+conversison from the raw pointer returned by the expression "new Widget"
+to the tr1::shared_ptr required by processWidget. The following code,
+however, will compile:</p>
+<pre><code language="C++">    processWidget(std::tr1::shared_ptr&lt;Widget&gt;(new Widget), priority());
+</code></pre>
+<p>Developer's Note:</p>
+<p>This is only looking for smart pointers shared_ptr, unique_ptr, weak_ptr,
+and auto_ptr in the standard namespace.</p>
+"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = file.lexer()
+    # Gather Objects define refs
+    refs = file.filerefs('define', 'object', True)
+
+    # Go through each ref and obtain the first lexeme on the line of the ref
+    for ref in refs:
+        ok = False
+        new = False
+        lexeme = lexer.lexeme(ref.line(), 0)
+        while lexeme and not re.search(r';|{|}', lexeme.text()):
+            # Look for smart pointers
+            if lexeme.token() == 'Identifier' and re.match(r'shared_ptr|unique_ptr|weak_ptr|auto_ptr', lexeme.text()):
+                ok = True
+                break
+            # Look for use of the 'new' keyword
+            if lexeme.token() == 'Keyword' and re.match(r'new', lexeme.text()):
+                new = True
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+        # Throw violation if there is no smart pointer and a 'new' keyword
+        if not ok and new:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().longname())

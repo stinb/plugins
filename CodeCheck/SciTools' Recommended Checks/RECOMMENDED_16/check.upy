@@ -1,0 +1,153 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2/21
+
+import re
+
+ERR1 = 'No comment with variable declaration'
+
+# The ID for the check
+def ids():
+    return ('RECOMMENDED_16', 'CPP_V010', 'ADA_V001')
+
+# The short name of the check
+def name(id):
+    return {
+        'RECOMMENDED_16': 'SciTools\' Recommended Checks/Variables should be commented', \
+        'CPP_V010': 'All Checks/Language Specific/C and C++/Variables/Variables should be commented', \
+        'ADA_V001': 'All Checks/Language Specific/Ada/Variables/Variables should be commented', \
+    }[id] \
+
+
+def tags(id):
+    return {
+        'RECOMMENDED_16': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+        'CPP_V010': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+        'ADA_V001': [
+            'Language: Ada',
+            'Variables',
+        ],
+    }.get(id)
+
+# The short description of the check \
+def description(id):
+    return {
+        'RECOMMENDED_16': "Each variable declaration should have a comment",
+        'CPP_V010': "Each variable declaration should have a comment",
+        'ADA_V001': "Each variable declaration should have a comment",
+    }[id]
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'RECOMMENDED_16': """\
+<p><b>Rationale</b></p>
+<p>Variable declarations should be commented for maintainability and to make
+it obvious what each is being used for.</p>
+<p>Note that any variables declared within macro definitions will not
+be checked.</p>
+<p>One of these formats are required</p>
+<pre><code language="C++">  a. /* this is a comment */
+     int x;
+  b. /* this is a 
+        comment */
+     int x;
+  c. int x; /* this is a comment */
+  </code></pre>
+<p>Exceptions</b></p>
+<p>Any exceptions should be in a comma delimited list of literals that will
+not be tested. For example: test,foo,bar</p>""",
+        'CPP_V010': """\
+<p><b>Rationale</b></p>
+<p>Variable declarations should be commented for maintainability and to make it 
+obvious what each is being used for. Note that any variables declared within 
+macro definitions will not be checked. One of these formats are required</p>
+<pre><code language="C++">  a. /* this is a comment */
+     int x;
+  b. /* this is a 
+        comment */
+     int x;
+  c. int x; /* this is a comment */
+  </code></pre>
+<p>Exceptions</b></p>
+<p>Any exceptions should be in a comma delimited list of literals that will not 
+be tested. For example: test,foo,bar</p>""",
+        'ADA_V001': """\
+<p><b>Rationale</b></p>
+<p>Variable declarations should be commented for maintainability and to make it 
+obvious what each is being used for. Note that any variables declared within 
+macro definitions will not be checked. One of these formats are required</p>
+<pre><code language="Ada">
+a. -- this is a comment
+   My_Savings := My_Savings * 10.0;
+b. My_Savings := My_Savings * 10.0; -- this is a comment
+</code></pre>
+<p>Exceptions</b></p>
+<p>Any exceptions should be in a comma delimited list of literals that will not 
+be tested. For example: test,foo,bar</p>""",
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file, ada file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return re.search(r'c|ada', language.lower())
+
+def define_options(check):
+    check.option().text('exceptions','Exception List(Comma Delimited)','')         
+
+def check(check, file):
+    varDefs = file.filerefs('define, init ~implicit', 'object', True)
+
+    textList = check.option().lookup('exceptions')
+    textList = re.sub(r'\s', '', textList)
+    exceptions = textList.split(',')
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    for ref in varDefs:
+        # Gather comments before and after variable
+        commentsBefore = ref.ent().comments('before', False, 'definein')
+        commentsAfter = ref.ent().comments('after', False, 'definein')
+        if (commentsBefore and not re.search(r'undcc_violation', str(commentsBefore).lower())) or (commentsAfter and not re.search(r'undcc_violation', str(commentsAfter).lower())):
+            continue
+
+        # if there is a typed reference then gather comments before and after
+        type = ref.ent().ref('typed')
+        if type:
+            commentsBefore = type.ent().comments('before', True, 'definein')
+            commentsAfter = type.ent().comments('after', True, 'definein')
+        if (commentsBefore and not re.search(r'undcc_violation', str(commentsBefore).lower())) or (commentsAfter and not re.search(r'undcc_violation', str(commentsAfter).lower())):
+                continue
+
+        # check for macro or if user specified an exception
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        if lexeme.ent() and lexeme.ent().kind().check("Macro"):
+            continue
+        if lexeme and lexeme.text() in exceptions:
+            continue
+
+        ok = False
+        line = lexeme.line_begin()
+        # check for inline comments
+        while lexeme and lexeme.line_begin() == line:
+            if lexeme.token() == 'Comment' and not re.search(r'undcc_violation', lexeme.text().lower()):
+                ok = True
+                break
+            lexeme = lexeme.next(ignore_whitespace=True)
+
+        if not ok:
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)

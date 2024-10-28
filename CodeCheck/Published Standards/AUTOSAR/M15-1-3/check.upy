@@ -1,0 +1,152 @@
+import re
+
+ERR1 = 'Empty throw shall only be used in the compound statement of a catch handler'
+
+# The ID for the check
+
+
+def ids():
+    return ('M15-1-3', 'CPP_E053', 'MISRA23_18.1.2')
+
+def name(id):
+    return {
+        'M15-1-3': """\
+Published Standards/AUTOSAR/Empty Throw""",
+        'CPP_E053': """\
+All Checks/Language Specific/C and C++/Exception Handling/Empty Throw""",
+        'MISRA23_18.1.2': """\
+Published Standards/MISRA C++ 2023/18.1.2 An empty throw shall only occur within the compound-statement of a catch handler""",
+    }[id]
+
+
+
+
+# The long description of the check
+
+
+
+def tags(id):
+    return {
+        'M15-1-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Exception Handling',
+        ],
+        'CPP_E053': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+        'MISRA23_18.1.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p>An empty <i>throw</i> re-throws the temporary object that represents an exception. Its use is intended to
+enable the handling of an exception to be split across two or more handlers.</p>
+<p>However, syntactically, there is nothing to prevent throw; being used outside a catch handler,
+where there is no exception object to re-throw. This may lead to an <i>implementation-defined</i>
+program termination.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">void f1 ( void )
+{
+ try
+ {
+ throw ( 42 );
+ }
+ catch ( int32_t i ) // int will be handled here first
+ {
+ if ( i &gt; 0 )
+ {
+ throw; // and then re-thrown - Compliant
+ }
+ }
+}
+void g1 ( void )
+{
+ try
+ {
+ f1 ( );
+ }
+ catch ( int32_t i )
+ {
+ // Handle re-throw from f1 ( )
+ // after f1's handler has done what it needs
+ }
+}
+void f2 ( void )
+{
+ throw; // Non-compliant
+}
+void g2 ( void )
+{
+ try
+ {
+ throw; // Non-compliant
+ }
+  catch ( ... )
+ {
+ // ...
+ }
+}
+</code></pre>
+<p>See MISRA C++ 2008 [7]</p>
+"""
+
+# Tests the type of file
+
+
+def test_entity(file):
+    return file.kind().check('file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"throw;", file.contents()):
+        return
+
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for lex in lexer.lexemes():
+        if lex.text() == "throw" and lex.token() == "Keyword" and lex.next().text() == ";":
+            prev_lex = lex.previous(ignore_whitespace=True)
+            bracket_stack = []
+
+            while prev_lex:
+                prev_ref_ent = prev_lex.ref().ent().name() if prev_lex.ref() else None
+
+                if ((prev_lex.text() == "catch" and prev_lex.token() == "Keyword" and not bracket_stack)
+                    or (prev_lex.text() == "try" and prev_lex.token() == "Keyword")
+                        or prev_ref_ent == file.name()):
+                    check.violation(lex.ent(), file,
+                                    lex.line_begin(), lex.column_begin(), ERR1)
+                    break
+                elif prev_lex.text() == "catch" and prev_lex.token() == "Keyword":
+                    break
+                elif prev_lex.text() in {"{", "}"} and prev_lex.token() == "Punctuation":
+                    if bracket_stack and bracket_stack[-1] == "}" and prev_lex.text() == "{":
+                        bracket_stack.pop()
+                    else:
+                        bracket_stack.append(prev_lex.text())
+
+                prev_lex = prev_lex.previous(ignore_whitespace=True)

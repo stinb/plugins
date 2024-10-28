@@ -1,0 +1,193 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-03-2021
+import re
+
+ERR1 = 'Static or thread-local object was not constant-initialized'
+
+def ids():
+    return ('A3-3-2', 'CPP_D043')
+
+def name(id):
+    return {
+        'A3-3-2': 'Published Standards/AUTOSAR/Static and thread-local objects shall be constant-initialized',
+        'CPP_D043': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Static and thread-local objects shall be constant-initialized',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A3-3-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D043': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>In general, using non-const global and static variables obscures the true
+dependencies of an API, since they can be accessed from any place of the source
+code. It therefore makes the code more difficult to maintain, less readable, and
+significantly less testable.</p>
+<p>A particular problem is that the order in which constructors and initializers
+for static variables are called is only partially specified by the C++ Language
+Standard and can even change from build to build. This can cause issues that are
+difficult to find or debug.</p>
+<p>The compiler performs constant-initialization, if</p>
+<ul>
+<li>the object is initialized by a constexpr constructor with only constant
+expression as arguments; or</li>
+<li>the object is not initialized by a constructor call, but is
+value-initialized (T object{};); or</li>
+<li>the object is not initialized by a constructor call, but is initialized by
+an initializer consisting only of constant expressions.</li>
+</ul>
+<p>Constant initialization is guaranteed to occur before any other
+initialization of static or thread-local objects and may happen at compile time.
+Thus it is guaranteed that problematic dependencies between the initializers of
+constant-initialized static or thread-local objects cannot occur.</p>
+<p>Note that declaring a static variable as constexpr (static is implied in this
+case, but may be added to the declaration), enforces constant initialization by
+the compiler.</p>
+<p>Note that the rule applies to:</p>
+<ul>
+<li>global variables (i.e. extern)</li>
+<li>static variables</li>
+<li>static class member variables</li>
+<li>static function-scope variables</li>
+<p><b>Example</b></p>
+<pre><code language="C++">1  // $Id: A3-3-2.cpp 305690 2018-01-29 14:35:00Z jan.babst $
+2  #include &lt;cstdint&gt;
+3  #include &lt;limits&gt;
+4  #include &lt;string&gt;
+5  class A
+6  {
+7  public:
+8    static std::uint8_t instanceId;
+9    static float const pi;
+10   static std::string const separator;
+11
+12   A() {}
+13   // Implementation...
+14 };
+15 std::uint8_t A::instanceId = 0; // Compliant - constant initialization
+16 float const A::pi = 3.14159265359; // Compliant - constant initialization
+17 std::string const A::separator =
+18 "=========="; // Non-compliant - string c'tor is not constexpr
+19
+20 class C
+21 {
+22 public:
+23   constexpr C() = default;
+24 };
+25
+26 namespace
+27 {
+28   constexpr std::int32_t maxInt32 =
+29   std::numeric_limits&lt;std::int32_t&gt;::max(); // Compliant - constexpr variable
+30
+31   A instance{}; // Compliant - constant (value) initialization
+32   constexpr C c{}; // Compliant - constexpr c'tor call
+33 } // namespace
+34
+35 void Fn() noexcept
+36 {
+37   static A a{}; // Non-compliant - A's default c'tor is not constexpr
+38   static std::int32_t counter{0}; // Compliant
+39   static std::string border(5, '*'); // Non-compliant - not a constexpr c'tor
+40 }
+41
+42 class D
+43 {
+44 public:
+45   D() = default;
+46   D(D const&) = default;
+47   D(D&&) = default;
+48   D& operator=(D const&) = default;
+49   D& operator=(D&&) = default;
+50   ~D() = default;
+51
+52 private:
+53   static D* instance;
+54 };
+55 D* D::instance = nullptr; // Compliant - initialization by constant expression
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Set Init', 'Static Object, Global Object')
+    for ref in refs:
+        ok = False
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False)
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        prevLex = lexeme
+
+        # Check for constexpr keyword
+        while prevLex and not re.match(r';|{|}', prevLex.text()):
+            if prevLex.text() == 'constexpr':
+                ok = True
+                break
+
+            prevLex = prevLex.previous(True, True)
+
+        prevLex = lexeme.previous(True, True)
+
+        lexeme = lexeme.next(True, True)
+        if not re.search(r'string', str(ref.ent().type())):
+            if prevLex.text() == '::':
+                ok = True
+
+            if lexeme and lexeme.text() == '=':
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.token() == 'Literal':
+                    ok = True
+
+            # Check for constant initialization by value
+            if lexeme and lexeme.text() == '{':
+                ok = True
+
+
+
+        if not ok:
+            # Check for constexpr keyword in constructor
+            typeRefs = ref.ent().refs('Typed', 'Class')
+
+            for typeRef in typeRefs:
+                conRefs = typeRef.ent().refs('Define', 'Member Function')
+                for conRef in conRefs:
+                    if not conRef.ent().name() == typeRef.ent().name():
+                        continue
+
+                    lexeme = lexer.lexeme(conRef.line(), conRef.column())
+
+                    while lexeme and not re.match(r';|{|}', lexeme.text()):
+                        if lexeme.text() == 'constexpr':
+                            ok = True
+                            break
+
+                        lexeme = lexeme.previous(True, True)
+
+
+        if not ok:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

@@ -1,0 +1,150 @@
+ERR1 = 'Do not publish partially initialized objects.'
+
+
+# The ID for the check
+def ids():
+    return ('TSM03-J', 'JAVA_TSM03')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'TSM03-J': 'Published Standards/SEI Cert Standards/Java/Do not publish partially initialized objects',
+        'JAVA_TSM03': 'All Checks/Language Specific/Java/Thread-Safety Miscellaneous/Do not publish partially initialized objects',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'TSM03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_TSM03': [
+            'Language: Java',
+            'Thread-Safety Miscellaneous',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not publish partially initialized objects'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not publish partially initialized objects</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to synchronize access to shared mutable data can cause different threads to observe different states of the object or to observe a partially initialized object.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TSM03-J.+Do+not+publish+partially+initialized+objects</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Foo {
+  private Helper helper;
+
+  public Helper getHelper() {
+    return helper;
+  }
+
+  public void initialize() {
+    helper = new Helper(42);
+  }
+}
+
+public class Helper {
+  private int n;
+
+  public Helper(int n) {
+    this.n = n;
+  }
+  // ...
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class Type"):
+        for member_ref in class_ref.ent().refs("Define", "Variable Member ~Final ~Static"):
+            mem_type = member_ref.ent().type()
+
+            if mem_type and "volatile" in mem_type:
+                continue
+
+            mem_ent, mem_type = get_ent_type(member_ref.ent())
+
+            if not mem_type and mem_ent and mem_ent.kind().check("Class"):
+                is_full_init = False
+                is_published = False
+
+                for set_init in member_ref.ent().refs("Setby Init"):
+                    if set_init.scope().id() == member_ref.ent().id() and set_init.line() == member_ref.line():
+                        is_full_init = True
+                        break
+
+                if is_full_init:
+                    continue
+
+                for use_ref in member_ref.ent().refs("Useby Return", "Method"):
+                    if use_ref.ent().parent().id() == member_ref.ent().parent().id():
+                        define_ref = use_ref.ent().ref("Definein")
+                        lex = lexer.lexeme(
+                            define_ref.line(), define_ref.column())
+                        is_synch = False
+
+                        while lex and lex.line_begin() == define_ref.line():
+                            if lex.text() == "synchronized" and lex.token() == "Keyword":
+                                is_synch = True
+                                break
+
+                            lex = lex.previous(ignore_whitespace=True)
+
+                        if is_synch:
+                            continue
+
+                        is_published = True
+                        break
+
+                if not is_full_init and is_published:
+                    check.violation(use_ref.ent(), file,
+                                    use_ref.line(), use_ref.column(), ERR1)

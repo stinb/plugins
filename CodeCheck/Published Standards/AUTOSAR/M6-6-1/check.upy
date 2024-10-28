@@ -1,0 +1,157 @@
+import re
+
+start_of_block = {"if", "for", "while", "do", "switch"}
+
+ERR1 = 'Goto statement for %1 references a label not in the same block or containing block'
+
+# The ID for the check
+def ids():
+    return ('M6-6-1', 'MISRA08_6-6-1', 'CPP_C018', 'MISRA23_9.6.2')
+
+# The short name of the check
+def name(id):
+    return {
+        'M6-6-1': 'Published Standards/AUTOSAR/Any label referenced by a goto statement shall be declared in the same block, or in a block enclosing the goto statement',
+        'MISRA08_6-6-1': 'Published Standards/MISRA-C++ 2008/6-6-1 Any label referenced by a goto statement shall be declared in the same block, or in a block enclosing the goto statement',
+        'CPP_C018': 'All Checks/Language Specific/C and C++/Control Flow/Any label referenced by a goto statement shall be declared in the same block, or in a block enclosing the goto statement',
+        'MISRA23_9.6.2': 'Published Standards/MISRA C++ 2023/9.6.2 A goto statement shall reference a label in a surrounding block',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'M6-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C018': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+        'MISRA23_9.6.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+<p>Unconstrained use of goto can lead to programs that are extremely difficult to comprehend, analyse and, for C++, can also lead to the program exhibiting unspecified behaviour.</p>
+<p>However, in many cases a total ban on goto requires the introduction of flags to ensure correct control flow, and it is possible that these flags may themselves be less transparent than the goto they replace.</p>
+<p>Therefore, the restricted use of goto is allowed where that use will not lead to semantics contrary to developer expectations. Jumping in to nested blocks is prohibited as it may lead to complex flow graphs.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">void f1 ( )
+{
+    int32_t j = 0;
+    goto L1;
+    for ( j = 0; j &lt; 10 ; ++j )
+    {
+L1: // Non-compliant
+        j;
+    }
+}
+
+void f2 ( )
+{
+    for ( int32_t j = 0; j &lt; 10 ; ++j )
+    {
+        for ( int32_t i = 0; i &lt; 10; ++i )
+        {
+            goto L1;
+        }
+    }
+L1: // Compliant
+    f1 ( );
+}
+</code></pre>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# check if valid start of block
+def open_braces_present(lex):
+    while lex and lex.text() != "(":
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    paren = 1
+    while lex and paren != 0:
+        if lex.text() == "(":
+            paren = paren + 1
+        if lex.text() == ")":
+            paren = paren - 1
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    return lex.text() == "{"
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    resume = True
+    for ref in file.filerefs("Define", "Label", True):
+
+        # check if Use ref has same scope with Define
+        for use_ref in ref.ent().refs("Useby"):
+            if use_ref.ent() != ref.scope():
+                resume = False
+                break
+        if resume:
+            lex = lexer.lexeme(ref.scope().ref().line(), ref.scope().ref().column())
+            # get to the first { open braces of the function
+            while lex and lex.text() != "{":
+                lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+            lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+            whole_block = 1
+            inner_block = 0
+            is_allowed = True
+
+            while lex and whole_block != 0:
+                # block that checks if the Label is valid in a certain position
+                if lex.token() == "Keyword" and lex.text() in start_of_block:
+                    if open_braces_present(lex):
+                        is_allowed = False
+                        inner_block = inner_block + 1
+
+                # (func_checker) loop aid - check if the whole function is traversed
+                if lex.text() == "}":
+                    if not is_allowed and inner_block == 1:
+                        is_allowed = True
+                    if inner_block != 0:
+                        inner_block = inner_block - 1
+                    whole_block = whole_block - 1
+                if lex.text() == "{":
+                    whole_block = whole_block + 1
+
+                # Label definition validation
+                if lex.ent() and lex.ent().kind().check("Label") and lex.next().text() == ":" and lex.ent() == ref.ent():
+                    if not is_allowed:
+                        check.violation(lex.ent(), file, lex.ent().ref().line(), lex.ent().ref().column(), ERR1, lex.ent().name())
+                    break
+                lex = lex.next(ignore_whitespace=True,ignore_comments=True)

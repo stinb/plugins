@@ -1,0 +1,78 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 06-14-2021
+
+import re
+
+ERR1 = 'Both the const and non-const versions of %1 should be defined'
+
+def id():
+    return 'CPP_DD011'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Declarations and Definitions/If the \
+subscript operator (operator[]) is overloaded, both the const and non-const \
+versions should be defined."""
+
+
+def tags(id):
+    return {
+        'CPP_DD011': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>This will ensure the subscript operator will work for const and non-
+const objects. For example, the following class is a simple wrapper for an
+array.</p>
+<pre><code language="C++">class Array {
+    public:
+        Array(int n) : data(std::vector&lt;int&gt;(n)) {}
+        Array(const Array &rhs) : data(rhs.data) { }
+        int &operator[] (int i) { return data[i]; }
+        const int &operator[] (int i) const { return data[i]; }
+    private:
+        std::vector&lt;int&gt; data;
+};
+</code></pre>
+<p>Without the const subscript operator, the last two lines in the following
+code would not compile:</p>
+<pre><code language="C++">Array a(3); // Declare Array of size 3
+a[0] = 0; a[1] = 1; a[2] = 2; // Set a=[1,2,3] using non-const subscript operator
+int i = a[0]; // Uses the non-const subscript operator to set I
+const Array b(a); // b = a (or b = [1,2,3])
+int j = b[0]; // Compile error! We are not able to read from this const object
+b[0] = 4; // Good compile error! This should never work on a const object
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # Gather class refs
+    refs = file.filerefs('Define', 'Class')
+    for ref in refs:
+        const = False
+        nonConst = False
+        # Find overload operators for '[]'
+        ooRefs = ref.ent().refs('Define', 'Member Function')
+        for ooRef in ooRefs:
+            if ooRef.ent().name() == 'operator[]':
+                if re.search(r'const', ooRef.ent().type()):
+                    const = True
+                else:
+                    nonConst = True
+
+
+        # Throw violation if there isn't a const or non-const version
+        if not (const and nonConst) and ooRefs:
+            check.violation(ooRefs[0].ent(), file, ooRefs[0].line(), ooRefs[0].column(), ERR1, ooRefs[0].ent().longname())

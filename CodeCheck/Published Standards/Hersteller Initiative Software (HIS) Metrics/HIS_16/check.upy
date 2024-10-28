@@ -1,0 +1,195 @@
+from understand import Check, Db, Ent
+
+
+ERR1 = 'Failed to open a comparison database: %1'
+ERR2 = 'Failed to parse floating point number from option value: %1'
+ERR3 = '%1 changed too much: stability index of %2 is below the minimum of %3'
+
+
+METRIC_CHANGED = 'CountLineChanged'
+METRIC_NEW = 'CountLineNew'
+METRIC_REMOVED = 'CountLineRemoved'
+METRIC_TOTAL = 'CountLine'
+METRICS = (METRIC_CHANGED, METRIC_NEW, METRIC_REMOVED, METRIC_TOTAL)
+
+
+def ids() -> tuple[str]:
+    return ('HIS_16')
+
+
+def name(id: str) -> str:
+    return {
+        'HIS_16': 'Published Standards/Hersteller Initiative Software (HIS) Metrics/16. Stability Index (S)',
+    }[id]
+
+
+def tags(id: str) -> str:
+    return {
+        'HIS_16': [
+            'Language: Ada',
+            'Language: C',
+            'Language: C++',
+            'Language: C#',
+            'Language: Fortran',
+            'Language: Java',
+            'Language: Jovial',
+            'Language: Pascal',
+            'Language: Python',
+            'Language: VHDL',
+            'Language: Web',
+            'Standard: Hersteller Initiative Software (HIS) Metrics',
+            'Metrics',
+        ],
+    }.get(id)
+
+
+def detailed_description(id: str) -> str:
+    return '''\
+<p><b>Title</b></p>
+<p>Stability index of project</p>
+
+<p><b>Description</b></p>
+<p>The stability index supplies a measure of the number of the changes (changes,
+deletions, additions) between two versions of a piece of software.</b></p>
+
+<p>The index is a floating point value in the range [0, 1] where 0 is unstable
+and 1 is stable.</p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check only compares the lines instead of the statements. To improve
+results, see Project > Configure Project > History > Diff.</p>
+'''
+
+
+def test_entity(file: Ent):
+    return True
+
+
+def test_global():
+    return True
+
+
+def define_options(check):
+    check.options().checkbox('checkFile', 'Check each file', True)
+    check.options().checkbox('checkGlobal', 'Check globally', True)
+    check.options().text('minimumFile', 'Minimum stability index per file', '0.5')
+    check.options().text('minimumGlobal', 'Minimum stability index globally', '0.5')
+
+
+def check(check: Check):
+    check_file = check.options().lookup('checkFile')
+    check_global = check.options().lookup('checkGlobal')
+
+    if not check_file and not check_global:
+        return
+
+    db: Db = check.db()
+
+    # Try to open the comparision database or fail
+    if db.comparison_db() == None:
+        check.violation(None, None, -1, -1, ERR1, error)
+        return
+
+    # Try to parse the float options or fail
+    FLOAT_OPTION_NAMES = ('minimumFile', 'minimumGlobal')
+    float_options: list[float] = []
+    for option_name in FLOAT_OPTION_NAMES:
+        try:
+            option_value_str = check.options().lookup(option_name)
+            float_options.append(float(option_value_str))
+        except Exception as error:
+            check.violation(None, None, -1, -1, ERR2, option_value_str)
+            return
+    minimum_file: float = float_options[0]
+    minimum_global: float = float_options[1]
+
+    # Total the metrics for all files
+    stability_index_total: float = 0.0
+    total_files = 0
+    for file in db.ents('~Unknown ~Unresolved File'):
+        # Calculate the stability index or fail
+        index: float = calculate_stability_index(file)
+        if index == None:
+            continue
+
+        # Add to the total for the project stability index
+        if check_global:
+            stability_index_total += index
+            total_files += 1
+
+        # Skip if only checking globally
+        if not check_file:
+            continue
+
+        # Skip if the file is stable
+        if index >= minimum_file:
+            continue
+
+        check.violation(file, file, -1, -1, ERR3, 'File', index, minimum_file)
+
+    # Fail if there were no comparison metrics for any files
+    if not total_files:
+        return
+
+    # Stop if only checking files
+    if not check_global:
+        return
+
+    # Calculate the project stability index as an average and stop if it's good
+    index = clamp_0_to_1(stability_index_total / total_files)
+    if index >= minimum_global:
+        return
+
+    check.violation(None, None, -1, -1, ERR3, 'Project', index, minimum_global)
+
+
+def calculate_stability_index(ent: Ent) -> float | None:
+    # Get metrics
+    metrics: dict = ent.metric(METRICS)
+    new_stmts: float = clamp_metric(metrics[METRIC_NEW])
+    changed_stmts: float = clamp_metric(metrics[METRIC_CHANGED])
+    removed_stmts: float = clamp_metric(metrics[METRIC_REMOVED])
+    total_stmts: float = clamp_metric(metrics[METRIC_TOTAL])
+
+    # Fail if any weren't real floats
+    if new_stmts == None or changed_stmts == None \
+    or removed_stmts == None or total_stmts == None:
+        return None
+
+    # Calculate the result
+    dividend = total_stmts - new_stmts - changed_stmts
+    divisor = total_stmts + removed_stmts
+    return divide_and_clamp_index(dividend, divisor)
+
+
+# Clamp into the range [0, 1]
+def clamp_0_to_1(number: float) -> float:
+    return max(0.0, min(number, 1.0))
+
+
+# Clamp the metric value to [0.0, ∞), otherwise None
+def clamp_metric(metric_value: int | str | None) -> float | None:
+    # Handle non-float types
+    if metric_value == None:
+        return None
+    elif isinstance(metric_value, int):
+        return float(metric_value)
+
+    # Handle float string
+    try:
+        metric_value = float(metric_value)
+    except:
+        return None
+    if metric_value == float('nan') or abs(metric_value) == float('inf'):
+        return None
+    else:
+        return max(0.0, metric_value)
+
+
+# Divide the numbers and clamp the result to [0.0, 1.0]
+def divide_and_clamp_index(dividend: float, divisor: float) -> float:
+    if divisor == 0.0:
+        result = dividend
+    else:
+        result = dividend / divisor
+    return clamp_0_to_1(result)

@@ -1,0 +1,169 @@
+# This script is designed to run with Understand - CodeCheck
+# Jordan Colbeth - 7/6/2022
+
+import re
+
+ERR1 = "Potential for SQL injection with unsanitized data variable '%1'"
+
+DEF_NAME = "Prevent SQL Injection"
+
+# The ID for the check
+def ids():
+    return ('IDS00-J', 'JAVA_IDS00')
+
+def name(id):
+    return {
+        'IDS00-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_IDS00': "All Checks/Language Specific/Java/Input Validation and Data Sanitization/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'IDS00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+        ],
+        'JAVA_IDS00': [
+            'Language: Java',
+            'Input Validation and Data Sanitization',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Prevent SQL Injection.</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to sanitize user input before processing or storing it can result in injection attacks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/IDS00-J.+Prevent+SQL+injection</i></p>
+<p><b>Exceptions</b></p>
+<p><i>None</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Login {
+  public Connection getConnection() throws SQLException {
+    DriverManager.registerDriver(new
+            com.microsoft.sqlserver.jdbc.SQLServerDriver());
+    String dbConnection =
+      PropertyManager.getProperty("db.connection");
+    // Can hold some value like
+    // "jdbc:microsoft:sqlserver://&lt;HOST&gt;:1433,&lt;UID&gt;,&lt;PWD&gt;"
+    return DriverManager.getConnection(dbConnection);
+  }
+
+  String hashPassword(char[] password) {
+    // Create hash of password
+  }
+
+  public void doPrivilegedAction(
+    String username, char[] password
+  ) throws SQLException {
+    Connection connection = getConnection();
+    if (connection == null) {
+      // Handle error
+    }
+    try {
+      String pwd = hashPassword(password);
+      String sqlString = "select * from db_user where username=" +
+        username + " and password =" + pwd;                              // invalid - input arguments not sanitized before placed into prepared statement
+      PreparedStatement stmt = connection.prepareStatement(sqlString);
+
+      ResultSet rs = stmt.executeQuery();
+      if (!rs.next()) {
+        throw new SecurityException("User name or password incorrect");
+      }
+
+      // Authenticated; proceed
+    } finally {
+      try {
+        connection.close();
+      } catch (SQLException x) {
+        // Forward to handler
+      }
+    }
+  }
+}
+</code></pre>
+<p><i>Developer's Note: </i> This check looks at the variables listed in the options section to see if they've been sanitized, reducing the risk of SQL injection</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.options().text('sensitivedata', 'Sensitive data variables (order specific, comma separated)', 'username,password')
+
+def check(check, file):
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    # unpack the sensitive data variables
+    sensitive_data_string = check.options().lookup("sensitivedata")
+    sensitive_data_list = sensitive_data_string.split(',')
+
+    for execute_call_ref in file.filerefs("Java Callby", "Method"):
+        if re.search(r"executeQuery",execute_call_ref.scope().name()):
+            arg_present = False
+            # check arguments to executeQuery - if arg, check it for ? - if no arg, check prepareStatement arg
+            lexeme = lexer.lexeme(execute_call_ref.line(), execute_call_ref.column())
+            while lexeme and lexeme.text() != "(":
+                lexeme = lexeme.next()
+            if lexeme.next() != ")":
+                arg_present = True
+
+            if arg_present and lexeme.next().ent():
+                execute_arg = lexeme.next().ent()
+                execute_arg_value = execute_arg.value()
+
+                if not execute_arg_value:
+                    continue
+
+                for word in sensitive_data_list:
+                    valid = re.search(rf"{word}\s*\=\s*\?",execute_arg_value)
+                    if not valid:
+                        check.violation(execute_call_ref.scope(), file, execute_call_ref.line(), execute_call_ref.column(), ERR1, word)
+                        continue
+                #print(execute_arg.name() + '\n')
+
+            #if not arg_present:
+            #print("Arg not present...")
+            while lexeme and (lexeme.text() != "prepareStatement"):
+                lexeme = lexeme.previous(True, True)
+
+
+            while lexeme and lexeme.text() != "(":
+                lexeme = lexeme.next()
+
+            if lexeme and lexeme.next() and lexeme.next().ent():
+                prepare_arg = lexeme.next().ent()
+                prepare_arg_value = prepare_arg.value()
+
+                if not prepare_arg_value:
+                    continue
+
+                for word in sensitive_data_list:
+                    valid = re.search(rf"{word}\s*\=\s*\?",prepare_arg_value)
+                    if not valid:
+                        check.violation(execute_call_ref.scope(), file, execute_call_ref.line(), execute_call_ref.column(), ERR1, word)
+
+        else:
+            continue
+
+
+

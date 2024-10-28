@@ -1,0 +1,127 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-08-2022
+
+import re
+ERR1 = 'Temporary file not removed before termination'
+
+DEF_NAME = "Remove temporary files before termination"
+
+# The ID for the check
+def ids():
+    return ('FIO03-J', 'JAVA_FIO03')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'FIO03-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_FIO03': "All Checks/Language Specific/Java/Input Output/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_FIO03': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Remove temporary files before termination.</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to remove temporary files before termination can result in
+information leakage and resource exhaustion.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/EXP02-J.+Do+not+use+the+Ob\
+ject.equals%28%29+method+to+compare+two+arrays</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">File f = new File("tempnam.tmp");
+if (f.exists()) {
+  System.out.println("This file already exists");
+  return;
+}
+
+FileOutputStream fop = null;
+try {
+  fop = new FileOutputStream(f);
+  String str = "Data";
+  fop.write(str.getBytes());
+} finally {
+  if (fop != null) {
+    try {
+      fop.close();
+    } catch (IOException x) {
+      // Handle error
+    }
+  }
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    if not re.search(r'\.tmp|createTempFile', file.contents()):
+        return
+
+    # Check all variables being set to a temp file for a path or file type
+    refs = file.filerefs('Set', 'Variable')
+    lexer = None
+    checked = []
+
+    for ref in refs:
+        if not re.search(r'path|file', str(ref.ent().type()).lower()):
+            continue
+
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        while lexeme and lexeme.text() != ';':
+            # Skip if a temp folder is being created
+            if re.search(r'createTempFolder', lexeme.text()):
+                break
+            # Check all temp files created
+            if re.search(r'createTempFile|\.tmp', lexeme.text()) and not re.search(r'java.io.tmpdir', lexeme.text()):
+                ok = False
+                fRefs = ref.ent().refs('Useby')
+                for fRef in fRefs:
+                    lexeme = lexer.lexeme(fRef.line(), 0)
+                    while lexeme and lexeme.text() != ';':
+                        # Mark ok if delete_on_close is being used on the temp file
+                        if lexeme.text().lower() == 'delete_on_close':
+                            ok = True
+                            break
+                        lexeme = lexeme.next(True, True)
+
+                if not ok:
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+                break
+
+            lexeme = lexeme.next(True, True)

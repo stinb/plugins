@@ -1,0 +1,110 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 11-4-2020
+
+def ids():
+    return ('CPP_M011')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_M011':  "All Checks/Language Specific/C and C++/Memory Allocation/The delete[] operator shall be used to deallocate arrays that have been allocated with the new[] operator"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_M011': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+
+    }.get(id)
+
+def description():
+    return 'The delete[] operator shall be used to deallocate arrays that have been allocated with the new[] operator.'
+
+def detailed_description():
+    return """\
+<p>The new[] operator denotes the dynamic allocation of an array. When the 
+program is finished using dynamically allocated memory, it must be deallocated 
+using the delete[] operator. Failure to do so can result in a memory leak that 
+will eventually terminate the program.
+</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+	pass
+
+def check(check, file):
+	obj_refs = file.filerefs('C Set', 'Object')
+
+	for obj in obj_refs:
+		# find if the object is ever set by new keyword
+		lexer = file.lexer()
+		lexeme = lexer.lexeme(obj.line(), obj.column())
+
+		if search_new_array(lexeme) == True:
+
+			# see if the object has a useby reference
+			if not obj.ent().refs('C Useby'):
+				check.violation(obj.ent(), file, obj.line(), obj.column(), "Dynamically allocated array '%1' is never deallocated with delete[]", obj.ent())
+			# if useby refs were found, look for delete[] operator in one of them
+			else:
+				valid_delete = False
+
+				for ref in obj.ent().refs('C Useby'):
+					temp_lexer = file.lexer()
+					temp_lexeme = temp_lexer.lexeme(ref.line(), ref.column())
+
+					if temp_lexeme and search_delete(temp_lexeme) == True:
+						valid_delete = True
+
+				if valid_delete == False:
+					check.violation(obj.ent(), file, obj.line(), obj.column(), "Dynamically allocated array '%1' is never deallocated with delete[]", obj.ent())
+
+
+def search_new_array(lexeme):
+	new_array = False
+	new_found = False
+	array_found = False
+
+	while lexeme and lexeme.text() != ";":
+		if lexeme.text() == "new" and lexeme.token() == "Keyword":
+			new_found = True
+		if lexeme.text() == "[" and lexeme.token() == "Operator":
+			array_found = True
+
+		lexeme = lexeme.next(ignore_whitespace=True)
+
+	if new_found and array_found:
+		new_array = True
+
+	return new_array
+
+
+def search_delete(lexeme):
+	found_delete = False
+
+	if lexeme and lexeme.previous(ignore_whitespace=True) and \
+	lexeme.previous(ignore_whitespace=True).previous(ignore_whitespace=True) and \
+	lexeme.previous(ignore_whitespace=True).previous(ignore_whitespace=True).previous(ignore_whitespace=True):
+		
+		prev_lex = lexeme.previous(ignore_whitespace=True)
+		twice_prev_lex = prev_lex.previous(ignore_whitespace=True)
+		thrice_prev_lex = twice_prev_lex.previous(ignore_whitespace=True)
+
+		if prev_lex and twice_prev_lex and thrice_prev_lex and \
+			prev_lex.token() == "Operator" and prev_lex.text() == "]" and \
+			twice_prev_lex.token() == "Operator" and twice_prev_lex.text() == "[" and \
+			thrice_prev_lex.token() == "Keyword" and thrice_prev_lex.text() == "delete":
+
+			found_delete = True
+
+	return found_delete

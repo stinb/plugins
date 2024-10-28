@@ -1,0 +1,107 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 8-3-22
+
+
+import re
+from Modules import findClose
+from Modules import lexemeEquals
+
+
+ERR1 = 'Recursion not tail-call optimized'
+
+
+def ids():
+    return ('CPP_F066')
+
+
+def name(id):
+    return {
+        'CPP_F066': 'All Checks/Language Specific/C and C++/Functions/Tail-Call Optimization',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'CPP_F066': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Recursion should minimize stack usage by tail-call optimization.
+</p>
+
+<p>
+The recursive call needs to be
+</p>
+<ul>
+    <li>
+    The only one in the function
+    </li>
+    <li>
+    In the last statement of the function
+    </li>
+    <li>
+    Called without modification of the return value
+    </li>
+</ul>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for define in file.filerefs('Define', 'Function'):
+        fun = define.ent()
+        id = fun.id()
+        recursionCalls = 0
+        error = False
+
+        for call in fun.refs('Call', 'Function'):
+            # Skip anything but recursion
+            if not call.ent() or call.ent().id() != id:
+                continue
+
+            # Violation if there are multiple recursive calls
+            recursionCalls += 1
+            if recursionCalls > 1:
+                error = True
+                break
+
+            # Violation if the lexeme before the call is invalid
+            lex = file.lexer(False).lexeme(call.line(), call.column())
+            l = lex.previous(True, True).text()
+            if l not in {'return', ';', '{', '}'}:
+                error = True
+                break
+
+            # Violation if the call isn't last
+            r = lex.next(True, True)
+            close = findClose(r)
+            expectedDefineEnd = close.next(True, True).next(True, True)
+            defineEnd = fun.ref('End')
+            if not lexemeEquals(expectedDefineEnd, defineEnd.line(), defineEnd.column()):
+                error = True
+                break
+
+        if not error:
+            continue
+
+        check.violation(fun, file, call.line(), call.column(), ERR1)

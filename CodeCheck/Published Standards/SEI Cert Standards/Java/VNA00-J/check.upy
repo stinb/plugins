@@ -1,0 +1,127 @@
+ERR1 = 'Ensure visibility when accessing shared primitive variables.'
+PRIMITIVE_TYPES = {"int", "byte", "short",
+                   "long", "float", "double", "boolean", "char"}
+
+
+# The ID for the check
+def ids():
+    return ('VNA00-J', 'JAVA_VNA00')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'VNA00-J': 'Published Standards/SEI Cert Standards/Java/Ensure visibility when accessing shared primitive variables',
+        'JAVA_VNA00': 'All Checks/Language Specific/Java/Visibility and Atomicity/Ensure visibility when accessing shared primitive variables',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'VNA00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_VNA00': [
+            'Language: Java',
+            'Visibility and Atomicity',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure visibility when accessing shared primitive variables'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure visibility when accessing shared primitive variables</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to ensure the visibility of a shared primitive variable may result in a thread observing a stale value of the variable.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/VNA00-J.+Ensure+visibility+when+accessing+shared+primitive+variables</i></p>
+<p><b>Exceptions</b></p>
+<p><i>VNA00-J-EX0: Class objects are created by the virtual machine; their initialization always precedes any subsequent use. Consequently, cross-thread visibility of Class objects is already assured by default.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class ControlledStop implements Runnable {
+  private boolean done = false;
+
+  @Override public void run() {
+    while (!done) {
+      try {
+        // ...
+        Thread.currentThread().sleep(1000); // Do something
+      } catch(InterruptedException ie) {
+        Thread.currentThread().interrupt(); // Reset interrupted status
+      }
+    }
+  }
+
+  public void shutdown() {
+    done = true;
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        primitive_vars = []
+
+        for var_ref in class_ref.ent().refs("Define", "Member Variable"):
+            if var_ref.ent().type() in PRIMITIVE_TYPES:
+                primitive_vars.append(var_ref.ent().id())
+
+        for method_ref in class_ref.ent().refs("Define", "Member Method"):
+            has_thread = False
+
+            for ref in method_ref.ent().refs("Call Nondynamic, Dotref"):
+                if "java.lang.Thread" in ref.ent().longname():
+                    has_thread = True
+
+            if has_thread:
+                for use_ref in method_ref.ent().refs("Use", "Variable Member"):
+                    if use_ref.ent().id() in primitive_vars:
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)
+
+                for call_ref in method_ref.ent().refs("Call Nondynamic", "Method Member"):
+                    for use_ref in call_ref.ent().refs("Use", "Variable Member"):
+                        if use_ref.ent().id() in primitive_vars:
+                            compliant = False
+                            define_ref = call_ref.ent().ref("Definein")
+                            lexes = lexer.lexemes(
+                                define_ref.line(), define_ref.line())
+
+                            for lex in lexes:
+                                if lex.text() == "synchronized" and lex.token() == "Keyword":
+                                    compliant = True
+
+                            if not compliant:
+                                check.violation(
+                                    use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)

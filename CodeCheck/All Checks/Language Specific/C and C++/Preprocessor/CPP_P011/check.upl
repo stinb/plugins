@@ -1,0 +1,126 @@
+use base ("Understand::Codecheck");
+use strict;
+use constant ERR1 => 'Missing wrapper in header file. Should have "#ifndef %1"';
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+use File::Basename;
+
+
+
+sub checkID { return "CPP_P011";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Preprocessor\\Ifndef Wrappers or Pragma Once";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Preprocessor',
+  );
+}
+
+sub description {
+  return " #ifndef wrappers will be used in all header files.";
+}
+
+sub detailed_description {
+  return "The string FILENAME_H or FILENAME_HPP is in the symbol following the first #ifndef in all header files or #pragma once is defined.";
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check('c file');
+   checkFileHasIfndefWrapper($check,$file);
+
+}
+
+
+sub checkFileHasIfndefWrapper($$$)
+{
+    my ($check,$file) = @_;
+    my($filename,$path,$suffix) = fileparse($file->longname,qr/\.[^.]*/);
+    my $lexer = $file->lexer;
+    return unless $lexer;
+
+    my $regex = '';
+    if($file->name =~ m%\.h$%)
+    {
+  $regex = uc($filename) . '_' . 'H';
+    }
+    elsif($file->name =~ m%\.hpp$%)
+    {
+  $regex = uc($filename) . '_' . 'HPP';
+    }
+    elsif($file->name =~ m%\.(c|cpp)$%)
+    {
+  return 0;
+    }
+
+    # find the first ifndef in the file
+    my $found = 0;
+    my $rval  = 0;
+    foreach my $lexeme ( $lexer->lexemes() ) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+      
+ if ( $lexeme->token() eq "Preprocessor" &&
+      ($lexeme->text() eq "pragma" &&  $lexeme->next()->next()->text() eq "once")) {
+       $found = 1;
+       last;
+      }
+
+  if ( $lexeme->token() eq "Preprocessor" &&
+       $lexeme->text() eq "ifndef" ) {
+      my $next = $lexeme->next()->next();
+      $found = 1;
+      my $text = $next->text();
+      if($text !~ m%${regex}%)
+      {
+        $check->violation($file,$file,-1,-1,ERR1,$regex);
+        $rval++;
+      }
+      last;
+  }
+  
+  if ( $lexeme->token() eq "Preprocessor" &&
+       ($lexeme->text() eq "if" && $lexeme->next()->next()->text() eq "!" &&  $lexeme->next()->next()->next()->text() eq "defined") ) {
+
+      my $next = $lexeme->next()->next()->next()->next()->next();
+      $found = 1;
+      my $text = $next->text();
+
+      if($text !~ m%${regex}%)
+      {
+        $check->violation($file,$file,-1,-1,ERR1,$regex);
+        $rval++;
+      }
+      last;
+  }
+  
+    }
+    if(!$found)
+    {
+      $check->violation($file,$file,-1,-1,ERR1,$regex);
+      $rval++;
+    }
+    return $rval;
+}

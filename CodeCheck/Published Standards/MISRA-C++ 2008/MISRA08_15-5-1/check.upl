@@ -1,0 +1,225 @@
+use base ("Understand::Codecheck");
+use strict;
+use constant ERR1 => "Destructor Throws Exception";
+use constant OPT1 => "Functions without throw specifications";
+use constant OPT1THROW=> "Can throw exceptions";
+use constant OPT1NOTHROW=> "Cannot throw exceptions";
+our @lexemes=();
+our $lexeme_pos=0;
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA08_15-5-1";}
+
+
+
+sub name { return "Published Standards\\MISRA-C++ 2008\\15-5-1 A class destructor shall not exit with an exception";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Standard: MISRA C++ 2008',
+    'Category: Required',
+    'Destructors',
+  );
+}
+
+sub description {
+  return "15-5-1 (Required) A class destructor shall not exit with an exception.";
+}
+
+sub detailed_description {
+  return <<"END_DESC"
+<p><b>Rationale</b></p>
+When an exception is thrown, the call stack is unwound up to the point where the exception is 
+to be  handled. The destructors  for  all automatic objects declared between the point where  the 
+exception is thrown and where it is to be handled will be invoked. If one of these destructors exits 
+with an exception, then the program will terminate in an implementation-defined manner.
+Note that it is acceptable for a destructor to throw an exception that is handled within the destructor, 
+for example within a try-catch block.
+</p><b>Example</b><pre><code language="C++">  class C1 
+  { 
+  public: 
+     ~C1 ( ) 
+     { 
+        try 
+        { 
+           throw ( 42 );      // Compliant - exception will not leave 
+                              // destructor 
+        }
+        catch ( int32_t i )   // int handler 
+        { 
+           // Handle int exception throw by destructor 
+        } 
+     } 
+  };
+  class C2 
+  { 
+  public: 
+     ~C2 ( ) 
+     { 
+        throw ( 42 );      // Non-compliant - destructor exits with an 
+                           // exception 
+     } 
+  };
+  void foo ( ) 
+  { 
+     C2 c; // program terminates when c is destroyed
+     throw ( 10 ); 
+  }</code></pre>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+sub define_options{
+  my $check = shift;
+  $check->option->radio_vert("strictThrowAll",OPT1,[OPT1THROW,OPT1NOTHROW],OPT1NOTHROW);
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file ~unresolved ~unknown");
+  # create lexer once for file
+  my $lexer = undef;
+  
+  # loop through member functions defined in the file
+  foreach my $ref ($file->filerefs("define","member function ~static",1)) {
+      my $func = $ref->ent(); 
+    next if $func->name() !~ m/~/;
+      my ($begin,$end) = getFunctionDefnLines($func);
+      next if (!$begin);
+      next if $begin == $end;
+
+      $lexer = $file->lexer() if (!$lexer);
+      return unless $lexer;
+      do_one_function($check,$file,$func,$lexer,$begin,$end);
+  }  
+  @lexemes=();
+  $lexeme_pos=0;
+}
+
+#
+# OPTIONS
+#
+
+# Check one function.
+sub do_one_function {
+    my $check = shift;
+    my $file = shift;
+    my $func = shift;
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+    # setup lexemes and parse
+    setupLexemes($lexer,$begin,$end);
+
+    my $lexeme = nextLexeme();
+    while ( $lexeme->text ne '{' ) {
+      $lexeme = nextLexeme();
+    }
+    
+    parse($check,$file,$func,0);
+}
+
+
+# Parse until an unbalanced, right-curly, or end of lexemes.
+# Return true if a violation has been reported.
+sub parse {
+    my $check = shift;
+    my $file = shift;
+    my $func = shift;
+    my $intry = shift;
+
+    my $lexeme = nextLexeme();
+    while ($lexeme) {
+      return 0 if ($lexeme->text() eq "}");
+      if ($lexeme->text() eq "{") {
+          return 1 if parse($check,$file,$func,$intry);
+      } elsif ($lexeme->text() eq "try") {
+          $lexeme = nextLexeme();
+          while ($lexeme && $lexeme->text() ne "{") {
+        $lexeme = nextLexeme();
+          }
+          return 1 if parse($check,$file,$func,1);
+      } elsif (!$intry) {
+          my $ref = $lexeme->ref();
+          if ($ref && $ref->kind()->check("callby") && checkFunctionThrow($check,$ref->scope())){
+            $check->violation($func,$file,$ref->line,$ref->column,ERR1);    
+            return;
+          }elsif ($lexeme->token =~ /keyword/i && $lexeme->text =~ /throw/){
+            $check->violation($func,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1);    
+            return;
+          }
+          
+      }
+      
+      $lexeme = nextLexeme();
+    }
+    return 0;
+}
+
+
+# Return true if function can throw any exceptions.
+sub checkFunctionThrow {
+    my $check = shift;
+    my $func = shift;
+    return 0 if !$func;
+    my $freetext = $func->freetext("AllowExceptions");
+    my $canThrow = $check->option->lookup("strictThrowAll") eq OPT1THROW;
+    return $canThrow if (!defined $freetext);    
+    return $freetext;
+}
+
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Setup the global lexemes array once per function, to use
+# the NextLexeme() sub.
+
+sub setupLexemes {
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+    @lexemes = $lexer->lexemes($begin,$end);
+    $lexeme_pos = 0;
+}
+
+# Return the next interesting lexeme or undef when all lexemes
+# are used.
+sub nextLexeme {
+    while ($lexeme_pos < $#lexemes) {
+      my $lexeme = $lexemes[$lexeme_pos++];
+      next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+      return $lexeme;
+    };
+    return undef;
+}

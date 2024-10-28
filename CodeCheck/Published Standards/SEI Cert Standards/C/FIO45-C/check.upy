@@ -1,0 +1,174 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-04-06
+
+
+import re
+
+
+ERR1 = 'Race condition by opening a file multiple times'
+
+OPEN_FUNCTIONS = { '_wfopen', '_wfopen_s', 'fdopen', 'fopen_s', 'fopen',
+'freopen', 'open', 'wfopen', 'wfopen_s' }
+
+
+def ids():
+    return ('FIO45-C')
+
+
+def name(id):
+    return {
+        'FIO45-C': '''Published Standards/SEI Cert Standards/C/\
+Avoid TOCTOU race conditions while accessing files''',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO45-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Libraries',
+        ],
+    }.get(id)
+
+def detailed_description(id):
+    return {
+        'FIO45-C': '''\
+<p>
+Avoid TOCTOU race conditions while accessing files
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+TOCTOU race conditions can result in unexpected behavior, including privilege
+escalation.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/c/FIO45-C.+Avoid+TOCTOU+race+conditions+while+accessing+files
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+<b>FIO45-C-EX2</b>: Accessing a file name or path name multiple times is
+permitted if the file referenced resides in a secure directory. (For more
+information, see FIO15-C. Ensure that file operations are performed in a secure
+directory.)
+</i></p>
+<p><i>
+<b>FIO45-C-EX3</b>: Accessing a file name or path name multiple times is
+permitted if the program can verify that every operation operates on the same
+file.
+</i></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void open_some_file(const char *file) {
+  FILE *f = fopen(file, "r");
+  if (NULL != f) {
+    /* File exists, handle error */
+  } else {
+    if (fclose(f) == EOF) {
+      /* Handle error */
+    }
+    f = fopen(file, "w");
+    if (NULL == f) {
+      /* Handle error */
+    }
+
+    /* Write to file */
+    if (fclose(f) == EOF) {
+      /* Handle error */
+    }
+  }
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+This check is limited to the scope of checking 1 function at a time.
+Additionally, the file argument is only checked if it's an identifier or a
+string literal.
+</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for define in file.filerefs('Define', 'Function'):
+        caller = define.ent()
+
+        allOpened = set()
+
+        for call in caller.refs('Call', 'Function'):
+            callee = call.ent()
+
+            # Skip all except file-opening functions
+            if callee.name() not in OPEN_FUNCTIONS:
+                continue
+
+            # Get to the file argument with the lexer
+            lexer = file.lexer(expand_macros=True)
+            callLex = lexer.lexeme(call.line(), call.column())
+            lex = getFileArgument(callLex)
+            if not lex:
+                continue
+
+            # Get the entity or name of the file lexeme
+            if lex.token() == 'Identifier' and lex.ent():
+                opened = lex.ent()
+            elif lex.token() == 'String':
+                opened = lex.text()
+            else:
+                continue
+
+            # One violation for the caller if the file was already opened
+            if opened in allOpened:
+                check.violation(caller, file, call.line(), call.column(), ERR1)
+                break
+
+            # Remember the opened file
+            allOpened.add(opened)
+
+
+# Get the first argument, only using simple syntax with 1 lexeme
+def getFileArgument(lex):
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '(':
+        return None
+
+    lex = lex.next(True, True)
+    arg = lex
+    if not lex:
+        return None
+
+    lex = lex.next(True, True)
+    if not lex or lex.text() not in {',', ')'}:
+        return None
+
+    return arg

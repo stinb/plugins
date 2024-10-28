@@ -1,0 +1,268 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 03-01-2023
+import re
+import Modules
+
+ERR1 = 'For loop contains more than one loop counter'
+ERR2 = 'Loop variable is a floating point number'
+ERR3 = 'Loop does not contain a traditional loop counter; cannot test'
+def ids():
+    return ('MISRA08_6-5-1', 'A6-5-2', 'CPP_C015')
+
+
+def name(id):
+    return {
+        'MISRA08_6-5-1': '''Published Standards/MISRA-C++ 2008/\
+6-5-1 A for loop shall contain a single loop-counter which shall not have\
+ floating-point type''',
+        'A6-5-2': '''Published Standards/AUTOSAR/\
+A for loop shall contain a single loop-counter which shall not have\
+ floating-point type''',
+        'CPP_C015': '''All Checks/Language Specific/C and C++/Control Flow/\
+A for loop shall contain a single loop-counter which shall not have\
+ floating-point type'''
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'A6-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C015': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+def detailed_description(id):
+    return {
+        'MISRA08_6-5-1': '''\
+<p><b>Rationale</b></p>
+
+<p>
+A <i>for</i> loop without exactly one <i>loop-counter</i> is simply a
+<i>while</i> loop. If this is the desired behaviour, then a <i>while</i> loop is
+more appropriate.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">y = 0;
+for ( x = 0; x &lt; y; x = y++ ) // Non-compliant
+</code></pre>''',
+        'A6-5-2': '''\
+<p><b>Rationale</b></p>
+
+<p>
+A for loop without a loop-counter is simply a while loop. If this is the
+desired behavior, then a while loop is more appropriate.
+</p>
+
+<p>
+Floating types, as they should not be tested for equality/inequality, are not to
+be used as loop-counters.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A6-5-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+namespace
+{
+  constexpr std::int32_t xlimit = 20;
+  constexpr std::int32_t ylimit = 15;
+  constexpr float zlimit = 2.5F;
+  constexpr std::int32_t ilimit = 100;
+}
+void Fn() noexcept
+{
+  std::int32_t y = 0;
+
+  for (std::int32_t x = 0; x &lt; xlimit && y &lt; ylimit;
+      x++, y++) // Non-compliant, two loop-counters
+  {
+    // ...
+  }
+
+  for (float z = 0.0F; z != zlimit;
+      z += 0.1F) // Non-compliant, float with !=
+  {
+    // ...
+  }
+
+  for (float z = 0.0F; z &lt; zlimit; z += 0.1F) // Non-compliant, float with &lt;
+  {
+    // ...
+  }
+
+  for (std::int32_t i = 0; i &lt; ilimit; ++i) // Compliant
+  {
+    // ...
+  }
+}
+</code></pre>
+''',
+        'CPP_C015': '''\
+<p><b>Rationale</b></p>
+
+<p>
+A for loop without a loop-counter is simply a while loop. If this is the
+desired behavior, then a while loop is more appropriate.
+</p>
+
+<p>
+Floating types, as they should not be tested for equality/inequality, are not to
+be used as loop-counters.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A6-5-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+namespace
+{
+  constexpr std::int32_t xlimit = 20;
+  constexpr std::int32_t ylimit = 15;
+  constexpr float zlimit = 2.5F;
+  constexpr std::int32_t ilimit = 100;
+}
+void Fn() noexcept
+{
+  std::int32_t y = 0;
+
+  for (std::int32_t x = 0; x &lt; xlimit && y &lt; ylimit;
+      x++, y++) // Non-compliant, two loop-counters
+  {
+    // ...
+  }
+
+  for (float z = 0.0F; z != zlimit;
+      z += 0.1F) // Non-compliant, float with !=
+  {
+    // ...
+  }
+
+  for (float z = 0.0F; z &lt; zlimit; z += 0.1F) // Non-compliant, float with &lt;
+  {
+    // ...
+  }
+
+  for (std::int32_t i = 0; i &lt; ilimit; ++i) // Compliant
+  {
+    // ...
+  }
+}
+</code></pre>
+''',
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.option().checkbox('skip', 'Skip non-traditional loop counters')
+
+def check(check, file):
+    if not re.search(r"for", file.contents()):
+        return
+    skip = check.option().lookup('skip')
+    lexer = None
+    funDefs = file.filerefs("Define", "Function")
+    for fun in funDefs:
+        text = fun.ent().contents()
+        text = re.sub(r'\/\/.*\n', '\n', text)
+        text = re.sub(r'\/\*(.|\n)*\*\/', '\n', text)
+
+        if not re.search(r'for', text):
+            continue
+
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(fun.line(), fun.column())
+        end = fun.ent().ref('end').line()
+
+        while lexeme and lexeme.line_begin() < end:
+            skip = False
+            if lexeme.token() == 'Keyword' and lexeme.text() == 'for':
+                lexeme = lexeme.next(True, True)
+                if lexeme:
+                    lexeme = lexeme.next(True, True)
+                    nextLex = lexeme.next(True, True)
+                    if lexeme and lexeme.text() == ';' and nextLex and nextLex != ';' and not skip:
+                        check.violation(fun.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR3)
+
+                    while lexeme and lexeme.text() != ';':
+                        nextLex = lexeme.next(True, True)
+                        if lexeme.text() == ':' or (nextLex and nextLex.text() == ':'):
+                            skip = True
+                            break
+
+                        if lexeme.token() == 'Identifier' and lexeme.ent() and re.search(r'float|double', str(lexeme.ent().type())):
+                            check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR2)
+
+                        if lexeme.text() == ',':
+                            check.violation(fun.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                        lexeme = lexeme.next(True, True)
+
+                    if skip:
+                        continue
+
+                    lexeme = lexeme.next(True, True)
+                    while lexeme and lexeme.text() != ';':
+                        nextLex = lexeme.next(True, True)
+                        if nextLex and lexeme.text() == ':' and nextLex == ':':
+                            skip = True
+                            break
+                        lexeme = lexeme.next(True, True)
+
+                    if skip:
+                        continue
+
+                    ent = None
+                    while lexeme and lexeme.text() != ')':
+                        if lexeme.text() == '->':
+                            lexeme = lexeme.next(True, True)
+                        elif lexeme.text() == '(':
+                            lexeme = Modules.findClose(lexeme)
+                            if not lexeme:
+                                continue
+                        elif lexeme.ent():
+                            if not ent:
+                                ent = lexeme.ent()
+                            elif ent.name() != lexeme.ent().name():
+                                check.violation(fun.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+                        elif lexeme.text() == ':':
+                            lexeme = lexeme.next(True, True)
+                            if lexeme and lexeme.text() == ':':
+                                skip = True
+                                break
+                        if lexeme:
+                            lexeme = lexeme.next(True, True)
+
+            else:
+                lexeme = lexeme.next(True, True)
+

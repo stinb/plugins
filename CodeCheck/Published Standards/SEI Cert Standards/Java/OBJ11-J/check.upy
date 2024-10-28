@@ -1,0 +1,195 @@
+ERR1 = 'Constructor throws an exception.'
+ERR2 = 'Finalizer obtains and stores a reference by using the this keyword.'
+ERR3 = 'Object variable is not declared as final.'
+
+
+# The ID for the check
+def ids():
+    return ('OBJ11-J', 'JAVA_OBJ11')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'OBJ11-J': 'Published Standards/SEI Cert Standards/Java/Be wary of letting constructors throw exceptions',
+        'JAVA_OBJ11': 'All Checks/Language Specific/Java/Object Orientation/Be wary of letting constructors throw exceptions',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'OBJ11-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+        ],
+        'JAVA_OBJ11': [
+            'Language: Java',
+            'Object Orientation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Be wary of letting constructors throw exceptions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Be wary of letting constructors throw exceptions</p>
+<p><b>Risk Assessment</b></p>
+<p>Allowing access to a partially initialized object can provide an attacker with an opportunity to resurrect the object before or during its finalization; as a result, the attacker can bypass security checks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/OBJ11-J.+Be+wary+of+letting+constructors+throw+exceptions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class BankOperations {
+  public BankOperations() {
+    if (!performSSNVerification()) {
+      throw new SecurityException("Access Denied!");
+    }
+  }
+
+  private boolean performSSNVerification() {
+    return false; // Returns true if data entered is valid, else false
+                  // Assume that the attacker always enters an invalid SSN
+  }
+
+  public void greet() {
+    System.out.println("Welcome user! You may now use all the features.");
+  }
+}
+
+public class Storage {
+  private static BankOperations bop;
+
+  public static void store(BankOperations bo) {
+  // Store only if it is initialized
+    if (bop == null) {
+      if (bo == null) {
+        System.out.println("Invalid object!");
+        System.exit(1);
+      }
+      bop = bo;
+    }
+  }
+}
+
+public class UserApp {
+  public static void main(String[] args) {
+    BankOperations bo;
+    try {
+      bo = new BankOperations();
+    } catch (SecurityException ex) { bo = null; }
+
+    Storage.store(bo);
+    System.out.println("Proceed with normal logic");
+  }
+}
+
+public class Interceptor extends BankOperations {
+  private static Interceptor stealInstance = null;
+
+  public static Interceptor get() {
+    try {
+      new Interceptor();
+    } catch (Exception ex) {/* Ignore exception */}
+    try {
+      synchronized (Interceptor.class) {
+        while (stealInstance == null) {
+          System.gc();
+          Interceptor.class.wait(10);
+        }
+      }
+    } catch (InterruptedException ex) { return null; }
+    return stealInstance;
+  }
+
+  public void finalize() {
+    synchronized (Interceptor.class) {
+      stealInstance = this;
+      Interceptor.class.notify();
+    }
+    System.out.println("Stole the instance in finalize of " + this);
+  }
+}
+
+public class AttackerApp { // Invoke class and gain access
+                           // to the restrictive features
+  public static void main(String[] args) {
+    Interceptor i = Interceptor.get(); // Stolen instance
+
+    // Can store the stolen object even though this should have printed
+    // "Invalid Object!"
+    Storage.store(i);
+
+    // Now invoke any instance method of BankOperations class
+    i.greet();
+
+    UserApp.main(args); // Invoke the original UserApp
+  }
+}
+
+
+class Trade {
+  private static Stock s;
+  static {
+    try {
+      s = new Stock();
+    } catch (IOException e) {
+      /* Does not initialize s to a safe state */
+    }
+  }
+  // ...
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    def check_violation(ref, err):
+        check.violation(ref.ent(), file,
+                        ref.line(), ref.column(), err)
+
+    for class_ref in file.filerefs("Define", "Class Type ~Final"):
+        for func_ref in class_ref.ent().refs("Define", "Member Public ~Final"):
+            if func_ref.ent().kind().check("Constructor") and "throw" in func_ref.ent().contents():
+                check_violation(func_ref, ERR1)
+            elif func_ref.ent().name() == "finalize" and "this" in func_ref.ent().contents():
+                check_violation(func_ref, ERR2)
+
+        for obj_ref in class_ref.ent().refs("Define", "Static Variable Member ~Final"):
+            _ent, _type = get_ent_type(obj_ref.ent())
+            if (not _type or "extends" in _type) and _ent.kind().check("Class ~Unknown"):
+                check_violation(obj_ref, ERR3)
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()

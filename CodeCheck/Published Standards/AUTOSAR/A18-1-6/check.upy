@@ -1,0 +1,178 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-06-2021
+import re
+
+ERR1 = """\
+std::hash specialization does not have a noexcept function call operator"""
+
+def ids():
+    return ('A18-1-6', 'CPP_L027')
+
+def name(id):
+    return {
+        'A18-1-6': """\
+Published Standards/AUTOSAR/All std::hash specializations for user-defined types \
+shall have a noexcept function call operator""",
+        'CPP_L027': """\
+All Checks/Language Specific/C and C++/Libraries/All std::hash specializations \
+for user-defined types shall have a noexcept function call operator"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-1-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Libraries',
+        ],
+        'CPP_L027': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Some of standard library containers use std::hash indirectly. Function call operator
+should be defined as noexcept to prevent container simple access from throwing an
+exception.
+Note: Consider own hash specializations to use standard library specializations
+combined with XOR (^) operation as implemented by boost::hash_combine:
+seed ^= std::hash&lt; decltype (v)&gt;{}(v) + 0x9e3779b9 + (seed &lt;&lt; 6) + (seed &gt;&gt; 2);</p>
+<p><b>Example</p></b>
+<pre><code language="C++">1 // $Id: A18-1-6.cpp 311792 2018-03-15 04:15:08Z christof.meerwald $
+2 #include &lt;cstdint&gt;
+3 #include &lt;functional&gt;
+4 #include &lt;string&gt;
+5 #include &lt;unordered_map&gt;
+6
+7 class A
+8 {
+9 public:
+10 A(uint32_t x, uint32_t y) noexcept : x(x), y(y) {}
+11
+12 uint32_t GetX() const noexcept { return x; }
+13 uint32_t GetY() const noexcept { return y; }
+14
+15 friend bool operator == (const A &lhs, const A &rhs) noexcept
+16 { return lhs.x == rhs.x && lhs.y == rhs.y; }
+17 private:
+18 uint32_t x;
+19 uint32_t y;
+20 };
+21
+22 class B
+23 {
+24 public:
+25 B(uint32_t x, uint32_t y) noexcept : x(x), y(y) {}
+26
+27 uint32_t GetX() const noexcept { return x; }
+28 uint32_t GetY() const noexcept { return y; }
+29
+30 friend bool operator == (const B &lhs, const B &rhs) noexcept
+31 { return lhs.x == rhs.x && lhs.y == rhs.y; }
+32 private:
+33 uint32_t x;
+34 uint32_t y;
+35 };
+36
+37 namespace std
+38 {
+39 // Compliant
+40 template &lt;&gt;
+41 struct hash&lt;A&gt;
+42 {
+43 std::size_t operator()(const A& a) const noexcept
+44 {
+45 auto h1 = std::hash&lt;decltype(a.GetX())&gt;{}(a.GetX());
+46 std::size_t seed { h1 + 0x9e3779b9 };
+47 auto h2 = std::hash&lt;decltype(a.GetY())&gt;{}(a.GetY());
+48 seed ^= h2 + 0x9e3779b9 + (seed &lt;&lt; 6) + (seed &gt;&gt; 2);
+49 return seed;
+50 }
+51 };
+52
+53 // Non-compliant: string concatenation can potentially throw
+54 template &lt;&gt;
+55 struct hash&lt;B&gt;
+56 {
+57 std::size_t operator()(const B& b) const
+58 {
+59 std::string s{std::to_string(b.GetX()) + ',' + std::to_string(b.GetY())};
+60 return std::hash&lt;std::string&gt;{}(s);
+61 }
+62 };
+63 }
+64
+65 int main()
+66 {
+67 std::unordered_map&lt;A, bool&gt; m1 { { A{5, 7}, true } };
+68
+69 if (m1.count(A{4, 3}) != 0)
+70 {
+71 // ....
+72 }
+73
+74 std::unordered_map&lt;B, bool&gt; m2 { { B{5, 7}, true } };
+75
+76 // Lookup can potentially throw if hash function throws
+77 if (m2.count(B{4, 3}) != 0)
+78 {
+79 // ....
+80 }
+81 }
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Struct')
+
+    for ref in refs:
+        # Skip if not 'std::hash'
+        if not re.match(r'std::(__1::)?hash', ref.ent().longname()):
+            continue
+
+        ok = False
+
+        mfRefs = ref.ent().refs('Define', 'Member Function')
+
+        for mfRef in mfRefs:
+            # Skip if not a function call operator
+            if not re.match(r'std::(__1::)?hash::operator\(\)', mfRef.ent().longname()):
+                continue
+
+            # Create lexer once
+            if not lexer:
+                lexer = file.lexer(lookup_ents=False)
+
+            lexeme = lexer.lexeme(mfRef.line(), mfRef.column())
+
+            # Look for noexcept before the member function begins
+            while lexeme and not re.search(r'{|;', lexeme.text()):
+                if lexeme.text() == 'noexcept':
+                    ok = True
+                    break
+
+                lexeme = lexeme.next(True, True)
+
+            if ok:
+                break
+
+        # Throw violation
+        if not ok:
+            check.violation(mfRef.ent(), file, mfRef.line(), mfRef.column(), ERR1)

@@ -1,0 +1,147 @@
+import re
+
+DEF_NAME = "C-style strings shall not be used"
+
+# The ID for the check
+def ids():
+    return ('A27-0-4', 'CPP_T051')
+
+def name(id):
+    return {
+        'A27-0-4': """\
+Published Standards/AUTOSAR/C-style strings shall not be used""",
+        'CPP_T051': """\
+All Checks/Language Specific/C and C++/Types/C-style strings shall not be used"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A27-0-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T051': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>It is required that an underlying buffer for a C-style string needs to be of sufficient size to hold character data and a null terminator. In addition, a C-style string implies all other disadvantages of built-in arrays (see A18-1-1 in section 6.18.1). Using std::string provides correct memory allocation, copying, gradual expansion and iteration. It is self-explanatory in terms of ownership and offers more readable interface.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A27-0-4.cpp 311495 2018-03-13 13:02:54Z michal.szczepankiewicz $
+2 #include &lt;iostream&gt;
+3 #include &lt;string&gt;
+4 #include &lt;list&gt;
+5
+6 void F1()
+7 {
+8 std::string string1;
+9 std::string string2;
+10 std::cin &gt;&gt; string1 &gt;&gt; string2; // Compliant - no buffer overflows
+11 }
+12
+13 std::list&lt;std::string&gt; F2(const std::string& terminator)
+14 {
+15 std::list&lt;std::string&gt; ret;
+16 //read a single word until it is different from the given terminator sequence
+17 for (std::string s; std::cin &gt;&gt; s && s != terminator; )
+18 {
+19 ret.push_back(s);
+20 }
+21 return ret;
+22 }
+</code></pre>
+<p><b>See also</b></p>
+<p>C++ Core Guidelines [11]: SL.str.1: Use std::string to own character sequences.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# check if entity is an array
+def is_array(ent):
+  if re.search(r'\[(.+)\]', str(ent.type())):
+    return True
+  return False
+
+# check if entity is an char
+def is_char(ent):
+  if ent.kind().check("Typedef"):
+    if re.search(r"char", str(ent)):
+      return True
+    else:
+      return False
+  elif ent.kind().check("Object"):
+    if re.search(r"char", str(ent.type())):
+      return True
+    else:
+      return False
+  elif ent.ref("Typed") and ent.ref("Typed").ent():
+    return is_char(ent.ref("Typed").ent())
+  else:
+    return False
+
+# check if ent is a pointer thru * operator
+def is_pointer(ent):
+  if re.search(r"\*", str(ent.type())):
+    return True
+  elif ent.ref("Typed") and ent.ref("Typed").ent():
+    return is_pointer(ent.ref("Typed").ent())
+  else:
+    return False
+
+def check(check, file):
+  lexer = file.lexer(True, 8, False, False)
+  for ref in file.filerefs("Define","~Unresolved ~Unknown Object", False):
+    if is_array(ref.ent()) and is_char(ref.ent()) and ref.scope().kind().check("~Union ~File"):
+      ent = ref.ent()
+      # skip if pointer or ent inside a macro?
+      if is_pointer(ent) or ref.ent().freetext("DefinedInMacro"):
+        break
+      #for inner_ref in ent.refs("Setby"):
+      for inner_ref in ent.refs("Setby,Useby"):
+      # get setby and useby? reference
+        is_valid = True
+        lex = lexer.lexeme(inner_ref.line(), inner_ref.column())
+        if lex and lex.next(ignore_whitespace=True,ignore_comments=True):
+          lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+        while lex and lex.text() != ";":
+          if lex.token() == "String" and re.search(r'\"(.+)\"', str(lex.text())):
+            # check if string literal - enclosed with " and "
+            is_valid = False
+            break
+          elif lex.token() == "Identifier" and lex.ent():
+            if lex.ent().kind().check("Object"):
+              # check object if string type
+              if re.search(r"string$", str(lex.ent().type())):
+                is_valid = False
+              break
+            elif lex.ent().kind().check("Function"):
+              # check function if return type is string
+              if re.search(r"string$", str(lex.ent().type())):
+                is_valid = False
+              break
+          lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+        if not is_valid:
+          check.violation(ent, file, inner_ref.line(), inner_ref.column(), DEF_NAME)

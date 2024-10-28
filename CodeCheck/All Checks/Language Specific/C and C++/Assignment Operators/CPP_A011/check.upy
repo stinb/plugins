@@ -1,0 +1,183 @@
+ERR1 = 'Self-assignment is not handled correctly.'
+
+
+# The ID for the check
+def ids():
+    return ('A12-8-5', 'CPP_A011')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-8-5': 'Published Standards/AUTOSAR/A copy assignment and a move assignment operators shall handle self-assignment.',
+        'CPP_A011': 'All Checks/Language Specific/C and C++/Assignment Operators/A copy assignment and a move assignment operators shall handle self-assignment.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A12-8-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Assignment Operators'
+        ],
+        'CPP_A011': [
+            'Language: C',
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A copy assignment and a move assignment operators shall handle
+self-assignment.</p>
+<p><b>Rationale</b></p>
+<p>User-defined copy assignment operator and move assignment operator need to
+prevent self-assignment, so the operation will not leave the object in an indeterminate
+state. If the given parameter is the same object as the local object, destroying
+object-local resources will invalidate them. It violates the copy/move assignment
+postconditions.</p>
+<p>Note that STL containers assume that self-assignment of an object is correctly handled.
+Otherwise it may lead to unexpected behavior of an STL container.</p>
+<p>Self-assignment problem can also be solved using swap operators. See rule: A12-8-2.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-8-5.cpp 271773 2017-03-23 13:16:53Z piotr.tanski $
+2 #include &lt;cstdint&gt;
+3 #include &lt;stdexcept&gt;
+4 struct A
+5 {
+6 std::int32_t number;
+7 std::int32_t* ptr;
+8 // Implementation
+9 };
+10 class B
+11 {
+12 public:
+13 // ...
+14 B& operator=(B const& oth) // Non-compliant
+15 {
+16 i = oth.i;
+17 delete aPtr;
+18
+19 try
+20 {
+21 aPtr = new A(*oth.aPtr); // If this is the self-copy case, then
+22 // the oth.a_ptr is already deleted
+23 }
+24 catch (std::bad_alloc&)
+25 {
+26 aPtr = nullptr;
+27 }
+28
+29 return *this;
+30 }
+31
+32 private:
+33 std::int16_t i = 0;
+34 A* aPtr = nullptr;
+35 };
+36 class C
+37 {
+38 public:
+39 C& operator=(C const& oth) // Compliant
+40 {
+41 if (this != &oth)
+42 {
+43 A* tmpPtr = new A(*oth.aPtr);
+44
+45 i = oth.i;
+46 delete aPtr;
+47 aPtr = tmpPtr;
+48 }
+49 return *this;
+50 }
+51 C& operator=(C&& oth) // Compliant
+52 {
+53 if (this != &oth)
+54 {
+55 A* tmpPtr = new A{std::move(*oth.aPtr)};
+56
+57 i = oth.i;
+58 delete aPtr;
+59 aPtr = tmpPtr;
+60 }
+61 return *this;
+62 }
+63
+64 private:
+65 std::int16_t i = 0;
+66 A* aPtr = nullptr;
+67 };
+</code></pre>
+<p><b>See also</b></p>
+<p>• SEI CERT C++ [10]: OOP54-CPP Gracefully handle self-assignment.</p>
+<p>• C++ Core Guidelines [11]: C.62: Make copy assignment safe for self-assignment.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Member Function"):
+        end_ref = func_ref.ent().ref("End, Endby")
+        on_delete = False
+        deleted_obj = {}
+        self_assignment = {}
+        lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+        if not end_ref:
+            continue
+
+        while lex and (lex.line_begin() != end_ref.line()):
+            if lex.text() == "delete" and lex.token() == "Keyword":
+                on_delete = True
+            elif on_delete and lex.token() == "Identifier":
+                on_delete = False
+
+                if lex.text() in deleted_obj:
+                    continue
+
+                deleted_obj[lex.text()] = lex.line_begin()
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+        for obj_ref in func_ref.ent().refs("Use", "Member Object"):
+            for set_ref in obj_ref.ent().refs("Setby"):
+                if set_ref.line() == obj_ref.line():
+                    if obj_ref.ent().name() in self_assignment:
+                        self_assignment[obj_ref.ent().name()] = obj_ref.line() if obj_ref.line(
+                        ) > self_assignment[obj_ref.ent().name()] else self_assignment[obj_ref.ent().name()]
+                        continue
+
+                    self_assignment[obj_ref.ent().name()] = obj_ref.line()
+
+        if deleted_obj and self_assignment:
+            for deleted in deleted_obj:
+                if deleted in self_assignment and deleted_obj[deleted] < self_assignment[deleted]:
+                    check.violation(func_ref.ent(), file,
+                                    func_ref.line(), func_ref.column(), ERR1)

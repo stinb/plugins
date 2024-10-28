@@ -1,0 +1,111 @@
+# This script is designed to run with Understand - CodeCheck
+
+import re
+
+ERR1 = 'A pointer to member virtual function is tested with non-null'
+
+valid_op = ["==","!="]
+invalid_op = ["<",">","<=","=<"]
+
+NULL_PTR = "nullptr"
+
+# The ID for the check
+def ids():
+    return ('A5-10-1', 'CPP_P048')
+
+# The short name of the check
+def name(id):
+    return {
+        "A5-10-1": "Published Standards/AUTOSAR/A pointer to member virtual function shall only be tested for equality with null-pointer-constant",
+        "CPP_P048": "All Checks/Language Specific/C and C++/Pointers/A pointer to member virtual function shall only be tested for equality with null-pointer-constant",
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A5-10-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P048': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>The result of equality comparison between pointer to member virtual function and anything other than null-pointer-constant (i.e. nullptr, see: A4-10-1) is unspecified.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A5-10-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 class A
+3 {
+4 public:
+5 virtual ~A() = default;
+6 void F1() noexcept {}
+7 void F2() noexcept {}
+8 virtual void F3() noexcept {}
+9 };
+10
+11 void Fn()
+12 {
+13 bool b1 = (&A::F1 == &A::F2); // Compliant
+14 bool b2 = (&A::F1 == nullptr); // Compliant
+15 bool b3 = (&A::F3 == nullptr); // Compliant
+16 bool b4 = (&A::F3 != nullptr); // Compliant
+17 bool b5 = (&A::F3 == &A::F1); // Non-compliant
+18 }
+</code></pre>
+<p><b>See also</b></p>
+<p>HIC++ v4.0 [9]: 5.7.2 Ensure that a pointer to member that is a virtual function is only compared (==) with nullptr.
+</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = file.lexer()
+    for ref in file.filerefs("Define","Class", True):
+        #get all virtual member function
+        for ent in ref.ent().ents("Define", "Virtual Function"):
+            #used as ptr
+            for inner_ref in ent.refs("C Useby Ptr"):
+                lex = lexer.lexeme(inner_ref.line(), inner_ref.column())
+                if not lex:
+                    continue
+
+                right = lex
+                right = right.next(ignore_whitespace=True, ignore_comments=True)
+                if right.text() in valid_op:
+                    #continue going right
+                    if right.next(ignore_whitespace=True, ignore_comments=True).text() != NULL_PTR:
+                        check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                elif right.text() in invalid_op:
+                    check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                else:
+                    left = lex
+                    while left and not (left.text() in valid_op or left.text() in invalid_op):
+                        if left.text() in invalid_op:
+                            check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                        left = left.previous(ignore_whitespace=True, ignore_comments=True)
+                    #continue going left
+                    if left and (left.previous(ignore_whitespace=True, ignore_comments=True).text() != NULL_PTR):
+                        check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)

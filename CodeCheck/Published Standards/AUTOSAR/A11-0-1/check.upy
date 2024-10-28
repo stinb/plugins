@@ -1,0 +1,136 @@
+import re
+
+
+ERR1 = 'Non-POD type is defined as struct'
+NON_POD_MEMBER = {"Protected", "Private", "Function"}
+
+
+# The ID for the check
+def ids():
+    return ('A11-0-1', 'CPP_D058')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A11-0-1': 'Published Standards/AUTOSAR/A non-POD type should be defined as class',
+        'CPP_D058': 'All Checks/Language Specific/C and C++/Declarations and Definitions/A non-POD type should be defined as class',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A11-0-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D058': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A non-POD type should be defined as class.</p>
+<p><b>Rationale</b></p>
+<p>Types that are not POD types are supposed to be defined as class objects, as a class
+specifier forces the type to provide private access control for all its members by default.
+This is consistent with developer expectations, because it is expected that a class has
+its invariant, interface and could provide custom-defined constructors.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A11-0-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 #include &lt;limits&gt;
+4 class A // Compliant - A provides user-defined constructors, invariant and
+5 // interface
+6 {
+7 std::int32_t x; // Data member is private by default
+8
+9 public:
+10 static constexpr std::int32_t maxValue =
+11 std::numeric_limits&lt;std::int32_t&gt;::max();
+12 A() : x(maxValue) {}
+13 explicit A(std::int32_t number) : x(number) {}
+14 A(A const&) = default;
+15 A(A&&) = default;
+16 A& operator=(A const&) = default;
+17 A& operator=(A&&) = default;
+18
+19 std::int32_t GetX() const noexcept { return x; }
+20 void SetX(std::int32_t number) noexcept { x = number; }
+21 };
+22 struct B // Non-compliant - non-POD type defined as struct
+23 {
+24 public:
+25 static constexpr std::int32_t maxValue =
+26 std::numeric_limits&lt;std::int32_t&gt;::max();
+27 B() : x(maxValue) {}
+28 explicit B(std::int32_t number) : x(number) {}
+29 B(B const&) = default;
+30 B(B&&) = default;
+31 B& operator=(B const&) = default;
+32 B& operator=(B&&) = default;
+33
+34 std::int32_t GetX() const noexcept { return x; }
+35 void SetX(std::int32_t number) noexcept { x = number; }
+36
+37 private:
+38 std::int32_t x; // Need to provide private access specifier for x member
+39 };
+40 struct C // Compliant - POD type defined as struct
+41 {
+42 std::int32_t x;
+43 std::int32_t y;
+44 };
+45 class D // Compliant - POD type defined as class, but not compliant with
+46 // M11-0-1
+47 {
+48 public:
+49 std::int32_t x;
+50 std::int32_t y;
+51 };
+</code></pre>
+<p><b>See also</b></p>
+<p>• C++ Core Guidelines [11]: C.2: Use class if the class has an invariant; use struct
+if the data members can vary independently.</p>
+<p>• stackoverflow.com [17]: When should you use a class vs a struct in C++?</p>
+"""
+
+
+
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"struct", file.contents()):
+        return
+
+    for struct_ref in file.filerefs("Define", "Struct"):
+        for ref in struct_ref.ent().refs("Declare"):
+            ref_kind = ref.ent().kind().longname()
+
+            if ref_kind and any(member in ref_kind for member in NON_POD_MEMBER):
+                check.violation(struct_ref.ent(), file,
+                                struct_ref.line(), struct_ref.column(), ERR1)
+                break

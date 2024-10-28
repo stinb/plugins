@@ -1,0 +1,104 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 1-5-22
+
+
+import re
+
+
+ERR1 = 'Bitwise operation on object of signed type: "%1"'
+
+
+def ids():
+    return ('M5-0-21', 'MISRA08_5-0-21', 'CPP_T018')
+
+
+def name(id):
+    return {
+        'M5-0-21': 'Published Standards/AUTOSAR/Bitwise operators shall only be applied to operands of unsigned underlying type',
+        'MISRA08_5-0-21': 'Published Standards/MISRA-C++ 2008/5-0-21 Bitwise operators shall only be applied to operands of unsigned underlying type',
+        'CPP_T018': 'All Checks/Language Specific/C and C++/Types/Bitwise operators shall only be applied to operands of unsigned underlying type',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-21': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'M5-0-21': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T018': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def description():
+    return 'Bitwise operators shall only be applied to operands of unsigned underlying type.'
+
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>Bitwise operations (<code>~</code>, <code>&lt;&lt;</code>, <code>&lt;&lt;=</code>, <code>&gt;&gt;</code>, <code>&gt;&gt;=</code>, <code>&</code>, <code>&=</code>, <code>^</code>, <code>^=</code>, <code>|</code> and <code>|=</code>) are not normally meaningful on signed integers or enumeration constants. Additionally, an <i>implementation-defined</i> result is obtained if a right shift is applied to a negative value.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">if ( ( uint16_a & int16_b ) == 0x1234U )    // Non-compliant
+if ( ( uint16_a | uint16_b ) == 0x1234U )   // Compliant
+if ( ~int16_a == 0x1234U )                  // Non-compliant
+if ( ~uint16_a == 0x1234U )                 // Compliant
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    signed = {'signed char', 'short', 'int', 'long', 'long long', 'float', 'double', 'long double'}
+    bitwise = {'~', '<<', '<<=', '>>', '>>=', '&', '&=', '^', '^=', '|', '|='}
+
+    lexer = file.lexer()
+
+    for ref in file.filerefs('Use', 'Object'):
+        ent = ref.ent()
+
+        # Ignore anything that isn't a signed number
+        if ent.freetext('UnderlyingType') not in signed:
+            continue
+
+        # Ignore anything that doesn't have a bitwise operator to the left or right
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        if lexeme and lexeme.previous(True, True) and lexeme.next(True, True):
+            prevText = lexeme.previous(True, True).text()
+            nextText = lexeme.next(True, True).text()
+            if prevText not in bitwise and nextText not in bitwise:
+                continue
+
+            check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.type())

@@ -1,0 +1,196 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2021-09-17
+
+
+import re
+
+
+ERR1 = 'reinterpret_cast is used'
+
+
+def ids():
+    return ('A5-2-4', 'CPP_E041', 'MISRA23_8.2.5')
+
+
+def name(id):
+    return {
+        'A5-2-4': 'Published Standards/AUTOSAR/reinterpret_cast shall not be used',
+        'CPP_E041': 'All Checks/Language Specific/C and C++/Expressions/reinterpret_cast shall not be used',
+        'MISRA23_8.2.5': 'Published Standards/MISRA C++ 2023/8.2.5 reinterpret_cast shall not be used'
+    }[id]
+
+
+def tags(id):
+    return {
+        'A5-2-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E041': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+        'MISRA23_8.2.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+def detailed_description(id):
+    if id == 'MISRA23_8.2.5':
+        return '''
+<p><b>Amplification</b></p>
+<p>Casting between unrelated types generally results in undefined behaviour.</p>
+
+<p><b>Exception</b></p>
+<p>The following are allowed by exception as the behaviour is well defined:</p>
+<p>1. Using reinterpret_cast< T * > to cast any object pointer to a pointer to T, where T is one
+of void, char, unsigned char or std::byte, possibly cv-qualified.</p>
+<p>2. Using reinterpret_cast< T >( p ) to convert a pointer p to an integer of type T that is
+large enough to represent a pointer value (e.g. std::uintptr_t).</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">uint8_t * p1;
+uint32_t * p2;
+p2 = reinterpret_cast&lt; uint32_t * &gt;( p1 ); // Non-compliant
+extern uint32_t read_value();
+extern void print( uint32_t n );
+void f()
+{
+ uint32_t u = read_value();
+ uint16_t * p3 = reinterpret_cast&lt; uint16_t * &gt;( &u ); // Non-compliant
+}
+void g()
+{
+ std::array&lt; int32_t, 2 &gt; a{};
+ auto p4 = reinterpret_cast&lt; int32_t(*)[ 2 ]&gt;( a.data() ); // Non-compliant
+ ( *p4 )[ 0 ] = 42; // Undefined behaviour
+}
+</code></pre>
+
+<p>In the following example, the target type uint64_t used in the initializer for p7 violates Rule 8.2.8.</p>
+<pre><code language="C++">void h( float x )
+{
+ auto p5 = reinterpret_cast&lt; std::byte const * &gt;( &x ); // Compliant by exception
+ auto p6 = reinterpret_cast&lt; std::uintptr_t &gt;( &x ); // Compliant by exception
+ auto p7 = reinterpret_cast&lt; uint64_t &gt;( &x ); // Compliant by exception
+}
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.2.1, Rule 8.2.6, Rule 8.2.8</p>
+    '''
+
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>
+Use of reinterpret_cast may violate type safety and cause the program to access a
+variable as if it were of another, unrelated type.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A5-2-4.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+#include &lt;string&gt;
+void F1() noexcept
+{
+    std::string str = "Hello";
+    std::int32_t* ptr = reinterpret_cast&lt;std::int32_t*&gt;(&str);  // Non-compliant
+}
+struct A
+{
+    std::int32_t x;
+    std::int32_t y;
+};
+class B
+{
+  public:
+    virtual ~B() {}
+
+  private:
+    std::int32_t x;
+};
+class C : public B
+{
+};
+class D : public B
+{
+};
+void F2(A* ptr) noexcept
+{
+    B* b1 = reinterpret_cast&lt;B*&gt;(ptr);  // Non-compliant
+    std::int32_t num = 0;
+    A* a1 = reinterpret_cast&lt;A*&gt;(num);  // Non-compliant
+    A* a2 = (A*)
+        num;  // Compliant with this rule, but non-compliant with Rule A5-2-2.
+    B* b2 = reinterpret_cast&lt;B*&gt;(num);  // Non-compliant
+    D d;
+    C* c1 = reinterpret_cast&lt;C*&gt;(&d);  // Non-compliant - cross cast
+    C* c2 = (C*)&d;  // Compliant with this rule, but non-compliant with Rule
+                     // A5-2-2. Cross-cast.
+    B* b3 = &d;      // Compliant - class D is a subclass of class B
+}
+</code></pre>'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    has_exception = True if (check.id() == 'MISRA23_8.2.5') else False
+
+    check.option().checkbox('has_exception', 'Allow the use of reinterpret_cast when the target type is: 1. Large enough to represent a pointer value or 2. A void, char, unsigned char or std::byte pointer.', has_exception)
+
+
+def check(check, file):
+    pattern = re.compile('reinterpret_cast')
+    has_exception = check.options().lookup('has_exception')
+
+    if not pattern.search(file.contents()):
+        return
+
+    for lexeme in file.lexer().lexemes():
+        token = lexeme.token()
+        if token not in {'Whitespace', 'Comment', 'Newline'}:
+            if (lexeme.text() == 'reinterpret_cast') and (lexeme.token() == 'Keyword'):
+                on_type = 0
+                target_type = ""
+
+                while has_exception and lexeme:
+                    if lexeme.text() == "<":
+                        on_type += 1
+                    elif lexeme.text() == ">":
+                        on_type -= 1
+
+                        if not on_type:
+                            break
+
+                    if on_type and lexeme.text() not in "<>":
+                        target_type += lexeme.text()
+
+                    lexeme = lexeme.next(True, True)
+
+                if target_type and (re.search(r"uint(ptr|64)_t", target_type) or re.search(r"(void|char|byte).*\*$", target_type)):
+                    continue
+                
+                check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)

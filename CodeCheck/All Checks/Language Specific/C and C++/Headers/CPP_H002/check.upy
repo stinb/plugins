@@ -1,0 +1,158 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2-28-23
+
+
+import re
+
+
+ERR1 = '#include %1 contains one or more non-standard characters'
+
+
+def ids():
+    return ('MISRA08_16-2-4', 'CPP_H002', 'MISRA23_19.2.3')
+
+
+def name(id):
+    return {
+        'MISRA08_16-2-4': '''Published Standards/MISRA-C++ 2008/\
+16-2-4 The ', ", /* or // characters shall not occur in a header\
+ file name''',
+        'CPP_H002': '''All Checks/Language Specific/C and C++/Headers/\
+The ', ", /* or // characters shall not occur in a header file\
+ name''',
+        'MISRA23_19.2.3': '''Published Standards/MISRA C++ 2023/\
+19.2.3 The ' or " or &#92; characters and the /* or // character\
+ sequences shall not occur in a header file name''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_16-2-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Headers',
+        ],
+        'CPP_H002': [
+            'Language: C',
+            'Language: C++',
+            'Headers',
+        ],
+        'MISRA23_19.2.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Headers',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    if id == 'MISRA23_19.2.3':
+        return '''\
+<p><b>Rationale</b></p>
+<p>Use of the following are <i>conditionally-supported</i> with
+<i>implementation-defined behaviour</i>:</p>
+
+<ul>
+<li>The <code>'</code> or <code>"</code> or <code>\\</code> characters, and the
+<code>/*</code> or <code>//</code> character sequences are used between
+<code>&lt;</code> and <code>&gt;</code> delimiters in a <i>header file</i> name
+preprocessing token;</li>
+<li>The <code>'</code> or <code>\\</code> characters, or the <code>/*</code> or
+<code>//</code> character sequences are used between the <code>"</code>
+delimiters in a <i>header file</i> name preprocessing token.</li>
+</ul>
+
+<p><i>Note</i>: even on systems where <code>\\</code> is the path separator,
+most implementations will accept the <code>/</code> character as an
+alternative.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+#include "file.h"      // Compliant
+#include "fi'le.h"     // Non-compliant
+#include "path\\file"   // Non-compliant
+#include "path\\\\file"  // Non-compliant
+#include "path/file"   // Compliant
+</code></pre>
+        '''
+
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>
+It is <i>undefined behaviour</i> if the <code>'</code>, <code>"</code>,
+<code>/*</code> or <code>//</code> characters are used between <code>&lt;</code>
+and <code>&gt;</code> delimiters or the <code>'</code>, <code>/*</code> or
+<code>//</code> characters are used between the <code>"</code> delimiters in a
+header name preprocessing token.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+#include "fi'le.h"  // Non-compliant
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    badInAngleBrackets = r'<.*(\\|\'|"|\/\*|\/\/).*>$' if check.id() == "MISRA23_19.2.3" else r'<.*(\'|"|\/\*|\/\/).*>$'
+    badInDoubleQuotes  = r'".*(\\|\'|\/\*|\/\/).*"$' if check.id() == "MISRA23_19.2.3" else r'".*(\'|\/\*|\/\/).*"$'
+
+    # Skip if the lexemes don't have entities
+    if file.kind().check('Unknown, Unresolved'):
+        return
+
+    # Skip if there are no includes
+    if not file.filerefs('Include', 'File', True):
+        return
+
+    # Go through the lexemes with entities
+    lex = file.lexer().first()
+    while lex:
+
+        # Skip until #include and then get the next useful token
+        if lex.token() != 'Preprocessor' or lex.text() != 'include':
+            lex = lex.next(True, True)
+            continue
+        lex = lex.next(True, True)
+
+        # Get value of this token
+        string = None
+        if lex.ent() and lex.ent().kind().check('Macro'):
+            string = lex.ent().type()
+        elif lex.token() == 'String':
+            string = lex.text()
+
+        # Skip if no value was found for the token
+        if not string:
+            lex = lex.next()
+            continue
+
+        # Skip if the value is not a violation
+        if not re.match(badInAngleBrackets, string) and not re.match(badInDoubleQuotes, string):
+            lex = lex.next(True, True)
+            continue
+
+        check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR1, string)
+
+        lex = lex.next(True, True)

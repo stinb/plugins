@@ -1,0 +1,155 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 9-5-14
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Copy constructor %1 initializes something other than base classes and non-static members';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_C008";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Constructors\\A copy constructor shall only initialize its base classes and the non-static members of the class of which it is a member";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Constructors',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { return "( Required ) A copy constructor shall only initialize its base classes and the non-static members of the class of which it is a member.";}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+
+<p><b>Rationale</b></p>
+If a compiler implementation detects that a call to a copy constructor is redundant, then it is
+permitted to omit that call, even if the copy constructor has a side effect other than to construct a
+copy of the object. This is called <i>copy elision</i>.</p>
+<p>
+It is therefore important to ensure that a copy constructor does not modify the program state as the
+number of such modifications may be indeterminate.</p>
+<br>
+
+<p><b>Example</b></p><pre><code language="C++">  class A
+  {
+  public:
+    A ( A const & rhs )
+    : m_i ( rhs.m_i )
+    {
+      ++m_static; // Non-compliant
+    }
+
+  private:
+    int32_t m_i;
+    static int32_t m_static;
+  };
+
+  int32_t A::m_static = 0;
+
+  A f ( )
+  {
+    return A ( );
+  }
+
+  void b ( )
+  {
+    A a = f ( );
+  }
+
+</code></pre>
+
+<p>
+The value that m_static has after the call to b( ) is <i>implementation-defined</i>.</p>
+<br>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+
+# This determines if this script is per file
+sub test_entity { return 1;}
+
+
+# This determines if this script is per project or per file
+sub test_global { return 0;}
+
+
+# Any defined options go here
+sub define_options{
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift; 
+  my $file = shift;
+  return unless $file->kind->check('c file');
+  
+  # Pull all the methods defined in the file, return if none
+  my @methodsDefined = $file->filerefs( 'Define', 'Member Function', 0 );
+  return unless @methodsDefined;
+
+  # Loop through all the defined methods
+  foreach my $method ( @methodsDefined ) {
+
+    # Skip everything but constructors
+    next unless $method->ent->longname eq $method->ent->name . '::' . $method->ent->name;
+
+    # Skip unless we are looking at a copy constructor
+    my $ok = 0;
+    $ok = 1 if $method->ent->parameters =~ /^const\s+[a-zA-Z0-9_]+\s*\&\s+[a-zA-Z0-9_]+$/;
+    $ok = 1 if $method->ent->parameters =~ /^[a-zA-Z0-9_]+\s*\&\s+[a-zA-Z0-9_]+$/;
+    next unless $ok;
+
+    # Pull all the call references
+    my @callRefs = $method->ent->refs( 'Call' );
+    foreach my $call ( @callRefs ) {
+
+      # Check to see if calling anything other than a constructor, throw error if so
+      if ( $call->ent->longname ne $call->ent->name . '::' . $call->ent->name ) {
+        $check->violation( $call->ent, $call->file, $call->line, $call->column, ERR1, $method->ent->name );
+      }
+
+    }
+
+    # Pull all the modify and set references
+    my @modifyRefs = $method->ent->refs( 'Modify, Set' );
+    foreach my $modify ( @modifyRefs ) {
+
+      # Check if what is being modified is static, throw error if so
+      if ( $modify->ent->kind->longname =~ /\bStatic\b/ ) {
+        $check->violation( $modify->ent, $modify->file, $modify->line, $modify->column, ERR1, $method->ent->name );
+      }
+
+    }
+  }
+}

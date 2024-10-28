@@ -1,0 +1,174 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'Extern %1 defined as (%2) and declared as (%3)';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_D015";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Declarations and Definitions\\Externals shall have the same type in the declaration and definition";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Declarations and Definitions',
+  );
+}
+
+sub description { return "(Global)An external object or function shall have the same type in the declaration and definition";}
+
+sub detailed_description { return <<"END_DESC"
+Some compilers allow externals to be defined and declared with different types. This will warn about such cases. i.e.:
+File #1
+float       Var1;
+int           Var2;
+ 
+File #2
+extern unsigned               Var1;
+extern unsigned               Var2;
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 0;}
+
+sub test_global { return 1;}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'macro', 'Treat MACROs without a value as an empty string', 0 );
+}
+
+
+sub check {
+
+  my $check = shift; 
+  my @files = $check->get_files;
+  my $emptyStringMacro = $check->option->lookup( 'macro' );
+
+  foreach my $file(@files){
+    next unless $file->kind->check('c file');
+    next unless($file->filerefs("Declarein"));
+    next unless $file->contents =~ /extern/i;
+    my $lexer = $file->lexer;
+    next unless $lexer;
+    my $findEnt = 0;
+    my $declTypeString;
+    my $lexeme = $lexer->first();
+    while ($lexeme){
+      my $text = $lexeme->text();
+      my $token = $lexeme->token();
+      if (!$findEnt && $text eq "extern" && $token eq "Keyword"){
+        $findEnt = 1;
+      }elsif($findEnt && $text eq '"C"'){
+        # Skip extern "C"
+        $declTypeString="";
+        $findEnt=0;
+      }elsif($findEnt && $lexeme->ent && $lexeme->ref->kind->check("Declarein")){ 
+        my $defType = $lexeme->ent->type;
+        $declTypeString =~ s/^\s+|\s+$//g;
+        my $declDisplay = $declTypeString;
+        $defType =~ s/\[.*\]//g;
+        my $defDisplay = $defType;
+        
+        if ($declTypeString ne $defType){
+          my $mismatch=1;
+          #The type string didn't match the declaration
+          #If the only difference is white space, let's get the real definition string
+          $declTypeString =~ s/\s+//g;
+          $defType =~ s/\s+//g;
+          if ($declTypeString eq $defType){
+            my $defLex = getRefLexeme($lexeme->ent->ref("definein"));
+            if($defLex){
+              $defDisplay="";
+              $defLex = $defLex->previous();
+              $declDisplay =~ s/\s+/ /g;  
+              while($defLex && length($declDisplay) > length($defDisplay) ){
+                $defDisplay = $defLex->text.$defDisplay if $defLex->token ne "Comment";
+                $defDisplay =~ s/\s+/ /g;
+                $defLex = $defLex->previous();
+              }
+                $defDisplay =~ s/^\s+|\s+$//g;   
+              
+              if ($defDisplay eq $declDisplay){
+                $mismatch=0;
+              }
+            }else{
+              $mismatch=0;
+            }
+          }
+          
+          $check->violation($lexeme->ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1,$lexeme->ent->name,$defDisplay,$declDisplay) if $mismatch;
+        }        
+        $findEnt=0;
+        $declTypeString="";
+      }elsif($findEnt && $text eq ";" && $token eq "Punctuation"){
+        $findEnt=0;
+        $declTypeString="";
+      }elsif($findEnt && $token ne "Comment"){
+
+        if ( $emptyStringMacro and $lexeme->ent and $lexeme->ent->kind->check( 'C Macro ~Functional' ) ) {
+          $declTypeString .= getBaseMacro( $lexeme );
+        } else {
+          $declTypeString .= $text;  
+        }
+        
+        #if ( $lexeme->ent && $lexeme->ent->kind->check("Typedef") ) {
+          #$declTypeString .= $lexeme->ent->type;
+        #} else {
+          #$declTypeString .= $text;
+        #}
+      }
+      $lexeme = $lexeme->next;
+    }
+  }
+}
+
+sub getRefLexeme{
+  my $ref = shift;
+  return unless $ref;
+  my $file = $ref->file;
+  return unless $file;
+  my $lexer = $file->lexer();
+  return unless $lexer;
+  my $lexeme = $lexer->lexeme($ref->line,$ref->column);
+  return $lexeme;
+}
+
+
+# Takes and MACRO lexeme and attempts to find it's base value.
+# This subroutine will find simple MACRO definitions or return an empty string if the MACRO is undefined
+sub getBaseMacro {
+
+  my $lexeme = shift;
+
+  # If we are looking at a literal or entity without a definition, simply return empty string
+  return $lexeme->text if $lexeme->token eq 'Literal';
+  my $ent = $lexeme->ent;
+  return '' unless $ent;
+  my $defineIn = $ent->ref( 'C Definein' );
+  return '' unless $defineIn;
+
+  # Create a new lexeme at MACRO definition
+  my $newLex = $defineIn->lexeme;
+  $newLex = $newLex->nextUseful;
+
+  # Handling complex MACRO definitions need work, simply return value if complex structure is detected
+  return getBaseMacro( $newLex ) if $newLex->token( 'Identifier' );
+  return $ent->value;
+    
+}

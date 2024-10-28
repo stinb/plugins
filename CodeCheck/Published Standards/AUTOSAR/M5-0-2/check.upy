@@ -1,0 +1,225 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-18-2021
+import re
+
+ERR1 = 'Parenthesis not required'
+
+def ids():
+    return ('M5-0-2', 'MISRA08_5-0-2', 'CPP_E034')
+
+def name(id):
+    return {
+        'M5-0-2': 'Published Standards/AUTOSAR/Limited dependence should be placed on C++ operator precedence rules in expressions',
+        'MISRA08_5-0-2': 'Published Standards/MISRA-C++ 2008/5-0-2 Limited dependence should be placed on C++ operator precedence rules in expressions',
+        'CPP_E034': 'All Checks/Language Specific/C and C++/Expressions/Limited dependence should be placed on C++ operator precedence rules in expressions',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Advisory',
+            'Expressions',
+        ],
+        'M5-0-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E034': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>In addition to the use of parentheses to override default operator
+precedence, parentheses should also be used to emphasize it. It is easy to make
+a mistake with the rather complicated precedence rules of C++, and this approach
+helps to avoid such errors, and helps to make the code easier to read. However,
+too many parentheses can clutter the code and make it unreadable.</p>
+<p><b>Example</b></p>
+<p>The following guidelines are suggested for deciding when parentheses are
+required:</p>
+<ul>
+<li>Parentheses are not required for the right-hand operand of an assignment
+operator unless the right-hand side itself contains an assignment expression:
+</li></ul>
+<pre><code language="C++">x = a + b; // acceptable
+x = (a + b); // () not required
+</code></pre>
+<ul><li>Parentheses are not required for the operand of a unary operator:</li>
+</ul>
+<pre><code language="C++">x = a * -1; // acceptable
+x = a * (-1); // () not required
+</code></pre>
+<ul><li>Otherwise, the operands of binary and ternary operators shall be
+cast-expressions (see Section 5.4(2) of ISO/IEC 14882:2003 [1]) unless all the
+operators in the expression are the same.</li></ul>
+<pre><code language="C++">x = a + b + c; // acceptable, but care needed
+x = f ( a + b, c ); // no () required for a + b
+x = ( a == b ) ? a : ( a - b );
+if ( a && b && c ) // acceptable
+x = ( a + b ) - ( c + d );
+x = ( a * 3 ) + c + d;
+x = static_cast&lt; uint16_t &gt; ( a ) + b; // no need for cast
+</code></pre>
+<ul><li>
+Even if all operators are the same, parentheses may be used to control the order
+of operation. Some operators (e.g. addition and multiplication) that are
+associative in algebra are not necessarily associative in C++. Similarly,
+integer operations involving mixed types (prohibited by several rules) may
+produce different results because of the integral promotions. The following
+example written for a 16-bit implementation demonstrates that addition is not
+associative and that it is important to be clear about the structure of an
+expression:</li></ul>
+<pre><code language="C++">uint16_t a = 10U;
+uint16_t b = 65535U;
+uint32_t c = 0U;
+uint32_t d;
+d = (a + b) + c; // d is 9; a + b wraps modulo 65536
+d = a + (b + c); // d is 65545
+// this example also deviates from several other rules
+</code></pre>
+<p>Note that Rule 5-2-1 is a special case of this rule applicable solely to the
+logical operators, && and ||.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        if lexeme.text() == '(':
+            close = findClose(lexeme)
+            if not close:
+                continue
+
+            
+            prevLex = lexeme.previous(True, True)
+            nextLex = lexeme.next(True, True)
+
+            # Check if parenthesis surrounds entire assignment
+            if prevLex and nextLex and prevLex.text() == '=' and close.next(True, True).text() == ';':
+
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                continue
+
+            # Ensure different parameters aren't fully enclosed in parethesis
+            elif (prevLex.ent() and re.search(r'Function', prevLex.ent().kindname())) or (prevLex and prevLex.token() == 'Keyword'):
+                continue
+
+
+            elif re.search(r'Operator|Literal|Identifier', nextLex.token()):
+                if nextLex.token() != 'Operator':
+                    nextLex = nextLex.next(True, True)
+                    if nextLex and nextLex.token() == 'Operator' and re.search(r'-{1}|-{2}|\+{2}|!|\&', nextLex.text()):
+                        nextLex = nextLex.next(True, True)
+                        if nextLex and nextLex.text() == ')':
+                            check.violation(file, file, nextLex.line_begin(), nextLex.column_begin(), ERR1)
+                            continue
+
+
+                # Check for parenthesis surrounding unary operators
+                elif nextLex.token() == 'Operator':
+                    if re.search(r'-{1}|-{2}|\+{2}|!|\&', nextLex.text()):
+                        nextLex = nextLex.next(True, True)
+
+                        if nextLex and re.search(r'Literal|Identifier', nextLex.token()):
+                            nextLex = nextLex.next(True, True)
+                            if nextLex and nextLex.text() == ')':
+                                check.violation(file, file, nextLex.line_begin(), nextLex.column_begin(), ERR1)
+                                continue
+
+            if re.match(r'if|for|while', prevLex.text()):
+                continue
+
+            if not checkOperators(lexeme):
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                continue
+
+
+
+
+
+
+
+
+
+
+
+
+
+def findClose(lexeme):
+    count = 0
+    
+    while lexeme and not (lexeme.text() == ')' and count == 0):
+        if lexeme.text() == '(':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme and lexeme.text() == ')':
+            count -= 1
+
+    return lexeme
+
+# Check if common math operators need parenthesis
+def checkOperators(open):
+    prevLex = open.previous(True, True)
+    nextLex = open.next(True, True)
+    prevOp = None
+    nextOp = None
+
+    while prevLex and not re.search(r'=|,|;|}', prevLex.text()):
+        if prevLex.token() == 'Operator' and not prevOp:
+            prevOp = prevLex.text()
+
+        elif prevLex.token() == 'Operator':
+            if prevLex.text() != prevOp:
+                return True
+
+        prevLex = prevLex.previous(True, True)
+
+
+    while nextLex and not re.search(r';|{|,', nextLex.text()):
+        if nextLex.token() == 'Operator' and not nextOp:
+            nextOp = nextLex.text()
+
+        elif nextLex.token() == 'Operator':
+            if nextLex.text() != nextOp:
+                return True
+
+        nextLex = nextLex.next(True, True)
+
+
+    if not prevOp:
+        return True
+    if prevOp and re.match(r'\-|\*|\/', prevOp):
+        return True
+    if prevOp and not re.match(r'\+', prevOp):
+        return True
+    if nextOp and not re.match(r'\+|\-|\/|\*', nextOp):
+        return True
+    return False
+

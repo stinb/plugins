@@ -1,0 +1,237 @@
+# https://wiki.sei.cmu.edu/confluence/display/cplusplus/OOP56-CPP.+Honor+replacement+handler+requirements
+# Written by Ian Reed November 2023.
+
+def id():
+  return ("OOP56-CPP")
+
+def name(id):
+  return {
+    "OOP56-CPP": "Published Standards/SEI Cert Standards/C++/Honor replacement handler requirements",
+  }[id]
+
+def detailed_description():
+  return '''
+<p><b>Title</b></p>
+<p>Honor replacement handler requirements</p>
+
+<p>The handler functions new_handler, terminate_handler, and unexpected_handler can be globally replaced by custom implementations.
+A replacement for any of the handler functions must meet the semantic requirements specified by the appropriate "Required behavior" clause of the replaced function.</p>
+
+<p><b>New Handler</b></p>
+<p>Required behavior: A new_handler shall perform one of the following:</p>
+<ul>
+<li>make more storage available for allocation and then return;
+<li>throw an exception of type bad_alloc or a class derived from bad_alloc;
+<li>terminate execution of the program without returning to the caller;
+</ul>
+
+<p><b>Terminate Handler</b></p>
+<p>Required behavior: A terminate_handler shall terminate execution of the program without returning to the caller.</p>
+
+<p><b>Unexpected Handler</b></p>
+<p>Required behavior: An unexpected_handler shall not return.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href="https://wiki.sei.cmu.edu/confluence/display/cplusplus/OOP56-CPP.+Honor+replacement+handler+requirements">
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/OOP56-CPP.+Honor+replacement+handler+requirements</a></p>
+
+<p><b>Risk Assessment</b></p>
+<p>Failing to meet the required behavior for a replacement handler results in undefined behavior.</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<p>In this noncompliant code example, a replacement new_handler is written to attempt to release salvageable resources when the dynamic memory manager runs out of memory. However, this example does not take into account the situation in which all salvageable resources have been recovered and there is still insufficient memory to satisfy the allocation request. Instead of terminating the replacement handler with an exception of type std::bad_alloc or terminating the execution of the program without returning to the caller, the replacement handler returns as normal. Under low memory conditions, an infinite loop will occur with the default implementation of ::operator new(). Because such conditions are rare in practice, it is likely for this bug to go undiscovered under typical testing scenarios.</p>
+<pre><code language="C++">
+#include &lt;new&gt;
+
+void custom_new_handler() {
+  // Returns number of bytes freed.
+  extern std::size_t reclaim_resources();
+  reclaim_resources();
+}
+
+int main() {
+  std::set_new_handler(custom_new_handler);
+}
+</code></pre>
+
+<p><b>Compliant Solution</b></p>
+<p>In this compliant solution, custom_new_handler() uses the return value from reclaim_resources(). If it returns 0, then there will be insufficient memory for operator new to succeed. Hence, an exception of type std::bad_alloc is thrown, meeting the requirements for the replacement handler.</p>
+<pre><code language="C++">
+#include &lt;new&gt;
+void custom_new_handler() noexcept(false) {
+  // Returns number of bytes freed.
+  extern std::size_t reclaim_resources();
+  if (0 == reclaim_resources()) {
+    throw std::bad_alloc();
+  }
+}
+
+int main() {
+  std::set_new_handler(custom_new_handler);
+}
+</code></pre>
+'''
+
+def tags(id):
+  return {
+    'OOP56-CPP': [
+      'Language: C',
+      'Language: C++',
+      'Standard: SEI CERT C++',
+      'Severity: Low',
+      'Likelihood: Probable',
+      'Remediation Cost: High',
+      'Priority: P2',
+      'Level: L3'
+    ],
+  }.get(id)
+
+def test_language(language):
+  return language == 'C++'
+
+def test_entity(file):
+  return False
+
+def test_global():
+  return True
+
+def check(check):
+  files = check.files()
+  db = check.db()
+  newHandlerFuncs = getCustomHandlerFuncs(db, "set_new_handler")
+  for ent in newHandlerFuncs:
+    defineRefs = ent.refs("DefineIn")
+    if not len(defineRefs):
+      continue
+    ref = defineRefs[0]
+    file = ref.file()
+    if file not in files:
+      continue # we only report violations for functions defined in files included in this check.
+    # for the new handler I mostly need to check that there is a branch in which it throws an std::bad_alloc exception.
+    if not funcThrowsBadAlloc(ent) and not funcCallsExit(ent):
+      check.violation(ent, file, ref.line(), ref.column(), "Violation: Custom new handlers need to throw an std::bad_alloc exception or terminate the program when they cannot free enough memory for the allocation.")
+  terminateHandlerFuncs = getCustomHandlerFuncs(db, "set_terminate")
+  for ent in terminateHandlerFuncs:
+    defineRefs = ent.refs("DefineIn")
+    if not len(defineRefs):
+      continue
+    ref = defineRefs[0]
+    file = ref.file()
+    if file not in files:
+      continue # we only report violations for functions defined in files included in this check.
+    # for the terminate handler I need to verify that it calls exit on all branches.
+    # another way of saying that is: If there is any path from the start node to the end node that does not pass through a call to exit, it is a violation.
+    found = searchToEndNode(ent, lambda n: n.kind() == "end", lambda n: isCallToExit(n, file))
+    if found:
+      check.violation(ent, file, ref.line(), ref.column(), "Violation: A terminate_handler shall terminate execution of the program without returning to the caller.")
+  unexpectedHandlerFuncs = getCustomHandlerFuncs(db, "set_unexpected")
+  for ent in unexpectedHandlerFuncs:
+    defineRefs = ent.refs("DefineIn")
+    if not len(defineRefs):
+      continue
+    ref = defineRefs[0]
+    file = ref.file()
+    if file not in files:
+      continue # we only report violations for functions defined in files included in this check.
+    # for the "unexpected" handler I need to verify that all branches either call exit or throw an exception.
+    # another way of saying that is: If there is any path from the start node to the end node that does not pass through a call to exit or a throw keyword, it is a violation.
+    found = searchToEndNode(ent, lambda n: n.kind() == "end", lambda n: isCallToExit(n, file) or isThrowKeyword(n, file))
+    if found:
+      check.violation(ent, file, ref.line(), ref.column(), "Violation: An unexpected_handler shall not return. It can terminate execution of the program or throw an exception.")
+
+def searchToEndNode(ent, isTargetCallback, isWallCallback):
+  cf = ent.control_flow_graph()
+  n = cf.start()
+  # perform a depth first graph search.
+  closed = set() # also known as visited.
+  open = [] # also known as the frontier. We use a stack for a depth first search.
+  open.append(n)
+  while len(open):
+    n = open.pop()
+    closed.add(n)
+    if isTargetCallback(n):
+      return True
+    neighbors = n.children()
+    for neighbor in neighbors:
+      if neighbor in closed:
+        continue
+      if isWallCallback(neighbor):
+        continue
+      open.append(neighbor)
+  return False
+
+def isCallToExit(n, file):
+  if n.kind() != "return":
+    return False # calls to exit show up as "return" nodes in the control flow graph.
+  line = n.line_begin()
+  if not line:
+    return False
+  l = file.lexer().lexeme(line, n.column_begin())
+  # search for a call to the exit function before the end of this statement.
+  while l and l.text() != ";":
+    ref = l.ref()
+    if ref and ref.kind().check("Call") and ref.ent().name() == "exit":
+      return True
+    if ref and ref.kind().check("Callby") and ref.scope().name() == "exit":
+      # this is the branch we actually hit, with the callBy ref, not the call ref.
+      return True
+    l = l.next()
+  return False
+
+def isThrowKeyword(n, file):
+  if n.kind() != "passive":
+    return False # throw keywords show up as "passive" nodes in the control flow graph.
+  line = n.line_begin()
+  if not line:
+    return False
+  l = file.lexer().lexeme(line, n.column_begin())
+  return l.text() == "throw"
+
+def getCustomHandlerFuncs(db, setHandlerName):
+  # this function finds which custom handlers are set by either set_new_handler, set_terminate, or set_unexpected, depending on which setHandlerName name is passed in.
+  customHandlers = []
+  setHandlerFuncs = db.lookup(setHandlerName, "Function")
+  if len(setHandlerFuncs):
+    calls = setHandlerFuncs[0].refs("Callby")
+    for call in calls:
+      l = call.file().lexer().lexeme(call.line(), call.column())
+      l = l.next(True, True) # should be a left parenthesy.
+      if l.text() != "(":
+        continue # that was unexpected.
+      l = l.next(True, True) # should be a function name they are passing in.
+      ent = l.ent()
+      if not ent or not ent.kind().check("C Function"):
+        continue
+      customHandlers.append(ent)
+  return customHandlers
+
+def funcThrowsBadAlloc(ent):
+  throws = ent.refs("C Throw Exception")
+  for t in throws:
+    if t.ent().longname() == "std::bad_alloc":
+      return True
+    elif derivedFromLongname(t.ent(), "std::bad_alloc"):
+      return True
+  return False
+
+def derivedFromLongname(ent, longname):
+  seen = set()
+  unvisited = [ent]
+  while unvisited:
+    ent = unvisited.pop()
+    if ent in seen:
+      continue
+    seen.add(ent)
+    if ent.longname() == longname:
+      return True
+    for ent in ent.ents("Base"):
+      if ent not in seen:
+        unvisited.append(ent)
+  return False
+
+def funcCallsExit(ent):
+  calls = ent.refs("C Call")
+  for c in calls:
+    if c.ent().name() == "exit":
+      return True
+  return False

@@ -1,0 +1,142 @@
+ERR1 = 'Dynamic memory usage shall be prohibited during realtime program phase'
+
+
+# The ID for the check
+def ids():
+    return ('A18-5-7', 'CPP_M018')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A18-5-7': 'Published Standards/AUTOSAR/Dynamic Memory Usage on Realtime Phase',
+        'CPP_M018': 'All Checks/Language Specific/C and C++/Memory Allocation/Dynamic Memory Usage on Realtime Phase',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-5-7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Memory Allocation',
+        ],
+        'CPP_M018': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p>If non-realtime implementation of dynamic memory management functions
+is used in the project, then memory shall only be allocated and deallocated
+during non-realtime program phases.</p>
+
+<p><b>Rationale</b></p>
+<p>If worst-case execution time of memory management functions can not be
+determined, then dynamic memory usage is prohibited during realtime program
+phase, but it can be used e.g. during initialization or non-realtime state
+transitions.</p>
+
+<p>See: Real-time.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">#include &lt;cstdint&gt;
+#include &lt;memory&gt;
+#include &lt;vector&gt;
+std::int8_t AppMainLoop() noexcept
+{
+    std::int8_t retCode = 0;
+    std::int32_t* arr[10];
+    while (true)
+    {
+        for (std::int8_t i = 0; i &lt; 10; ++i)
+        {
+            arr[i] = new std::int32_t{
+            i}; // Non-compliant - allocation in a phase that
+                // requires real-time
+        }
+        // Implementation
+        for (auto& i : arr)
+        {
+            delete i; // Non-compliant - deallocation in a phase that requires
+                      // real-time
+        }
+    }
+    return retCode;
+}
+static std::int32_t* object =
+    new std::int32_t{0}; // Compliant- allocating in start-up phase
+
+int main(int, char**)
+{
+    std::unique_ptr&lt;std::int32_t&gt; ptr =
+        std::make_unique&lt;std::int32_t&gt;(0); // Compliant
+    std::vector&lt;std::int32_t&gt; vec;         // Compliant
+    vec.reserve(10);                       // Compliant
+
+    std::int8_t code = AppMainLoop();
+    return code;
+}
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+<p>An architecture containing all the code files with dynamic memory usage
+during realtime should be set up. Alternatively, scan all selected files.</p>
+'''
+
+
+def define_options(check):
+    check.options().text('arch', 'Name of the architecture to scan:', 'arch_name')
+    check.options().checkbox('all', 'Scan all files', True)
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check_db(check, db, selectedFiles):
+    for file in db.ents():
+        for func_ref in file.filerefs('Define', 'Function'):
+            for call_ref in func_ref.ent().refs('Call', 'Unresolved Function'):
+                if call_ref.ent().longname() in {'operator new', 'operator delete', 'malloc', 'free'}:
+                    if call_ref.file().longname() in selectedFiles:
+                        check.violation(call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+
+def check(check):
+    db = check.db()
+    all_files = check.option().lookup('all')
+    selectedFiles = []
+    for f in check.files():
+        selectedFiles.append(f.longname())
+
+    # All files
+    if all_files:
+        check_db(check, db, selectedFiles)
+        return
+
+    # All files in one architecture
+    arch = check.option().lookup('arch')
+    arch_to_scan = db.lookup_arch(arch)
+    if not arch_to_scan:
+        return
+    for arch_db in db.root_archs():
+        if arch_db.longname() == arch_to_scan.longname():
+            check_db(check, arch_db, selectedFiles)

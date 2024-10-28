@@ -1,0 +1,140 @@
+import re
+
+
+ERR1 = 'Do not rely on side effects in unevaluated operands.'
+UNEVAL_OPS = "sizeof|typeid|noexcept|decltype|declval"
+
+
+# The ID for the check
+def id():
+    return ('EXP52-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP52-CPP': 'Published Standards/SEI Cert Standards/C++/Do not rely on side effects in unevaluated operands',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not rely on side effects in unevaluated operands'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not rely on side effects in unevaluated operands</p>
+<p><b>Risk Assessment</b></p>
+<p>If expressions that appear to produce side effects are an unevaluated operand, the results may be different than expected. Depending on how this result is used, it can lead to unintended program behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP52-CPP.+Do+not+rely+on+side+effects+in+unevaluated+operands</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;iostream&gt;
+void f() {
+  int a = 14;
+  int b = sizeof(a++);
+  std::cout &lt;&lt; a &lt;&lt; ", " &lt;&lt; b &lt;&lt; std::endl;
+}
+
+
+#include &lt;iostream&gt;
+ 
+void f() {
+  int i = 0;
+  decltype(i++) h = 12;
+  std::cout &lt;&lt; i;
+}
+</code></pre>
+"""
+
+def tags(id):
+    return {
+        'EXP52-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define, Declare", "Function"):
+        if func_ref.ent().parent() and func_ref.ent().parent().kind().check("Template"):
+            continue
+
+        func_contents = func_ref.ent().contents()
+
+        if re.search(rf"{UNEVAL_OPS}(\(|<)", func_contents):
+            lex = lexer.lexeme(func_ref.line(), func_ref.column())
+            on_uneval_ops = False
+            on_body = 0
+            on_param = 0
+
+            if func_ref.kind().check("Declare"):
+                while lex.text() != ";":
+                    if on_uneval_ops:
+                        on_uneval_ops, on_param = check_uneval_op(
+                            lex, on_param, check)
+                    elif re.search(UNEVAL_OPS, lex.text()) and lex.next(ignore_whitespace=True).text() in "(<":
+                        on_uneval_ops = True
+
+                    lex = lex.next(ignore_whitespace=True)
+            else:
+                while lex:
+                    if on_uneval_ops:
+                        on_uneval_ops, on_param = check_uneval_op(
+                            lex, on_param, check)
+                    elif lex.text() == "{":
+                        on_body += 1
+                    elif lex.text() == "}":
+                        on_body -= 1
+
+                        if not on_body:
+                            break
+                    elif re.search(UNEVAL_OPS, lex.text()) and lex.next(ignore_whitespace=True).text() in "(<":
+                        on_uneval_ops = True
+
+                    lex = lex.next(ignore_whitespace=True)
+
+
+def check_uneval_op(lex, op, check):
+    if lex.text() in "(<":
+        op += 1
+    elif lex.text() in ")>":
+        op -= 1
+
+        if not op:
+            return False, op
+    elif lex.ent():
+        for mod_ref in lex.ent().refs("Modifyby"):
+            if (mod_ref.line() == lex.line_begin()) and (mod_ref.column() == lex.column_begin()):
+                check.violation(mod_ref.scope(), mod_ref.file(),
+                                mod_ref.line(), mod_ref.column(), ERR1)
+
+    return True, op

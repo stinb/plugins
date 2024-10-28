@@ -1,0 +1,240 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-11-28
+
+
+import re
+
+from Modules import findClose, lexemeBeforeLexeme, lexemeBetweenNodes
+from Modules import refBetweenNodes
+
+
+ERR1 = 'Value is relied on after this move'
+ERR2 = 'Value is relied on in next iteration after this move'
+
+
+def ids():
+    return ('EXP63-CPP', 'CPP_E033')
+
+
+def name(id):
+    return {
+        'EXP63-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Do not rely on the value of a moved-from object''',
+        'CPP_E033': '''All Checks/Language Specific/C and C++/Expressions/\
+Do not rely on the value of a moved-from object''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'EXP63-CPP': [
+            'Expressions',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'CPP_E033': [
+            'Expressions',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Do not rely on the value of a moved-from object</p>
+
+<p><b>Risk Assessment</b></p>
+<p>The state of a moved-from object is generally valid, but unspecified.
+Relying on unspecified values can lead to abnormal program termination as well
+as data integrity violations.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP63-CPP.+Do+not+rely+on+the+value+of+a+moved-from+object'>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP63-CPP.+Do+not+rely+on+the+value+of+a+moved-from+object</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+void g(std::string v) {
+std::cout &lt; v &lt; std::endl;
+}
+
+void f() {
+std::string s;
+for (unsigned i = 0; i &lt; 10; ++i) {
+    s.append(1, static_cast&lt;char&gt;('0' + i));
+    g(std::move(s));
+}
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This check does not see if the return value of std::remove is properly
+utilized. It simply checks whether or not it is discarded. </p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for call in file.filerefs('Call', 'Function'):
+        longname = call.ent().longname()
+        if re.search(r'^std::move(_if_noexcept)?$', longname) or re.search(r'^std::__1::move(_if_noexcept)?$', longname):
+            checkMove(check, file, call)
+        elif re.search(r'^std::remove(_if)?$', longname) or re.search(r'^std::__1::remove(_if)?$', longname):
+            checkRemove(check, file, call)
+
+
+def checkMove(check, file, call):
+    # Stop if no variable found in std::move arguments
+    lex = getVarInArgs(file, call)
+    if not lex:
+        return
+    var = lex.ent()
+
+    # Stop if there are no references to the object after the move
+    error = refsChronologicallyAfterLexeme(call.scope(), file, lex)
+    if not error:
+        return
+
+    check.violation(var, file, call.line(), call.column(), error)
+
+
+def checkRemove(check, file, call):
+    # Stop if the value is used or we assume it's used
+    if removeValueUsed(check, file, call):
+        return
+
+    # Optionally get the variable that is being removed
+    var = None
+    lex = file.lexer().lexeme(call.line(), call.column())
+    while lex and lex.text() not in {')', ','}:
+        ent = lex.ent()
+        if ent and ent.kind().check('Object, Parameter'):
+            var = ent
+            break
+        lex = lex.next(True, True)
+
+    check.violation(var, file, call.line(), call.column(), ERR1)
+
+
+def removeValueUsed(check, file, call):
+    usingTexts = {'=', '('}
+
+    # Match remove or assume valid
+    lex = file.lexer(False).lexeme(call.line(), call.column())
+    if not lex or lex.text() != 'remove':
+        return True
+
+    # Assume valid if no lexeme, otherwise it should be :: or in usingTexts
+    lex = lex.previous(True, True)
+    if not lex:
+        return True
+    if lex.text() != '::' and lex.text() not in usingTexts:
+        return False
+
+    # Assume valid if no lexeme, otherwise it should be std
+    lex = lex.previous(True, True)
+    if not lex:
+        return True
+    if lex.text() != 'std':
+        return False
+
+    # Assume valid if no lexeme, otherwise it should be in usingTexts
+    lex = lex.previous(True, True)
+    if not lex:
+        return True
+    if lex.text() not in usingTexts:
+        return False
+
+    return True
+
+
+def getVarInArgs(file, call):
+    # Match: move
+    lex = file.lexer().lexeme(call.line(), call.column())
+    if not lex or lex.text() != call.ent().name():
+        return
+
+    # Match: (
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '(':
+        return
+    lexOpen = lex
+
+    # Match: )
+    lex = findClose(lex)
+    if not lex:
+        return
+
+    # Match: last entity in parentheses as a variable
+    while lex and lexemeBeforeLexeme(lexOpen, lex):
+        var = lex.ent()
+        if var:
+            if var.kind().check('Object, Parameter'):
+                return lex
+            else:
+                return
+        lex = lex.previous(True, True)
+
+
+def refsChronologicallyAfterLexeme(scopeFunction, file, lex):
+    ent = lex.ent()
+    line, column = lex.line_begin(), lex.column_begin()
+
+    # Easy case: global variable
+    if ent.kind().check('Global'):
+        return ERR1
+
+    # Medium case: any ref is in another file or after the move position
+    for ref in ent.refs():
+        if ref.file() != file:
+            return ERR1
+        if ref.line() > line or ref.line() == line and ref.column() > column:
+            return ERR1
+
+    # Assume valid if no variable definition
+    define = ent.refs('Definein')
+    if not define:
+        return
+    define = define[0]
+
+    # Assume valid if no CFG
+    cfg = scopeFunction.control_flow_graph()
+    if not cfg:
+        return
+
+    # Hard case: moved in a loop and created in above scope
+    for loop in cfg.nodes():
+        # Skip unless loop
+        if loop.kind() not in {'while-for', 'do-while'}:
+            continue
+        # Skip unless the move is in the loop
+        endLoop = loop.end_node()
+        if not lexemeBetweenNodes(loop, lex, endLoop):
+            continue
+        # Skip if the definition is also in the loop
+        if refBetweenNodes(loop, define, endLoop):
+            continue
+
+        return ERR2

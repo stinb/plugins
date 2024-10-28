@@ -1,0 +1,124 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/16/21
+import re
+
+ERR1 = 'Postpone the definition of %1 as long as possible (possibly to line %2).'
+
+# The ID for the check
+def id():
+    return 'EFFECTIVECPP_26'
+
+# The short name of the check
+def name():
+    return "Published Standards\\Effective C++ (3rd Edition) Scott Meyers\\26. Postpone variable definitions as long as possible"
+
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_26': [
+            'Language: C',
+            'Language: C++',
+            'Standard: Effective C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Postpone variable definitions as long as possible. It increases program clarity
+and imporves program efficiency."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>Whenever you define a variable of a type with a constructor or
+destructor, you incur the cost of construction when control reaches
+the variable’s definition, and you incur the cost of destruction when
+the variable goes out of scope. There’s a cost associated with unused
+variables, so you want to avoid them whenever you can.
+You’re probably thinking that you never define unused variables, but
+you may need to think again. Consider the following function, which
+returns an encrypted version of a password, provided the password is
+long enough. If the password is too short, the function throws an
+exception of type logic_error, which is defined in the standard C++
+library (see Item 54):</p>
+<pre><code language="C++">    // this function defines the variable "encrypted" too soon
+    std::string encryptPassword(const std::string& password)
+    {
+      using namespace std;
+      string encrypted;
+      if (password.length() &lt; MinimumPasswordLength) {
+        throw logic_error("Password is too short");
+      }
+      ...                 // do whatever is necessary to place an
+                          // encrypted version of password in encrypted
+      return encrypted;
+    }
+</code></pre>
+<p>The object encrypted isn’t completely unused in this function, but it’s
+unused if an exception is thrown. That is, you’ll pay for the construction
+and destruction of encrypted even if encryptPassword throws an exception.
+As a result, you’re better off postponing encrypted’s definition until you
+know you’ll need it:</p>
+<pre><code language="C++">    // this function postpones encrypted’s definition until it’s truly necessary
+    std::string encryptPassword(const std::string& password)
+    {
+      using namespace std;
+      if (password.length() &lt; MinimumPasswordLength) {
+        throw logic_error("Password is too short");
+      }
+      string encrypted;
+      ...               // do whatever is necessary to place an
+                        // encrypted version of password in encrypted
+      return encrypted;
+    }
+</code></pre>
+<p>This code still isn’t as tight as it might be, because encrypted is defined
+without any initialization arguments. That means its default constructor will
+be used. In many cases, the first thing you’ll do to an object is give it
+some value, often via an assignment. Item 4 explains why default-constructing
+an object and then assigning to it is less efficient than initializing it
+with the value you really want it to have. That analysis applies here, too.
+</p>
+<p>A preferable approach is to initialize encrypted with password, thus
+skipping the pointless and potentially expensive default construction:</p>
+<pre><code language="C++">    // finally, the best way to define and initialize encrypted
+    std::string encryptPassword(const std::string& password)
+    {
+      ...                           // import std and check length
+      string encrypted(password);   // define and initialize via copy
+                                    // constructor
+      encrypt(encrypted);
+      return encrypted;
+    }
+</code></pre>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    refs = file.filerefs('Define, Declare', 'Object', True)
+
+    for ref in refs:
+        ent = ref.ent()
+        entRefs = ent.refs()
+        line = None
+        count = 0
+        for entRef in entRefs:
+            if re.search(r'Define|Declare|Init', str(entRef.kind())):
+                continue
+            if line == None or entRef.line() < line:
+                line = entRef.line()
+
+        if line and (line - ref.line()) > 2:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().longname(), line - 1)

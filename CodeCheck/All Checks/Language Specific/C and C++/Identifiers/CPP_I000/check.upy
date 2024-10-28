@@ -1,0 +1,108 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 03-06-2024
+
+import re
+
+ERR1 = "The class, union or enum name '%1', has been reused"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA08_2-10-4', 'CPP_I000')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA08_2-10-4': 'Published Standards/MISRA-C++ 2008/2-10-4 A class, union or enum name (including qualification, if any) shall be a unique identifier',
+        'CPP_I000': 'All Checks/Language Specific/C and C++/Identifiers/A class, union or enum name (including qualification, if any) shall be a unique identifier',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_2-10-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Identifiers',
+        ],
+        'CPP_I000': [
+            'Language: C',
+            'Language: C++',
+            'Identifiers',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+Reusing a <i>class</i>, <i>union</i> or <i>enum</i> name, either as another type or for any other purpose, may lead to
+developer confusion.</p>
+<p>
+The <i>class</i>, <i>union</i> or <i>enum</i> name shall not be duplicated anywhere in the project, even if the
+declarations are identical.</p>
+<p>
+This rule is not violated when the definition is made in a <i>header file</i>, and that <i>header file</i> is
+included in multiple source files.</p>
+<p><b>Example</b>
+<pre><code language="C++">
+void f1 ( )
+{
+class TYPE { };
+}
+void f2 ( )
+{
+float32_t TYPE; // Non-compliant
+}
+</code></pre></p>
+"""
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.option().checkbox('skipTypedefs', 'Ignore typedefs (unchecking may introduce false positives)', True)
+
+
+def check(check, file):
+    skipTypedefs = check.option().lookup('skipTypedefs')
+
+    # pull up cache - if not populated, fill with class, union, and enum names from entire db - if already populated, do nothing and move on with check
+    cache = check.cache()
+    if cache.is_empty():
+        entities = check.db().ents("c enum ~unresolved ~undefined, c union ~unresolved ~undefined, c class ~unresolved ~undefined")
+        for ent in entities:
+            name = ent.longname()
+            ent_id = ent.id()
+            cache.insert(ent_id, name)
+
+    # in this file, check all non-class/union/enum entity definitions one by one and check their identifier against the entire cache
+    if skipTypedefs:
+        def_refs = file.filerefs("define", "~enum ~union ~class ~typedef ~unresolved ~undefined ~unknown", True)
+    else:
+        def_refs = file.filerefs("define", "~enum ~union ~class ~unresolved ~undefined ~unknown", True)
+
+    for def_ref in def_refs:
+        ent = def_ref.ent()
+        ent_name = ent.longname()
+        ent_id_2 = ent.id()
+        value = cache.value(ent_name)
+
+        # check if the entity identifier is found in the cache
+        if cache.value(ent_name) and ent_name != "[unnamed]":
+            check.violation(ent, file, def_ref.line(), def_ref.column(), ERR1, ent_name)

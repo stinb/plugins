@@ -1,0 +1,110 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 05-19-2021
+
+import re
+
+ERR1 = 'Parameter list was changed when overriding method %1'
+
+def ids():
+    return ('CPP_F055')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_F055':  "All Checks/Language Specific/C and C++/Functions/The default parameter list, when redeclaring or overriding methods, should be kept constant"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_F055': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>When redeclaring or overriding methods, the default
+parameter list should be kept constant. <i>An overridden virtual
+function should have the same default parameter values as
+defined in the base class to prevent an unexpected default value
+being passed into the overridden function.</i></p>
+<pre><code language="C++">class Base
+{
+    public:
+        virtual void goodExample( int param = 0 );
+        virtual void badExample( int param = 0 );
+};
+class Derived : public Base
+{
+    public:
+        virtual void goodExample( int param = 0 );
+        virtual void badExample( int param = 10 );
+};
+void foo( Derived& derivedObj )
+{
+    Base& baseObj = derivedObj;
+    // Acceptable, both statements call Derived::goodExample with a = 0.
+
+    baseObj.goodExample();
+    derivedObj.goodExample();
+    // Unacceptable, the first statement calls Derived::badExample with a = 0,
+    // the second statement calls Derived::badExample with a = 10, and may produce
+    // unexpected results.
+
+    baseObj.badExample();
+    derivedObj.badExample();
+}
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Overrides', 'Member Function')
+
+    for ref in refs:
+        declRef = ref.ent().ref('Declare')
+        if not declRef:
+            declRef = ref.ent().ref('Define')
+        if not declRef:
+            continue
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(declRef.line(), declRef.column())
+        parameters1 = gatherParameters(lexeme)
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        parameters2 = gatherParameters(lexeme)
+        
+        ok = all(parameter in parameters1 for parameter in parameters2) and all(parameter in parameters2 for parameter in parameters1)
+
+        if not ok:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+
+
+def gatherParameters(lexeme):
+    while lexeme and lexeme.text() != '(':
+        lexeme = lexeme.next(ignore_comments=True, ignore_whitespace=True)
+    parameter = ''
+    parameterList = []
+    while lexeme and lexeme.next(ignore_comments=True, ignore_whitespace=True) and lexeme.next(ignore_comments=True, ignore_whitespace=True).text() != ')':
+        lexeme = lexeme.next(ignore_comments=True, ignore_whitespace=True)
+        if lexeme.text() == ',':
+            parameterList.append(parameter)
+            parameter = ''
+        else:
+            parameter = parameter + lexeme.text()
+
+    parameterList.append(parameter)
+
+
+    return parameterList

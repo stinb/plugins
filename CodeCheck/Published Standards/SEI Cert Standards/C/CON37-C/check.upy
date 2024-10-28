@@ -1,0 +1,113 @@
+import re
+
+
+ERR1 = 'Do not call signal() in a multithreaded program.'
+
+
+# The ID for the check
+def id():
+    return ('CON37-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON37-C': 'Published Standards/SEI Cert Standards/C/Do not call signal() in a multithreaded program',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'CON37-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P6',
+            'Level: L2',
+            'Threads',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not call signal() in a multithreaded program'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not call signal() in a multithreaded program</p>
+<p><b>Risk Assessment</b></p>
+<p>Mixing signals and threads causes undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/CON37-C.+Do+not+call+signal%28%29+in+a+multithreaded+program</i></p>
+<p><b>Exceptions</b></p>
+<p><i>CON37-C-EX1: Implementations such as POSIX that provide defined behavior when multithreaded programs use custom signal handlers are exempt from this rule [IEEE Std 1003.1-2013].</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;signal.h&gt;
+#include &lt;stddef.h&gt;
+#include &lt;threads.h&gt;
+
+volatile sig_atomic_t flag = 0;
+
+void handler(int signum) {
+  flag = 1;
+}
+
+/* Runs until user sends SIGUSR1 */
+int func(void *data) {
+  while (!flag) {
+    /* ... */
+  }
+  return 0;
+}
+
+int main(void) {
+  signal(SIGUSR1, handler); /* Undefined behavior */
+  thrd_t tid;
+
+  if (thrd_success != thrd_create(&tid, func, NULL)) {
+    /* Handle error */
+  }
+  /* ... */
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"#include <signal.h>", file.contents()):
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        signal_calls = []
+        thread_created = False
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == "signal":
+                signal_calls.append(call_ref)
+            elif call_ref.ent().name() in {"thrd_create", "pthread_create"}:
+                thread_created = True
+
+        if thread_created and signal_calls:
+            for signal_call in signal_calls:
+                check.violation(signal_call.ent(), file,
+                                signal_call.line(), signal_call.column(), ERR1)

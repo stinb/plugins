@@ -1,0 +1,170 @@
+ERR1 = 'Reset strings on fgets() or fgetws() failure.'
+
+
+# The ID for the check
+def id():
+    return ('FIO40-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO40-C': 'Published Standards/SEI Cert Standards/C/Reset strings on fgets() or fgetws() failure',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO40-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Reset strings on fgets() or fgetws() failure'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Reset strings on fgets() or fgetws() failure</p>
+<p><b>Risk Assessment</b></p>
+<p>Making invalid assumptions about the contents of an array modified by fgets() or fgetws() can result in undefined behavior and abnormal program termination.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO40-C.+Reset+strings+on+fgets%28%29++or+fgetws%28%29+failure</i></p>
+<p><b>Exceptions</b></p>
+<p><i>FIO40-C-EX1: If the string goes out of scope immediately following the call to fgets() or fgetws() or is not referenced in the case of a failure, it need not be reset.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+enum { BUFFER_SIZE = 1024 };
+void func(FILE *file) {
+  char buf[BUFFER_SIZE];
+
+  if (fgets(buf, sizeof(buf), file) == NULL) {
+    /* Set error flag and continue */
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def is_compliant(lex):
+    on_set = False
+    set_val = ""
+
+    while lex and lex.text() != ";":
+        if lex.text() == "=":
+            on_set = True
+        elif on_set:
+            set_val += lex.text()
+
+        lex = lex.next(ignore_whitespace=True)
+
+    if set_val and "\\0" in set_val:
+        return True, lex
+
+    return False, lex
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in {"fgets", "fgetws"}:
+                lexes = lexer.lexemes(call_ref.line(), call_ref.line())
+                on_call = False
+                on_param = 0
+                on_if = False
+                check_failure = False
+                str_ent = None
+                param_ctr = 0
+
+                for lex in lexes:
+                    if lex.ent() and (lex.ent().id() == call_ref.ent().id()):
+                        on_call = True
+                    elif on_call and (lex.text() == "("):
+                        on_param += 1
+                    elif on_call and (lex.text() == ")"):
+                        on_param -= 1
+
+                        if not on_param:
+                            on_call = False
+                    elif on_param and (lex.text() == ","):
+                        param_ctr += 1
+                    elif on_param and (param_ctr == 0) and lex.ent() and (lex.token() == "Identifier"):
+                        str_ent = lex.ent()
+                    elif (lex.text() == "if") and (lex.token() == "Keyword"):
+                        on_if = True
+                    elif on_if and (lex.text() == "NULL") and (lex.token() == "Identifier"):
+                        check_failure = True
+
+                if check_failure:
+                    compliant = False
+
+                    lex = lexes[-1].next(ignore_whitespace=True)
+                    on_scope = 0
+                    str_on_set = False
+
+                    if lex.text() == "{":
+                        while lex:
+                            if lex.text() == "{":
+                                on_scope += 1
+                            elif lex.text() == "}":
+                                on_scope -= 1
+
+                                if not on_scope:
+                                    break
+                            elif lex.ent() and (lex.ent().id() == str_ent.id()) and lex.ref().kind().check("Setby"):
+                                str_on_set = True
+                            elif str_on_set:
+                                str_on_set = False
+                                compliant, lex = is_compliant(lex)
+
+                            lex = lex.next(
+                                ignore_whitespace=True, ignore_comments=True)
+
+                    else:
+                        lexes = lexer.lexemes(
+                            lex.line_begin(), lex.line_begin())
+
+                        for lex in lexes:
+                            if lex.ent() and (lex.ent().id() == str_ent.id()) and lex.ref().kind().check("Setby"):
+                                str_on_set = True
+                            elif str_on_set:
+                                str_on_set = False
+                                compliant, lex = is_compliant(lex)
+
+                            lex = lex.next(
+                                ignore_whitespace=True, ignore_comments=True)
+
+                    if not compliant:
+                        check.violation(call_ref.ent(), call_ref.file(
+                        ), call_ref.line(), call_ref.column(), ERR1)

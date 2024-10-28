@@ -1,0 +1,885 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-06-28
+
+
+import re
+
+from Modules import findClose
+from Modules import refBetweenNodes
+
+
+ERR1 = 'Loop does not have a trivial fixed limit with a known value'
+ERR2 = 'Infinite loop has an end point'
+
+ANY = 1
+
+COMP_OP = {'<', '<=', '>', '>=', '!=', '==', '<=>'}
+ITER_OP = {'++', '--', '=', '+=', '-='}
+
+INT_TYPES = {'short', 'short int', 'signed short', 'signed short int',
+'unsigned short int', 'int', 'signed', 'signed int', 'unsigned', 'unsigned int',
+'long', 'long int', 'signed long', 'signed long int', 'unsigned long',
+'unsigned long int', 'long long', 'long long int', 'signed long long',
+'signed long long int', 'unsigned long long', 'unsigned long long int', 'int8_t',
+'int16_t', 'int32_t', 'int64_t', 'int_fast8_t', 'int_fast16_t', 'int_fast32_t',
+'int_fast64_t', 'int_least8_t', 'int_least16_t', 'int_least32_t',
+'int_least64_t', 'intmax_t', 'intptr_t', 'uint8_t', 'uint16_t', 'uint32_t',
+'uint64_t', 'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t',
+'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t',
+'uintmax_t', 'uintptr_t'}
+
+INFINITE_WHILE = ('while', '(', {'1', 'true'}, ')')
+
+# NOTE: Don't add 'volatile', because volatile iterators/limits can be changed
+# by unpredictable things like hardware
+QUALIFIER = r'\b(const|restrict)\b'
+
+
+def ids():
+    return ('POWER_OF_TEN_02', 'CPP_CF007')
+
+
+def name(id):
+    return {
+        'POWER_OF_TEN_02': '''Published Standards/The Power of 10/\
+2 Loops with Fixed Limits''',
+        'CPP_CF007': '''All Checks/Language Specific/C and C++/Control Flow/\
+Loops with Fixed Limits''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POWER_OF_TEN_02': [
+            'Language: C',
+            'Language: C++',
+            'Standard: The Power of Ten',
+            'Control Flow'
+        ],
+        'CPP_CF007': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow'
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'POWER_OF_TEN_02': '''\
+<p>Give all loops a fixed upper bound. It must be trivially possible for a
+checking tool to prove statically that the loop cannot exceed a preset upper
+bound on the number of iterations. If a tool cannot prove the loop bound
+statically, the rule is considered violated.</p>
+
+<p><b>Rationale</b></p>
+
+<p>The absence of recursion and the presence of loop bounds prevents runaway
+code. This rule does not, of course, apply to iterations that are meant to be
+non-terminating - for example, in a process scheduler. In those special cases,
+the reverse rule is applied: It should be possible for a checking tool to prove
+statically that the iteration cannot terminate.</p>
+
+<p>One way to comply with this rule is to add an explicit upper bound to all
+loops that have a variable number of iterations - for example, code that
+traverses a linked list. When the loop exceeds the upper bound, it must trigger
+an assertion failure, and the function containing the failing iteration should
+return an error.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">void for_fixed_upper_bound()
+{
+  for (int i = 0; i &lt; 8; i++) { // Valid - fixed upper limit
+
+  }
+
+  int limit = 8;
+  for (int i = 0; i &lt; limit; i++) { // Valid - fixed upper limit
+
+  }
+
+  #define limit 8
+  for (int i = 0; i &lt; limit; i++) { // Valid - fixed upper limit
+
+  }
+  #undef limit
+}
+
+void for_modified_upper_bound()
+{
+  int limit = 8;
+  for (int i = 0; i &lt; limit; i++) { // Violation - limit modified
+    if (i == 4)
+      limit &lt;&lt;= 1;
+  }
+}
+
+void for_volatile_upper_bound()
+{
+  int volatile limit = 8;
+  for (int i = 0; i &lt; limit; i++) { // Violation - limit is volatile
+
+  }
+}
+
+void for_no_upper_bound()
+{
+  int limit = 8;
+  for (int i = 0; limit; i++) { // Violation - limit not used
+
+  }
+}
+
+void for_infinite()
+{
+  for (;;) { // Valid - allowed for the simple case (;;)
+
+  }
+}
+
+void for_infinite_break()
+{
+  for (;;) { // Violation - infinite loop has a break
+    if (0)
+      break;
+  }
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+
+<p>Tautological problems in loops, like
+<code>for (unsigned int i = 10; i >= 0; i--)</code>, are covered by Rule 10.</p>
+
+<p>To be even more strict, you may wish to disallow loops that are intentionally
+infinite and have no break/goto/return/exit. An option is provided for this.</p>
+''',
+        'CPP_CF007': '''
+<p>Give all loops a fixed upper bound. It must be trivially possible for a
+checking tool to prove statically that the loop cannot exceed a preset upper
+bound on the number of iterations. If a tool cannot prove the loop bound
+statically, the rule is considered violated.</p>
+
+<p><b>Rationale</b></p>
+
+<p>The absence of recursion and the presence of loop bounds prevents runaway
+code. This rule does not, of course, apply to iterations that are meant to be
+non-terminating - for example, in a process scheduler. In those special cases,
+the reverse rule is applied: It should be possible for a checking tool to prove
+statically that the iteration cannot terminate.</p>
+
+<p>One way to comply with this rule is to add an explicit upper bound to all
+loops that have a variable number of iterations - for example, code that
+traverses a linked list. When the loop exceeds the upper bound, it must trigger
+an assertion failure, and the function containing the failing iteration should
+return an error.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">void for_fixed_upper_bound()
+{
+  for (int i = 0; i &lt; 8; i++) { // Valid - fixed upper limit
+
+  }
+
+  int limit = 8;
+  for (int i = 0; i &lt; limit; i++) { // Valid - fixed upper limit
+
+  }
+
+  #define limit 8
+  for (int i = 0; i &lt; limit; i++) { // Valid - fixed upper limit
+
+  }
+  #undef limit
+}
+
+void for_modified_upper_bound()
+{
+  int limit = 8;
+  for (int i = 0; i &lt; limit; i++) { // Violation - limit modified
+    if (i == 4)
+      limit &lt;&lt;= 1;
+  }
+}
+
+void for_volatile_upper_bound()
+{
+  int volatile limit = 8;
+  for (int i = 0; i &lt; limit; i++) { // Violation - limit is volatile
+
+  }
+}
+
+void for_no_upper_bound()
+{
+  int limit = 8;
+  for (int i = 0; limit; i++) { // Violation - limit not used
+
+  }
+}
+
+void for_infinite()
+{
+  for (;;) { // Valid - allowed for the simple case (;;)
+
+  }
+}
+
+void for_infinite_break()
+{
+  for (;;) { // Violation - infinite loop has a break
+    if (0)
+      break;
+  }
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+
+<p>This rule originates from The Power of 10. Tautological problems in loops,
+like <code>for (unsigned int i = 10; i >= 0; i--)</code>, are covered by Rule
+10.</p>
+
+<p>To be even more strict, you may wish to disallow loops that are intentionally
+infinite and have no break/goto/return/exit. An option is provided for this.</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('allowInfinite', 'Allow infinite loops without a termination', True)
+
+
+def check(check, file):
+    allowInfinite = check.options().lookup('allowInfinite')
+
+    for ref in file.filerefs('Define', 'Function', True):
+        ent = ref.ent()
+
+        # Skip if no control flow graph
+        cfg = ent.control_flow_graph()
+        if not cfg:
+            continue
+
+        lexer = None
+
+        for node in cfg.nodes():
+            # Skip if not a loop
+            if node.kind() not in {'while-for', 'do-while'} or not node.line_begin():
+                continue
+
+            # Get type first lexeme of loop
+            if not lexer:
+                lexer = file.lexer(expand_macros=True)
+            lex = lexer.lexeme(node.line_begin(), node.column_begin())
+            while lex and lex.text() not in {'for', 'while', 'do'}:
+                lex = lex.previous(True, True)
+
+            # Skip if no first lexeme
+            if not lex:
+                continue
+
+            if lex.text() == 'for':
+                checkFor(check, ent, file, node, lexer, lex, allowInfinite)
+            elif lex.text() == 'while':
+                checkWhile(check, ent, file, node, lexer, lex, allowInfinite)
+            else:
+                checkDoWhile(check, ent, file, node, lexer, lex, allowInfinite)
+
+
+def checkFor(check, ent, file, node, lexer, lex, allowInfinite):
+    # Stop if the condition is a simple infinite loop
+    if doLexemesMatch(lex, ['for', '(', ';', ';', ')']):
+        if not allowInfinite:
+            check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+        elif hasLoopTermination(node):
+            check.violation(ent, file, node.line_begin(), node.column_begin(), ERR2)
+        return
+
+    # Get the iterator and limit
+    iterator = None
+    limit = None
+    semicolons = 0
+    openParenLex = None
+    while lex:
+        ent = lex.ent()
+        # Lexeme is (
+        if lex.text() == '(':
+            if not openParenLex:
+                openParenLex = lex
+        # Lexeme is ;
+        elif lex.text() == ';':
+            semicolons += 1
+            if semicolons > 2:
+                break
+        # Lexeme is {
+        elif lex.text() == '{':
+            if semicolons >= 2:
+                break
+        # Lexeme is variable or literal
+        elif ent or lex.token() in {'Literal', 'String'}:
+            kind = ent.kind() if ent else None
+            # Iterator initialization
+            if semicolons == 0:
+                # iterator is not defined, entity is var, and lexeme is assigned
+                if not iterator and ent and isAssigned(lex):
+                    iterator = lex
+            # Iterator comparison
+            elif semicolons == 1:
+                if iterator:
+                    # No entity or an iterator entity different from iterator
+                    isLimit = False
+                    if not ent:
+                        isLimit = True
+                    elif ent != iterator.ent() and ent.value():
+                        isLimit = True
+                    # Lexeme is compared with iterator with a comparison operator
+                    if isLimit and isComparedWithEnt(lex, iterator.ent()):
+                        limit = lex
+            # Iteration
+            elif semicolons == 2:
+                # iterator is defined and entity is iterator
+                if iterator and ent and ent == iterator.ent():
+                    # iterator is modified/assigned with an iteration operation
+                    if not isIterated(lex):
+                        iterator = None
+                    break
+
+        lex = lex.next(True, True)
+
+    # Stop and violation if iterator or limit not found
+    if not iterator or not limit:
+        check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+        return
+
+    # Stop and violation if iterator is volatile
+    iEnt = iterator.ent()
+    if isVolatile(iEnt):
+        check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+        return
+
+    # Stop if limit is an integer literal
+    limitEnt = limit.ent()
+    if not limitEnt:
+        return
+
+    # Stop and violation if limit is volatile
+    if isVolatile(limitEnt):
+        check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+        return
+
+    # Stop if parentheses not found
+    closeParenLex = findClose(openParenLex)
+    if not closeParenLex:
+        return
+
+    # Stop if curly braces not found
+    openBraceLex  = closeParenLex.next(True, True)
+    closeBraceLex = findClose(openBraceLex)
+    if not closeBraceLex or closeBraceLex.text() != '}':
+        return
+
+    # See if the limit is assigned in the loop
+    isLoopAssignedInLoop = False
+    for assignRef in limitEnt.refs('Assignby, Modifyby'):
+        # Skip if in another file
+        if assignRef.file() != file:
+            continue
+        # Skip if outside of the curly braces
+        if not refBetweenNodes(openBraceLex, assignRef, closeBraceLex):
+            continue
+        isLoopAssignedInLoop = True
+
+    # Stop and violation if limit is assigned in the loop
+    if isLoopAssignedInLoop:
+        check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+        return
+
+
+def checkWhile(check, ent, file, node, lexer, lex, allowInfinite):
+    checkWhileOrDoWhile(check, ent, file, node, lexer, lex, allowInfinite)
+
+
+def checkDoWhile(check, ent, file, node, lexer, doLex, allowInfinite):
+    # Get "while" lexeme
+    whileNode = node.end_node()
+    whileLex = lexer.lexeme(whileNode.line_begin(), whileNode.column_begin())
+    for iterator in range(2):
+        if not whileLex:
+            return
+        whileLex = whileLex.previous(True, True)
+
+    # Stop if "while" lexeme not found
+    if not whileLex or whileLex.text() != 'while':
+        return
+
+    checkWhileOrDoWhile(check, ent, file, node, lexer, whileLex, allowInfinite)
+
+
+# Check a 'while' or 'do-while' loop
+def checkWhileOrDoWhile(check, ent, file, node, lexer, whileLex, allowInfinite):
+    # Stop if the condition is a simple infinite loop
+    if doLexemesMatch(whileLex, INFINITE_WHILE):
+        if not allowInfinite:
+            check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+        elif hasLoopTermination(node):
+            check.violation(ent, file, node.line_begin(), node.column_begin(), ERR2)
+        return
+
+    # Get the first node and end node
+    firstNode = node.children()[0]
+    endNode   = node.end_node()
+
+    # Get the 'if' nodes that have break statements
+    ifNodes = []
+    for ifNode in getDirectChildNodesOfKind(node, {'if'}):
+        if getDirectChildNodesOfKind(ifNode, {'break', 'return'}, True):
+            ifNodes.append(ifNode)
+
+    # Get the 'passive' nodes
+    passiveNodes = getDirectChildNodesOfKind(node, {'passive'})
+
+    # Get ents that could be an iterator
+    possibleIterators = []
+    for modifyRef in ent.refs('Modify, Assign', 'Local Object'):
+        modifyEnt = modifyRef.ent()
+
+        # Skip if it's not known to be an integer
+        if not isInteger(modifyRef.ent()):
+            continue
+
+        # Skip if the ref is outside of the loop
+        if not refBetweenNodesInclusive(firstNode, modifyRef, endNode, file):
+            continue
+
+        # See if the ref is in a passive node in the loop
+        inPassiveNode = False
+        for passiveNode in passiveNodes:
+            if refBetweenNodesInclusive(passiveNode, modifyRef, passiveNode, file):
+                inPassiveNode = True
+                break
+
+        # Skip if the ref is not in a passive node in the loop
+        if not inPassiveNode:
+            continue
+
+        # Skip if no lexeme
+        lex = lexer.lexeme(modifyRef.line(), modifyRef.column())
+        if not lex:
+            continue
+
+        # See if it's simple addition/subtraction
+        name = modifyEnt.name()
+        r = lex.next(True, True)
+        l = lex.previous(True, True)
+        simpleAddition = False
+        if r:
+            if doLexemesMatch(r, [{'++', '--'}, ';']) \
+            or doLexemesMatch(r, ['=', name, {'+', '-'}, ANY, ';']):
+                simpleAddition = True
+        if l and not simpleAddition:
+            if doLexemesMatch(l, [{'++', '--'}, name, ';']):
+                simpleAddition = True
+
+        # Skip if the modification isn't simple addition/subtraction
+        if not simpleAddition:
+            continue
+
+        # A possible iterator was found
+        possibleIterators.append(modifyEnt)
+
+    # For each possible iterator, see if it's compared with a limit
+    for possibleIterator in possibleIterators:
+        for useRef in possibleIterator.refs('Useby', 'Function'):
+
+            # Skip if the ref is outside of the loop and loop condition
+            if not refBetweenNodesInclusive(node, useRef, endNode, file):
+                continue
+
+            # Skip if no lexeme
+            lex = lexer.lexeme(useRef.line(), useRef.column())
+            if not lex:
+                continue
+
+            # See if there's a simple comparison in the 'while' condition
+            simpleComparison = False
+            name = possibleIterator.name()
+            # Get the 'while' lexeme
+            newWhileLex = lex
+            for i in range(5):
+                if not newWhileLex or newWhileLex.text() == 'while':
+                    break
+                newWhileLex = newWhileLex.previous(True, True)
+            newWhileLex = newWhileLex if newWhileLex.text() == 'while' else None
+            # See if the lexemes match
+            if doLexemesMatch(newWhileLex, ['while', '(', name, COMP_OP, ANY, ')']):
+                simpleComparison = True
+                limitLex = getNthLexemeNext(lex, 2)
+            elif doLexemesMatch(newWhileLex, ['while', '(', name, COMP_OP, '-', ANY, ')']):
+                simpleComparison = True
+                limitLex = getNthLexemeNext(lex, 3)
+            elif doLexemesMatch(newWhileLex, ['while', '(', ANY, COMP_OP, name, ')']):
+                simpleComparison = True
+                limitLex = getNthLexemePrevious(lex, 2)
+            elif doLexemesMatch(newWhileLex, ['while', '(', '-', ANY, COMP_OP, name, ')']):
+                simpleComparison = True
+                limitLex = getNthLexemePrevious(lex, 2)
+            # See if the 'while' lexeme is the condition of this loop
+            if simpleComparison:
+                if newWhileLex.line_begin()   != whileLex.line_begin() \
+                or newWhileLex.column_begin() != whileLex.column_begin() \
+                or newWhileLex.line_end()     != whileLex.line_end() \
+                or newWhileLex.column_end()   != whileLex.column_end():
+                    simpleComparison = False
+
+            # See if there's a simple comparison in an 'if' condition
+            if not simpleComparison:
+                newIfLex = lex
+                # Get the 'if' lexeme
+                for i in range(5):
+                    if not newIfLex or newIfLex.text() == 'if':
+                        break
+                    newIfLex = newIfLex.previous(True, True)
+                newIfLex = newIfLex if newIfLex.text() == 'if' else None
+                # See if the lexemes match
+                if doLexemesMatch(newIfLex, ['if', '(', name, COMP_OP, ANY, ')']):
+                    simpleComparison = True
+                    limitLex = getNthLexemeNext(lex, 2)
+                elif doLexemesMatch(newIfLex, ['if', '(', name, COMP_OP, '-', ANY, ')']):
+                    simpleComparison = True
+                    limitLex = getNthLexemeNext(lex, 3)
+                elif doLexemesMatch(newIfLex, ['if', '(', ANY, COMP_OP, name, ')']):
+                    simpleComparison = True
+                    limitLex = getNthLexemePrevious(lex, 2)
+                elif doLexemesMatch(newIfLex, ['if', '(', '-', ANY, COMP_OP, name, ')']):
+                    simpleComparison = True
+                    limitLex = getNthLexemePrevious(lex, 2)
+                # See if this 'if' node will certainly happen
+                if simpleComparison:
+                    simpleComparison = False
+                    for ifNode in ifNodes:
+                        childNode = ifNode.children()[0]
+                        if refBetweenNodesInclusive(ifNode, useRef, childNode, file):
+                            simpleComparison = True
+                            break
+
+            # Skip if the use isn't a simple comparison
+            if not simpleComparison:
+                continue
+
+            # Skip if there's a limit entity and it's modified
+            limitEnt = limitLex.ent()
+            if limitEnt:
+                if isVolatile(limitEnt):
+                    continue
+                limitRefModified = False
+                for limitRef in limitEnt.refs('Setby ~Init, Modifyby'):
+                    if refBetweenNodesInclusive(firstNode, limitRef, endNode, file):
+                        limitRefModified = True
+                if limitRefModified:
+                    continue
+
+            # Stop looking at this loop, since there is a valid limit
+            return
+
+    check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+
+
+# Get nodes that are direct children with a given kind
+def getDirectChildNodesOfKind(node, kinds, stopEarly=False):
+    matchingNodes = []
+
+    # Stop if there are no children
+    if not node.children():
+        return matchingNodes
+
+    # Get 'continue' nodes, which shouldn't occur before any matching nodes
+    continueNodes = getContinueNodes(node)
+
+    # Limits
+    endNode = node.end_node()
+    visitedNodes = set([node, endNode])
+
+    # Start at first child
+    node = node.children()[0]
+
+    while node and node != endNode and node.kind() != 'goto':
+        # Stop if already visited
+        if node in visitedNodes:
+            break
+        visitedNodes.add(node)
+
+        # See if there is any preceding 'continue'
+        if node.line_begin():
+            afterContinue = False
+            for continueNode in continueNodes:
+                if continueNode.line_begin() < node.line_begin() \
+                or continueNode.line_begin() == node.line_begin() \
+                and continueNode.column_begin() < node.column_begin():
+                    afterContinue = True
+                    break
+            # Stop if
+            if afterContinue:
+                break
+
+        # Append matching node
+        if node.kind() in kinds:
+            if stopEarly:
+                return True
+            else:
+                matchingNodes.append(node)
+
+        # Iterate
+        children = node.children()
+        if len(children) == 2:
+            node = children[1]
+        elif node.end_node():
+            node = node.end_node()
+        elif children:
+            node = children[0]
+        # Stop at the 'end' node of a function
+        else:
+            break
+
+    return matchingNodes
+
+
+def getContinueNodes(loopNode):
+    continueNodes = []
+
+    # Unchecked stack and seen set
+    unchecked = [loopNode]
+    seen = set([loopNode.end_node()])
+    if len(loopNode.children()) > 1:
+        seen.add(loopNode.children()[1])
+
+    # Find a goto/return
+    while unchecked:
+        currentNode = unchecked.pop()
+
+        # 'continue' node found
+        if currentNode.kind() == 'continue':
+            continueNodes.append(currentNode)
+
+        # Append unseen children, not traversing into goto/switch/loops
+        for childNode in currentNode.children():
+            if childNode in seen or childNode.kind() == 'goto':
+                continue
+            elif childNode.kind() in {'switch', 'while-for', 'do-while'}:
+                nextNodeToCheck = childNode.end_node()
+            else:
+                nextNodeToCheck = childNode
+                unchecked.append(nextNodeToCheck)
+                seen.add(nextNodeToCheck)
+
+    return continueNodes
+
+
+# Whether an entity is type is known to be an integer
+def isVolatile(ent):
+    return ent.type() and re.search(r'\bvolatile\b', ent.type())
+
+
+# Whether an entity is type is known to be an integer
+def isInteger(ent):
+    return ent.type() and re.sub(QUALIFIER, '', ent.type()).strip() in INT_TYPES
+
+
+# Go previous n times to get a lexeme
+def getNthLexemePrevious(lex, n):
+    if lex:
+        for i in range(n):
+            lex = lex.previous(True, True)
+            if not lex:
+                return
+        return lex
+
+
+# Go previous n times to get a lexeme
+def getNthLexemeNext(lex, n):
+    if lex:
+        for i in range(n):
+            lex = lex.next(True, True)
+            if not lex:
+                return
+        return lex
+
+
+# Whether the lexeme text matches
+def doLexemesMatch(lex, textArray):
+    for textSetOrAny in textArray:
+        matched = False
+        if isinstance(textSetOrAny, str):
+            matched = lex and lex.text() == textSetOrAny
+        elif isinstance(textSetOrAny, set):
+            matched = lex and lex.text() in textSetOrAny
+        elif textSetOrAny == ANY:
+            matched = True
+        if not lex or not matched:
+            return False
+        lex = lex.next(True, True)
+    return True if lex else False
+
+
+# Whether the loop terminates
+def hasLoopTermination(loopNode):
+    return hasLoopTerminationBreak(loopNode) \
+    or hasLoopTerminationGotoOrReturn(loopNode)
+
+
+# Whether the loop terminates because of a break
+def hasLoopTerminationBreak(loopNode):
+    # Unchecked stack and seen set
+    unchecked = [loopNode]
+    seen = set([loopNode.end_node()])
+    if len(loopNode.children()) > 1:
+        seen.add(loopNode.children()[1])
+
+    # Find a goto/return
+    while unchecked:
+        currentNode = unchecked.pop()
+
+        # Termination node found
+        if currentNode.kind() == 'break':
+            return True
+
+        # Append unseen children, not traversing into goto/switch/loops
+        for childNode in currentNode.children():
+            if childNode in seen or childNode.kind() == 'goto':
+                continue
+            elif childNode.kind() in {'switch', 'while-for', 'do-while'}:
+                nextNodeToCheck = childNode.end_node()
+            else:
+                nextNodeToCheck = childNode
+                unchecked.append(nextNodeToCheck)
+                seen.add(nextNodeToCheck)
+
+    return False
+
+
+# Whether the loop terminates because of a goto/return
+def hasLoopTerminationGotoOrReturn(loopNode):
+    # Unchecked stack and seen set
+    unchecked = [loopNode]
+    seen = set([loopNode.end_node()])
+    if len(loopNode.children()) > 1:
+        seen.add(loopNode.children()[1])
+
+    # Find a goto/return
+    while unchecked:
+        currentNode = unchecked.pop()
+
+        # Termination node found
+        if currentNode.kind() in {'goto', 'return'}:
+            return True
+
+        # Append unseen children
+        for childNode in currentNode.children():
+            if childNode in seen:
+                continue
+            unchecked.append(childNode)
+            seen.add(childNode)
+
+    return False
+
+
+# Whether the given lexeme is assigned with =
+def isAssigned(originalLex):
+
+    # Go right
+
+    # Match an assignment operator
+    lex = originalLex.next(True, True)
+    if not lex or lex.text() != '=':
+        return False
+
+    # Go left
+
+    # Match anything but a address-of/dereference operator
+    lex = originalLex.previous(True, True)
+    if not lex or lex.text() in {'&', '*'}:
+        return False
+
+    return True
+
+
+# Whether the given lexeme is compared with the given entity
+def isComparedWithEnt(originalLex, ent):
+    # Go right
+
+    # Match a semicolon, not a comma
+    lex = originalLex.next(True, True)
+    if not lex or lex.text() != ';':
+        return False
+
+    # Go left
+
+    # Optionally match a negation operator
+    lex = originalLex.previous(True, True)
+    if lex and lex.text() == '-':
+        # Match a comparison operator
+        lex = lex.previous(True, True)
+        if not lex or lex.text() not in COMP_OP:
+            return False
+    # Otherwise, match a comparison operator
+    elif not lex or lex.text() not in COMP_OP:
+        return False
+
+    # Match the expected entity
+    lex = lex.previous(True, True)
+    if not lex or not lex.ent() or lex.ent() != ent:
+        return False
+
+    # Match the start of the expression
+    lex = lex.previous(True, True)
+    if not lex or lex.text() not in {',', ';', '('}:
+        return False
+
+    return True
+
+
+# Whether the lexeme is iterated
+def isIterated(lex):
+    l = lex.previous(True, True)
+    r = lex.next(True, True)
+    return l and l.text() in ITER_OP or r and r.text() in ITER_OP
+
+
+# Whether a reference is between 2 nodes, inclusively
+def refBetweenNodesInclusive(node1, ref, node2, file):
+    # Make sure both nodes have position information
+    if node1.line_begin() == None or node2.line_begin() == None:
+        return False
+
+    # Make sure reference exists in the correct file
+    if ref.file().uniquename() != file.uniquename():
+        return False
+
+    # Make sure the order is node1, ref
+    if ref.line() < node1.line_begin():
+        return False
+    if ref.line() == node1.line_begin() and ref.column() < node1.column_begin():
+        return False
+
+    # Make sure the order is ref, node2
+    if ref.line() > node2.line_begin():
+        return False
+    if ref.line() == node2.line_begin() and ref.column() > node2.column_begin():
+        return False
+
+    return True

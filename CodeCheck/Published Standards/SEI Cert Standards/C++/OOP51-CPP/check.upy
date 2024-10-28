@@ -1,0 +1,178 @@
+ERR1 = 'Do not slice derived objects.'
+
+
+# The ID for the check
+def id():
+    return ('OOP51-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'OOP51-CPP': 'Published Standards/SEI Cert Standards/C++/Do not slice derived objects',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not slice derived objects'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not slice derived objects</p>
+<p><b>Risk Assessment</b></p>
+<p>Slicing results in information loss, which could lead to abnormal program execution or denial-of-service attacks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/OOP51-CPP.+Do+not+slice+derived+objects</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;iostream&gt;
+#include &lt;string&gt;
+ 
+class Employee {
+  std::string name;
+   
+protected:
+  virtual void print(std::ostream &os) const {
+    os &lt;&lt; "Employee: " &lt;&lt; get_name() &lt;&lt; std::endl;     
+  }
+   
+public:
+  Employee(const std::string &name) : name(name) {}
+  const std::string &get_name() const { return name; }
+  friend std::ostream &operator&lt;&lt;(std::ostream &os, const Employee &e) {
+    e.print(os);
+    return os;
+  }
+};
+  
+class Manager : public Employee {
+  Employee assistant;
+   
+protected:
+  void print(std::ostream &os) const override {
+    os &lt;&lt; "Manager: " &lt;&lt; get_name() &lt;&lt; std::endl;
+    os &lt;&lt; "Assistant: " &lt;&lt; std::endl &lt;&lt; "\t" &lt;&lt; get_assistant() &lt;&lt; std::endl;     
+  }
+   
+public:
+  Manager(const std::string &name, const Employee &assistant) : Employee(name), assistant(assistant) {}
+  const Employee &get_assistant() const { return assistant; }
+};
+ 
+void f(Employee e) {
+  std::cout &lt;&lt; e;   
+}
+ 
+int main() {
+  Employee coder("Joe Smith");
+  Employee typist("Bill Jones");
+  Manager designer("Jane Doe", typist);
+   
+  f(coder);
+  f(typist);
+  f(designer);
+}
+
+
+#include &lt;iostream&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+  
+void f(const std::vector&lt;Employee&gt; &v) {
+  for (const auto &e : v) {
+    std::cout &lt;&lt; e;
+  }
+}
+ 
+int main() {
+  Employee typist("Joe Smith");
+  std::vector&lt;Employee&gt; v{typist, Employee("Bill Jones"), Manager("Jane Doe", typist)};
+  f(v);
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'OOP51-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Virtual Functions',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object"):
+        typed_ref = obj_ref.ent().ref("Typed")
+
+        if typed_ref and typed_ref.ent().ref("Base"):
+            base_ref = typed_ref.ent().ref("Base")
+
+            for assign_ref in obj_ref.ent().refs("Assignby Value"):
+                ent_type = assign_ref.ent().type()
+
+                if ent_type and (base_ref.ent().name() == ent_type):
+                    check.violation(assign_ref.scope(), assign_ref.file(),
+                                    assign_ref.line(), assign_ref.column(), ERR1)
+
+    for call_ref in file.filerefs("Call", "Unresolved Public Member Function"):
+        if call_ref.ent().name() == "vector":
+            lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+            lex_next = lex.next(ignore_whitespace=True)
+
+            if (lex_next.text() != "{") or (lex_next.text() == "=" and lex_next.next(ignore_whitespace=True).text() != "{"):
+                continue
+
+            if lex.ent():
+                type_arg = lex.ent().ref("Typed TemplateArgument")
+
+            if not type_arg or (type_arg.ent() and not type_arg.ent().kind().check("Class, Struct")):
+                continue
+
+            vector_type = type_arg.ent()
+            on_param = 0
+
+            while lex:
+                if lex.text() == "{":
+                    on_param += 1
+                elif lex.text() == "}":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and (lex.ent()):
+                    ent_type = lex.ent().type()
+
+                    if ent_type and (vector_type.name() != ent_type):
+                        check.violation(
+                            lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                    elif lex.ent().kind().check("Member Function"):
+                        if lex.ent().parent() and (lex.ent().parent().name() == lex.text()):
+                            for derive_ref in vector_type.refs("Derive"):
+                                if derive_ref.ent().name() == lex.text():
+                                    check.violation(lex.ent(), file,
+                                                    lex.line_begin(), lex.column_begin(), ERR1)
+
+                lex = lex.next(ignore_whitespace=True)

@@ -1,0 +1,280 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-08-26
+
+
+import re
+from Modules import findClose, javaAncestorOfLongnameExists
+
+
+ERR1 = 'I/O not closed at termination via program'
+ERR2 = 'Input not closed at termination via input'
+
+
+translationUnitCache = dict()
+
+
+def ids():
+    return ('FIO14-J', 'JAVA_FIO14')
+
+
+def name(id):
+    return {
+        'FIO14-J': '''Published Standards/SEI Cert Standards/Java/\
+Perform proper cleanup at program termination''',
+        'JAVA_FIO14': '''All Checks/Language Specific/Java/Input Output/\
+Perform proper cleanup at program termination''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'FIO14-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+        ],
+        'JAVA_FIO14': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'FIO14-J': '''\
+<p>
+Perform proper cleanup at program termination
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to perform necessary cleanup at program termination may leave the system
+in an inconsistent state.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/FIO14-J.+Perform+proper+cleanup+at+program+termination
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class CreateFile {
+  public static void main(String[] args)
+                          throws FileNotFoundException {
+    final PrintStream out =
+        new PrintStream(new BufferedOutputStream(
+                        new FileOutputStream("foo.txt")));
+    out.println("hello");
+    Runtime.getRuntime().exit(1);
+  }
+}
+</code></pre>
+''',
+        'JAVA_FIO14': '''\
+<p>
+Perform proper cleanup at program termination
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to perform necessary cleanup at program termination may leave the system
+in an inconsistent state.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/FIO14-J.+Perform+proper+cleanup+at+program+termination
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class CreateFile {
+  public static void main(String[] args)
+                          throws FileNotFoundException {
+    final PrintStream out =
+        new PrintStream(new BufferedOutputStream(
+                        new FileOutputStream("foo.txt")));
+    out.println("hello");
+    Runtime.getRuntime().exit(1);
+  }
+}
+</code></pre>
+''',
+    }[id]
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def refBetweenPositions(ref, positions):
+    startLine   = positions[0][0]
+    startColumn = positions[0][1]
+    endLine     = positions[1][0]
+    endColumn   = positions[1][1]
+
+    if ref.line() < startLine or ref.line() > endLine:
+        return False
+
+    if ref.line() == startLine and ref.column() < startColumn:
+        return False
+
+    if ref.line() == endLine and ref.column() > endColumn:
+        return False
+
+    return True
+
+
+def getShutdownHooks(shutdownHooks, scope):
+    shutdownHooks[scope] = []
+
+    for callRef in scope.refs('Call', 'Public Method'):
+        if callRef.ent().longname() != 'java.lang.Runtime.addShutdownHook':
+            continue
+
+        lexer = callRef.file().lexer(False)
+        start = lexer.lexeme(callRef.line(), callRef.column()).next(True, True)
+        end = findClose(start)
+        positions = ((start.line_begin(), start.column_begin()), (end.line_begin(), end.column_begin()))
+        shutdownHooks[scope].append(positions)
+
+
+def getCallsToClose(closes, scope):
+    closes[scope] = set()
+
+    for callRef in scope.refs('Call', 'Public Method'):
+        if callRef.ent().name() != 'close':
+            continue
+
+        key = f'{callRef.line()}:{callRef.column()}'
+        closes[scope].add(key)
+
+
+def refInShutdownHooks(shutdownHooks, ref, scope):
+    if scope not in shutdownHooks:
+        getShutdownHooks(shutdownHooks, scope)
+    for positions in shutdownHooks[scope]:
+        if refBetweenPositions(ref, positions):
+            return True
+    return False
+
+
+def refBeforeClose(closes, ref):
+    ent = ref.ent()
+
+    if ent not in closes:
+        getCallsToClose(closes, ent)
+
+    key0 = f'{ref.line()}:{ref.column() + len(ent.name())}'
+    key1 = f'{ref.line()}:{ref.column() + len(ent.name()) + 1}'
+
+    return key0 in closes[ent] or key1 in closes[ent]
+
+
+def check(check, file):
+    halt = r'^java\.lang\.Runtime\.(exit|halt)$'
+    io   = r'^java\.io\.(In|Out)putStream$'
+
+    shutdownHooks = dict() # { ent: [ ((line, column), (line, column)), ... ], ... }
+    closes        = dict() # { ent: { 'line:column', ... }, ... }
+
+    # Termination via program
+    for exitRef in file.filerefs('Call', 'Public Method'):
+        exitEnt = exitRef.ent()
+        method = exitRef.scope()
+
+        # Skip everything but java.lang.Runtime.exit or java.lang.Runtime.halt objects
+        if not re.match(halt, exitEnt.longname()):
+            continue
+
+        # Skip unless there's an input/output object
+        for ioEnt in method.ents('Set', 'Variable, Parameter'):
+            ioType = ioEnt.ref('Typed')
+            if not ioType:
+                continue
+            ioType = ioType.ent()
+            if not javaAncestorOfLongnameExists(ioType, io, translationUnitCache):
+                continue
+
+        # Get calls to "close" in the scope of this method
+        getCallsToClose(closes, method)
+
+        # Skip if the i/o is closed before the exit
+        closed = False
+        for useRef in ioEnt.refs('Useby Deref Partial'):
+            useEnt = useRef.ent()
+
+            # Skip if the exit isn't "exit" and the scope of this usage isn't the method
+            if useEnt != method and exitEnt.name() != 'exit':
+                continue
+
+            # Skip if the scope of this usage isn't in the method or "addShutdownHook"
+            if useEnt != method and not refInShutdownHooks(shutdownHooks, useRef, method):
+                continue
+
+            # Stop if there is a call to "close" adjacent to this usage
+            if refBeforeClose(closes, useRef):
+                closed = True
+                break
+        if closed:
+            continue
+
+        check.violation(exitEnt, file, exitRef.line(), exitRef.column(), ERR1)
+
+
+    # Termination via input - typically the user
+    for ioRef in file.filerefs('Set', 'Variable, Parameter'):
+        ioEnt = ioRef.ent()
+        method = ioRef.scope()
+
+        # Skip everything but InputStream objects
+        if ioEnt.type() != 'InputStream':
+            continue
+
+        # Skip if it's assigned to null
+        lexer = file.lexer(False)
+        lex = lexer.lexeme(ioRef.line(), ioRef.column())
+        lex = lex.next(True, True)
+        if lex and lex.text() == '=':
+            lex = lex.next(True, True)
+            if lex and lex.text() == 'null':
+                continue
+
+        # Skip if the input is closed in "addShutdownHook"
+        closed = False
+        for useRef in ioEnt.refs('Useby Deref Partial'):
+            useEnt = useRef.ent()
+
+            # Skip if the scope of this usage is the method
+            if useEnt == method:
+                continue
+
+            # Skip if the scope of this usage isn't in "addShutdownHook"
+            if not refInShutdownHooks(shutdownHooks, useRef, method):
+                continue
+
+            # Stop if there is a call to "close" adjacent to this usage
+            if refBeforeClose(closes, useRef):
+                closed = True
+                break
+        if closed:
+            continue
+
+        check.violation(ioEnt, file, ioRef.line(), ioRef.column(), ERR2)

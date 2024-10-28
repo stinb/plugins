@@ -1,0 +1,173 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 10-16-14
+
+
+# Boiler Plate code
+use base ( 'Understand::Codecheck' );
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => '"U" or "u" suffix not applied to integer constant %1';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA04_10.6";}
+
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA-C 2004\\10.6 A U suffix shall be applied to all constants of unsigned type";}
+
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2004',
+    'Category: required',
+    'Variables',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { 
+  return "10.6 (Required) A U suffix shall be applied to all constants of unsigned type.";
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { 
+  return <<"END_DESC"
+
+<p><b>Rationale</b></p>
+The type of an integer constant is a potential source of confusion, because it is dependent on a 
+complex combination of factors including:</p>
+
+<p>
+• The magnitude of the constant<br>
+• The <b>implemented</b> sizes of the integer types<br>
+• The presence of any suffixes<br>
+• The number base in which the value is expressed (i.e. decimal, octal or hexadecimal).
+</p>
+
+<p>
+For example, the integer constant "40000" is of type <i>int</i> in a 32-bit environment but of type <i>long</i>
+in a 16-bit environment. The value 0x8000 is of type <i>unsigned int</i> in a 16-bit environment, but of 
+type (<i>signed</i>) int in a 32-bit environment.
+</p>
+
+<p>
+Note the following:<br/>
+
+• Any value with a U suffix is of <i>unsigned</i> type<br>
+• An unsuffixed decimal value less than 2^31 is of <i>signed</i> type<br>
+But:<br>
+• An unsuffixed hexadecimal value greater than or equal to 2^15 may be of <i>signed</i> or <i>unsigned</i>
+type<br>
+• An unsuffixed decimal value greater than or equal to 2^31 may be of signed or unsigned type
+</p>
+
+<p>
+Signedness of constants should be explicit. Consistent signedness is an important principle in 
+constructing well formed expressions. If a constant is of an <i>unsigned type</i>, it is helpful to avoid 
+ambiguity by applying a U suffix. When applied to larger values, the suffix may be redundant 
+(in the sense that it does not influence the type of the constant); however its presence is a valuable 
+contribution towards clarity.
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->integer( 'int', 'Integer size in bits', 16 );
+  $check->option->integer( 'long', 'Long size in bits', 32 );
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check( 'c file' );
+
+  my $int = 2 ** $check->option->lookup( 'int' );
+  my $long = 2 ** $check->option->lookup( 'long' );
+
+  my $twoToTheThirtyOne = 2 ** 31;
+  my $twoToTheFifteen = 2 ** 15;
+  
+  my $lexer = $file->lexer( 0 );
+  my @lexemes = $lexer->lexemes if $lexer;
+  
+  foreach my $lexeme ( @lexemes ) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+
+    next unless $lexeme->token eq 'Literal';
+    next unless $lexeme->text =~ /(^0[0-8]+$)|(^0x[0-9a-fA-F]+$)|(^[1-9][0-9]*$)/;
+
+    my $ok = 0;
+    my $val = 0;
+    if ( $lexeme->text =~ /(^0[0-8]+$)|(^0x[0-9a-fA-F]+$)/ ) {
+      $val = oct ( $lexeme->text );
+    } else {
+      $val = $lexeme->text;
+    }
+
+
+    if ( $lexeme->text =~ /^0[0-8]+$/ ) {
+
+      $ok = 1 if $val < $int / 2;
+
+    } elsif ( $lexeme->text =~ /^0x[0-9a-fA-F]+$/ ) {
+
+      $ok = 1 if $val < $int / 2 or $val < $twoToTheFifteen;
+
+    } elsif ( $lexeme->text =~ /^[1-9][0-9]*$/ ) {
+
+      $ok = 1 if $val < $int / 2 or $val < $twoToTheThirtyOne;
+
+    } else {
+
+      # Should not happen
+      ######
+      $check->violation( 0, $file, $lexeme->line_begin, $lexeme->column_begin, 'Error reading ' . $lexeme->text );
+      ######
+
+    }
+
+    $check->violation( 0, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1, $lexeme->text ) unless $ok;
+
+  }
+}

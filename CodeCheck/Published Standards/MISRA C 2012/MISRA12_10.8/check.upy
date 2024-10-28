@@ -1,0 +1,151 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9/30/24
+
+import re
+import Modules
+
+ERR1 = 'The value of the expression was assigned to a wider or different essential type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_10.8', 'MISRA23_10.8', 'CPP_E078')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_10.8': 'Published Standards/MISRA C 2012/' + """\
+10.8 The value of a composite expression shall not be cast to a different
+essential type category or a wider essential type""",
+        'MISRA23_10.8': 'Published Standards/MISRA C 2023/' + """\
+10.8 The value of a composite expression shall not be cast to a different
+essential type category or a wider essential type""",
+        'CPP_E078': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+The value of a composite expression shall not be cast to a different essential
+type category or a wider essential type""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_10.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_10.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E078': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Rationale</b></p>
+<p>The rationale is described in the introduction on composite operators and
+expressions (see Section8.1 0.3).</p>
+<p>Casting to a wider type is not permitted as the result may vary between
+implementations. Consider the following:</p>
+<pre><code language="C++">( uint32_t ) ( u16a + u16b );</code></pre>
+<p>On a 16-bit machine the addition will be performed in 16 bits with the result
+wrapping modulo-2 before it is cast to 32 bits. However, on a 32-bit machine the
+addition will take place in 32 bits and would preserve high-order bits that
+would have been lost on a 16-bit machine.</p>
+<p>Casting to a narrower type with the same essential type category is
+acceptable as the explicit truncation of the result always leads to the same
+loss of information.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">( uint16_t ) ( u32a + u32b ) /* Compliant */
+( uint16_t ) ( s32a + s32b ) /* Non -compliant - different essential
+* type category */
+( uint16_t ) s32a /* Compliant - s32a is not composite */
+( uint32_t ) ( u16a + u16b ) /* Non-compliant - cast to wider
+* essential type */</pre></code>
+"""
+    return {
+        'MISRA12_10.8': desc,
+        'MISRA23_10.8': desc,
+        'CPP_E078': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # List of types to check
+    types = r'int|short|long|float|double'
+    lexer = None
+    # Go through each object ref
+    refs = file.filerefs("Cast Use", "Type")
+    for ref in refs:
+        found = False
+        # Skip if not in types
+        if not re.search(types, str(ref.ent().name())):
+            continue
+
+        # Grab size of type and skip if not found
+        size0 = re.sub(r'\[\d*\]', '', str(ref.ent().name()))
+        size0 = re.sub(r'[^\d]', '', size0)
+        type = re.search(r'(int|short|long|float|double)', str(ref.ent().name())).group()
+        if size0 == '':
+            continue
+        # Go through each set
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        if lexeme:
+            if lexeme.ent() and lexeme.ent().kind().check('Macro'):
+                continue
+
+            lexeme = lexeme.next(True, True)
+        ok = True
+        while lexeme and not re.match(r';|{|}', lexeme.text()):
+            # Find ents that have a smaller size than the defined ref
+            if lexeme.ent():
+                if type not in str(lexeme.ent().type()):
+                    nextLex = lexeme.next(True, True)
+                    if not (nextLex and nextLex.text() == ';'):
+                        ok = False
+                        break
+                size1 = re.sub(r'\[\d*\]', '', str(lexeme.ent().type()))
+                size1 = re.sub(r'[^\d]', '', size1)
+                if size1 == '':
+                    break
+                # Check if cast to wider type
+                if size1 < size0:
+                    nextLex = lexeme.next(True, True)
+                    if not (nextLex and nextLex.text() == ';'):
+                        ok = False
+                        break
+
+            lexeme = lexeme.next(True, True)
+
+        if not ok:
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+            continue
+

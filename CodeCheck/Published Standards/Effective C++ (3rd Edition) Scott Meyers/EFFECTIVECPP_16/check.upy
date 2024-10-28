@@ -1,0 +1,135 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/8/21
+import re
+
+ERR1 = 'The same form was not used for corresponding uses of new and delete.'
+
+# The ID for the check
+def id():
+    return 'EFFECTIVECPP_16'
+
+# The short name of the check
+def name():
+    return "Published Standards\\Effective C++ (3rd Edition) Scott Meyers\\16. Use the same form in corresponding uses of new and delete"
+
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_16': [
+            'Language: C',
+            'Language: C++',
+            'Standard: Effective C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+When an object is created with the keyword 'new' the same form shall be used
+when using the keyword delete for said object."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>What's wrong with this picture?</p>
+<pre><code language="C++">    std::string *stringArray = new std::string[100];
+    ...
+    delete stringArray;</code></pre>
+<p>Everything appears to be in order. The new is matched with a delete. Still,
+something is quite wrong. The program's behavior is undefined. At the very
+least, 99 of the 100 string objects pointed to by stringArray are unlikely to
+be properly destroyed, because their destructors will probably never be called.
+</p>
+<p>When you use delete on a pointer, the only way for delete to know whether
+the array size information is there is for you to tell it. If you use brackets
+in your use of delete, delete assumes an array is pointed to. Otherwise, it
+assumes that a single object is pointed to:</p>
+<pre><code language="C++">   std::string *stringPtr1 = new std::string;
+    std::string *stringPtr2 = new std::string[100];
+    ...
+    delete stringPtr1;              // delete an object
+    delete [] stringPtr2;           // delete an array of objects</code></pre>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+
+    # Obtain all object refs
+    refs = file.filerefs('define', 'object', True)
+    for ref in refs:
+        value = str(ref.ent().value())
+        # Check for the 'new' keyword and if it is an array
+        if re.search(r'new', value):
+            if re.search(r'\[\w*\]', value):
+
+                # Look for useby refs since there is a useby ref when delete is called on an array
+                entRefs = ref.ent().refs('Useby')
+                # Check all useby refs
+                for entRef in entRefs:
+
+                    # Create lexer if not yet created
+                    if lexer == None:
+                        lexer = file.lexer()
+                        if not lexer:
+                            return
+                    lexeme = lexer.lexeme(entRef.line(), entRef.column())
+
+                    # Look for delete keyword
+                    while lexeme and not re.search(r';|}|{|delete', lexeme.text()):
+                        lexeme = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+                    if lexeme and lexeme.text() == 'delete':
+                        close = False
+                        open = False
+                        # Look for an open and close square bracket
+                        while lexeme and not re.search(r';|}|{', lexeme.text()) and not lexeme.ent():
+                            if lexeme.text() == '[':
+                                open = True
+                            if lexeme.text() == ']':
+                                close = True
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                        # Throw violation if missing an opening or closing square bracket with the keyword delete for this object
+                        if lexeme.ent() and not(open and close):
+                            check.violation(ref.ent(), file, entRef.line(), entRef.column(), ERR1)
+
+            # If not an array
+            else:
+                # Create lexer if not yet created
+                if lexer == None:
+                    lexer = file.lexer()
+                    if not lexer:
+                        return
+                lexeme = lexer.first()
+                while lexeme:
+                    # Look for keyword delete
+                    if lexeme.text() == 'delete':
+                        close = False
+                        open = False
+                        # Search for opening or closing square bracket
+                        while lexeme and not re.search(r';|{|}', lexeme.text()) and not lexeme.ent():
+                            if lexeme.text() == '[':
+                                open = True
+                            if lexeme.text() == ']':
+                                close = True
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                        # Throw violation if a opening or closing square bracket was used with the keyword delete for this object
+                        if lexeme.ent() and (open or close) and lexeme.ent().longname() == ref.ent().longname():
+                            check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+

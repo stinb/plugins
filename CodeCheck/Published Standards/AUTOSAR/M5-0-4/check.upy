@@ -1,0 +1,181 @@
+import re
+
+ERR1 = 'Implicit integral conversion changed the signedness of the underlying type'
+
+# The ID for the check
+def ids():
+    return ('M5-0-4', 'MISRA08_5-0-4', 'CPP_T008')
+
+# The short name of the check
+def name(id):
+    return {
+        'M5-0-4': 'Published Standards/AUTOSAR/An implicit integral conversion shall not change the signedness of the underlying type',
+        'MISRA08_5-0-4': 'Published Standards/MISRA-C++ 2008/5-0-4 An implicit integral conversion shall not change the signedness of the underlying type',
+        'CPP_T008': 'All Checks/Language Specific/C and C++/Types/An implicit integral conversion shall not change the signedness of the underlying type',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'M5-0-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T008': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'An implicit integral conversion shall not change the signedness of the underlying type.'
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Some signed to unsigned conversions may lead to implementation-defined behaviour. This behaviour may not be consistent with developer expectations.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">void f()
+{
+    int8_t s8;
+    uint8_t u8;
+    s8 = u8;                                  // Non-compliant
+    u8 = s8 + u8;                             // Non-compliant
+    u8 = static_cast&lt; uint8_t &gt; ( s8 ) + u8;  // Compliant
+}
+</code></pre>
+"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# get the if signed or unsigned variable
+def get_signedness(val):
+    if re.match(r"unsigned", str(val)):
+        return 0
+    else:
+        return 1
+
+# check if integral type
+def check_integral(ent):
+    utype = ent.freetext("UnderlyingType")
+
+    if utype and re.search("int|char", utype):
+        return True
+    
+    return False
+
+# base type retrieval function
+def get_base_type(ent):
+    return ent.freetext("UnderlyingType")
+
+
+# skip the whole entities in function parameter definition
+def traverse_function(lex):
+    while lex:
+        if lex.token() == "Punctuation" and lex.text() == ")":
+            return lex
+        elif lex.token() == "Punctuation" and lex.text() == "(":
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+            traverse_function(lex)
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    return lex
+
+# skip to the next object
+def traverse_casting(lex):
+    while lex:
+        if lex.ent() and lex.token() == "Identifier":
+            break
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    return lex
+
+# function to check if object is an index or not - left side
+def check_index_left(lex, start_lex):
+    while lex and lex.line_begin() == start_lex.line_begin():
+        if lex.token() == "Operator" and lex.text() == "[":
+            return lex
+        elif lex.token() == "Operator" and lex.text() == "]":
+            lex = lex.previous(ignore_whitespace=True, ignore_comments=True)
+            check_index_left(lex, start_lex)
+        lex = lex.previous(ignore_whitespace=True,ignore_comments=True)
+    return lex
+
+# function to check if object is an index or not - right side
+def check_index_right(lex):
+    while lex and lex.text() != ";":
+        if lex.token() == "Operator" and lex.text() == "]":
+            return lex
+        elif lex.token() == "Operator" and lex.text() == "[":
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+            check_index_right(lex)
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    return lex
+
+def check_entities(lex, base, check, file):
+    # traverse until end of statement (;)
+    start_lex = lex
+    while lex and lex.text() not in [";", "{", ","]:
+        if lex.ent() and lex.token() == "Identifier":
+            ent = lex.ent()
+            ent_type = get_base_type(ent)
+
+            # check if ent is an index or not
+            if lex.previous(ignore_whitespace=True,ignore_comments=True).text() == "[" or lex.next(ignore_whitespace=True,ignore_comments=True).text() == "]":
+                lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+            else:
+                if ent.kind().check("Macro,Function"):
+                    # travel the whole function call to avoid duplicate checking
+                    lex = traverse_function(lex)
+                    continue
+                elif ent.kind().check("Type"):
+                    # travel until the next object (object being used on cast command)
+                    lex = traverse_casting(lex.next(ignore_whitespace=True,ignore_comments=True))
+                    lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+                    continue
+                # main validation process
+                if get_signedness(ent_type) != get_signedness(base) and check_integral(ent):
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1)
+                    break
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    for ref in file.filerefs("Define","Object", True):
+        # getting base type
+        base = get_base_type(ref.ent())
+        # validate entities with unsigned or signed identifier
+        if re.match(r'unsigned|signed', str(base)) and ref.ent().refs("Setby") and check_integral(ref.ent()):
+            # specifically validate setby refs
+            for setby_ref in ref.ent().refs("Setby"):
+                if setby_ref.file() == file:
+                    lex = lexer.lexeme(setby_ref.line(), setby_ref.column())
+                    if lex.ent() and lex.ent().kind().check("~Macro"):
+                        # get to line and check each entities
+                        check_entities(lex.next(ignore_whitespace=True,ignore_comments=True), base, check, file)
+                    lex = None

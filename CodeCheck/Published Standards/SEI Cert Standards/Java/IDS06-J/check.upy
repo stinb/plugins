@@ -1,0 +1,126 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-15-2022
+
+import re
+import Modules
+
+ERR1 = "Unsanitized user input in format string"
+DEF_NAME = "Exclude unsanitized user input from format strings"
+
+# The ID for the check
+def ids():
+    return ('IDS06-J', 'JAVA_IDS06')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'IDS06-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_IDS06': "All Checks/Language Specific/Java/Input Validation and Data Sanitization/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'IDS06-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_IDS06': [
+            'Language: Java',
+            'Input Validation and Data Sanitization',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Exclude unsanitized user input from format strings</p>
+<p><b>Risk Assessment</b></p>
+<p>The java.io package includes a PrintStream class that has two equivalent
+formatting methods: format() and printf(). System.out and System.err are
+PrintStream objects, allowing PrintStream methods to be invoked on the standard
+output and error streams. The risks from using these methods are not as high as
+from using similar functions in C or C++  [Seacord 2013]. The standard library
+implementations throw an exception when any conversion argument fails to match
+the corresponding format specifier. Although throwing an exception helps
+mitigate against exploits, if untrusted data is incorporated into a format
+string, it can result in an information leak or allow a denial-of-service
+attack. Consequently, unsanitized input from an untrusted source must never be
+incorporated into format strings.</p>
+
+<p></p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/IDS06-J.+Exclude+unsanitize\
+d+user+input+from+format+strings</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Format {
+  static Calendar c = new GregorianCalendar(1995, GregorianCalendar.MAY, 23);
+  public static void main(String[] args) {
+    // args[0] should contain the credit card expiration date
+    // but might contain %1$tm, %1$te or %1$tY format specifiers
+    System.out.format(
+      args[0] + " did not match! HINT: It was issued on %1$terd of some month", c
+    );
+  }
+}</code></pre>
+<p><b>Developer's Note</b></p>
+<p>This CodeCheck will just check for the concatenation of a variable or object
+(e.g. args[0]) to a string literal</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Call', 'Public Method')
+
+    for ref in refs:
+        if re.match(r'format|printf', ref.ent().name()):
+
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+
+            # Check for various indicators in first argument of format()
+            if lexeme and re.match(r'format|printf', lexeme.text()):
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '(':
+                    inQuote = False
+                    quote = False
+                    var = False
+                    plus = False
+                    while lexeme and (lexeme.text() != ',' or inQuote):
+                        if re.match(r'\'|\"', lexeme.text()):
+                            inQuote = not inQuote
+                            quote = True
+
+                        elif lexeme.ent():
+                            var = True
+
+                        elif not inQuote and lexeme.text() == '+':
+                            plus = True
+
+                        lexeme = lexeme.next(True, True)
+
+                    if quote and var and plus:
+                        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

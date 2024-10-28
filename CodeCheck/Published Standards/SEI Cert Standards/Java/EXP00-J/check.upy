@@ -1,0 +1,138 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6-15-2022
+
+import re
+ERR1 = 'Value returned by method %1 was ignored.'
+
+DEF_NAME = "Do not ignore values returned by methods."
+
+# The ID for the check
+def ids():
+    return ('EXP00-J', 'JAVA_EXP00')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'EXP00-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_EXP00': "All Checks/Language Specific/Java/Expressions/" + DEF_NAME,
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'EXP00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_EXP00': [
+            'Language: Java',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Do not ignore values returned by methods</p>
+<p><b>Risk Assessment</b></p>
+<p>Methods can return values to communicate failure or success or to update
+local objects or fields. Security risks can arise when method return values are
+ignored or when the invoking method fails to take suitable action. Consequently,
+programs must not ignore method return values. When getter methods are named
+after an action, a programmer could fail to realize that a return value is
+expected. For example, the only purpose of the
+ProcessBuilder.redirectErrorStream() method is to report via return value
+whether the process builder successfully merged standard error and standard
+output. The method that actually performs redirection of the error stream is the
+overloaded single-argument method ProcessBuilder.redirectErrorStream(boolean).
+</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/EXP00-J.+Do+not+ignore+valu\
+es+returned+by+methods</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class Replace {
+  public static void main(String[] args) {
+    String original = "insecure";
+    original.replace('i', '9');
+    System.out.println(original);
+  }
+}
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Call', 'Method')
+    for ref in refs:
+        # Skip methods that return void
+        if ref.ent().type() == 'void':
+            continue
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        prevLex = lexeme
+
+        ok = False
+        close = False
+        # Look to see if return value was used
+        while prevLex and not re.match(r';|}|{', prevLex.text()):
+            if re.match(r'=|if|while|for|return', prevLex.text()):
+                ok = True
+                break
+            # Check to see if ref was parameter
+            if prevLex.text() == '(' and not close:
+                prevLex = prevLex.previous(True, True)
+                if prevLex and prevLex.ent() and re.search(r'method', (prevLex.ent().kindname()).lower()):
+                    ok = True
+                    break
+                else:
+                    continue
+
+            # Skip parenthesis
+            elif prevLex.text() == ')':
+                close = True
+                prevLex = findOpen(prevLex)
+
+            if prevLex:
+                prevLex = prevLex.previous(True, True)
+
+
+
+
+        # Throw violation if ok was not updated and prevLex still exists
+        if not ok and prevLex:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+
+
+# Find coresponding opening parenthesis
+def findOpen(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == '(' and count == 0):
+        if lexeme.text() == ')':
+            count += 1
+        lexeme = lexeme.previous(True, True)
+        if lexeme.text() == '(':
+            count -= 1
+

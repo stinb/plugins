@@ -1,0 +1,10 @@
+const long a = 0L;
+const long b = 0l; 				/* UndCC_Violation */
+const unsigned long c = 0Lu;
+const unsigned long d = 0lU; 	/* UndCC_Violation */
+const unsigned long e = 0ULL;
+const unsigned long f = 0Ull; 	/* UndCC_Violation */
+const long long g = 0LL;
+const long long h = 0ll; 		/* UndCC_Violation */
+const long double m = 1.2L;
+const long double n = 2.4l; 	/* UndCC_Violation */

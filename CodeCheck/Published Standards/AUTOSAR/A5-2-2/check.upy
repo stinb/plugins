@@ -1,0 +1,167 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-01-03
+
+
+import re
+
+
+ERR1 = 'C-style cast used on %1'
+
+
+def ids():
+    return ('A5-2-2', 'CPP_E031')
+
+
+def name(id):
+    return {
+        'A5-2-2': 'Published Standards/AUTOSAR/Traditional C-style casts shall not be used',
+        'CPP_E031': 'All Checks/Language Specific/C and C++/Expressions/Traditional C-style casts shall not be used',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A5-2-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E031': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+C-style casts are more dangerous than the C++ named conversion operators. The Cstyle casts are difficult to locate in large programs and the intent of the conversion is not explicit.
+</p>
+
+<p>
+Traditional C-style casts raise several concerns:<br>
+• C-style casts enable most any type to be converted to most any other type without any indication of the reason for the conversion<br>
+• C-style cast syntax is difficult to identify for both reviewers and tools. Consequently, both the location of conversion expressions as well as the subsequent analysis of the conversion rationale proves difficult for C-style casts
+</p>
+
+<p>
+Thus, C++ introduces casts (const_cast, dynamic_cast, reinterpret_cast, and static_cast) that address these problems. These casts are not only easy to identify, but they also explicitly communicate the developer's intent for applying a cast.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A5-2-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+class C
+{
+  public:
+    explicit C(std::int32_t) {}
+    virtual void Fn() noexcept {}
+};
+class D : public C
+{
+  public:
+    void Fn() noexcept override {}
+};
+class E
+{
+};
+std::int32_t G() noexcept
+{
+    return 7;
+}
+void F() noexcept(false)
+{
+    C a1 = C{10};       // Compliant
+    C* a2 = (C*)(&a1);  // Non-compliant
+    const C a3(5);
+    C* a4 = const_cast&lt;C*&gt;(&a3);       // Compliant - violates another rule
+    E* d1 = reinterpret_cast&lt;E*&gt;(a4);  // Compliant - violates another rule
+    D* d2 = dynamic_cast&lt;D*&gt;(a2);      // Compliant - violates another rule
+    std::int16_t x1 = 20;
+    std::int32_t x2 = static_cast&lt;std::int32_t&gt;(x1);  // Compliant
+    std::int32_t x3 = (std::int32_t)x1;               // Non-compliant
+    std::int32_t x4 = 10;
+    float f1 = static_cast&lt;float&gt;(x4);                // Compliant
+    float f2 = (float)x4;                             // Non-compliant
+    std::int32_t x5 = static_cast&lt;std::int32_t&gt;(f1);  // Compliant
+    std::int32_t x6 = (std::int32_t)f1;               // Non-compliant
+    (void)G();                                        // Non-compliant
+    static_cast&lt;void&gt;(G());                           // Compliant
+}
+</code></pre>
+
+<p><b>See also</b><br>
+• MISRA C++ 2008 [7]: 5-2-4 C-style casts (other than void casts) and functional notation casts (other than explicit constructor calls) shall not be used.<br>
+• JSF December 2005 [8]: AV Rule 185 C++ style casts (const_cast, reinterpret_cast, and static_cast) shall be used instead of the traditional C-style casts.
+</p>
+
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def isCast(lexeme):
+    # Parenthesis not preceded by a macro, function, or reserved word
+    if lexeme.text() == '(':
+        prev = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+        if prev.text() not in {'if', 'else', 'for', 'while', 'defined'} and prev.token() != 'Identifier':
+            prevEnt = prev.ent()
+            if not prevEnt or (prevEnt.kindname() != 'Macro' and 'Function' not in prevEnt.kindname()):
+                return True
+
+    return False
+
+
+def getCasted(lexeme):
+    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+    count = 1
+
+    # Go past the parentheses
+    while lexeme and count:
+        if lexeme.text() == '(':
+            count += 1
+        elif lexeme.text() == ')':
+            count -= 1
+        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+    # Get to the identifier
+    if lexeme and lexeme.text() == '(':
+        while lexeme and lexeme.token() not in {'Identifier', 'Literal', 'String'}:
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+    return lexeme
+
+
+def check(check, file):
+    lexer = file.lexer()
+    lexeme = lexer.first()
+
+    # Find all the casts
+    while lexeme:
+        if isCast(lexeme):
+            castedLexeme = getCasted(lexeme)
+            if castedLexeme:
+                castedEnt = castedLexeme.ent()
+                if castedEnt or castedLexeme.token() in {'Literal', 'String'}:
+                    check.violation(castedEnt, file, castedLexeme.line_begin(), castedLexeme.column_begin(), ERR1, castedLexeme.text())
+
+        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)

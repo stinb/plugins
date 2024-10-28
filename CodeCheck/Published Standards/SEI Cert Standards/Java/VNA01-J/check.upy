@@ -1,0 +1,140 @@
+import re
+
+
+ERR1 = 'Ensure visibility of shared references to immutable objects.'
+
+
+# The ID for the check
+def ids():
+    return ('VNA01-J', 'JAVA_VNA01')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'VNA01-J': 'Published Standards/SEI Cert Standards/Java/Ensure visibility of shared references to immutable objects',
+        'JAVA_VNA01': 'All Checks/Language Specific/Java/Visibility and Atomicity/Ensure visibility of shared references to immutable objects',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'VNA01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_VNA01': [
+            'Language: Java',
+            'Visibility and Atomicity',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure visibility of shared references to immutable objects'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure visibility of shared references to immutable objects</p>
+<p><b>Risk Assessment</b></p>
+<p>The incorrect assumption that classes that contain only references to immutable objects are themselves immutable can cause serious thread-safety issues.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/VNA01-J.+Ensure+visibility+of+shared+references+to+immutable+objects</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">// Immutable Helper
+public final class Helper {
+  private final int n;
+
+  public Helper(int n) {
+    this.n = n;
+  }
+  // ...
+}
+
+final class Foo {
+  private Helper helper;
+
+  public Helper getHelper() {
+    return helper;
+  }
+
+  public void setHelper(int num) {
+    helper = new Helper(num);
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class Type"):
+        for mem_ref in class_ref.ent().refs("Define", "Member Variable"):
+            mem_type = mem_ref.ent().type()
+
+            if mem_type and re.search(r"AtomicReference|volatile", mem_type):
+                continue
+
+            mem_ent, _ = get_ent_type(mem_ref.ent())
+
+            if mem_ent and mem_ent.kind().check("Class") and not mem_ent.refs("Define", "~Final Variable"):
+                for set_ref in mem_ref.ent().refs("Setby", "Method Member"):
+                    if (set_ref.ent().name() == class_ref.ent().name()) or (set_ref.ent().parent().id() != class_ref.ent().id()):
+                        continue
+
+                    compliant = False
+                    define_ref = set_ref.ent().ref("Definein")
+                    lex = lexer.lexeme(define_ref.line(), define_ref.column())
+
+                    while lex and (lex.line_begin() == define_ref.line()):
+                        if lex.text() == "synchronized" and lex.token() == "Keyword":
+                            compliant = True
+                            break
+
+                        lex = lex.previous(ignore_whitespace=True)
+
+                    if not compliant:
+                        check.violation(set_ref.scope(), file,
+                                        set_ref.line(), set_ref.column(), ERR1)

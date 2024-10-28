@@ -1,0 +1,182 @@
+import re
+
+
+ERR1 = '''The continue statement shall only be used within a well-formed for loop'''
+
+
+# The ID for the check
+def ids():
+    return ('M6-6-3', 'CPP_C044')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M6-6-3': 'Published Standards/AUTOSAR/Continue Statement Used in a not Well-formed For Loop',
+        'CPP_C044': 'All Checks/Language Specific/C and C++/Control Flow/Continue Statement Used in a not Well-formed For Loop',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'M6-6-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C044': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return '''The continue statement shall only be used within a well-formed for loop.'''
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>The continue statement shall only be used within a well-formed for loop.</p>
+<p><b>Rationale</b></p>
+<p>Over-use of the continue statement can lead to unnecessary complexity within the code. This
+complexity may impede effective testing as extra logic must be tested. The required testing may
+not be achievable due to control flow dependencies.</p>
+<p>A well-formed for loop is one which satisfies Rule 6-5-1 to Rule 6-5-6.</p>
+<p><b>Note</b></p>
+<p>In this checking, the basis of a well-formed for loop are the rules 6-5-1, 6-5-2, 6-5-5 and 6-5-6.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">void fn ( )
+{
+ for ( int32_t i = 0 ; i != 10; ++i )
+ {
+ if ( ( i % 2 ) == 0 )
+ {
+ continue; // Compliant
+ }
+ // ...
+ }
+ int32_t j = -1;
+ for ( int32_t i = 0 ; i != 10 && j != i; ++i )
+ {
+ if ( ( i % 2 ) == 0 )
+ {
+ continue; // Non-compliant - loop is not well-formed
+ }
+ // ...
+ ++j;
+ }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() == "for" and lex.token() == "Keyword":
+            on_condition = 0
+            on_body = 0
+            sc_count = 0
+            well_formed = True
+            correct_operand = True
+            continue_lexes = []
+            last_sc_lex = None
+            loop_counter = None
+            loop_control_variable = []
+
+            while lex:
+                lex = next_lex(lex)
+
+                if lex.text() == "(" and not on_body:
+                    on_condition += 1
+                elif lex.text() == ")" and not on_body:
+                    on_condition -= 1
+                    check_next_lex = next_lex(lex)
+
+                    if not on_condition and check_next_lex.text() != "{":
+                        break
+                elif lex.text() == ";" and on_condition:
+                    sc_count += 1
+                    last_sc_lex = lex
+                elif lex.text() == "{" and not on_condition:
+                    on_body += 1
+                elif lex.text() == "}" and not on_condition:
+                    on_body -= 1
+
+                    if not on_body:
+                        break
+                elif on_condition and sc_count == 0 and lex.ref() and lex.ref().kindname() == 'Define':
+                    if not loop_counter:
+                        loop_counter = lex.ent()
+
+                        if re.search(r"float|double", lex.ent().type()):
+                            well_formed = False
+                    else:
+                        well_formed = False
+                elif on_condition and loop_counter and lex.ref() and lex.ref().kindname() == 'Use' and lex.text() != loop_counter.name():
+                    loop_control_variable.append(lex.ent().id())
+                    if not re.search(r'bool', str(lex.ent().type())):
+                        well_formed = False
+
+                    if loop_counter and sc_count == 1 and loop_counter.id() == lex.ent().id():
+                        last_sc_lex = next_lex(last_sc_lex)
+                        while last_sc_lex and last_sc_lex.text() != ";":
+                            if last_sc_lex.text() not in {"<=", "<", ">" or ">="} and last_sc_lex.token() == "Operator":
+                                correct_operand = False
+
+                            last_sc_lex = next_lex(last_sc_lex)
+                elif on_condition and sc_count == 1 and lex.text() not in {"<=", "<", ">" or ">="} and lex.token() == "Operator":
+                    correct_operand = False
+                elif on_condition and sc_count == 2 and lex.ref() and loop_counter and lex.ent().id() == loop_counter.id() and lex.ref().kind().check("Modifyby"):
+                    while last_sc_lex and last_sc_lex.text() != ")":
+                        if last_sc_lex.text() not in {"++", "--"} and last_sc_lex.token() == "Operator":
+                            if not correct_operand:
+                                well_formed = False
+
+                        last_sc_lex = next_lex(last_sc_lex)
+                elif lex.text() == "continue" and lex.token() == "Keyword":
+                    continue_lexes.append(lex)
+                elif on_body and lex.ref() and lex.ref().kind().check("Setby") and loop_counter and loop_counter.id() == lex.ent().id():
+                    well_formed = False
+                elif lex.ref() and lex.ref().kind().check("Modifyby, Setby") and loop_counter and loop_counter.id() != lex.ent().id() and lex.ent().id() in loop_control_variable:
+                    well_formed = False
+
+            if continue_lexes and not well_formed:
+                for continue_lex in continue_lexes:
+                    check.violation(None, file, continue_lex.line_begin(),
+                                    continue_lex.column_begin(), ERR1)
+
+        lex = next_lex(lex)
+
+
+def next_lex(_lex):
+    return _lex.next(ignore_whitespace=True, ignore_comments=True)

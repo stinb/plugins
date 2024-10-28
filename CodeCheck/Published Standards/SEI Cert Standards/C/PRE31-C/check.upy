@@ -1,0 +1,210 @@
+ERR1 = 'Avoid side effects in arguments to unsafe macros.'
+
+
+# The ID for the check
+def id():
+    return ('PRE31-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'PRE31-C': 'Published Standards/SEI Cert Standards/C/Avoid side effects in arguments to unsafe macros',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'PRE31-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Avoid side effects in arguments to unsafe macros'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Avoid side effects in arguments to unsafe macros</p>
+<p><b>Risk Assessment</b></p>
+<p>Invoking an unsafe macro with an argument that has side effects may cause those side effects to occur more than once. This practice can lead to unexpected program behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/PRE31-C.+Avoid+side+effects+in+arguments+to+unsafe+macros</i></p>
+<p><b>Exceptions</b></p>
+<p><i>PRE31-C-EX1: An exception can be made for invoking an unsafe macro with a function call argument provided that the function has no side effects. However, it is easy to forget about obscure side effects that a function might have, especially library functions for which source code is not available; even changing errno is a side effect. Unless the function is user-written and does nothing but perform a computation and return its result without calling any other functions, it is likely that many developers will forget about some side effect. Consequently, this exception must be used with great care.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++"># define ABS(x) (((x) &lt; 0) ? -(x) : (x))
+
+void func(int n) {
+  /* Validate that n is within the desired range */
+  int m = ABS(++n);
+
+  /* ... */
+}
+
+
+# include &lt;assert.h&gt;
+# include &lt;stddef.h&gt;
+
+void process(size_t index) {
+  assert(index++ &gt; 0); /* Side effect */
+  /* ... */
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check automatically considers a macro function unsafe if one of its parameters is referred to at least twice or not at all.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    macro_violations = []
+
+    for macro_ref in file.filerefs("Define", "Macro Functional"):
+        lex = lexer.lexeme(macro_ref.line(), macro_ref.column())
+        on_param_def = 0
+        params = {}  # key: ent name, value: number of references
+        unsafe = False
+        generic = False
+        static_func = False
+
+        while lex:
+            if lex.text() == "(":
+                on_param_def += 1
+            elif lex.text() == ")":
+                on_param_def -= 1
+
+                if not on_param_def:
+                    break
+            elif on_param_def and (lex.token() == "Identifier"):
+                if lex.text() not in params:
+                    params[lex.text()] = 0
+
+            lex = lex.next(ignore_whitespace=True)
+
+        if not params:
+            continue
+
+        lex = lex.next(ignore_whitespace=True)
+
+        while lex and (lex.text() != "undef"):
+            if lex.text() in {"(", "{"}:
+                on_param_def += 1
+            elif lex.text() in {")", "}"}:
+                on_param_def -= 1
+
+                if not on_param_def:
+                    break
+            elif not on_param_def and (lex.line_begin() != macro_ref.line()):
+                params.clear()
+                break
+            elif not on_param_def and lex.ent() and lex.ent().kind().check("Function Static"):
+                static_func = True
+                break
+            elif (lex.text() == "_Generic") and (lex.token() == "Identifier"):
+                generic = True
+                break
+            elif on_param_def and (lex.token() == "Identifier") and (lex.text() in params):
+                params[lex.text()] += 1
+
+                if params[lex.text()] > 1:
+                    unsafe = True
+                    break
+
+            lex = lex.next(ignore_whitespace=True)
+
+        if not generic and (0 in params.values()):
+            unsafe = True
+
+        if unsafe and not static_func:
+            for use_ref in macro_ref.ent().refs("Useby"):
+                def_ref = macro_ref.ent().refs("Definein")
+
+                if ((len(def_ref) > 1) and (use_ref.file().id() != file.id())) or (f"{use_ref.line()}{use_ref.column()}" in macro_violations):
+                    continue
+
+                lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+                on_param = 0
+                on_call = False
+
+                while lex:
+                    if on_call:
+                        on_call = False
+
+                        if lex.text() != "(":  # not as function call
+                            break
+
+                    if lex.ent() and (lex.ent().id() == macro_ref.ent().id()):
+                        on_call = True
+                    elif lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    # increment, decrement, assignment
+                    elif on_param and (lex.text() in {"++", "--", "="}):
+                        check.violation(use_ref.scope(), use_ref.file(
+                        ), use_ref.line(), use_ref.column(), ERR1)
+                        break
+                    elif on_param and lex.ent() and lex.ent().kind().check("Function"):  # function call
+                        check.violation(use_ref.scope(), use_ref.file(
+                        ), use_ref.line(), use_ref.column(), ERR1)
+                        macro_violations.append(
+                            f"{use_ref.line()}{use_ref.column()}")
+                        break
+
+                    lex = lex.next(ignore_whitespace=True)
+
+    for use_ref in file.filerefs("Use", "Unresolved Macro"):
+        if use_ref.ent().name() == "assert":
+            lex = lexer.lexeme(use_ref.line(), use_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param and (lex.text() in {"++", "--", "="}):
+                    check.violation(use_ref.ent(), file,
+                                    use_ref.line(), use_ref.column(), ERR1)
+                    break
+                elif on_param and lex.ent() and lex.ent().kind().check("Function"):  # function call
+                    check.violation(use_ref.ent(), file,
+                                    use_ref.line(), use_ref.column(), ERR1)
+                    break
+
+                lex = lex.next(ignore_whitespace=True)

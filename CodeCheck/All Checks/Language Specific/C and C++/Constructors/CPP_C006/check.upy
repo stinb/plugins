@@ -1,0 +1,205 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-06-21
+
+
+import re
+
+from Modules import isConstructor
+from Modules import refBetweenRefs
+
+
+ERR1 = 'Constructor does not explicitly call all immediate and virtual base class(es)'
+
+
+def ids():
+    return ('MISRA08_12-1-2', 'CPP_C006')
+
+
+def name(id):
+    return {
+        'MISRA08_12-1-2': '''Published Standards/MISRA-C++ 2008/\
+12-1-2 Explicitly call all immediate and virtual base classes''',
+        'CPP_C006': '''All Checks/Language Specific/C and C++/Constructors/\
+Explicitly call all immediate and virtual base classes''',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_12-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Advisory',
+            'Constructors',
+        ],
+        'CPP_C006': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>All constructors of a class should explicitly call a constructor for all of
+its immediate base classes and all virtual base classes.</p>
+
+<p><b>Rationale</b></p>
+
+<p>This rule reduces confusion over which constructor will be used, and with
+what parameters.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">  class A
+  {
+  public:
+    A ( )
+    {
+    }
+  };
+
+  class B : public A
+  {
+  public:
+    B ( ) // Non-compliant - benign, but should be B ( ) : A ( )
+    {
+    }
+  };
+
+  class V
+  {
+  public:
+    V ( )
+    {
+    }
+    V ( int32_t i )
+    {
+    }
+  };
+
+  class C1 : public virtual V
+  {
+  public:
+    C1 ( ) : V ( 21 )
+    {
+    }
+  };
+
+  class C2 : public virtual V
+  {
+  public:
+    C2 ( ) : V ( 42 )
+    {
+    }
+  };
+
+  class D: public C1, public C2
+  {
+  public:
+    D ( ) // Non-compliant
+    {
+    }
+  };
+</code></pre>
+
+<p>There would appear to be an ambiguity here, as <code>D</code> only includes
+one copy of <code>V</code>. Which version of <code>V</code>'s constructor is
+executed and with what parameter? In fact, <code>V</code>'s default constructor
+is always executed. This would be the case even if <code>C1</code> and
+<code>C2</code> constructed their bases with the same integer parameter.</p>
+
+<p>This is clarified by making the initialization explicit, as in:</p>
+
+<pre><code language="C++">  D ( ) : C1 ( ), C2 ( ), V ( )
+  {
+  }
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+For Windows users, if your project has inheritance with template classes,
+uncheck the option Delayed Template Parsing for more accuracy. The option is in
+Project &gt; Configure Project &gt; C++ &gt; Options &gt;.
+</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # Each method definition
+    for define in file.filerefs('Define', 'Member Function'):
+        derivedCtor = define.ent()
+
+        # Skip if not a constructor
+        if not isConstructor(derivedCtor):
+            continue
+
+        # Get all immediate and virtual bases
+        ctorsNotCalled = set()
+        for baseClass in define.scope().ents('Base', '~Abstract'):
+            ctorsNotCalled.add(getCtorLongname(baseClass))
+
+        end = None
+
+        # Find each explicit base constructor call, or template class reference
+        calls = derivedCtor.refs('Call ~Implicit', 'Member Function, Member Typedef Type')
+        calls += derivedCtor.refs('Typed', 'Template Class Type')
+        for call in calls:
+            baseCtor = call.ent()
+
+            # Skip bogus refs (https://github.com/stinb/sti/issues/2791)
+            if not end:
+                end = derivedCtor.ref('Endby')
+            if end and not refBetweenRefs(define, call, end):
+                continue
+
+            # Get the longname of the constructor called
+            longname = None
+            # Function was called
+            if baseCtor.kind().check('Function'):
+                # Skip if not a constructor
+                if not isConstructor(baseCtor):
+                    continue
+                longname = baseCtor.longname()
+            # Typedef was called
+            elif baseCtor.kind().check('Typedef'):
+                baseClasses = baseCtor.ents('Typed')
+                # Skip if no base class
+                if len(baseClasses) != 1:
+                    continue
+                longname = getCtorLongname(baseClasses[0])
+            # Template class was referenced
+            elif baseCtor.kind().check('Template Class Type'):
+                longname = getCtorLongname(baseCtor)
+
+            # Mark it as explicitly called
+            if longname and longname in ctorsNotCalled:
+                ctorsNotCalled.remove(longname)
+
+        # Skip if they're all explicitly called
+        if not ctorsNotCalled:
+            continue
+
+        check.violation(derivedCtor, file, define.line(), define.column(), ERR1)
+
+
+def getCtorLongname(baseClass):
+    return f'{baseClass.longname()}::{baseClass.name()}'

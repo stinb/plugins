@@ -1,0 +1,85 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 10-29-2020
+
+import re
+
+def id():
+    return 'CPP_DD006'
+
+def name():
+    return "All Checks/Language Specific/C and C++/Declarations and Definitions/" +  'Initializer lists shall be written in the order in which they \
+are declared'
+
+
+def tags(id):
+    return {
+        'CPP_DD006': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+def description():
+    return 'Initializer lists shall be written in the order in which they are \
+declared.'
+
+def detailed_description():
+    return """\
+<p>Initializer lists shall be written in the order in which they are declared. 
+Data members are initialized in the order in which they are specified in a 
+class definition, not the order they appear in the initialization list of a 
+constructor.
+</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+	# find all member functions defined in the file
+	for mem_func in file.filerefs("define", "member function"):
+
+		# filter out non-constructors
+		parent_name = mem_func.ent().parent().simplename()
+		if mem_func.ent().name() == parent_name:
+
+			# initialize line and column markers
+			line = 0
+			column = 0
+
+			# spin up the lexer, place at the member function
+			lexer = file.lexer()
+			lexeme = lexer.lexeme(mem_func.line(), mem_func.column())
+
+			# parse lexer until we find the first open bracket
+			while lexeme and lexeme.next(ignore_whitespace=True) and lexeme.text() != "{":
+
+				# if we find a data member with a 'setby init' reference, we know we have an initializer list
+				if lexeme.ent() and lexeme.token() == "Identifier":
+
+					lex_ent = lexeme.ent()
+					check_data_mem = re.search(r"Member Object", lex_ent.kind().longname())
+					check_setby_init = lex_ent.refs("C Setby Init")
+					check_definein = lex_ent.ref("C Definein")
+
+					if check_data_mem and check_setby_init and check_definein:
+							definein_line = lex_ent.ref("C Definein").line()
+							definein_col = lex_ent.ref("C Definein").column()
+
+							# if definein definein_line is less than line, or definein_line == line but definein_col is less than or equal to column, flag it
+							if (definein_line < line) or (definein_line == line and definein_col <= column):
+								check.violation(mem_func.ent(), file, lexeme.line_begin(), lexeme.column_begin(), "Violation: data member '%1', in initializer list for '%2' class constructor, is defined out of order \
+from which it is declared", lexeme.ent().name(), mem_func.ent().name())
+
+							# otherwise, set current line and column to the definein line/column
+							else:
+								line = definein_line
+								column = definein_col
+
+				lexeme = lexeme.next(ignore_whitespace=True)
+

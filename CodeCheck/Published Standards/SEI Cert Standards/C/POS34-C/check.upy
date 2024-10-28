@@ -1,0 +1,111 @@
+import re
+
+
+ERR1 = 'Do not call putenv() with a pointer to an automatic variable as the argument.'
+
+
+# The ID for the check
+def id():
+    return ('POS34-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'POS34-C': 'Published Standards/SEI Cert Standards/C/Do not call putenv() with a pointer to an automatic variable as the argument',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'POS34-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not call putenv() with a pointer to an automatic variable as the argument'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not call putenv() with a pointer to an automatic variable as the argument</p>
+<p><b>Risk Assessment</b></p>
+<p>Providing a pointer to a buffer of automatic storage duration as an argument to putenv() may cause that buffer to take on an unintended value. Depending on how and when the buffer is used, it can cause unexpected program behavior or possibly allow an attacker to run arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/POS34-C.+Do+not+call+putenv%28%29+with+a+pointer+to+an+automatic+variable+as+the+argument</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">int func(const char *var) {
+  char env[1024];
+  int retval = snprintf(env, sizeof(env),"TEST=%s", var);
+  if (retval &lt; 0 || (size_t)retval &gt;= sizeof(env)) {
+    /* Handle error */
+  }
+
+  return putenv(env);
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        func_vars = []
+
+        for obj_ref in func_ref.ent().refs("Define", "~Static Local Object"):
+            obj_val = obj_ref.ent().value()
+
+            if obj_val and re.search(r"alloc", obj_val):
+                continue
+
+            func_vars.append(obj_ref.ent().id())
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() != "putenv":
+                continue
+
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param and lex.ent() and lex.ent().id() in func_vars:
+                    check.violation(call_ref.ent(), call_ref.file(
+                    ), call_ref.line(), call_ref.column(), ERR1)
+
+                lex = lex.next()

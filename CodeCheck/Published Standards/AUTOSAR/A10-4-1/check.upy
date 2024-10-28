@@ -1,0 +1,116 @@
+ERR1 = 'Hierarchy is not based on an interface class'
+
+
+# The ID for the check
+def ids():
+    return ('A10-4-1', 'CPP_D057')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A10-4-1': 'Published Standards/AUTOSAR/Hierarchies should be based on interface classes',
+        'CPP_D057': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Hierarchies should be based on interface classes',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A10-4-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Non-automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D057': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Hierarchies should be based on interface classes.</p>
+<p><b>Rationale</b></p>
+<p>Software design that provides common and standardized interfaces without committing
+to a particular implementation:</p>
+<ul><li>eliminates of potential redundancy.</li>
+<li>increases software reusability.</li>
+<li>hides implementation details.</li>
+<li>can be easily extended.</li>
+<li>facilitates different objects iteration.</li></ul></p>
+<p>Well-defined interfaces are less prone to require further reworking and maintenance.</p>
+<p>See: Interface-Class</p>
+<p><b>See also</b></p>
+<p>• JSF December 2005 [8]: AV Rule 87: Hierarchies should be based on abstract
+classes.</p>
+<p>• C++ Core Guidelines [11]: I.25: Prefer abstract classes as interfaces to class
+hierarchies.</p>
+<p>• C++ Core Guidelines [11]: C.122: Use abstract classes as interfaces when
+complete separation of interface and implementation is needed.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for derive_ref in file.filerefs("Derive", "Class"):
+        base_ref = derive_ref.ent().ref("Base")
+
+        for member_ref in base_ref.ent().refs("Declare ~implicit, Define", "Member"):
+            compliant = False
+            ref_kind = member_ref.ent().kind().longname()
+
+            #  all member functions should be public pure virtual
+            if all(prop in ref_kind for prop in {"Function", "Public", "Virtual Pure"}):
+                compliant = True
+
+            # all data members should be public static constexpr
+            elif all(prop in ref_kind for prop in {"Object", "Public"}):
+                is_static = False
+                is_constexpr = False
+                lex = lexer.lexeme(member_ref.line(), 0)
+                next_lex = lex
+
+                while(next_lex and lex and (next_lex.line_begin() == lex.line_begin())):
+                    if next_lex.text() == "static" and next_lex.token() == "Keyword":
+                        is_static = True
+                    elif next_lex.text() == "constexpr" and next_lex.token() == "Identifier":
+                        is_constexpr = True
+                    elif next_lex.text() == member_ref.ent().name():
+                        break
+
+                    next_lex = next_lex.next(
+                        ignore_whitespace=True, ignore_comments=True)
+
+                if is_static and is_constexpr:
+                    compliant = True
+
+            if not compliant:
+                check.violation(derive_ref.ent(), file,
+                                derive_ref.line(), derive_ref.column(), ERR1)
+                break

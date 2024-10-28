@@ -1,0 +1,130 @@
+import re
+
+ERR1 = 'Function defined in anonymous namespace not used'
+ERR2 = 'Static function with internal linkage not used'
+ERR3 = 'Private member function not used'
+
+# The ID for the check
+def ids():
+    return ('A0-1-3', 'CPP_F026')
+
+# The short name of the check
+def name(id):
+    return {
+        'A0-1-3': 'Published Standards/AUTOSAR/Every function defined in an anonymous namespace, or static function with internal linkage, or private member function shall be used',
+        'CPP_F026': 'All Checks/Language Specific/C and C++/Functions/Every function defined in an anonymous namespace, or static function with internal linkage, or private member function shall be used',
+    }[id]
+
+def tags(id):
+    return {
+        'A0-1-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions'
+        ],
+        'CPP_F026': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Functions which are not callable from outside the compilation unit in which they are defined, or from outside the class implementation to which they pertain, and which are not used may be symptomatic of serious problems, such as poor software design or missing paths in flow control.</p>
+<p>This rule enforces developers to statically and explicitly use every such function in the source code. A function does not necessarily need to be called at run-time. Rule M0-1-1 detects all unreachable code occurrences.</p>
+<p>Note that this rule applies equally to static and non-static private member functions.</p>
+<p><b>Exception</b></p>
+<p>It is allowed to use literal values in combination with logging mechanism.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">//% $Id: A0-1-3.cpp 291350 2017-10-17 14:31:34Z jan.babst $
+#include &lt;cstdint&gt;
+static void F1() // Compliant
+{
+}
+
+namespace
+{
+  void F2() // Non-compliant, defined function never used
+  {
+  }
+}
+
+class C
+{
+  public:
+    C() : x(0) {}
+    void M1(std::int32_t i) // Compliant, member function is used
+    {
+      x = i;
+    }
+    void M2(std::int32_t i,
+    std::int32_t j) // Compliant, never used but declared
+                    // as public
+    {
+      x = (i &gt; j) ? i : j;
+    }
+
+  protected:
+    void M1ProtectedImpl(std::int32_t j) // Compliant, never used but declared
+                                         // as protected
+    {
+      x = j;
+    }
+
+  private:
+    std::int32_t x;
+    void M1PrivateImpl(
+    std::int32_t j) // Non-compliant, private member function never used
+    {
+      x = j;
+    }
+};
+int main(int, char**)
+{
+  F1();
+  C c;
+  c.M1(1);
+  return 0;
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>MISRA C++ 2008 [7]: Rule 0-1-10 Every defined function shall be called at least once.
+</p>
+<p>HIC++ v4.0 [9]: 1.2.2 Ensure that no expression or sub-expression is redundant.
+</p>"""
+
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    for ref in file.filerefs('Define', 'Function', True):
+        ent = ref.ent()
+
+        # Skip if used
+        if ent.ref('Callby, Useby'):
+            continue
+
+        # Unique violation for each function kind
+        kind = ent.kind()
+        if inAnonymousNamespace(ent):
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+        elif kind.check('Static'):
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+        elif kind.check('Private'):
+            check.violation(ent, file, ref.line(), ref.column(), ERR3)
+
+def inAnonymousNamespace(ent):
+    parent = ent.parent()
+    return bool(parent and parent.kind().check('Unnamed Namespace'))

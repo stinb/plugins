@@ -1,0 +1,199 @@
+import re
+
+
+ERR1 = 'Do not access a cv-qualified object through a cv-unqualified type.'
+
+
+# The ID for the check
+def id():
+    return ('EXP55-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP55-CPP': 'Published Standards/SEI Cert Standards/C++/Do not access a cv-qualified object through a cv-unqualified type',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not access a cv-qualified object through a cv-unqualified type'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not access a cv-qualified object through a cv-unqualified type</p>
+<p><b>Risk Assessment</b></p>
+<p>If the object is declared as being constant, it may reside in write-protected memory at runtime. Attempting to modify such an object may lead to abnormal program termination or a denial-of-service attack. If an object is declared as being volatile, the compiler can make no assumptions regarding access of that object. Casting away the volatility of an object can result in reads or writes to the object being reordered or elided entirely, resulting in abnormal program execution.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP55-CPP.+Do+not+access+a+cv-qualified+object+through+a+cv-unqualified+type</i></p>
+<p><b>Exceptions</b></p>
+<p><i>EXP55-CPP-EX1: An exception to this rule is allowed when it is necessary to cast away const when invoking a legacy API that does not accept a const argument, provided the function does not attempt to modify the referenced variable. However, it is always preferable to modify the API to be const-correct when possible. For example, the following code casts away the const qualification of INVFNAME in the call to the audit_log() function.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">void g(const int &ci) {
+  int &ir = const_cast&lt;int &&gt;(ci);
+  ir = 42;
+}
+ 
+void f() {
+  const int i = 4;
+  g(i);
+}
+
+
+#include &lt;iostream&gt;
+  
+class S {
+  int cachedValue;
+   
+  int compute_value() const;  // expensive
+public:
+  S() : cachedValue(0) {}
+   
+  // ... 
+  int get_value() const {
+    if (!cachedValue) {
+      const_cast&lt;S *&gt;(this)-&gt;cachedValue = compute_value(); 
+    }       
+    return cachedValue;
+  }
+};
+ 
+void f() {
+  const S s;
+  std::cout &lt;&lt; s.get_value() &lt;&lt; std::endl;
+}
+
+
+#include &lt;iostream&gt;
+ 
+struct S {
+  int i;
+   
+  S(int i) : i(i) {}
+};
+ 
+void g(S &s) {
+  std::cout &lt;&lt; s.i &lt;&lt; std::endl;
+}
+ 
+void f() {
+  volatile S s(12);
+  g(const_cast&lt;S &&gt;(s));
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'EXP55-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+            'Types',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        checked_violation = []  # "{line}{column}"
+
+        for obj_ref in func_ref.ent().refs("Define", "Object, Parameter"):
+            ent_type = obj_ref.ent().type()
+
+            if ent_type and ("const" in ent_type):
+                for assign_ref in obj_ref.ent().refs("Assignby Ref"):
+                    if ent_type not in assign_ref.ent().type():
+                        is_param = False
+                        non_compliant = False
+
+                        if assign_ref.ent().kind().check("Parameter"):
+                            is_param = True
+
+                            for ref in assign_ref.ent().refs("Setby, Modifyby, Assignby"):
+                                if ref.ent().id() == assign_ref.ent().parent().id():
+                                    non_compliant = True
+                                    break
+
+                        if (is_param and non_compliant) or not is_param:
+                            check.violation(assign_ref.ent(), assign_ref.file(
+                            ), assign_ref.line(), assign_ref.column(), ERR1)
+
+                        checked_violation.append(
+                            f"{assign_ref.line()}{assign_ref.column()}")
+
+        func_contents = func_ref.ent().contents()
+
+        if func_contents and ("const_cast" in func_contents):
+            end_line = func_ref.ent().ref("End").line()
+            lex = func_ref.file().lexer().lexeme(func_ref.line(), func_ref.column())
+
+            while lex.line_begin() != end_line:
+                if lex.text() == "const_cast":
+                    on_param = 0
+                    on_this = False
+
+                    while lex.text() != ";":
+                        if f"{lex.line_begin()}{lex.column_begin()}" in checked_violation:
+                            lex = lex.next()
+                            continue
+                        elif lex.text() == "(":
+                            on_param += 1
+                        elif lex.text() == ")":
+                            on_param -= 1
+
+                            if not on_param:
+                                if on_this and lex.next().text() == "->":
+                                    this_lex = lex.next().next()
+
+                                    if this_lex.ent():
+                                        for ret_ref in this_lex.ent().refs("Useby Return"):
+                                            for call_ref in ret_ref.ent().refs("Callby"):
+                                                call_lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+
+                                                if call_lex.previous().text() == ".":
+                                                    prev_lex = call_lex.previous().previous()
+
+                                                    if prev_lex.ent() and re.search(r"const|volatile", prev_lex.ent().type()):
+                                                        check.violation(call_ref.scope(), call_ref.file(
+                                                        ), call_ref.line(), call_ref.column(), ERR1)
+
+                                break
+                        elif (on_param == 1) and (lex.text() == "this"):
+                            on_this = True
+                        elif (on_param == 1) and lex.ent() and lex.ent().type() and re.search(r"const|volatile", lex.ent().type()):
+                            compliant = False
+
+                            for assby_ref in lex.ent().refs("Assignby Ptr"):
+                                if (assby_ref.line() == lex.line_begin()) and (assby_ref.column() == lex.column_begin()) and (assby_ref.ent().kind().check("Parameter")):
+                                    if not assby_ref.ent().ref("Modifyby"):
+                                        compliant = True
+
+                            if not compliant:
+                                check.violation(
+                                    lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                        lex = lex.next(ignore_whitespace=True)
+
+                lex = lex.next(ignore_whitespace=True)

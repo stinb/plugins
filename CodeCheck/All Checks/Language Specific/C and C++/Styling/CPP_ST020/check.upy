@@ -1,0 +1,106 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 10-28-2020
+
+# library for using regular expressions
+import re
+
+def id():
+    return 'CPP_ST020'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/For the if-else, while, do, and for control structure, the statement(s) shall be indented one level"""
+
+
+def tags(id):
+    return {
+        'CPP_ST020': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+For the if-else, while, do, and for control structure, the statement(s) shall be indented one level."""
+
+def detailed_description():
+    return """\
+<p>Developer's Note: Due to the potential complexity of some nested control 
+structures, it is not guaranteed that these nested structures will not result in
+false positives or some other undefined behavior.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+
+    control_structs = ["if", "else", "while", "do", "for"]
+    conditional_directives = ["if", "else", "elif", "ifdef", "ifndef", "endif", "define", "undef", "include"]
+
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+    lexeme = lexer.first()
+
+    while lexeme:
+        # find control structure keyword
+        if lexeme and lexeme.text() in control_structs and lexeme.token() == "Keyword":
+
+            # record the line and column it was found on
+            line = lexeme.line_begin()
+            column = lexeme.column_begin()
+            temp_lex = lexeme
+
+            # progress to opening bracket
+            while temp_lex and temp_lex.text() != "{":
+                temp_lex = temp_lex.next(ignore_whitespace=True)
+
+            # account for single line control structs, which don't require brackets
+            if temp_lex and (temp_lex.line_begin() > (line + 1)):
+                pass
+
+            else:
+                num_brackets = 1
+                if temp_lex and temp_lex.next(ignore_whitespace=True):
+                    temp_lex = temp_lex.next(ignore_whitespace=True)
+
+                # parse structure until we find the corresponding closing bracket
+                while temp_lex and temp_lex.next(ignore_whitespace=True) and num_brackets != 0:
+                    if temp_lex.text() == "{":
+                        num_brackets += 1
+                    elif temp_lex.text() == "}":
+                        num_brackets -= 1
+                    # ignore comments, we only care about statements
+                    elif (temp_lex.token() == "Comment") or (temp_lex.text() in control_structs):
+                        pass
+                    else:
+                        # if the statement column is less than or equal to the control structure column, we know it is not indented
+                        # exception #1: for else structure, the statements can align with the keyword
+                        # exception #2: else if control structures are handled so the 'if' alone does not flag false positives
+                        # exception #3: conditional directives are ok, they usually align with column 0
+                        if temp_lex.column_begin() <= column:
+                            if not ((temp_lex.column_begin() == column) and (lexeme.text() == "else") and (lexeme.previous(ignore_whitespace=True, ignore_comments=True).text() == "}")):
+                                if (lexeme.text() == "if" and (lexeme.previous(ignore_whitespace=True, ignore_comments=True).text() == "else")):
+                                    pass
+                                elif (temp_lex.text() == "#" and (temp_lex.next().text() in conditional_directives)):
+                                    # we encounter conditional directive, progress to next line
+                                    while temp_lex and temp_lex.next() and temp_lex.next().token() != "Newline":
+                                        temp_lex = temp_lex.next()
+                                else:
+                                    violation = check.violation(file, file, temp_lex.line_begin(), temp_lex.column_begin(), "Violation: statement in '%1' loop is not indented on line %2 (%3)", lexeme.text(), temp_lex.line_begin(), temp_lex.text())
+                                    violation.add_fixit_hint(temp_lex.line_begin(), temp_lex.column_begin(), temp_lex.line_begin(), temp_lex.column_begin(), ' ' * (column - temp_lex.column_begin() + 2))
+                                    while temp_lex and temp_lex.next() and temp_lex.next().token() != "Newline":
+                                        temp_lex = temp_lex.next()
+
+                    temp_lex = temp_lex.next(ignore_whitespace=True)
+
+        lexeme = lexeme.next(ignore_whitespace=True)
+

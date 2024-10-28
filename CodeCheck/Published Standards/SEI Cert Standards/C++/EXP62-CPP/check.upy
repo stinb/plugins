@@ -1,0 +1,155 @@
+ERR1 = "Do not access the bits of an object representation that are not part of the object's value representation."
+
+
+# The ID for the check
+def id():
+    return ('EXP62-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP62-CPP': "Published Standards/SEI Cert Standards/C++/Do not access the bits of an object representation that are not part of the object's value representation",
+    }[id]
+
+
+# The short description of the check
+def description():
+    return "Do not access the bits of an object representation that are not part of the object's value representation"
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not access the bits of an object representation that are not part of the object's value representation</p>
+<p><b>Risk Assessment</b></p>
+<p>The effects of accessing bits of an object representation that are not part of the object's value representation can range from implementation-defined behavior (such as assuming the layout of fields with differing access controls) to code execution vulnerabilities (such as overwriting the vtable pointer).</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP62-CPP.+Do+not+access+the+bits+of+an+object+representation+that+are+not+part+of+the+object%27s+value+representation</i></p>
+<p><b>Exceptions</b></p>
+<p><i>EXP62-CPP-EX1: It is permissible to access the bits of an object representation when that access is otherwise unobservable in well-defined code. Specifically, reading bits that are not part of the value representation is permissible when there is no reliance or assumptions placed on their values, and writing bits that are not part of the value representation is only permissible when those bits are padding bits. This exception does not permit writing to bits that are part of the object representation aside from padding bits, such as overwriting a vtable pointer.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;cstring&gt;
+  
+struct S {
+  unsigned char buffType;
+  int size;
+};
+  
+void f(const S &s1, const S &s2) {
+  if (!std::memcmp(&s1, &s2, sizeof(S))) {
+    // ...
+  }
+}
+
+
+#include &lt;cstring&gt;
+ 
+struct S {
+  int i, j, k;
+  
+  // ...
+ 
+  virtual void f();
+};
+ 
+void f() {
+  S *s = new S;
+  // ...
+  std::memset(s, 0, sizeof(S));
+  // ...
+  s-&gt;f(); // undefined behavior
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'EXP62-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in ["memcmp", "memset", "memmove", "memchr"]:
+                lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                param_ctr = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and (lex.text() == ","):
+                        param_ctr += 1
+                    elif (param_ctr == 2) and lex.text() == "sizeof":
+                        sizeof_param = 0
+
+                        while lex:
+                            if lex.text() == "(":
+                                sizeof_param += 1
+                            elif lex.text() == ")":
+                                sizeof_param -= 1
+
+                                if not sizeof_param:
+                                    break
+                            elif sizeof_param and lex.ent():
+                                if lex.ent().ref("Define, Declare", "Virtual"):
+                                    check.violation(
+                                        call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                                else:
+                                    prev_type = None
+                                    check_padding = False
+
+                                    for obj_ref in sorted(lex.ent().refs("Define", "Member Object"), key=lambda x: x.line()):
+                                        utype = obj_ref.ent().freetext("UnderlyingType")
+
+                                        if check_padding:
+                                            if utype in ["int", "short", "char"]:
+                                                check.violation(
+                                                    call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+                                                break
+
+                                            check_padding = False
+
+                                        if utype in ["char", "unsigned char", "unsigned char"]:
+                                            if prev_type and prev_type in ["int", "short", "char"]:
+                                                check.violation(
+                                                    call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+                                                break
+
+                                            check_padding = True
+
+                                        prev_type = utype
+
+                            lex = lex.next()
+
+                    lex = lex.next(ignore_whitespace=True)

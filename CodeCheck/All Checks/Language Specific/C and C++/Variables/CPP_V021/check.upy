@@ -1,0 +1,106 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 4-7-2021
+
+import re
+
+ERR1 = 'Variable \'%1\' is altered %2 times on line %3'
+
+def id():
+    return ('CPP_V021')
+
+def name(id):
+    return {
+		'CPP_V021': "All Checks/Language Specific/C and C++/Variables/" +  'Variables should not be altered more than once in an expression'
+	}[id]
+
+def tags(id):
+    return {
+        'CPP_V021': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+    Variables should not be altered more than once in an expression."""
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Altering a variable multiple times in one expression can be dangerous,
+leading to overly complex code and unpredictable outcomes.</p>
+<p><b>Example</b></p>
+<p>
+<pre><code language="C++">    int i = 0;  /* counter variable */
+    int total = 0;  /* total number of items */
+
+    for (i = 0; i &lt; 10; i++) {
+
+    	total = total * ++total;  /* invalid, total is altered more than once */
+
+    }
+</code></pre></p>
+<p><i>Developer's Note:</i>
+If a variable is passed by reference to a function in the same expression
+that it is modified in another way, it will be flagged by this check.
+This is a precaution taken because the value of the variable may
+be changed when passed by reference, though it is not guaranteed.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+	# set up lexer
+	if file and file.lexer():
+		lexer = file.lexer()
+	else:
+		return
+
+	# grab all unique objects that have been defined
+	obj_defs = file.filerefs("define", "c object ~unresolved ~unknown", True)
+
+	for ref in obj_defs:
+		# grab the entity being defined
+		obj_ent = ref.ent()
+
+		# initialize empty dictionary of line numbers (keys) to hold each modification (values)
+		mod_lines = {}
+
+		# gather the modifying refs (including reference passing)
+		mod_refs = obj_ent.refs('modifyby, setby ~init, addr useby')
+
+		if not (mod_refs):
+			continue
+
+		for m_ref in mod_refs:
+			line = m_ref.line()
+			# if the line num exists in dict, add to counter of mods on that line
+			if line in mod_lines:
+				mod_lines[line] += 1
+			# else if line num doesn't exist, add it to the dict and set count to 1
+			else:
+				mod_lines[line] = 1
+
+
+		# if there are any lines with > 1 mod, flag the ent and line number
+		for k, v in mod_lines.items():
+			if v >= 2:
+				# visit the line with lexer, check that it's not a 'for' loop
+				lexeme = lexer.lexeme(k, 0)
+
+				if lexeme and lexeme.token() == "Whitespace":
+					lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+				if lexeme and not (lexeme.text() == "for" and lexeme.token() == "Keyword"):
+					check.violation(obj_ent, file, k, 0, ERR1, obj_ent, v, k)
+		
+
+
+

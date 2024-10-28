@@ -1,0 +1,127 @@
+import re
+
+
+ERR1 = 'A function that can be overridden shall not be in a final class'
+
+
+# The ID for the check
+def ids():
+    return ('A10-3-3', 'CPP_F045')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A10-3-3': 'Published Standards/AUTOSAR/Virtual functions shall not be introduced in a final class',
+        'CPP_F045': 'All Checks/Language Specific/C and C++/Functions/Virtual functions shall not be introduced in a final class',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A10-3-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions'
+        ],
+        'CPP_F045': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Virtual functions shall not be introduced in a final class.</p>
+<p><b>Rationale</b></p>
+<p>Declaring a class as final explicitly specifies that the class cannot be inherited.
+Declaring a virtual function inside a class specifies that the function can be overridden
+in the inherited class, which is inconsistent.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A10-3-3.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 class A
+3 {
+4 public:
+5 virtual ~A() = default;
+6 virtual void F() noexcept = 0;
+7 virtual void G() noexcept {}
+8 };
+9 class B final : public A
+10 {
+11 public:
+12 void F() noexcept final // Compliant
+13 {
+14 }
+15 void G() noexcept override // Non-compliant
+16 {
+17 }
+18 virtual void H() noexcept = 0; // Non-compliant
+19 virtual void Z() noexcept // Non-compliant
+20 {
+21 }
+22 };
+</code></pre>
+<p><b>See also</b></p>
+<p>• HIC++ v4.0 [9]: 9.1.5 Do not introduce virtual functions in a final class.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    if not (lexer or re.search(r'virtual|override', file.contents())):
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        is_final = False
+
+        lex = lexer.lexeme(class_ref.line(), class_ref.column())
+
+        while lex and lex.text() not in {":", "{"}:
+            if lex.text() == "final" and lex.token() == "Identifier":
+                is_final = True
+                break
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+        if is_final:
+            for func_ref in class_ref.ent().refs("Define, Declare ~Implicit", "Virtual Function"):
+                is_virtual = False
+                is_override = False
+
+                lex = lexer.lexeme(func_ref.line(), 0)
+
+                while lex and lex.text() != "{":
+                    if lex.text() == "virtual" and lex.token() == "Keyword":
+                        is_virtual = True
+                    elif lex.text() == "override" and lex.token() == "Identifier":
+                        is_override = True
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+                if is_virtual or is_override:
+                    check.violation(func_ref.ent(), file,
+                                    func_ref.line(), func_ref.column(), ERR1)

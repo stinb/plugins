@@ -1,0 +1,126 @@
+ERR1 = 'Do not call getc(), putc(), getwc(), or putwc() with a stream argument that has side effects.'
+
+
+# The ID for the check
+def id():
+    return ('FIO41-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO41-C': 'Published Standards/SEI Cert Standards/C/Do not call getc(), putc(), getwc(), or putwc() with a stream argument that has side effects',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO41-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not call getc(), putc(), getwc(), or putwc() with a stream argument that has side effects'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not call getc(), putc(), getwc(), or putwc() with a stream argument that has side effects</p>
+<p><b>Risk Assessment</b></p>
+<p>Using an expression that has side effects as the stream argument to getc(), putc(), or getwc() can result in unexpected behavior and abnormal program termination.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO41-C.+Do+not+call+getc%28%29%2C+putc%28%29%2C+getwc%28%29%2C+or+putwc%28%29+with+a+stream+argument+that+has+side+effects</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void func(const char *file_name) {
+  FILE *fptr;
+
+  int c = getc(fptr = fopen(file_name, "r"));
+  if (feof(fptr) || ferror(fptr)) {
+    /* Handle error */
+  }
+
+  if (fclose(fptr) == EOF) {
+    /* Handle error */
+  }
+}
+
+
+
+#include &lt;stdio.h&gt;
+
+void func(const char *file_name) {
+  FILE *fptr = NULL;
+  int c = 'a';
+
+  while (c &lt;= 'z') {
+    if (putc(c++, fptr ? fptr :
+         (fptr = fopen(file_name, "w"))) == EOF) {
+      /* Handle error */
+    }
+  }
+
+  if (fclose(fptr) == EOF) {
+    /* Handle error */
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call", "Unresolved Function"):
+        if call_ref.ent().name() in {"getc", "putc", "getwc", "putwc"}:
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            param = 0
+
+            while lex:
+                if lex.text() == "(" and lex.token() == "Punctuation":
+                    on_param += 1
+                elif lex.text() == ")" and lex.token() == "Punctuation":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param == 1 and lex.text() == "," and lex.token() == "Operator":
+                    param += 1
+                elif (((call_ref.ent().name() in {"putc", "putwc"} and param == 1) or ((call_ref.ent().name() in {"getc", "getwc"} and param == 0))) and
+                      lex.text() in {"=", "?"} and lex.token() == "Operator"):
+                    check.violation(call_ref.ent(), file,
+                                    call_ref.line(), call_ref.column(), ERR1)
+                    break
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)

@@ -1,0 +1,118 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2023-04-11
+
+
+import re
+
+from Modules import searchContents
+
+
+ERR1 = 'Catch statement not const'
+
+
+def ids():
+    return ('CPP_E003')
+
+
+def name(id):
+    return {
+        'CPP_E003': '''All Checks/Language Specific/C and C++/Exception Handling/\
+Catch Const References''',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'CPP_E003': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+
+    }.get(id)
+
+def detailed_description(id):
+    return {
+        'CPP_E003': '''\
+<p>
+Report catch statements that do not use <code>const</code> references.
+</p>
+
+<p>
+Look for syntax: <code>... const ... & ... )</code>
+</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('ignoreEllipsis', 'Ignore Ellipsis', True)
+
+
+def check(check, file):
+    # Skip files without catch statements
+    if not searchContents(file, r'\Wcatch\W'):
+        return
+
+    # Loop through functions defined in the file
+    for ref in file.filerefs('Define', 'Function', True):
+        func = ref.ent()
+
+        begin, end = getFunctionDefinitionLines(func)
+        if not begin:
+            continue
+
+        lexer = file.lexer(lookup_ents=False)
+        if not lexer:
+            continue
+
+        checkOneFunction(check, file, func, lexer, begin, end)
+
+
+def checkOneFunction(check, file, func, lexer, begin, end):
+    # Find catch statements
+    for lex in lexer.lexemes(begin, end):
+        if lex.token() != 'Keyword' or lex.text() != 'catch':
+            continue
+        catchLex = lex
+
+        # Look for lexemes: ... const ... & ... )
+        okay      = False
+        constSeen = False
+        lex       = lex.next(True, True)
+        while not okay and lex:
+            if lex.text() == ')':
+                break
+            if not constSeen and lex.text() == 'const':
+                constSeen = True
+            elif constSeen and lex.text() == '&':
+                okay = True
+            if check.options().lookup('ignoreEllipsis') and lex.text() == '...':
+                okay = True
+            lex = lex.next(True, True)
+
+        if not okay:
+            check.violation(func, file, catchLex.line_begin(), catchLex.column_begin(), ERR1)
+
+
+# Get (begin, end) lines or (None, None)
+def getFunctionDefinitionLines(func):
+    beginRef = func.ref('Definein')
+    endRef   = func.ref('End')
+    if beginRef and endRef:
+        return beginRef.line(), endRef.line()
+    return None, None

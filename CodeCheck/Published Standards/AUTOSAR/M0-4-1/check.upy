@@ -1,0 +1,142 @@
+ERR1 = 'Use of scaled-integer or fixed-point arithmetic shall be documented'
+
+
+# The ID for the check
+def ids():
+    return ('M0-4-1', 'CPP_T045')
+
+def name(id):
+    return {
+        'M0-4-1': """\
+Published Standards/AUTOSAR/Undocumented Use of Scaled-integer or Fixed-point Arithmetic""",
+        'CPP_T045': """\
+All Checks/Language Specific/C and C++/Types/Undocumented Use of Scaled-integer or Fixed-point Arithmetic"""
+
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'M0-4-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Types',
+        ],
+        'CPP_T045': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Use of scaled-integer or fixed-point arithmetic shall be
+documented.</p>
+<p><b>Rationale</b></p>
+<p>It is extremely difficult to design and implement arithmetic packages for scaled-integer or fixedpoint arithmetic without overlooking dangerous cases.</p>
+<p>If either is used, then this rule requires that documentation be produced to demonstrate that all the issues have been covered by the implementation.</p>
+<p><b>Note</b></p>
+<p>This check can only scan integers that are scaled by a macro function.</p>
+"""
+
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    flagged_lines = []
+
+    for func_ref in file.filerefs("Define", "Macro Functional"):
+        lexemes = lexer.lexemes(func_ref.line(), func_ref.line())
+        is_multiplied = False
+        is_scaled = False
+
+        for lex in lexemes:
+            if lex.text() == "*" and lex.token() == "Operator":
+                is_multiplied = True
+            elif lex.text() == "<<" and lex.token() == "Operator":
+                is_scaled = True
+
+        if is_multiplied and is_scaled:
+            useby_func = []
+
+            for use_ref in func_ref.ent().refs("Useby"):
+                if use_ref.ent().id() in useby_func:
+                    continue
+
+                useby_func.append(use_ref.ent().id())
+
+                for set_ref in use_ref.ent().refs("Set, Set Init", "Object"):
+                    underlying_type = set_ref.ent().freetext("UnderlyingType")
+                    if ((underlying_type is not None) and ("int" not in underlying_type)):
+                        continue
+
+                    check_use = False
+                    lexer = set_ref.file().lexer()
+                    lex = lexer.lexeme(set_ref.line(), set_ref.column())
+
+                    while lex and lex.text() != ";":
+                        lex_id = lex.ent().id() if lex.ent() else None
+
+                        if lex_id and lex_id == func_ref.ent().id():
+                            check_use = True
+                            break
+
+                        lex = lex.next(ignore_whitespace=True,
+                                       ignore_comments=True)
+
+                    if check_use:
+                        for obj_use_ref in set_ref.ent().refs("Useby"):
+                            if obj_use_ref.line() in flagged_lines:
+                                continue
+
+                            has_comment = False
+                            has_operator = False
+                            lexer = obj_use_ref.file().lexer()
+                            current_line = obj_use_ref.line()
+                            lexemes = lexer.lexemes(current_line, current_line)
+                            prev_line = current_line - 1
+                            prev_lexemes = lexer.lexemes(prev_line, prev_line)
+
+                            for lex in prev_lexemes:
+                                if lex.token() == "Comment" and lex.text() != "// UndCC_Violation":
+                                    has_comment = True
+                                elif lex.token() in {"Keyword", "Identifier"}:
+                                    has_comment = False
+                                    break
+
+                            for lex in lexemes:
+                                if lex.token() == "Comment" and lex.text() != "// UndCC_Violation":
+                                    has_comment = True
+                                elif lex.token() == "Operator" and lex.text() in {"+", "-", "*", "/"}:
+                                    has_operator = True
+
+                            if has_operator and not has_comment:
+                                flagged_lines.append(obj_use_ref.line())
+                                check.violation(obj_use_ref.scope(), obj_use_ref.file(),
+                                                obj_use_ref.line(), obj_use_ref.column(), ERR1)

@@ -1,0 +1,151 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-04-19
+
+
+import re
+
+
+ERR1 = 'Several arguments have calls and the order of evaluation is unspecified'
+
+
+def ids():
+    return ('EXP30-C-A')
+
+
+def name(id):
+    return {
+        'EXP30-C-A': '''Published Standards/SEI Cert Standards/C/\
+Do not depend on the order of evaluation for side effects - calls''',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'EXP30-C-A': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+            'Expressions',
+        ],
+
+    }.get(id)
+
+def detailed_description(id):
+    return {
+        'EXP30-C-A': '''\
+<p>
+Do not depend on the order of evaluation for side effects
+</p>
+
+<p><b>Risk Assessment</b></p>
+
+<p>
+Attempting to modify an object multiple times between sequence points may cause
+that object to take on an unexpected value, which can lead to unexpected program
+behavior.
+</p>
+
+<p>
+For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/c/EXP30-C.+Do+not+depend+on+the+order+of+evaluation+for+side+effects</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void func(int i, int *b) {
+  int a = i + b[++i];
+  printf("%d, %d" a, i);
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Determining the relationship of side-effects between 2 functions is not
+possible in many ways. Thus, this check will flag any call which has multiple
+arguments with calls.
+</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Call', 'Function'):
+        ent = ref.ent()
+
+        # Skip unless the call has 2+ arguments with calls
+        lex = file.lexer().lexeme(ref.line(), ref.column())
+        if not lex or not hasMultipleArgsWithCalls(lex):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+
+def hasMultipleArgsWithCalls(lex):
+    # Go past the outer call
+    lex = lex.next(True, True)
+
+    commas          = 0
+    openParentheses = 0
+    openBrackets    = 0
+    openBraces      = 0
+
+    argsWithCallsCount = 0
+    argsWithCallsSet = set()
+
+    while lex:
+        text = lex.text()
+
+        # Punctuation/operator
+        if text == ',':
+            # Commas of the outer call
+            if openParentheses == 1 and openBrackets == 0 and openBraces == 0:
+                commas += 1
+        elif text == '(':
+            openParentheses += 1
+        elif text == ')':
+            openParentheses -= 1
+            # Stop at the end of the outer call
+            if openParentheses == 0:
+                return False
+        elif text == '[':
+            openBrackets += 1
+        elif text == ']':
+            openBrackets -= 1
+        elif text == '{':
+            openBraces += 1
+        elif text == '}':
+            openBraces -= 1
+
+        # Reference, skipping when a call was already seen for this argument
+        elif commas not in argsWithCallsSet and lex.ref():
+            ref = lex.ref()
+            if ref.kind().check('Callby'):
+                # Remember that a call was seen for this argument
+                argsWithCallsCount += 1
+                argsWithCallsSet.add(commas)
+                # There are multiple arguments with calls
+                if argsWithCallsCount == 2:
+                    return True
+
+        lex = lex.next(True, True)
+
+    return False

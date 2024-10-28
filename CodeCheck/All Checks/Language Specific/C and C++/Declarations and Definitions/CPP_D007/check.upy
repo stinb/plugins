@@ -1,0 +1,197 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 11-11-14
+# Rewritten by Robby Bennett
+# 3-7-23
+
+
+import re
+
+from Modules import buildTranslationUnit
+
+
+ERR1 = 'Object or function has external linkage but no visible declaration'
+
+
+def ids():
+    return ('MISRA12_8.4', 'CPP_D007', 'MISRA23_8.4')
+
+
+def name(id):
+    return {
+        'MISRA12_8.4': '''Published Standards/MISRA C 2012/\
+8.4 A compatible declaration shall be visible when an object or function with\
+ external linkage is defined''',
+        'CPP_D007': '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+A compatible declaration shall be visible when an object or function with\
+ external linkage is defined''',
+        'MISRA23_8.4': '''Published Standards/MISRA C 2023/\
+8.4 A compatible declaration shall be visible when an object or function with\
+ external linkage is defined''',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'MISRA12_8.4': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'CPP_D007': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_8.4': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p><b>Amplification</b></p>
+
+<p>
+A compatible declaration is one which declares a compatible type for the object
+or function being defined.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+If a declaration for an object or function is visible when that object or
+function is defined, a compiler must check that the declaration and definition
+are compatible. In the presence of function prototypes, checking extends to the
+number and type of function parameters.
+</p>
+
+<p>
+The recommended method of implementing declarations of objects and functions
+with external linkage is to declare them in a <i>header file</i>, and then
+include the <i>header file</i> in all those code files that need them, including
+the one that defines them.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+In these examples there are no declarations or definitions of objects or
+functions other than those present in the code.
+</p>
+
+<pre><code language="C++">extern  int16_t count;
+        int16_t count = 0;        /* Compliant                        */
+
+extern uint16_t speed = 6000u;    /* Non-compliant - no declaration
+                                   * prior to this definition         */
+
+uint8_t pressure = 101u;          /* Non-compliant - no declaration
+                                   * prior to this definition         */
+
+extern void func1 ( void );
+extern void func2 ( int16_t x, int16_t y );
+extern void func3 ( int16_t x, int16_t y );
+
+void func1 ( void )
+{
+  /* Compliant */
+}
+</code></pre>
+
+<p>
+The following non-compliant definition of func3 also violates Rule 8.3.
+</p>
+
+<pre><code language="C++">void func2 ( int16_t x, int16_t y )
+{
+  /* Compliant */
+}
+
+void func3 ( int16_t x, uint16_t y )
+{
+  /* Non-compliant - parameter types different */
+}
+
+void func4 ( void )
+{
+  /* Non-compliant - no declaration of func4 before this definition */
+}
+
+static void func5 ( void )
+{
+  /* Compliant - rule does not apply to objects/functions with internal
+   * linkage */
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 8.2, Rule 8.3, Rule 8.5, Rule 17.3
+</p>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+The declaration must be visible to the definition and not simply available
+before use.
+</p>
+'''
+
+
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # Loop through each object/function
+    for define in file.filerefs('Define', 'Object Global ~Static, Function ~Static ~Member ~Template', True):
+        ent = define.ent()
+
+        # Skip built in functions and functions and objects within namespaces
+        if re.search(r'^__', ent.name()):
+            continue
+
+        if ent.type() and re.search(r'\bconst\b', ent.type()):
+            continue
+
+        # if this is a typedef, declaration will be considered definition and invalidates check
+        if ent.refs("C Typed"):
+            continue
+
+        # Skip if this entity does not exist in the global scope or is main
+        parent = ent.parent()
+        if not parent or not parent.kind().check('File') or ent.name() == 'main':
+            continue
+
+        # Create a hash reference to store all files for this translation unit
+        filesToCheck = set()
+        buildTranslationUnit(file, filesToCheck)
+
+        # Loop through all the declares and check to see if they occur in a
+        # header file or within the same file as the definition
+        ok = False
+        for declare in ent.refs('Declarein, C Assignby'):
+            if declare.file() in filesToCheck:
+                ok = True
+                break
+
+        # A declaration, if any, can't be visible
+        if not ok:
+            check.violation(ent, file, define.line(), define.column(), ERR1)

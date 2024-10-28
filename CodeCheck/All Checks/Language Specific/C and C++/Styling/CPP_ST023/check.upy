@@ -1,0 +1,125 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 12-7-2020
+
+import re
+
+def id():
+    return 'CPP_ST023'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/At least one blank line shall be \
+placed before comments"""
+
+
+def tags(id):
+    return {
+        'CPP_ST023': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+At least one blank line shall be placed before comments."""
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Blank lines placed before comments help to space out and increase the readability of cluttered code.</p>
+
+<p><b>Examples</b></p>
+<pre><code language="C++"> /* This is a valid comment preceding int a */
+
+ int a;
+
+ // This is also a valid comment preceding int b
+
+ int b;
+ /* This is an INVALID comment following int b */
+
+ int c;
+ // And this is another INVALID comment following int c
+
+ if (c == 3) {
+    c++;
+ }
+ /* This comment is valid, only character on preceding line is a closing bracket */
+</code></pre>
+</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def define_options(check):
+    check.option().checkbox("inlineComments", "Ignore inline comments", False)
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        #Yield to GUI interupts
+        if check.is_aborted():
+            return
+
+        invalid = False;
+        inline = False;
+        ignoreInlines = check.option().lookup("inlineComments")
+
+        prevLex = lexeme.previous(ignore_whitespace=True)
+        if lexeme.token() == "Comment":
+            if prevLex and prevLex.token() == 'Comment':
+                lexeme = lexeme.next()
+                continue
+
+            tempLex = lexeme.previous()
+
+            # create empty string to record the indentation for the new line
+            indent = ''
+
+            # step back to the front of the line the comment is on and figure out if it's inline or not
+            while tempLex and tempLex.token() != "Newline":
+                # if we encounter non-whitespace (excluding closing bracket), consider it an inline comment
+                if tempLex.token() != "Whitespace" and tempLex.text() != "}":
+                    inline = True
+
+                indent = indent + tempLex.text()
+                tempLex = tempLex.previous()
+
+
+            if inline and ignoreInlines:
+                pass
+
+            elif inline and not ignoreInlines:
+                violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), "Violation: Inline comment")
+                prevLex = lexeme
+                text = ''
+                while prevLex and prevLex.token() != 'Newline':
+                    prevLex = prevLex.previous()
+                while prevLex and prevLex.text() != lexeme.text():
+                    text = text + prevLex.text()
+                    prevLex = prevLex.next()
+                violation.add_fixit_hint(lexeme.line_begin(), 1, lexeme.line_begin(), lexeme.column_end() + 1, '\n' + lexeme.text() + text)
+
+            elif not inline:
+                # if the previous token is not a newline (indicating an entire blank line) or a closing bracket (counts as 'blank' under this standard), flag it
+                if tempLex and tempLex.previous() and tempLex.previous().token() != "Newline" and tempLex.previous().text() != "}":
+
+                    violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), "Violation: Comment is not preceded by at least one blank line")
+                    violation.add_fixit_hint(lexeme.previous().line_begin(), lexeme.previous().column_begin(), lexeme.previous().line_begin(), lexeme.previous().column_begin(), '\n')
+
+        lexeme = lexeme.next()

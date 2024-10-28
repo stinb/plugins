@@ -1,0 +1,352 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-11-27
+
+
+import re
+
+from Modules import cGetOperand, nthParamOfCall
+
+
+ERR1 = 'Iterators of different containers subtracted/compared'
+
+PRIMITIVES = {'bool', 'char', 'short', 'int', 'long', 'float', 'double'}
+
+
+def ids():
+    return ('CTR54-CPP')
+
+
+def name(id):
+    return {
+        'CTR54-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Do not subtract iterators that do not refer to the same container''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'CTR54-CPP': [
+            'Pointers',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Do not subtract iterators that do not refer to the same container</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR54-CPP.+Do+not+subtract+iterators+that+do+not+refer+to+the+same+container'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR54-CPP.+Do+not+subtract+iterators+that+do+not+refer+to+the+same+container</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+#include &lt;cstddef&gt;
+#include &lt;iostream&gt;
+
+template &lt;typename Ty&gt;
+bool in_range(const Ty *test, const Ty *r, size_t n) {
+  return 0 &lt; (test - r) && (test - r) &lt; (std::ptrdiff_t)n;
+}
+
+void f() {
+  double foo[10];
+  double *x = &foo[0];
+  double bar;
+  std::cout &lt;&lt; std::boolalpha &lt;&lt; in_range(&bar, x, 10);
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This check relies on a recursive references like assignments and calls, and
+may have some inaccuracies. It also parses expressions without an actual
+abstract syntax tree.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    checkOperators(check, file)
+    checkFunctors(check, file)
+
+
+def checkOperators(check, file):
+    lexer = file.lexer()
+    lex = lexer.first()
+
+    while lex:
+        lex = lex.next(True, True)
+        if not lex:
+            break
+
+        # Skip if lexeme isn't a comparison
+        if lex.token() != 'Operator' or lex.text() not in {'-', '<', '<=', '>', '>=', '<=>'}:
+            continue
+
+        # Skip unless the left & right are different arrays
+        leftLexemes = cGetOperand(lex, True)
+        rightLexemes = cGetOperand(lex, False)
+        if not violationInLexemeArrays(leftLexemes, rightLexemes):
+            continue
+
+        check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+
+def checkFunctors(check, file):
+    for typeRef in file.filerefs('Typed', 'Struct Type Template'):
+        # Skip if not a certain kind of comparison
+        if not re.search(r'^std::(greater|less)', typeRef.ent().longname()):
+            continue
+
+        # Check arguments of each functor call
+        functor = typeRef.scope()
+        for call in functor.refs('Callby'):
+            # Skip unless the left & right are different arrays
+            leftLexemes = nthParamOfCall(call, 0)
+            rightLexemes = nthParamOfCall(call, 1)
+            if not violationInLexemeArrays(leftLexemes, rightLexemes):
+                continue
+
+            check.violation(functor, file, call.line(), call.column(), ERR1)
+
+
+def violationInLexemeArrays(leftLexemes, rightLexemes):
+    # False unless lexemes found on both sides
+    if not leftLexemes or not rightLexemes:
+        return False
+
+    # False if no pointer/iterator in any operand
+    leftIteratorEnts = getIteratorEntsFromLexemes(leftLexemes)
+    rightIteratorEnts = getIteratorEntsFromLexemes(rightLexemes)
+    if not leftIteratorEnts or not rightIteratorEnts:
+        return False
+
+    # False if the pointer/iterator is of the same array
+    for left in leftIteratorEnts:
+        for right in rightIteratorEnts:
+            if eitherIsAssignedWith(left, right):
+                return False
+
+    return True
+
+
+def eitherIsAssignedWith(ent0, ent1):
+    return ent0 == ent1 or isSetBy(ent0, ent1) or isSetBy(ent1, ent0)
+
+
+def isSetBy(ent0, ent1):
+    for ref in ent0.refs('Setby'):
+        lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+        while lex:
+            lex = lex.next(True, True)
+            if not lex or lex.text() == ';':
+                break
+            if lex.ent() == ent1:
+                return True
+    return False
+
+
+def getIteratorEntsFromLexemes(lexemes):
+    iteratorEnts = []
+
+    # Fail if there isn't exactly 1 variable entity in the given lexemes
+    variableEnts = []
+    for i, lex in enumerate(lexemes):
+        # Skip if not a variable
+        ent = lex.ent()
+        if not ent or not ent.kind().check('Parameter, Object'):
+            continue
+        # Skip primitive types
+        entType = ent.freetext('UnderlyingType')
+        entType = re.sub(r'((un)?signed )|(long )', '', entType) if entType else None
+        if entType in PRIMITIVES:
+            prevLex = lex.previous(True, True)
+            if prevLex and prevLex.text() != '&':
+                continue
+        # Skip if the variable isn't the main lexeme
+        if i == 1:
+            prevLex = lexemes[0]
+            if prevLex.text() == '*':
+                continue
+        if i + 1 < len(lexemes):
+            nextLex = lexemes[i + 1]
+            if nextLex.text() in {'.', ')', ',', '->', '['}:
+                continue
+        # Skip if there are too many variables
+        if variableEnts:
+            break
+        variableEnts.append(ent)
+    if len(variableEnts) != 1:
+        return iteratorEnts
+
+    # Get array entities using assignment refs and a stack
+    stack = [variableEnts[0]]
+    seen = set(variableEnts)
+    while stack:
+        ent = stack.pop()
+        baseEnts = getBaseArraysFromAssignments(ent)
+        baseEnts.append(getBaseArrayFromCalls(ent))
+        for baseEnt in baseEnts:
+            if baseEnt in seen:
+                continue
+            seen.add(baseEnt)
+            stack.append(baseEnt)
+        iteratorEnts.append(ent)
+
+    return iteratorEnts
+
+
+def getBaseArraysFromAssignments(ent):
+    baseArrays = []
+    seen = set(baseArrays)
+
+    # Get arrays in simple assignments
+    for baseEnt in ent.ents('Assign Ptr'):
+        if isArrayLike(baseEnt, None):
+            baseArrays.append(baseEnt)
+
+    # Get arrays in complicated assignments
+    for ref in ent.refs('Setby'):
+        lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+        if not lex:
+            continue
+
+        # Get exactly one base array here in the assignment
+        seenHere = set()
+        baseArraysHere = []
+        while lex.text() != ';':
+            # Next or stop
+            lex = lex.next(True, True)
+            if not lex:
+                break
+
+            # Skip if no ent
+            baseEnt = lex.ent()
+            if not baseEnt:
+                continue
+
+            # Skip if seen here in this assignment
+            if baseEnt in seenHere:
+                continue
+            seenHere.add(baseEnt)
+
+            # Skip if not array
+            if not isArrayLike(baseEnt, lex):
+                continue
+
+            # Stop if more than 1 array
+            baseArraysHere.append(baseEnt)
+            if len(baseArraysHere) > 1:
+                break
+
+        # Skip if more than 1 array
+        if len(baseArraysHere) != 1:
+            continue
+        baseEnt = baseArraysHere[0]
+
+        # Skip if already seen in another assignment
+        if baseEnt in seen:
+            continue
+        seen.add(baseEnt)
+
+        baseArrays.append(baseEnt)
+
+    return baseArrays
+
+
+def getBaseArrayFromCalls(param):
+    # Keep on getting the base parameter
+    seen = set([param])
+    while param and param.kind().check('Parameter'):
+        # Get function or stop
+        function = param.parent()
+        if not function:
+            break
+
+        # Get parameter position or stop
+        paramPosition = None
+        for otherParam in function.ents('Define', 'Parameter'):
+            if paramPosition == None:
+                paramPosition = 0
+            if otherParam == param:
+                break
+            paramPosition += 1
+        if paramPosition == None:
+            break
+
+        # Get argument in each call or stop
+        foundNewParameter = False
+        for call in function.refs('Callby'):
+            # Get first object/parameter in the argument
+            for lex in nthParamOfCall(call, paramPosition):
+                argument = lex.ent()
+                if argument:
+                    kind = argument.kind()
+                    if kind.check('Object') and isArrayLike(argument, lex):
+                        return argument
+                    elif kind.check('Parameter') and argument not in seen:
+                        param = argument
+                        seen.add(param)
+                        foundNewParameter = True
+                        break
+            if foundNewParameter:
+                break
+
+        # Stop if end reached
+        if not foundNewParameter:
+            break
+
+    return param
+
+
+def isArrayLike(ent, lexEntUsage):
+    # False if not a variable (such as a function)
+    if not ent.kind().check('Object, Parameter'):
+        return False
+
+    # Remove <> from type
+    entType = []
+    angleBrackets = 0
+    for char in str(ent.type()):
+        if angleBrackets == '<':
+            angleBrackets += 1
+        elif angleBrackets == '>':
+            angleBrackets -= 1
+        elif angleBrackets == 0:
+            entType.append(char)
+    entType = ''.join(entType)
+
+    # Finally check the type
+    arrayLike = False
+    if re.search(r'[*[]', entType):
+        arrayLike = True
+    # Contiguous containers in the standard library
+    elif re.search(r'^std::(array|basic_string|vector)', entType):
+        arrayLike = True
+    # Address operator
+    elif lexEntUsage:
+        lex = lexEntUsage.previous(True, True)
+        if lex and lex.text() == '&':
+            arrayLike = True
+    return arrayLike

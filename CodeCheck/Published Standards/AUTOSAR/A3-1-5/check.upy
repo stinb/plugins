@@ -1,0 +1,156 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-13-2021
+import re
+
+ERR1 = """\
+Function definition %1 did not follow the criteria"""
+
+def ids():
+    return ('A3-1-5', 'CPP_D039')
+
+def name(id):
+    return {
+        'A3-1-5': 'Published Standards/AUTOSAR/A function definition shall only be placed in a class definition if (1) the function is intended to be inlined (2) it is a member function template (3) it is a member function of a class template',
+        'CPP_D039': 'All Checks/Language Specific/C and C++/Declarations and Definitions/A function definition shall only be placed in a class definition if (1) the function is intended to be inlined (2) it is a member function template (3) it is a member function of a class template',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A3-1-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Partially Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D039': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Merging the implementation into the declaration instructs a compiler to
+inline the method which may save both time and space for short functions. For
+templates, it allows to reduce repetitions of template syntax elements (e.g.
+parameter list), which makes code less difficult to read and maintain.</p>
+<p><b>Developer's Note</b></p>
+<p>The name of this check is misleading and vague. Based on the example given
+I took it as A function definition or declaration shall only be placed in a
+class definition if the function is inlined even if it is a member function
+template or it is a member function of a class template.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">//% $Id: A3-1-5.cpp 305629 2018-01-29 13:29:25Z piotr.serwa $
+#include &lt;cstdint&gt;
+#include &lt;iostream&gt;
+
+class A
+{
+public:
+    //compliant with (2)
+    template &lt;typename T&gt;
+    void Foo(T&& t)
+    {
+        std::cout &lt;&lt; __PRETTY_FUNCTION__ &lt;&lt; " defined inside with param: " &lt;&lt; t &lt;&lt;     std::endl;
+    }
+
+    //non-compliant with (2)
+    template &lt;typename T&gt;
+    void Bar(T&& t);
+
+    //compliant with (1)
+    std::uint32_t GetVal() const noexcept
+    {
+        return val;
+    }
+
+    //non-compliant with (1)
+    std::uint32_t GetVal2() const noexcept;
+
+private:
+    std::uint32_t val = 5;
+};
+
+
+template &lt;typename T&gt;
+void A::Bar(T&& t)
+{
+    std::cout &lt;&lt; __PRETTY_FUNCTION__ &lt;&lt; " defined outside with param: " &lt;&lt; t &lt;&lt; std::endl;
+}
+
+std::uint32_t A::GetVal2() const noexcept
+{
+    return val;
+}
+
+template &lt;typename T&gt;
+class B
+{
+public:
+    B(const T& x) : t(x) {}
+
+    //compliant with (3)
+    void display() const noexcept
+    {
+        std::cout &lt;&lt; t &lt;&lt; std::endl;
+    }
+
+    //non-compliant with (3)
+    void display2() const noexcept;
+
+private:
+    T t;
+};
+
+template &lt;typename T&gt;
+void B&lt;T&gt;::display2() const noexcept
+{
+    std::cout &lt;&lt; t &lt;&lt; std::endl;
+}
+
+int main(void)
+{
+    std::uint32_t tmp = 5;
+    A a;
+    a.Foo(3.14f);
+    a.Bar(5);
+
+    std::cout &lt;&lt; a.GetVal() &lt;&lt; std::endl;
+
+    B&lt;std::int32_t&gt; b(7);
+    b.display();
+
+    return 0;
+}
+</code></pre>"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    classRefs = file.filerefs('Define', 'Class')
+
+
+    for classRef in classRefs:
+        mfRefs = classRef.ent().refs('Define, Declare ~Implicit', 'Member Function')
+
+        for mfRef in mfRefs:
+            begin = classRef.ent().ref('Begin')
+            end = classRef.ent().ref('End')
+            if begin and end and mfRef.ent().freetext("Inline") != 1 and (mfRef.line() > begin.line() and mfRef.line() < end.line()):
+                check.violation(mfRef.ent(), file, mfRef.line(), mfRef.column(), ERR1, mfRef.ent().name())
+                
+
+
+

@@ -1,0 +1,124 @@
+from understand import Check, Db, Ent
+
+
+ERR1 = 'Failed to open a comparison database: %1'
+ERR2 = '%1 changed too many statements: %2, which is above the maximum of %3'
+
+
+METRIC = 'CountLineChanged'
+
+
+def ids() -> tuple[str]:
+    return ('HIS_13')
+
+
+def name(id: str) -> str:
+    return {
+        'HIS_13': 'Published Standards/Hersteller Initiative Software (HIS) Metrics/13. Statements Changed (SCHG)',
+    }[id]
+
+
+def tags(id: str) -> str:
+    return {
+        'HIS_13': [
+            'Language: Ada',
+            'Language: C',
+            'Language: C++',
+            'Language: C#',
+            'Language: Fortran',
+            'Language: Java',
+            'Language: Jovial',
+            'Language: Pascal',
+            'Language: Python',
+            'Language: VHDL',
+            'Language: Web',
+            'Standard: Hersteller Initiative Software (HIS) Metrics',
+            'Metrics',
+        ],
+    }.get(id)
+
+
+def detailed_description(id: str) -> str:
+    return '''\
+<p><b>Title</b></p>
+<p>Number of statements changed in the project</p>
+
+<p><b>Description</b></p>
+<p>This is the number of statements changed between this project and a
+comparison project.</b></p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check only compares the lines instead of the statements. To improve
+results, see Project > Configure Project > History > Diff.</p>
+'''
+
+
+def test_entity(file: Ent):
+    return True
+
+
+def test_global():
+    return True
+
+
+def define_options(check):
+    check.options().checkbox('checkFile', 'Check each file', True)
+    check.options().checkbox('checkGlobal', 'Check globally', True)
+    check.options().integer('maximumFile', 'Maximum changed statements per file', 100)
+    check.options().integer('maximumGlobal', 'Maximum changed statements globally', 500)
+
+
+def check(check: Check):
+    check_file = check.options().lookup('checkFile')
+    check_global = check.options().lookup('checkGlobal')
+
+    if not check_file and not check_global:
+        return
+
+    db: Db = check.db()
+
+    # Try to open the comparision database or fail
+    if db.comparison_db() == None:
+        check.violation(None, None, -1, -1, ERR1, error)
+        return
+
+    # Try to parse the float options or fail
+    maximum_file: int = check.options().lookup('maximumFile')
+    maximum_global: int = check.options().lookup('maximumGlobal')
+
+    # Total the metric for all files
+    value_global: int = 0
+    for file in db.ents('~Unknown ~Unresolved File'):
+        # Get the metric value as an integer or fail
+        value_file: int = file.metric([METRIC])[METRIC]
+        if value_file == None:
+            continue
+        elif isinstance(value_file, str):
+            try:
+                value_file = int(float(value_file))
+            except:
+                continue
+
+        # Add to the total for the project metric value
+        if check_global:
+            value_global += value_file
+
+        # Skip if only checking globally
+        if not check_file:
+            continue
+
+        # Skip if the file is stable
+        if value_file < maximum_file:
+            continue
+
+        check.violation(file, file, -1, -1, ERR2, 'File', value_file, maximum_file)
+
+    # Stop if only checking files
+    if not check_global:
+        return
+
+    # Stop if the project is stable
+    if value_global < maximum_global:
+        return
+
+    check.violation(None, None, -1, -1, ERR2, 'Project', value_global, maximum_global)

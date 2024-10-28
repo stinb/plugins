@@ -1,0 +1,140 @@
+ERR1 = "A data member is initialized by assigning a copy of a passed value in the contructor's body."
+
+
+# The ID for the check
+def ids():
+    return ('A12-6-1', 'CPP_D067')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-6-1': 'Published Standards/AUTOSAR/All class data members that are initialized by the constructor shall be initialized using member initializers.',
+        'CPP_D067': 'All Checks/Language Specific/C and C++/Declarations and Definitions/All class data members that are initialized by the constructor shall be initialized using member initializers.'
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A12-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D067': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>All class data members that are initialized by the constructor shall be
+initialized using member initializers.</p>
+<p><b>Rationale</b></p>
+<p>Using the constructor's member initializers is more efficient than assigning a copy
+of passed values to data members in the constructor's body. Also, it supports the
+programmer to prevent “data usage before initialization” errors.</p>
+<p>Note that if a data member is already initialized using member initializer, then changing
+its value in the constructor's body does not violate this rule.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-6-1.cpp 271696 2017-03-23 09:23:09Z piotr.tanski $
+2 #include &lt;cstdint&gt;
+3 #include &lt;string&gt;
+4 class A
+5 {
+6 public:
+7 A(std::int32_t n, std::string s) : number{n}, str{s} // Compliant
+8 {
+9 }
+10 // Implementation
+11
+12 private:
+13 std::int32_t number;
+14 std::string str;
+15 };
+16 class B
+17 {
+18 public:
+19 B(std::int32_t n, std::string s) // Non-compliant - no member initializers
+20 {
+21 number = n;
+22 str = s;
+23 }
+24 // Implementation
+25
+26 private:
+27 std::int32_t number;
+28 std::string str;
+29 };
+30 class C
+31 {
+32 public:
+33 C(std::int32_t n, std::string s) : number{n}, str{s} // Compliant
+34 {
+35 n += 1; // This does not violate the rule
+36 str.erase(str.begin(),
+37 str.begin() + 1); // This does not violate the rule
+38 }
+39 // Implementation
+40
+41 private:
+42 std::int32_t number;
+43 std::string str;
+44 };
+</code></pre>
+<p><b>See Also</b></p>
+<p>• C++ Core Guidelines [11]: C.49: Prefer initialization to assignment in
+constructors.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        for constructor_ref in class_ref.ent().refs("Define ~Implicit", "Function"):
+            if constructor_ref.ent().name() == class_ref.ent().name() and constructor_ref.ent().parameters():
+                copy_assigned_members = []
+                member_initialized = []
+
+                for obj_ref in constructor_ref.ent().refs("Set ~Implicit ~Init", "Object Member"):
+                    if obj_ref.ent().name() not in copy_assigned_members:
+                        copy_assigned_members.append(obj_ref.ent().name())
+
+                for obj_ref in constructor_ref.ent().refs("Set Init ~Implicit", "Object Member"):
+                    if obj_ref.ent().name() not in member_initialized:
+                        member_initialized.append(obj_ref.ent().name())
+
+                for param_ref in constructor_ref.ent().refs("Define", "Parameter"):
+                    non_compliant = False
+
+                    for assign_ref in param_ref.ent().refs("Assignby Value", "Member Object"):
+                        if assign_ref.ent().name() in copy_assigned_members and assign_ref.ent().name() not in member_initialized:
+                            non_compliant = True
+                            break
+
+                    if non_compliant:
+                        check.violation(constructor_ref.ent(), constructor_ref.file(
+                        ), constructor_ref.line(), constructor_ref.column(), ERR1)
+                        break

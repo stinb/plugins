@@ -1,0 +1,93 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 7-15-2021
+import re
+
+ERR1 = """\
+Pointer function %1 does not return a valid pointer on success and a
+zero pointer on failure"""
+
+def ids():
+    return ('CPP_P056')
+
+def name(id):
+    return {
+        "CPP_P056": """\
+All Checks/Language Specific/C and C++/Pointers/Pointer functions shall return \
+a valid pointer on success and a zero pointer on failure"""
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_P056': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>The zero pointer is referred to as a null pointer. The
+macro NULL is normally used to test for this
+condition.</p>
+<p>Developer's note:</p>
+<p>This check only checks if there was valid pointer and a zero pointer was
+used in a pointer function</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Function')
+
+    for ref in refs:
+        # Skip function if it is not a pointer function
+        if not re.search(r'\*', str(ref.ent().type())) or re.search(r'operator', ref.ent().name()):
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        # bools to check if a pointer function returns a valid pointer and a zero pointer
+        null = False
+        ent = False
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        end = ref.ent().ref('End')
+
+        # Go through the lexemes in the function
+        while lexeme and not (lexeme.line_begin() == end.line() and lexeme.column_begin() == end.column()):
+            # Find the returns
+            if lexeme.text() == 'return':
+                while lexeme and lexeme.text() != ';':
+                    if lexeme.ent():
+                        nullThis = False
+                        setRefs = lexeme.ent().refs('Setby')
+                        # Check the setby refs on the ents after a return to check if they were set to NULL
+                        for setRef in setRefs:
+                            lex = lexer.lexeme(setRef.line(), setRef.column())
+                            while lex and lex.text() != ';':
+                                if lex.text() == 'NULL':
+                                    nullThis = True
+                                    null = True
+                                lex = lex.next(True, True)
+
+                        # If there was a entity and null wasn't marked with this return statement then mark it valid
+                        if not nullThis:
+                            ent = True
+
+                    lexeme = lexeme.next(True, True)
+
+
+            lexeme = lexeme.next(True, True)
+
+        if not (null and ent):
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())

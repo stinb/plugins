@@ -1,0 +1,101 @@
+import re
+
+DEF_NAME = "A lambda expression object shall not outlive any of its reference-captured objects"
+
+# The ID for the check
+def ids():
+    return ('A5-1-4', 'CPP_E056')
+
+def name(id):
+    return {
+        'A5-1-4': """\
+Published Standards/AUTOSAR/A lambda expression object shall not outlive any of \
+its reference-captured objects""",
+        'CPP_E056': """\
+All Checks/Language Specific/C and C++/Expressions/A lambda expression object \
+shall not outlive any of its reference-captured objects"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A5-1-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E056': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+	return """\
+<p><b>Rationale</b></p>
+<p>When an object is captured by reference in a lambda, lifetime of the object is not tied to the lifetime of the lambda.</p>
+<p>If a lambda object leaves the scope of one of its reference-captured object, the execution of the lambda expression results in an undefined behavior once the reference-captured object is accessed.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A5-1-4.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 #include &lt;functional&gt;
+4 std::function&lt;std::int32_t()&gt; F()
+5 {
+6 std::int32_t i = 12;
+7 return ([&i]() -&gt; std::int32_t {
+8 i = 100;
+9 return i;
+10 }); // Non-compliant
+11 }
+12 std::function&lt;std::int32_t()&gt; G()
+13 {
+14 std::int32_t i = 12;
+15 return ([i]() mutable -&gt; std::int32_t { return ++i; }); // Compliant
+16 }
+17 void Fn()
+18 {
+19 auto lambda1 = F();
+20 std::int32_t i = lambda1(); // Undefined behavior
+21 auto lambda2 = G();
+22 i = lambda2(); // lambda2() returns 13
+23 }
+</code></pre>
+<p><b>See also</b></p>
+<p>SEI CERT C++ [10]: EXP61-CPP. A lambda object must not outlive any of its reference captured objects.
+</p>
+<p>C++ Core Guidelines [11]: F.53: Avoid capturing by reference in lambdas that will be used nonlocally, including returned, stored on the heap, or passed to another thread.
+</p>"""
+
+# Tests the type of file
+def test_entity(file):
+	return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+	return False
+
+def sortRowLine(ref):
+	return str(ref.line())
+
+def test_language(language):
+	return language == 'C++'
+
+def check(check, file):
+	for ref in file.filerefs("Define", "Lambda Function", True):
+		pattern = r"(?<=\[).+?(?=\]\W*\()"
+		params = re.search(pattern, ref.ent().contents())
+		if params:
+			result = params.group().split(",")
+			for val in result:
+				if re.search(r"&", val):
+					for ent in ref.ent().ents("Capture"):
+						if ent.ref("Return") and val.strip('&') == ent.name():
+							check.violation(ent, file, ent.ref().line(), ent.ref().column(), DEF_NAME)

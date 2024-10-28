@@ -1,0 +1,456 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-11-16
+
+
+import re
+from Modules import lexemeBefore, lexemeBetweenNodes, refBetweenNodes, javaAncestorOfLongnameExists as ancestorLongname
+
+
+ERR1 = 'Object state not restored on failure'
+ERR2 = 'Object state modified before failure with variable "%1"'
+ERR3 = 'Object state modified before failure with method "%1"'
+
+
+translationUnitCache = dict()
+
+throwingMethods = dict() # { ent: boolean }
+changingMethods = dict() # { ent: boolean }
+
+
+def ids():
+    return ('ERR03-J', 'JAVA_ERR03')
+
+
+def name(id):
+    return {
+        'ERR03-J': '''Published Standards/SEI Cert Standards/Java/\
+Restore prior object state on method failure''',
+        'JAVA_ERR03': '''All Checks/Language Specific/Java/Exceptional Behavior/\
+Restore prior object state on method failure''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'ERR03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_ERR03': [
+            'Language: Java',
+            'Exceptional Behavior',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'ERR03-J': '''\
+<p>
+Restore prior object state on method failure
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to restore prior object state on method failure can leave the object in
+an inconsistent state and can violate required state invariants.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/ERR03-J.+Restore+prior+object+state+on+method+failure
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Dimensions {
+  private int length;
+  private int width;
+  private int height;
+  static public final int PADDING = 2;
+  static public final int MAX_DIMENSION = 10;
+
+  public Dimensions(int length, int width, int height) {
+    this.length = length;
+    this.width = width;
+    this.height = height;
+  }
+
+  protected int getVolumePackage(int weight) {
+    length += PADDING;
+    width  += PADDING;
+    height += PADDING;
+    try {
+      if (length &lt;= PADDING || width &lt;= PADDING || height &lt;= PADDING ||
+        length &gt; MAX_DIMENSION + PADDING || width &gt; MAX_DIMENSION + PADDING ||
+        height &gt; MAX_DIMENSION + PADDING || weight &lt;= 0 || weight &gt; 20) {
+        throw new IllegalArgumentException();
+      }
+
+      int volume = length * width * height;
+      length -= PADDING; width -= PADDING; height -= PADDING; // Revert
+      return volume;
+    } catch (Throwable t) {
+      MyExceptionReporter mer = new MyExceptionReporter();
+      mer.report(t); // Sanitize
+      return -1; // Non-positive error code
+    }
+  }
+
+  public static void main(String[] args) {
+    Dimensions d = new Dimensions(8, 8, 8);
+    System.out.println(d.getVolumePackage(21)); // Prints -1 (error)
+    System.out.println(d.getVolumePackage(19));
+    // Prints 1728 (12x12x12) instead of 1000 (10x10x10)
+  }
+}
+</code></pre>
+''',
+        'JAVA_ERR03': '''\
+<p>
+Restore prior object state on method failure
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to restore prior object state on method failure can leave the object in
+an inconsistent state and can violate required state invariants.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/ERR03-J.+Restore+prior+object+state+on+method+failure
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Dimensions {
+  private int length;
+  private int width;
+  private int height;
+  static public final int PADDING = 2;
+  static public final int MAX_DIMENSION = 10;
+
+  public Dimensions(int length, int width, int height) {
+    this.length = length;
+    this.width = width;
+    this.height = height;
+  }
+
+  protected int getVolumePackage(int weight) {
+    length += PADDING;
+    width  += PADDING;
+    height += PADDING;
+    try {
+      if (length &lt;= PADDING || width &lt;= PADDING || height &lt;= PADDING ||
+        length &gt; MAX_DIMENSION + PADDING || width &gt; MAX_DIMENSION + PADDING ||
+        height &gt; MAX_DIMENSION + PADDING || weight &lt;= 0 || weight &gt; 20) {
+        throw new IllegalArgumentException();
+      }
+
+      int volume = length * width * height;
+      length -= PADDING; width -= PADDING; height -= PADDING; // Revert
+      return volume;
+    } catch (Throwable t) {
+      MyExceptionReporter mer = new MyExceptionReporter();
+      mer.report(t); // Sanitize
+      return -1; // Non-positive error code
+    }
+  }
+
+  public static void main(String[] args) {
+    Dimensions d = new Dimensions(8, 8, 8);
+    System.out.println(d.getVolumePackage(21)); // Prints -1 (error)
+    System.out.println(d.getVolumePackage(19));
+    // Prints 1728 (12x12x12) instead of 1000 (10x10x10)
+  }
+}
+</code></pre>
+''',
+    }[id]
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('showEachMod', 'Show each object modification', False)
+
+
+def sameLexeme(lex1, lex2):
+    return lex1.line_begin() == lex2.line_begin() and lex1.column_begin() == lex2.column_begin()
+
+
+def endOfStatement(lexer, ref):
+    lex = lexer.lexeme(ref.line(), ref.column())
+    while lex:
+        if lex.text() == ';':
+            break
+        lex = lex.next(True, True)
+    return lex
+
+
+def sameStatement(ref1, ref2):
+    # Get lexer
+    if ref1.file() != ref2.file():
+        return False
+    lexer = ref1.file().lexer(False)
+
+    return sameLexeme(endOfStatement(lexer, ref1), endOfStatement(lexer, ref2))
+
+
+def refBeforeRef(ref1, ref2):
+    # Make sure the order is ref1, ref2
+    if ref2.line() < ref1.line():
+        return False
+    if ref2.line() == ref1.line() and ref2.column() <= ref1.column():
+        return False
+
+    return True
+
+
+def nodeBeforeRef(node, ref):
+    # Make the both node has position information
+    if node.line_begin() == None:
+        return False
+
+    # Make sure the order is node, ref
+    if ref.line() < node.line_begin():
+        return False
+    if ref.line() == node.line_begin() and ref.column() <= node.column_begin():
+        return False
+
+    return True
+
+
+def getTryCatch(method, refOrLex, **kwargs):
+    cfg = method.control_flow_graph()
+    if not cfg:
+        return
+
+    # Get try & catch nodes
+    for tryNode in cfg.nodes():
+        if tryNode.kind() != 'try':
+            continue
+        for catchNode in tryNode.children():
+            if catchNode.kind() != 'try-catch':
+                continue
+
+            # See if the refOrLex is between them
+            if 'lexeme' in kwargs and kwargs['lexeme']:
+                if lexemeBetweenNodes(tryNode, refOrLex, catchNode):
+                    return tryNode, catchNode
+            else:
+                if refBetweenNodes(tryNode, refOrLex, catchNode):
+                    return tryNode, catchNode
+
+
+def methodThrows(method, visited):
+    # Base case: already checked
+    if method in throwingMethods:
+        return throwingMethods[method]
+    # Base case: method already visited
+    if method in visited:
+        return False
+    # Base case: if method ref throws
+    if method.ref('Throw'):
+        throwingMethods[method] = True
+        return True
+    visited.add(method)
+
+    # Done if method definition directly throws
+    define = method.ref('Define')
+    end = method.ref('End')
+    if not define or not end:
+        throwingMethods[method] = False
+        return False
+    file = define.file()
+    if not file.contents():
+        return False
+    lex = file.lexer(False).lexeme(define.line(), define.column())
+    while lex and lexemeBefore(lex, end.line(), end.column()):
+        if lex.text() == 'throw' and not getTryCatch(method, lex, lexeme=True):
+            throwingMethods[method] = True
+            return True
+        lex = lex.next(True, True)
+
+    # Done if method definition indirectly throws
+    for call in method.refs('Call', 'Method'):
+        if methodThrows(call.ent(), visited) and not getTryCatch(method, call, lexeme=False):
+            throwingMethods[method] = True
+            return True
+
+    throwingMethods[method] = False
+    return False
+
+
+def isThrowable(ent):
+    return ancestorLongname(ent, r'java\.lang\.Throwable', translationUnitCache)
+
+
+def objectModifications(method, visited, varsAndMods, methodsAndMods):
+    # During recursion, look at base cases
+    if varsAndMods == None:
+        # Base case: method does/doesn't modify the object
+        if method in changingMethods:
+            return changingMethods[method]
+        # Base case: method already visited
+        if method in visited:
+            return False
+    visited.add(method)
+
+    # Skip main
+    if method.name() == 'main':
+        changingMethods[method] = False
+        return False
+
+    # Directly modifies the object
+    for modify in method.refs('Set, Modify', 'Variable'):
+        var = modify.ent()
+
+        # Skip variables besides members of the method's class
+        if var.parent() != method.parent():
+            continue
+
+        # Remember how this method modifies its object
+        if varsAndMods != None:
+            if var not in varsAndMods:
+                varsAndMods[var] = []
+            varsAndMods[var].append(modify)
+        changingMethods[method] = True
+
+    # Indirectly modifies the object
+    for call in method.refs('Call', 'Method'):
+        otherMethod = call.ent()
+
+        # Skip external methods
+        if otherMethod.parent() != method.parent():
+            continue
+
+        # Remember how this method modifies its object
+        if objectModifications(otherMethod, visited, None, None):
+            if methodsAndMods != None:
+                if otherMethod not in methodsAndMods:
+                    methodsAndMods[otherMethod] = []
+                methodsAndMods[otherMethod].append(call)
+            changingMethods[method] = True
+
+    modified = varsAndMods or methodsAndMods
+    changingMethods[method] = modified
+    return modified
+
+
+def objectRestored(method, throwRef, varsAndMods):
+    # Get try & try-catch nodes
+    tryCatch = getTryCatch(method, throwRef)
+    (tryNode, catchNode) = tryCatch if tryCatch else (None, None)
+
+    # Control flow
+    if tryNode:
+
+        # Get end-try and try-finally nodes
+        endTryNode = tryNode.end_node()
+        finallyNode = None
+        if endTryNode.kind() != 'end-try':
+            for finallyNode in endTryNode.children():
+                if finallyNode.kind() == 'try-finally':
+                    endTryNode = finallyNode.end_node()
+                    break
+
+        # See if all variables were restored through control flow
+        for var, mods in varsAndMods.items():
+            varRestored = False
+            for mod in mods:
+                # Restored in catch or finally
+                if refBetweenNodes(catchNode, mod, endTryNode):
+                    varRestored = True
+                    break
+                # Restored after try, catch, and finally
+                if nodeBeforeRef(endTryNode, mod):
+                    varRestored = True
+                    break
+            if not varRestored:
+                return False
+
+        return True
+
+    # No control flow
+    else:
+        # See if all variables were modified at or after the throw
+        for var, mods in varsAndMods.items():
+            for mod in mods:
+                if refBeforeRef(mod, throwRef) and not sameStatement(mod, throwRef):
+                    return False
+        return True
+
+    return False
+
+
+def check(check, file):
+    showEachMod = check.options().lookup('showEachMod')
+
+    for define in file.filerefs('Define', 'Method'):
+        outerMethod = define.ent()
+
+        # Skip if the object is not modified
+        varsAndMods    = dict() # { ent: [ ref, ... ], ... }
+        methodsAndMods = dict() # { ent: [ ref, ... ], ... }
+        objectModifications(outerMethod, set(), varsAndMods, methodsAndMods)
+        if not varsAndMods and not methodsAndMods:
+            continue
+
+        violations = False
+
+        # Exceptions from called methods
+        for call in outerMethod.refs('Call', 'Method'):
+            called = call.ent()
+
+            # Skip if control flow restores the object
+            if objectRestored(outerMethod, call, varsAndMods):
+                continue
+
+            # Skip unless the method throws
+            if not methodThrows(called, set()):
+                continue
+
+            violations = True
+            check.violation(called, file, call.line(), call.column(), ERR1)
+
+        # Exceptions from created throwables
+        for create in outerMethod.refs('Create', 'Class Type'):
+            created = create.ent()
+
+            # Skip if control flow restores the object
+            if objectRestored(outerMethod, create, varsAndMods):
+                continue
+
+            # Skip unless the created type is throwable
+            if not isThrowable(created):
+                continue
+
+            violations = True
+            check.violation(created, file, create.line(), create.column(), ERR1)
+
+        # Show each modification
+        if violations and showEachMod:
+            for var, mods in varsAndMods.items():
+                check.violation(outerMethod, file, mods[0].line(), mods[0].column(), ERR2, var.name())
+            for method, mods in methodsAndMods.items():
+                check.violation(outerMethod, file, mods[0].line(), mods[0].column(), ERR3, method.name())

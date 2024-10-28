@@ -1,0 +1,102 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2/10/21
+
+import re
+
+ERR1 = 'Unused Local Variable'
+ERR2 = 'Unused Parameter'
+
+
+# The ID for the check
+def ids():
+    return ('RECOMMENDED_18')
+
+# The short name of the check
+def name(id):
+    return {
+        'RECOMMENDED_18': 'SciTools\' Recommended Checks/Unused Local Variables',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'RECOMMENDED_18': [
+            'Language: Ada',
+            'Language: C#',
+            'Language: Fortran',
+            'Language: Java',
+            'Language: Jovial',
+            'Language: Python',
+            'Language: Pascal',
+            'Language: VHDL',
+            'Language: Web',
+            'Variables',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return "Find Local Variables that are defined but not used."
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'RECOMMENDED_18': """\
+<p><b>Rationale</b></p>
+<p>Local variables that are defined but not used can lead to memory management
+issues as well as making code more difficult to follow. They can also be
+indicitive of an error where a programmer meant to use one variable and
+accidently used another. This check ignores references inside inactive code
+(ie #if 0...#endif).</p>""",
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return re.search(r'ada|c#|cobol|fortran|java|jovial|pascal|python|vhdl|php|web', language.lower())
+
+def define_options(check):
+    check.option().checkbox("testParameters", 'Also test parameters', True)
+
+def check(check, file):
+    lexer = None
+    entrefs = []
+    if check.option().lookup("testParameters"):
+        entrefs = file.filerefs('define, declare ~formal', 'object local ~member ~unknown ~unresolved, Variable ~Member ~Unknown ~Unresolved, parameter ~unknown ~unresolved', True)
+    else:
+        entrefs = file.filerefs('define, declare ~formal', 'object local ~member ~unknown ~unresolved, Variable ~Member ~Unknown ~Unresolved', True)
+
+    for ref in entrefs:
+        if ref.ent().name() in ['...', '[unnamed]', '__range'] or ref.ent().refs("setby ~init, useby ~inactive, modifyby, callby"):
+            continue
+
+        if ref.ent().kind().check('Parameter'):
+            violation = check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR2)
+
+            if lexer == None:
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            prevLex = lexeme
+
+            # Find beginning of parameter
+            while prevLex.previous() and prevLex.previous().text() != '(' and prevLex.text() != ',' and prevLex.previous().token() != 'Newline':
+                prevLex = prevLex.previous()
+            nextLex = lexeme
+
+            # Find end of parameter
+            while nextLex.next() and nextLex.next().text() != ')' and nextLex.text() != ',' and nextLex.next().token() != 'Newline':
+                nextLex = nextLex.next()
+
+            violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), nextLex.line_end(), nextLex.column_end() + 1, '')
+
+        else:
+            violation = check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+            violation.add_fixit_hint(ref.line(), 1, ref.line() + 1, 1, '')

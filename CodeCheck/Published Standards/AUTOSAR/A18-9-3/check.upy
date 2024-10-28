@@ -1,0 +1,125 @@
+import re
+
+CHECK_DESC = 'The std::move shall not be used on objects declared const or const&'
+
+# The ID for the check
+def ids():
+    return ('A18-9-3', 'CPP_L023', 'MISRA23_28.6.1')
+
+# The short name of the check
+def name(id):
+    return {
+        'A18-9-3': '''\
+Published Standards/AUTOSAR/''' + CHECK_DESC,
+        'CPP_L023': '''\
+All Checks/Language Specific/C and C++/Libraries/''' + CHECK_DESC,
+        'MISRA23_28.6.1': 'Published Standards/MISRA C++ 2023/28.6.1 The argument to std::move shall be a non-const lvalue',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-9-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Libraries',
+        ],
+        'CPP_L023': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+        'MISRA23_28.6.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_28.6.1':
+        return '''
+<p><b>Rationale</b></p>
+<p>The result of calling std::move on an object that is const will result in the object’s content not
+being moved.</p>
+<p>Calling std::move on an rvalue is redundant.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1( std::string && ); // #1
+void f1( std::string const & ); // #2
+void f2( std::string const & s1, std::string s2 )
+{
+ f1( s1 ); // Calls #2
+ f1( std::move( s1 ) ); // Non-compliant - calls #2
+ f1( std::move( s2 ) ); // Compliant - calls #1
+ f1( std::string( "abc" ) ); // Calls #1
+ f1( std::move( std::string( "abc" ) ) ); // Non-compliant - redundant move of
+} // temporary, also calls #1
+</code></pre>
+        '''
+
+    return '''\
+<p><b>Rationale</b></p>
+<p>If an object is declared const or const&, then it will actually never be moved using the std::move.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A18-9-3.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;utility&gt;
+class A
+{
+    // Implementation
+};
+void F1()
+{
+    const A a1{};
+    A a2 = a1;            // Compliant - copy constructor is called
+    A a3 = std::move(a1); // Non-compliant - copy constructor is called
+                          // implicitly instead of move constructor
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>HIC++ v4.0 [9]: 17.3.1 Do not use std::move on objects declared with const or const& type.
+</p>'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Call", "Unresolved Function Template"):
+        if (func_ref.ent().longname() == "std::move" or func_ref.ent().longname() == "std::__1::move"):
+            lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+            on_param = 0           
+
+            while lex:
+                ent_type = lex.ent().type() if lex.ent() else None
+                ent_kind = lex.ent().kind().longname() if lex.ent() else None
+
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and ((ent_type and "const" in ent_type) or (ent_kind and "Type" in ent_kind)):
+                    check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), CHECK_DESC)
+                    break
+
+                lex = lex.next(True, True)

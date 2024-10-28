@@ -1,0 +1,203 @@
+import re
+
+
+ERR1 = 'Ensure that tasks executing in a thread pool do not fail silently.'
+RUNTIME_EXCEPTIONS = "throw.+(Arithmetic|ArrayStore|ClassCast|EnumConstantNotPresent|IllegalArgument|IllegalThreadState|NumberFormat|IllegalCaller|IllegalMonitorState|IllegalState|IndexOutOfBounds|ArrayIndexOutOfBounds|StringIndexOutOfBounds|LayerInstantiation|NegativeArraySize|NullPointer|Security|TypeNotPresent|UnsupportedOperation)Exception"
+
+
+# The ID for the check
+def ids():
+    return ('TPS03-J', 'JAVA_TPS03')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'TPS03-J': 'Published Standards/SEI Cert Standards/Java/Ensure that tasks executing in a thread pool do not fail silently',
+        'JAVA_TPS03': 'All Checks/Language Specific/Java/Thread Pools/Ensure that tasks executing in a thread pool do not fail silently',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'TPS03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_TPS03': [
+            'Language: Java',
+            'Thread Pools',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure that tasks executing in a thread pool do not fail silently'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure that tasks executing in a thread pool do not fail silently</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to provide a mechanism for reporting that tasks in a thread pool failed as a result of an exceptional condition can make it difficult or impossible to diagnose the problem.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TPS03-J.+Ensure+that+tasks+executing+in+a+thread+pool+do+not+fail+silently</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class PoolService {
+  private final ExecutorService pool = Executors.newFixedThreadPool(10);
+
+  public void doSomething() {
+    pool.execute(new Task());
+  }
+}
+
+final class Task implements Runnable {
+  @Override public void run() {
+    // ...
+    throw new NullPointerException();
+    // ...
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    for class_ref in file.filerefs("Define", "Class"):
+        for var_ref in class_ref.ent().refs("Define", "Member Variable"):
+            var_type = var_ref.ent().type()
+
+            if var_type and "Executor" in var_type:
+                lex = lexer.lexeme(var_ref.line(), var_ref.column())
+                on_set_init = False
+                has_afterexec = False
+                has_uncaughtexc = False
+
+                while lex.text() != ";":
+                    if lex.text() == "=" and lex.token() == "Operator":
+                        on_set_init = True
+                    elif on_set_init:
+                        if lex.text() == "new" and lex.token() == "Keyword":
+                            lex = lex.next(ignore_whitespace=True)
+
+                        lib = lex.ent().library()
+
+                        if lib and lib == "Standard":
+                            break
+
+                        if lex.ent().parent():
+                            for meth_ref in lex.ent().parent().refs("Define", "Method"):
+                                if meth_ref.ent().name() == "afterExecute":
+                                    has_afterexec = True
+                                    break
+
+                        break
+
+                    lex = lex.next(ignore_whitespace=True)
+
+                if has_afterexec:
+                    continue
+                elif on_set_init:
+                    on_param = 0
+
+                    while lex:
+                        ent_type = lex.ent().type() if lex.ent() else None
+
+                        if lex.text() == "(" and lex.token() == "Punctuation":
+                            on_param += 1
+                        elif lex.text() == ")" and lex.token() == "Punctuation":
+                            on_param -= 1
+
+                            if not on_param:
+                                break
+                        elif ent_type and ent_type == "ThreadFactory":
+                            def_ref = lex.ent().ref("Definein")
+                            factory_lexer = def_ref.file().lexer()
+                            factory_lex = factory_lexer.lexeme(
+                                def_ref.line(), def_ref.column())
+                            on_param = 0
+
+                            while factory_lex:
+                                ent_type = factory_lex.ent().type() if factory_lex.ent() else None
+
+                                if factory_lex.text() == "(" and factory_lex.token() == "Punctuation":
+                                    on_param += 1
+                                elif factory_lex.text() == ")" and factory_lex.token() == "Punctuation":
+                                    on_param -= 1
+
+                                    if not on_param:
+                                        break
+                                elif ent_type and "UncaughtExceptionHandler" in ent_type:
+                                    for meth_ref in factory_lex.ent().refs("Define", "Member Method"):
+                                        if meth_ref.ent().name() == "uncaughtException":
+                                            has_uncaughtexc = True
+
+                                    break
+
+                                factory_lex = factory_lex.next(
+                                    ignore_whitespace=True)
+
+                            break
+
+                        lex = lex.next(ignore_whitespace=True)
+
+                if has_uncaughtexc:
+                    continue
+
+                for use_ref in var_ref.ent().refs("Useby Deref Partial"):
+                    use_lexer = use_ref.file().lexer()
+                    lex = use_lexer.lexeme(
+                        use_ref.line(), use_ref.column())
+                    get_method = False
+
+                    while lex:
+                        if lex.text() == "." and lex.token() == "Punctuation":
+                            get_method = True
+                        elif get_method:
+                            if lex.text() == "execute":
+                                on_param = 0
+
+                                while lex:
+                                    ent_type = lex.ent().type() if lex.ent() else None
+
+                                    if lex.text() == "(" and lex.token() == "Punctuation":
+                                        on_param += 1
+                                    elif lex.text() == ")" and lex.token() == "Punctuation":
+                                        on_param -= 1
+
+                                        if not on_param:
+                                            break
+                                    elif ent_type and re.search(r"implements (Runnable|Callable)", ent_type):
+                                        for meth_ref in lex.ent().refs("Define", "Method Member"):
+                                            if re.search(r"run|call", meth_ref.ent().name()) and re.search(RUNTIME_EXCEPTIONS, meth_ref.ent().contents()):
+                                                check.violation(use_ref.scope(), use_ref.file(
+                                                ), use_ref.line(), use_ref.column(), ERR1)
+
+                                    lex = lex.next()
+
+                            break
+
+                        lex = lex.next()

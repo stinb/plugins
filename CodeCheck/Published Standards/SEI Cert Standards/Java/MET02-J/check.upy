@@ -1,0 +1,206 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 4/7/2022
+
+ERR1 = 'Use of deprecated '
+ERR2 = 'Use of obsolete '
+ERRTYPE = ['Method', "Field", "Class"]
+ERREX = " via extension of deprecated class "
+
+DEF_NAME = "Do not use deprecated or obsolete classes or methods"
+
+OBSOLETE = [ "java.lang.Thread.run", "java.lang.Character.isJavaLetter", "java.lang.Character.isJavaLetterOrDigit",
+"java.lang.Character.isSpace", "java.lang.Class.newInstance", "java.util.Properties.save", "java.lang.Thread.run",
+"java.lang.Thread.stop", "java.lang.ThreadGroup", "java.util.Date"]
+
+OBSOLETEIN = ["java.util.Dictionary", "java.util.Date", "java.lang.ThreadGroup"]
+
+# The ID for the check
+def ids():
+    return ('MET02-J', 'JAVA_MET02')
+
+# The short name of the check
+def name(id):
+    return {
+        'MET02-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_MET02': "All Checks/Language Specific/Java/Methods/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MET02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_MET02': [
+            'Language: Java',
+            'Methods',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use deprecated or obsolete classes, methods, or fields</p>
+<p><b>Risk Assessment</b></p>
+<p>Using deprecated or obsolete classes or methods in program code can lead to erroneous behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/MET02-J.+Do+not+use+deprecated+or+obsolete+classes+or+methods</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">@Deprecated
+public class Worker {
+  @Deprecated
+  public static int BIGX = 0;
+
+}
+
+class test {
+  Worker nw = new Worker(); // Non-compliant
+  testm(){
+    int x = Worker.BIGX; // Non-compliant
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>By default the depth is set to 0, this means a method inside a deprecated class will not be considered deprecated itself. Increasing this number checks the parents of the fields but decreases performance.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return True
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().integer("ce", "Test for extended deprecated values depth", 0)
+    check.option().checkbox("ds", "Ignore uses from deprecated to deprecated", True)
+    check.option().checkbox("ij", "Ignore JDK", True)
+
+def check(check):
+    ce = check.option().lookup('ce')
+    ds = check.option().lookup('ds')
+    ij = check.option().lookup('ij')
+
+    #get a dict of all fun/class/var
+    depD = {}
+    items = []
+    for e in check.db().ents("~file"):
+        depD[e.longname()] = False
+        dep = False
+        if is_dep(e):
+            dep = True
+        else:
+            if is_obs(e, OBSOLETE, OBSOLETEIN):
+                dep = True
+            elif ce > 0:
+                depP = check_parent_class_dep(e, ce)
+                if depP:
+                    dep = True
+        if e.longname() in depD and depD[e.longname()] == True:
+            continue
+        depD[e.longname()] = dep
+
+    for file in check.files():
+        items += file.filerefs("Call","Method ~Constructor")
+        items += file.filerefs("Use","Variable")
+        items += file.filerefs("Typed, Create","Class")
+
+    dupLine = {}
+    for item in items:
+        if depD[item.ent().longname()] == True:
+            scope = find_true_scope(item, check)
+            if scope is None:
+                continue
+            if ds and depD[scope.longname()] == True:
+                continue
+            if ij and "java." == scope.longname()[0:5] or "jdk." == scope.longname()[0:4] or "javax." == scope.longname()[0:6]:
+                continue
+
+            if is_unique(dupLine, item, check):
+                pm(item.ent().longname() + " " + scope.longname(), check, item.ent(), item.file(), item.line(), item.column())
+                dup_add_line(dupLine, item, check)
+
+def is_obs(e, obs, obsn, checki = False, check = None):
+    for o in obs:
+        if checki:
+            pm(o + " " + e.longname() + " \t\t" + str(o in e.longname() ), check)
+        if o == e.longname():
+            return True
+    for o in obsn:
+        if o in e.longname():
+            return True
+    return False
+
+def is_unique(l, e, check=None):
+    if e.ent().longname() not in l:
+        return True
+    else:
+        if e.line() in l[e.ent().longname()]:
+            return False
+        else:
+            return True
+
+def dup_add_line(l, e, check=None):
+    if is_unique(l, e, check):
+        l[e.ent().longname()] = [e.line()]
+    else:
+        l[e.ent().longname()].append(e.line())
+
+def find_true_scope(ref, check = None):
+    if ref.scope() is None:
+        return None
+
+    if "Class" not in ref.scope().kindname() and "Method" not in ref.scope().kindname():
+        s = ref.scope().ref("Definein")
+        if s is None:
+            return None
+        if s.ent() is None or ("Class" not in s.ent().kindname() and "Method" not in s.ent().kindname()):
+            return None
+        return s.ent()
+    else:
+        return ref.scope()
+
+
+
+def check_parent_class_dep(e, limit = 3):
+
+    lastc = e
+    c = True
+    count = 0
+    while c and count < limit:
+        count += 1
+        c = False
+        for refin in lastc.refs("Definein"):
+            if is_dep(refin.ent()) and "Class" in refin.ent().kindname():
+                return refin.ent()
+            if "Class" in refin.ent().kindname():
+                lastc = refin.ent()
+                c = True
+    return None
+
+def is_dep(e, full = 0, check = None):
+    for annoRef in e.refs("Use Annotation"):
+            if annoRef.ent().name() == "Deprecated":
+                return True
+    if full > 0:
+        p = check_parent_class_dep(e, full)
+        if p:
+            return True
+    return False
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

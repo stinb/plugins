@@ -1,0 +1,316 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-21-2020
+
+import re
+
+# The ID for the check
+def id():
+    return 'CPP_DD000'
+
+# The short name of the check
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Declarations and Definitions/The defines, \
+typedefs, structures, externals, globals, statics, external prototypes, and \
+local prototypes shall be grouped by category."""
+
+
+
+def tags(id):
+    return {
+        'CPP_DD000': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """\
+<p>The defines, typedefs, structures, externals, globals, statics, external prototypes, and local prototypes shall be grouped by category.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_global():
+    return False
+
+# Options for the check
+def define_options(check):
+   return
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+    lexeme = lexer.first()
+
+    # Groups
+    b = {
+        'defines': False,
+        'typedefs': False,
+        'structures': False,
+        'externals': False,
+        'globals': False,
+        'statics': False,
+        'external prototypes': False,
+        'local prototypes': False
+    }
+
+    while lexeme:
+        skip = False
+
+        # defines
+        if lexeme.text() == '#':
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+            if lexeme.text() == 'define':
+
+                if not b['defines']:
+                    b['defines'] = True
+
+                    # Skip through grouped defines
+                    while lexeme.text() == 'define' or lexeme.text() == 'ifdef' or lexeme.text() == 'ifndef' or lexeme.text() == 'endif' or lexeme.text() == 'else':
+                        line = lexeme.line_begin()
+                        while lexeme.line_begin() == line:
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                            if not lexeme:
+                                return
+
+                        if lexeme.text() == '#':
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                else:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Defines are not grouped by category') 
+
+        # typedefs
+        elif lexeme.text() == 'typedef':
+            if not b['typedefs']:
+                b['typedefs'] = True
+
+                # Skip through grouped typedefs
+                while lexeme.text() == 'typedef':
+                    line = lexeme.line_begin()
+                    while lexeme.line_begin() == line:
+                        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                        if not lexeme:
+                            return
+
+            else:
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Typedefs are not grouped by category') 
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                
+
+        # structures
+        elif lexeme.text() == 'struct':
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True).next(ignore_whitespace=True, ignore_comments=True)
+            if lexeme.text() == '{':
+                if not b['structures']:
+                    b['structures'] = True
+
+                    # Skip through grouped structures
+                    while lexeme.text() == '{':
+                        while lexeme.text() != '}':
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                        line = lexeme.line_begin()
+                        while lexeme.line_begin() == line:
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                            if lexeme.text() == ';':
+                                break
+                            if not lexeme:
+                                return
+
+                        if lexeme.text() == ';':
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                            if not lexeme:
+                                return
+                            if lexeme.text() == 'struct':
+                                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True).next(ignore_whitespace=True, ignore_comments=True)
+
+                else:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Structures are not grouped by category') 
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+        # externals
+        elif lexeme.text() == 'extern':
+            nextLex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+            line = lexeme.line_begin()
+
+            # check if external prototype
+            while not nextLex.ent() and nextLex.line_begin() == line:
+                nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+            if nextLex.ent() and nextLex.ent().kind().longname() == 'C Unresolved Function':
+                lexeme = nextLex
+
+                if not b['external prototypes']:
+                    b['external prototypes'] = True
+                    line = lexeme.line_begin()
+                    while lexeme.line_begin() == line:
+                        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                    # Skip through grouped external prototypes
+                    while lexeme.text() == 'extern':
+                        nextLex = lexeme
+                        line = lexeme.line_begin()
+
+                        while not nextLex.ent():
+                            nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+                            if not nextLex:
+                                return
+
+                        if nextLex.ent().kind().longname() != 'C Unresolved Function' or nextLex.line_begin() != line:
+                            break
+
+                        elif nextLex.ent().kind().longname() == 'C Unresolved Function':
+                            line = nextLex.line_begin()
+                            while nextLex == line:
+                                nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+
+                                if not nextLex:
+                                    return
+
+                            lexeme = nextLex
+                else:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'External prototypes are not grouped by category')
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+            else:
+                if not b['externals']:
+                    b['externals'] = True
+
+                    # Skip through grouped externals
+                    while lexeme.text() == 'extern':
+                        nextLex = lexeme
+                        line = lexeme.line_begin()
+                        while not nextLex.ent() and nextLex.line_begin() == line:
+                            nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+                            if not nextLex:
+                                return
+
+                        if nextLex.ent() and nextLex.ent().kind().longname() == 'C Unresolved Function':
+                            break
+                        else:
+                            while nextLex.line_begin() == line:
+                                nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+                                if not nextLex:
+                                    return
+
+                            lexeme = nextLex
+
+                else:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Externals are not grouped by category')
+                    line = lexeme.line_begin()
+                    while lexeme.line_begin() == line:
+                        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+        # statics
+        elif lexeme.text() == 'static':
+            nextLex = lexeme
+            while nextLex.text() != ';':
+                if nextLex.ent() and nextLex.ent().kind().longname() == 'C Function Static':
+                    skip = True
+                    break
+                nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+            if not skip:
+                if not b['statics']:
+                    b['statics'] = True
+
+                    # Skip through grouped statics
+                    while lexeme.text() == 'static':
+                        line = lexeme.line_begin()
+                        while lexeme.line_begin() == line:
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                            if not lexeme:
+                                return
+
+                else:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Statics are not grouped by category')
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                    
+            else:
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+        # local prototypes
+        elif lexeme.ent() and lexeme.ent().kind().longname() == 'C Unresolved Function':
+            line = lexeme.line_begin()
+            prevLex = lexeme
+            while prevLex and prevLex.previous(ignore_whitespace=True, ignore_comments=True) and prevLex.previous(ignore_whitespace=True, ignore_comments=True).line_begin() == line:
+                prevLex = prevLex.previous(ignore_whitespace=True, ignore_comments=True)
+
+            refs = lexeme.ent().refs()
+            for ref in refs:
+                if ref.kind().longname() == 'C Callby' and ref.line() == line:
+                    skip = True
+                    break
+
+            if prevLex.token() == 'Keyword' and not skip:
+                if not b['local prototypes']:
+                    b['local prototypes'] = True
+
+                    # Skip through grouped local prototypes
+                    while lexeme.ent() and lexeme.ent().kind().longname() == 'C Unresolved Function':
+                        line = lexeme.line_begin()
+                        while lexeme.line_begin() == line:
+                            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                            if not lexeme:
+                                return
+                        if lexeme.text() == 'extern' or lexeme.token() != 'Keyword':
+                            break
+                        line = lexeme.line_begin()
+                        nextLex = lexeme
+                        while nextLex.line_begin() == line and not nextLex.ent():
+                            nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+                            if not nextLex:
+                                return
+
+                        if nextLex.line_begin() == line and nextLex.ent().kind().longname() == 'C Unresolved Function':
+                            lexeme = nextLex
+
+                else:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Local prototypes are not grouped by category')
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+            else:
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+        # globals
+        elif lexeme.ent() and lexeme.ent().kindname() and lexeme.ent().type() and lexeme.ent().kindname() == 'Global Object' and not re.search(r"struct", lexeme.ent().type()):
+            if not b['globals']:
+                b['globals'] = True
+
+                # Skipped through grouped globals
+                while lexeme.ent() and lexeme.ent().kindname() == 'Global Object':
+                    line = lexeme.line_begin()
+                    while lexeme and lexeme.line_begin() == line:
+                        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                    nextLex = lexeme
+                    while lexeme and nextLex and nextLex.line_begin() == lexeme.line_begin() and not nextLex.ent():
+                        nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+
+                    if not lexeme:
+                        return
+
+                    if lexeme and nextLex and nextLex.line_begin() == lexeme.line_begin():
+                        if nextLex.ent().kindname() == 'Global Object':
+                            lexeme = nextLex
+
+            else:
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Globals are not grouped by category')
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+        else:
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+

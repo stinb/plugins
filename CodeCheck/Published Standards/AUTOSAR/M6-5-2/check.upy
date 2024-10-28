@@ -1,0 +1,195 @@
+# This script is designed to run with Understand - CodeCheck
+
+
+import re
+
+
+ERR1 = 'Inappropriate condition test in for loop'
+
+
+eq_operator = {'!=', "=="}
+rel_operator = {'<', ">", '<=', ">="}
+
+
+def ids():
+    return ('M6-5-2', 'MISRA08_6-5-2', 'CPP_C020')
+
+
+def name(id):
+    return {
+        'M6-5-2': 'Published Standards/AUTOSAR/If loop-counter is not modified by -- or ++, then, within condition, the loop-counter shall only be used as an operand to <=, <, > or >=',
+        'MISRA08_6-5-2': 'Published Standards/MISRA-C++ 2008/6-5-2 If loop-counter is not modified by -- or ++, then, within condition, the loop-counter shall only be used as an operand to <=, <, > or >=',
+        'CPP_C020': 'All Checks/Language Specific/C and C++/Control Flow/If loop-counter is not modified by -- or ++, then, within condition, the loop-counter shall only be used as an operand to <=, <, > or >=',
+    }[id]
+
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'M6-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C020': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+When the <i>loop-counter</i> is modified using an operator other than <code>--</code> or <code>++</code>, then <code>==</code> and <code>!=</code> shall not be used, as loop termination may not occur, which may be inconsistent with developer expectations.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">for ( i = 1; i != 10; i += 2 )    // Non-compliant
+for ( i = 1; i &lt;= 10; i += 2 )    // Compliant
+for ( i = 1; i != 10; ++i )       // Compliant
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+# function for while and do-while loop validation
+def validate_other_loop(lex):
+    return_en = None
+    return_op = None
+    incre_once = None
+    dowhile = False
+
+    while lex and lex.text() != ")":
+        if lex.ent() and lex.ent().kind().check("~Unresolved Object") and lex.ent().refs("Modifyby"):
+            return_en = lex.ent()
+            if not re.search(r"int", str(return_en.type())):
+                return False,True
+        elif lex.token() == "Operator" and (lex.text() in eq_operator or lex.text() in rel_operator):
+            return_op = str(lex.text())
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    lex.next(ignore_whitespace=True,ignore_comments=True).text() == ";" and (dowhile := True)
+
+    # go up - traverse whole do while block
+    if dowhile:
+        # loop through entire block
+        while lex and lex.text() != "do":
+            # check for possible counter ent
+            if lex.token() == "Operator" and not (lex.text() in eq_operator or lex.text() in rel_operator) and lex.text() != "=":
+                if lex.previous(ignore_whitespace=True,ignore_comments=True).ent():
+                    ctr_ent = lex.previous(ignore_whitespace=True,ignore_comments=True).ent()
+                else:
+                    ctr_ent = lex.next(ignore_whitespace=True,ignore_comments=True).ent()
+                # validate if correct ctr ent
+                if re.search(r"=", str(lex.text())) and return_en == ctr_ent:
+                    incre_once = False
+                else:
+                    incre_once = True
+            lex = lex.previous(ignore_whitespace=True,ignore_comments=True)
+    # go down - traverse whole while block
+    else:
+        # start at { punctation
+        lex.next(ignore_whitespace=True,ignore_comments=True).text() == "{" \
+            and (lex := lex.next(ignore_whitespace=True,ignore_comments=True))
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+        braces = 1
+
+        # loop through entire block
+        while lex and braces != 0:
+            # loop aid
+            if lex.text() == "{":
+                braces = braces + 1
+            elif lex.text() == "}":
+                braces = braces - 1
+            # check for possible counter ent
+            if lex.token() == "Operator" and not (lex.text() in eq_operator or lex.text() in rel_operator) and lex.text() != "=":
+                if lex.previous(ignore_whitespace=True,ignore_comments=True).ent():
+                    ctr_ent = lex.previous(ignore_whitespace=True,ignore_comments=True).ent()
+                else:
+                    ctr_ent = lex.next(ignore_whitespace=True,ignore_comments=True).ent()
+                # validate if correct ctr ent
+                if re.search(r"=", str(lex.text())) and return_en == ctr_ent:
+                    incre_once = False
+                else:
+                    incre_once = True
+            lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    if return_en == None or incre_once == None:
+        return False,True
+    return rule_validation(return_op, incre_once),False
+
+# function for for-loop validation
+def validate_for_loop(lex):
+    return_en = None
+    return_op = None
+    incre_once = None
+     # loop through entire for block
+    while lex and lex.text() != ")":
+        if lex.ent() and lex.ent().kind().check("~Unresolved Object") and lex.ent().refs("Modifyby"):
+            return_en = lex.ent()
+            if not re.search(r"int", str(return_en.type())):
+                return False,True
+        elif lex.token() == "Operator" and (lex.text() in eq_operator or lex.text() in rel_operator):
+            return_op = str(lex.text())
+        elif lex.token() == "Operator" and not (lex.text() in eq_operator or lex.text() in rel_operator) and lex.text() != "=":
+            if re.search(r"=", str(lex.text())):
+                incre_once = False
+            else:
+                incre_once = True
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    if return_en == None or incre_once == None:
+        return False,True
+    return rule_validation(return_op, incre_once),False
+
+def rule_validation(return_op, incre_one):
+    # not ++/-- and !=/==
+    if not incre_one and return_op in eq_operator:
+        return False
+    else:
+        return True
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+    while lex:
+        is_valid = False
+        skip = False
+        if (lex.text() == "for" or lex.text() == "while") and lex.token() == "Keyword":
+            if lex.text() == "for":
+                is_valid, skip = validate_for_loop(lex)
+            else:
+                is_valid, skip = validate_other_loop(lex)
+
+            if not skip:
+                if not is_valid:
+                    check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)

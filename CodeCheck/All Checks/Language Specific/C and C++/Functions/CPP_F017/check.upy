@@ -1,0 +1,162 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2-27-23
+
+
+import re
+
+
+ERR1 = 'Function template explicitly specialized: %1'
+
+
+def ids():
+    return ('MISRA08_14-8-1', 'CPP_F017', 'MISRA23_17.8.1')
+
+
+def name(id):
+    return {
+        'MISRA08_14-8-1': 'Published Standards/MISRA-C++ 2008/\
+14-8-1 Overloaded function templates shall not be explicitly specialized',
+        'CPP_F017': 'All Checks/Language Specific/C and C++/Functions/\
+Overloaded function templates shall not be explicitly specialized',
+        'MISRA23_17.8.1': 'Published Standards/MISRA C++ 2023/17.8.1 Function templates shall not be explicitly specialized',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_14-8-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Functions',
+        ],
+        'CPP_F017': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+        'MISRA23_17.8.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Functions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    if id == 'MISRA23_17.8.1':
+        return '''
+<p><b>Amplification</b></p>
+<p>This rule also applies to member function templates, but not non-template member functions of class
+templates.</p>
+
+<p><b>Rationale</b></p>
+<p>Explicit function specializations will be considered only after overload resolution has chosen a best
+match from the set of primary function templates. Furthermore, when the overload set contains both
+template and non-template versions that are otherwise an equal match for overload resolution, the
+template version (and therefore its specializations) will not be selected. All of this may be inconsistent
+with developer expectations.</p>
+<p>Note: overloads provide a better solution than the use of explicit function specializations.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">template&lt; typename T &gt; void f1( T ); // Overload # 1A
+template&lt;&gt; void f1&lt; char * &gt;( char * ); // Non-compliant - explicit
+ // specialization of overload # 1A
+template&lt; typename T &gt; void f1( T * ); // Overload # 1B
+template&lt; typename T &gt; void f2( T ); // Overload # 2A
+template&lt; typename T &gt; void f2( T * ); // Overload # 2B
+void f2( char * ); // Overload # 2C - rule does not apply
+template&lt; typename T &gt; void f3( T );
+template&lt;&gt; void f3&lt; char * &gt;( char * ); // Non-compliant - explicit
+ // specialization of f3
+void b( char * s )
+{
+ f1( s ); // Calls overload # 1B, with T = char
+ f2( s ); // Calls overload # 2C
+}</code></pre>
+'''
+
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>
+Explicit specializations will be considered only after overload resolution has
+chosen a best match from the set of primary function templates. This may be
+inconsistent with developer expectations.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">template &lt;typename T&gt; void f ( T );  // overload Example 1
+template &lt;typename T&gt; void f ( T* ); // overload Example 2
+template &lt;&gt; void f&lt;int32_t*&gt; ( int32_t* ); // explicit specialization of
+                                           // Example 1
+void b ( int32_t * i )
+{
+  f ( i ); // Non-compliant
+           // - Calls Example 2, f&lt;int32_t*&gt;
+}
+</code></pre>
+
+<p>
+Where a template is not overloaded with other templates, or is overloaded with
+non-template functions then it can be explicitly specialized, as it is
+consistent with developer expectation that the explicit specializations will
+only be considered if that <i>primary template</i> is chosen.
+</p>
+
+<pre><code language="C++">template &lt;typename T&gt; void f ( T );        // Example 1
+template &lt;&gt; void f&lt;int32_t*&gt; ( int32_t* ); // Example 2
+void b ( int32_t * i )
+{
+ f ( i ); // Compliant
+          // - Calls Example 2, f&lt;int32_t*&gt;
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    overloaded_ftemps = True if (check.id() in ['MISRA08_14-8-1', 'CPP_F017']) else False
+
+    check.option().checkbox('overloaded_ftemps', 'Overloaded function templates only', overloaded_ftemps)
+
+
+def check(check, file):
+    overloaded_ftemps = check.option().lookup('overloaded_ftemps')
+    func_temps = {} # key: name, value: True if overloaded, False otherwise
+
+    for ftemp_ref in file.filerefs("Declare, Define", "Function Template", True):
+        if ftemp_ref.ent().name() not in func_temps:
+            func_temps[ftemp_ref.ent().name()] = False
+        else:
+            func_temps[ftemp_ref.ent().name()] = True
+
+    for func_ref in file.filerefs("Define, Declare", "Function ~Template", False):
+        if not re.search("<.*>", func_ref.ent().longname()):
+            continue
+
+        if func_ref.ent().name() in func_temps:
+            if overloaded_ftemps and not func_temps[func_ref.ent().name()]:
+                continue
+
+            # Error if function name matches template
+            check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR1, func_ref.ent().name())
+
+

@@ -1,0 +1,188 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 10-13-14
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => "Non unique external identifier %1 conflicts with entity %2 in file %3 on line %4";
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA12_5.8";}
+
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA C 2012\\5.8 Identifiers that define objects or functions with external linkage shall be unique";}
+
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Category: Required',
+    'Standard: MISRA C 2012',
+    'Identifiers',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return "5.8 (Global)( Required ) Identifiers that define objects or functions with external linkage shall be unique.";
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Amplification</b></p>
+An identifier used as an external identifier shall not be used for any other purpose in any name space
+or translation unit, even if it denotes an object with no linkage.
+</p>
+
+<p><b>Rationale</b></p>
+Enforcing uniqueness of identifier names in this manner helps avoid confusion. Identifiers of objects
+that have no linkage need not be unique since there is minimal risk of such confusion.
+</p>
+
+<p><b>Example</b></p>
+In the following example, file1.c and file2.c are both part of the same project.
+</p>
+
+<pre><code language="C++">  /* file1.c */
+
+  int32_t count;              /* "count" has external linkage */
+
+  void foo ( void )           /* "foo" has external linkage */
+  {
+    int16_t index;            /* "index" has no linkage */
+  }
+
+---------------------------------------------------------------------
+
+  /* file2.c */
+
+  static void foo ( void )    /* Non-compliant - "foo" is not unique
+  {                            * (it is already defined with external
+                               * linkage in file1.c) */
+    int16_t count;            /* Non-compliant - "count" has no linkage
+                               * but clashes with an identifier with
+                               * external linkage */
+    int32_t index;            /* Compliant - "index" has no linkage */
+  }
+
+</code></pre>
+
+<p><b>See also</b><br>
+Rule 5.3
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 0;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 1;
+}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'ignoreUnresolved', 'Ignore Entities defined in #include(d) files that are not in the current project definition ( i.e. Unresolved )', 1 ) # create a checkbox option
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the check from understand, retrieve our global entities from the database and check our options
+  my $check = shift;
+
+   my $filterString = '';
+  $filterString = $filterString . ' ~Unresolved' if $check->option->lookup( 'ignoreUnresolved' );
+
+  my @externalsDefined = $check->db->ents( 'C Global ~Static' . $filterString . ', C Function ~Lambda ~Member ~Static' . $filterString );
+  return unless @externalsDefined;
+
+  # Start my hash for tracking patterns
+  my %patternsSeen = ();
+  my %errorsThrown = ();
+
+  foreach my $external ( @externalsDefined ) {
+
+    # Pull a define reference
+    my $define = $external->ref ( 'C Definein, C Declarein' );
+    next unless $define;
+
+    # Test if we have seen a external with the same name
+    if ( exists $patternsSeen{ $define->scope->name } ) {
+
+      # We've seen this name before, throw error
+      my $seenName = $patternsSeen{ $define->scope->name };
+      $errorsThrown{ $define->scope->name } = $define;
+      $check->violation( $external, $define->file, $define->line, $define->column,
+                         ERR1, $external->name, $seenName->scope->name, $seenName->file->name, $seenName->line );
+
+    # Put this external into the hash for comparison later
+    } else {
+      $patternsSeen{ $define->scope->name } = $define;
+    }
+
+  }
+
+  my @everythingElse = $check->db->ents( $filterString );
+  return unless @everythingElse;
+
+  foreach my $else ( @everythingElse ) {
+
+    # Pull references
+    my @defineRefs = $else->refs ( 'C Definein, C Declarein ~Implicit' );
+    next unless @defineRefs;
+
+    # We need a define or a declare reference, don't care which one so we just take the first one
+    my $define = @defineRefs[0];
+    next unless $define;
+
+    if ( exists $patternsSeen{ $define->scope->name } and ! exists $errorsThrown{ $define->scope->name } ) {
+
+      my $seenName = $patternsSeen{ $define->scope->name };
+
+      # Check to make sure we are not looking at the same entity
+      next if $define->scope->uniquename eq $seenName->scope->uniquename;
+
+      # We've seen this name before, throw error
+      $check->violation( $else, $define->file, $define->line, $define->column,
+                         ERR1, $else->name, $seenName->scope->name, $seenName->file->name, $seenName->line );
+
+    }
+
+  }
+
+
+}

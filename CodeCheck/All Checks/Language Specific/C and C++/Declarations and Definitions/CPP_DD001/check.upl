@@ -1,0 +1,116 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 8-24-2020
+
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => "Violation: Global %1 is only used within function %2, so it should be local.";
+use constant ERR2 => "Violation: Global %1 is only used within file %2, so static keyword should be used.";
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+  $check->add_tr_text(ERR2);
+}
+
+sub checkID { return "CPP_DD001";}
+
+sub name{ return "All Checks\\Language Specific\\C and C++\\Declarations and Definitions\\" .  "Use of global functions and variables shall be limited";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Declarations and Definitions',
+  );
+}
+
+sub description { return "Use of global functions and variables shall be limited.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Use of global functions and variables shall be limited. A static is preferable to a global. A local is preferable to a static.
+For example, if function A is only called by function B, then functions A and B could be in a single module and function A
+could be declared static. A known exception is that some debuggers, shells, and other tools cannot access static
+variables and global reference may be necessary in order to gain insight into the contents of a variable.
+</p>
+
+
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 0;
+}
+
+sub test_global {
+  return 1;
+}
+
+# This is the actual test being performed on the user's code
+sub check {
+  # tests if the global function/object could be static and flags if so
+  my $check = shift;
+
+  my @definedEnts;
+  FILE:foreach my $file ($check->get_files) {
+    next FILE unless $file->kind->check('c file');
+    return if $check->is_abort();
+    REF:foreach my $ref ($file->filerefs("define","global object ~static ~unknown ~member, function ~template ~static ~unknown ~member",1)){
+      push (@definedEnts,$ref->ent);
+    }
+  }
+
+  my %seen;
+  ENT:foreach my $ent (@definedEnts) {
+
+    next if $ent->name eq 'main';
+    next if $seen{$ent->id};
+    $seen{$ent->id}=1;
+    my $parent = $ent->parent;
+    next if $parent && $ent->name eq $parent->name;
+    next if $ent->name =~ /^~/;
+    my @defines = $ent->refs("definein");
+    my @files;
+    foreach my $defRef (@defines){
+      push (@files,$defRef->file->id) unless grep {$_ eq $defRef->file->id} @files;
+    }
+    my $defRef = $defines[0];
+    my @refs = $ent->refs("~definein ~declarein");
+    REF:foreach my $ref(@refs) {
+      next REF if grep {$_ eq $ref->file->id} @files;
+      next ENT;
+    }
+
+    # test which globals are used in a single function and can thus be local
+    my @uses = $ent->refs("setby, useby, modifyby");
+    next ENT unless @uses;
+    my @scopes;
+    foreach my $useRef (@uses){
+      next ENT unless $useRef->ent and $useRef->ent->kind->check('function');
+      push(@scopes, $useRef->ent->name) unless grep {$_ eq $useRef->ent->name} @scopes;
+    }
+
+    my $useRef = $uses[0];
+
+    # check length of scopes array for ents that have been used in more than one scope
+    my $numScopes = @scopes;
+
+    if ($numScopes <= 1) {
+      $check->violation($useRef->scope, $useRef->file, $useRef->line, $useRef->column, ERR1, $useRef->scope->name, $useRef->ent()->name()) unless $useRef->ent()->name() eq "[unnamed]";
+    }
+    # end local test
+
+    else {
+      $check->violation($defRef->scope, $defRef->file, $defRef->line, $defRef->column, ERR2, $defRef->scope->name, $defRef->file->name);
+    }
+  }
+
+  return;
+}

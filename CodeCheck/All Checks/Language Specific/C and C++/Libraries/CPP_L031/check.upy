@@ -1,0 +1,118 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2-10-2022
+import re
+
+ERR1 = 'Potential side effects inside of sizeof operator'
+
+def ids():
+    return ('A5-3-1', 'CPP_L031')
+
+def name(id):
+    return {
+        'A5-3-1': """\
+Published Standards/AUTOSAR/Evaluation of the operand to the typeid operator shall not contain side effects.""",
+        'CPP_L031': """\
+All Checks/Language Specific/C and C++/Libraries/Evaluation of the operand to the typeid operator shall not contain side effects.""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'A5-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Libraries',
+        ],
+        'CPP_L031': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>The operand of typeid operator is evaluated only if it is a function call
+which returns a reference to a polymorphic type.</p>
+<p>Providing side effects to typeid operator, which takes place only under
+special circumstances, makes the code more difficult to maintain.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A5-3-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;typeinfo&gt;
+3 bool SideEffects() noexcept
+4 {
+5   // Implementation
+6   return true;
+7 }
+8 class A
+9 {
+10 public:
+11   static A& F1() noexcept { return a; }
+12   virtual ~A() {}
+13
+14 private:
+15   static A a;
+16 };
+17 A A::a;
+18 void F2() noexcept(false)
+19 {
+20   typeid(SideEffects()); // Non-compliant - sideEffects() function not called
+21   typeid(A::F1()); // Non-compliant - A::f1() functions called to determine
+22   // the polymorphic type
+23 }
+</code></pre>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not re.search(r'typeid', file.contents()):
+        return
+
+    lexer = file.lexer()
+
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        if not lexeme.text() == 'typeid':
+            continue
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme and lexeme.text() == '(':
+            close = findClose(lexeme)
+            if not close:
+                continue
+
+            while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                # Throw violation for any operator or call a function that may cause side effects
+                if re.search(r'=|\+\+|--|\+=|-=|<<|>>', lexeme.text()) or (lexeme.ent() and re.search(r'function', lexeme.ent().kindname().lower())) or (lexeme.ent() and lexeme.ent().ref("Deref Callby")):
+
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+                lexeme = lexeme.next(True, True)
+
+def findClose(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == ')' and count == 0):
+        if lexeme.text() == '(':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme and lexeme.text() == ')':
+            count -= 1
+
+
+    return lexeme

@@ -1,0 +1,115 @@
+import re
+
+
+ERR1 = 'Do not attempt to create a std::string from a null pointer.'
+
+
+# The ID for the check
+def id():
+    return ('STR51-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'STR51-CPP': 'Published Standards/SEI Cert Standards/C++/Do not attempt to create a std::string from a null pointer',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not attempt to create a std::string from a null pointer'
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Title</b></p>
+<p>Do not attempt to create a std::string from a null pointer</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Dereferencing a null pointer is undefined behavior, typically abnormal program termination. In some situations, however, dereferencing a null pointer can lead to the execution of arbitrary code [Jack 2007, van Sprundel 2006]. The indicated severity is for this more severe case; on platforms where it is not possible to exploit a null pointer dereference to execute arbitrary code, the actual severity is low.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/STR51-CPP.+Do+not+attempt+to+create+a+std%3A%3Astring+from+a+null+pointer'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/STR51-CPP.+Do+not+attempt+to+create+a+std%3A%3Astring+from+a+null+pointer</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">
+#include &lt;cstdlib&gt;
+#include &lt;string&gt;
+  
+void f() {
+  std::string tmp(std::getenv("TMP"));
+  if (!tmp.empty()) {
+    // ...
+  }
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This check automatically flags a string initialized with a function that returns a pointer.</p>
+'''
+
+
+def tags(id):
+    return {
+        'STR51-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1'
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for init_ref in file.filerefs("Set Init"):
+        utype = init_ref.ent().freetext("UnderlyingType")
+
+        if utype and re.search(r"std::.*string", utype):
+            lex = file.lexer().lexeme(init_ref.line(), init_ref.column())
+            lex = lex.next(ignore_whitespace=True)
+
+            if lex.text() == "(":
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.ent() and lex.ent().kind().check("Function") and lex.ent().type() and ("*" in lex.ent().type()):
+                        check.violation(init_ref.ent(), file,
+                                        init_ref.line(), init_ref.column(), ERR1)
+                        break
+
+                    lex = lex.next(True, True)
+            elif lex.text() == "=":
+                while lex and (lex.text() != ";"):
+                    if lex.ent() and lex.ent().kind().check("Function") and lex.ent().type() and ("*" in lex.ent().type()):
+                        check.violation(init_ref.ent(), file,
+                                        init_ref.line(), init_ref.column(), ERR1)
+                        break
+
+                    lex = lex.next(True, True)

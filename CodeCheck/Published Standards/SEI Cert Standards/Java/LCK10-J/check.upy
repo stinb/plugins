@@ -1,0 +1,151 @@
+import re
+
+
+ERR1 = 'Use a correct form of the double-checked locking idiom.'
+
+
+# The ID for the check
+def ids():
+    return ('LCK10-J', 'JAVA_LCK10')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'LCK10-J': 'Published Standards/SEI Cert Standards/Java/Use a correct form of the double-checked locking idiom',
+        'JAVA_LCK10': 'All Checks/Language Specific/Java/Locking/Use a correct form of the double-checked locking idiom',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'LCK10-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_LCK10': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Use a correct form of the double-checked locking idiom'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Use a correct form of the double-checked locking idiom</p>
+<p><b>Risk Assessment</b></p>
+<p>Using incorrect forms of the double-checked locking idiom can lead to synchronization problems and can expose partially initialized objects.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/LCK10-J.+Use+a+correct+form+of+the+double-checked+locking+idiom</i></p>
+<p><b>Exceptions</b></p>
+<p><i>LCK10-J-EX0: Use of the noncompliant form of the double-checked locking idiom is permitted for 32-bit primitive values (for example, int or float) [Pugh 2004], although this usage is discouraged. The noncompliant form establishes the necessary happens-before relationship between threads that see an initialized version of the primitive value. The second happens-before relationship (for the initialization of the fields of the referent) is of no practical value because unsynchronized reads and writes of primitive values up to 32-bits are guaranteed to be atomic. Consequently, the noncompliant form establishes the only needed happens-before relationship in this case. Note, however, that the noncompliant form fails for long and double because unsynchronized reads or writes of 64-bit primitives lack a guarantee of atomicity and consequently require a second happens-before relationship to guarantee that all threads see only fully assigned 64-bit values (see  VNA05-J. Ensure atomicity when reading and writing 64-bit values for more information).</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">// Double-checked locking idiom
+final class Foo {
+  private Helper helper = null;
+  public Helper getHelper() {
+    if (helper == null) {
+      synchronized (this) {
+        if (helper == null) {
+          helper = new Helper();
+        }
+      }
+    }
+    return helper;
+  }
+
+  // Other methods and members...
+}
+
+
+
+public final class Helper {
+  private final int n;
+
+  public Helper(int n) {
+    this.n = n;
+  }
+
+  // Other fields and methods, all fields are final
+}
+
+final class Foo {
+  private Helper helper = null;
+
+  public Helper getHelper() {
+    if (helper == null) {            // First read of helper
+      synchronized (this) {
+        if (helper == null) {        // Second read of helper
+          helper = new Helper(42);
+        }
+      }
+    }
+    return helper;                   // Third read of helper
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check is recommended for multithreaded applications.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        for mem_ref in class_ref.ent().refs("Define", "Member Variable ~Static"):
+            mem_type = mem_ref.ent().type()
+            init_value = mem_ref.ent().freetext("InitValue")
+
+            if mem_type and "volatile" in mem_type:
+                continue
+            elif not init_value or init_value == "null":
+                for ret_ref in mem_ref.ent().refs("Useby Return", "Method Member"):
+                    checking = re.findall(
+                        f"{mem_ref.ent().name()}.?==", ret_ref.ent().contents())
+
+                    if len(checking) < 2:
+                        continue
+
+                    def_ref = ret_ref.ent().ref("Definein")
+                    lexer = def_ref.file().lexer(True, 8, False, False)
+                    lexes = lexer.lexemes(def_ref.line(), def_ref.line())
+                    compliant = False
+
+                    for lex in lexes:
+                        if lex.text() == "synchronized" and lex.token() == "Keyword":
+                            compliant = True
+                            break
+
+                    if not compliant:
+                        for ref in ret_ref.ent().refs("Use", "Final Variable Member"):
+                            ref_type = ref.ent().type()
+
+                            if ref_type and "ThreadLocal" in ref_type:
+                                compliant = True
+
+                        if not compliant:
+                            check.violation(ret_ref.ent(), def_ref.file(
+                            ), def_ref.line(), def_ref.column(), ERR1)

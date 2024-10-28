@@ -1,0 +1,151 @@
+import re
+
+
+ERR1 = 'Lowercase on literal suffix is not allowed'
+ERR2 = 'The lowercase form of L shall not be used as the first character in a literal suffix'
+
+
+# The ID for the check
+def ids():
+    return ('M2-13-4', 'MISRA08_2-13-4', 'CPP_D018', 'MISRA23_5.13.5')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M2-13-4': 'Published Standards/AUTOSAR/Literal suffixes shall be upper case',
+        'MISRA08_2-13-4': 'Published Standards/MISRA-C++ 2008/2-13-4 Literal suffixes shall be upper case',
+        'CPP_D018': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Literal suffixes shall be upper case',
+        'MISRA23_5.13.5': 'Published Standards/MISRA C++ 2023/5.13.5 The lowercase form of L shall not be used as the first character in a literal suffix',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_2-13-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M2-13-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D018': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_5.13.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+# The short description of the check
+def description():
+    return 'Literal suffixes shall be upper case.'
+
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_5.13.5':
+        return '''
+<p><b>Amplification</b></p>
+<p>This rule does not apply to user-defined-literals.</p>
+
+<p><b>Rationale</b></p>
+<p>Using the uppercase suffx L removes the potential ambiguity between 1 (digit 1) and l (lowercase L)
+when declaring numeric literals. The ambiguity only occurs when lowercase L is used as the first letter
+of a suffix.</p>
+
+<p><b>Example</b></p><pre><code language="C++">int64_t const a = 0L; // Compliant
+int64_t const b = 0l; // Non-compliant
+uint64_t const c = 1Lu; // Compliant
+uint64_t const d = 1lU; // Non-compliant
+uint64_t const e = 2uLL; // Compliant
+uint64_t const f = 2Ull; // Compliant
+long long const g = 3LL; // Compliant
+long long const h = 3ll; // Non-compliant
+long double const i = 1.2L; // Compliant
+long double const j = 3.4l; // Non-compliant
+constexpr Litre operator"" _l( long double val ) noexcept
+{
+ return Litre { val }; // Assumes type Litre is defined
+}
+auto volume = 42.1_l; // Rule does not apply</code></pre>
+'''
+
+    return '''
+<p><b>Rationale</b></p>
+Using upper case literal suffixes removes the potential ambiguity between "1" (digit 1) and "l"
+(letter el) for declaring literals.
+</p><br>
+
+<p><b>Example</b></p><pre><code language="C++">  const unsigned int a = 0U;
+  const unsigned int b = 0u;       // Non-compliant
+  const long int c = 0L;
+  const long int d = 0l;           // Non-compliant
+  const unsigned long int e = 0UL;
+  const unsigned long int f = 0Ul; // Non-compliant
+  const unsigned int g = 0x12bU;
+  const unsigned int h = 0x12bu;   // Non-compliant
+  const float m = 1.2F;
+  const float n = 2.4f;            // Non-compliant
+  const double o = 1.2L;
+  const double p = 2.4l;           // Non-compliant
+  const double q = o;
+  const double r = p;
+</code></pre>
+
+<p><b>See also</b><br>
+ISO/IEC 14882:2003 [1] §2.13</p>
+<br>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file,header file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    only_l = True if (check.id() == 'MISRA23_5.13.5') else False
+
+    check.option().checkbox('only_l', 'Flag the use of lowercase L only', only_l)
+
+
+def check(check, file):
+    only_l = check.option().lookup('only_l')
+
+    for obj_ref in file.filerefs("Define", "Object"):
+        init_val = obj_ref.ent().freetext("InitValue")
+        init_text = obj_ref.ent().freetext("InitText")
+
+        if not init_val or not init_text or (init_val and (not (init_val.isdigit() or init_val.isdecimal() or re.search(r'\d+(\.\d+)?e\+\d+', init_val)))):
+            continue
+
+        if not only_l and re.search(r"(0x[\da-fA-F]+|\d+(\.\d+)?)[FLU]?[flu]", init_text):
+            check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+        elif re.search(r"\d+(\.\d+)?l", init_text):
+            check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR2)

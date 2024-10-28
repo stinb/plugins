@@ -1,0 +1,283 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-30-2021
+import re
+
+ERR1 = """\
+User-provided destructor, deallocation function, move constructors, move
+assignment operators, or swap function exited with an exception"""
+
+def ids():
+    return ('A15-5-1', 'CPP_D071')
+
+def name(id):
+    return {
+        'A15-5-1': """\
+Published Standards/AUTOSAR/All user-provided class destructors, deallocation \
+functions, move constructors, move assignment operators and swap functions shall \
+not exit with an exception. A noexcept exception specification shall be added to \
+these functions as appropriate""",
+        'CPP_D071': """\
+All Checks/Language Specific/C and C++/Destructors/All user-provided class destructors, \
+deallocation functions, move constructors, move assignment operators and swap \
+functions shall not exit with an exception. A noexcept exception specification \
+shall be added to these functions as appropriate"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A15-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Destructors',
+        ],
+        'CPP_D071': [
+            'Language: C',
+            'Language: C++',
+            'Destructors',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>When an exception is thrown, the call stack is unwound up to the point where
+the exception is to be handled. The destructors for all automatic objects
+declared between the point where the exception is thrown and where it is to be
+handled will be invoked. If one of these destructors or delete operators exits
+with an exception, then the program will terminate in an implementation-defined
+manner.</p>
+<p>Move constructors and move assignment operators are usually expected to
+be nonthrowing. If they throw exceptions, strong exception safety cannot be
+guaranteed, because the original type values could be already modified or
+partially modified.</p>
+<p>Note that some operations in the standard library statically check the
+noexcept specification of the move constructors and move assignment operators of
+parameter types. They may choose less efficient algorithms or provide fewer
+exception safety guarantees if these are not noexcept.</p>
+<p>The standard-library containers and algorithms will not work correctly if
+swapping of two elements exits with an exception. A non-throwing swap function
+is also an important basic tool to implement the strong exception safety
+guarantee in a copy assignment operator (see A12-8-2).</p>
+<p>Note that it is acceptable for a destructor or deallocation function to throw
+an exception that is handled within this function, for example within a
+try-catch block.</p>
+<p>Note that deallocation functions are declared noexcept by default. A
+destructor is declared as noexcept by default unless a destructor of any base
+class or member is potentially-throwing. Using a base class or member
+with a potentially-throwing destructor is a violation of this rule. The
+respective base class or member destructor must be fixed in order to comply to
+this rule. The intention of this rule is that the implementation of a
+user-provided destructor is ensured to not exit with an exception. Only then,
+the default noexcept specification added implicitly to the user-provided
+destructor is correct. It may be explicitly restated as noexcept for
+documentation purposes.</p>
+<p>The compiler also adds a noexcept specification implicitly for any defaulted
+special member function. This noexcept specification depends on the noexcept
+specification of the member and base class operations that the defaulted special
+member function will call implicitly. It is therefore not required to default a
+special member function only to add the noexcept specification. Reasons to
+default a special member function exist independently from this rule, for
+example due to A12-0-1.</p>
+<p>Exception</p>
+<p>Generic move constructors, generic move assignment operators, and generic
+swap functions may have noexcept specifications which depend on type properties
+of the template parameters.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 //% $Id: A15-5-1.cpp 309720 2018-03-01 14:05:17Z jan.babst $
+2 #include &lt;stdexcept&gt;
+3 #include &lt;type_traits&gt;
+4
+5 class C1
+6 {
+7 public:
+8    C1() = default;
+9
+10   // Compliant - move constructor is non-throwing and declared to be noexcept
+11   C1(C1&& rhs) noexcept {}
+12
+13   // Compliant - move assignment operator is non-throwing and declared to be
+14   // noexcept
+15   C1& operator=(C1&& rhs) noexcept { return *this; }
+16
+17   // Compliant - destructor is non-throwing and declared to be noexcept by
+18   // default
+19   ~C1() noexcept {}
+20 };
+21
+22 void Swap(C1& lhs,
+23 C1& rhs) noexcept // Compliant - swap function is non-throwing and
+24 // declared to be noexcept
+25 {
+26   // Implementation
+27 }
+28
+29 class C2
+30 {
+31 public:
+32   C2() = default;
+33
+34   // Compliant - move constructor is non-throwing and declared to be noexcept
+35   C2(C2&& rhs) noexcept
+36   {
+37     try
+38     {
+39     // ...
+40     throw std::runtime_error(
+41     "Error"); // Exception will not escape this function
+42     }
+43
+44     catch (std::exception& e)
+45     {
+46       // Handle error
+47     }
+48   }
+49
+50   C2& operator=(C2&& rhs) noexcept
+51   {
+52     try
+53     {
+54       // ...
+55       throw std::runtime_error(
+56       "Error"); // Exception will not escape this function
+57     }
+58
+59     catch (std::exception& e)
+60     {
+61       // Handle error
+62     }
+63     return *this;
+64   }
+65
+66   // Compliant - destructor is non-throwing and declared to be noexcept by
+67   // default
+68   ~C2()
+69   {
+70     try
+71     {
+72       // ...
+73       throw std::runtime_error(
+74       "Error"); // Exception will not escape this function
+75     }
+76
+77     catch (std::exception& e)
+78     {
+79       // Handle error
+80     }
+81   }
+82 };
+83
+84 // Non-compliant - swap function is declared to be noexcept(false)
+85 void Swap(C2& lhs, C2& rhs) noexcept(false)
+86 {
+87   // ...
+88   // Non-compliant - Implementation exits with an exception
+89   throw std::runtime_error("Swap function failed");
+90 }
+91
+92 class C3
+93 {
+94 public:
+95    C3() = default;
+96    C3(C3&& rhs) // Non-compliant - move constructor throws
+97    {
+98      // ...
+99      throw std::runtime_error("Error");
+100   }
+101   C3& operator=(C3&& rhs) // Non-compliant - move assignment operator throws
+102   {
+103     // ...
+104     throw std::runtime_error("Error");
+105     return *this;
+106   }
+107   ~C3() // Non-compliant - destructor exits with an exception
+108   {
+109     throw std::runtime_error("Error");
+110   }
+111   static void operator delete(void* ptr, std::size_t sz)
+112   {
+113     // ...
+114     throw std::runtime_error("Error"); // Non-compliant - deallocation
+115     // function exits with an exception
+116   }
+117 };
+118
+119 void Fn()
+120 {
+121   C3 c1; // program terminates when c1 is destroyed
+122   C3* c2 = new C3;
+123   // ...
+124   delete c2; // program terminates when c2 is deleted
+125 }
+126
+127 template &lt;typename T&gt;
+128 class Optional
+129 {
+130 public:
+131   // ...
+132
+133   // Compliant by exception
+134   Optional(Optional&& other) noexcept(
+135   std::is_nothrow_move_constructible&lt;T&gt;::value)
+136   {
+137   // ...
+138   }
+139
+140   // Compliant by exception
+141   Optional& operator=(Optional&& other) noexcept(
+142   std::is_nothrow_move_assignable&lt;T&gt;::value&&
+143   std::is_nothrow_move_constructible&lt;T&gt;::value)
+144   {
+145   // ...
+146   return *this;
+147   }
+148
+149   // ...
+150 };
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    classRefs = file.filerefs('Define', 'Class')
+    for classRef in classRefs:
+        refs = classRef.ent().refs('Define')
+
+        for ref in refs:
+            # Skip non-applicable refs
+            if ref.ent().name() != classRef.ent().name() and ref.ent().name() != '~' + classRef.ent().name() and ref.ent().name() != 'operator=' and not re.search(r'swap', ref.ent().name().lower()):
+                continue
+
+            ok = False
+
+            if not lexer:
+                lexer = file.lexer(lookup_ents=False)
+
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+
+            # Look for noexcept keyword
+            while lexeme and not re.search(r'{|}|;', lexeme.text()):
+                if lexeme.text() == 'noexcept':
+                    ok = True
+                    break
+
+                lexeme = lexeme.next(True, True)
+
+            if not ok:
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+
+
+

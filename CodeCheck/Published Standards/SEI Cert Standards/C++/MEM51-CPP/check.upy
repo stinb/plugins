@@ -1,0 +1,269 @@
+import re
+
+
+ERR1 = 'Properly deallocate dynamically allocated resources.'
+
+
+# The ID for the check
+def id():
+    return ('MEM51-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MEM51-CPP': 'Published Standards/SEI Cert Standards/C++/Properly deallocate dynamically allocated resources',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Properly deallocate dynamically allocated resources'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Properly deallocate dynamically allocated resources</p>
+<p><b>Risk Assessment</b></p>
+<p>Passing a pointer value to a deallocation function that was not previously obtained by the matching allocation function results in undefined behavior, which can lead to exploitable vulnerabilities.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/MEM51-CPP.+Properly+deallocate+dynamically+allocated+resources</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;iostream&gt;
+  
+struct S {
+  S() { std::cout &lt;&lt; "S::S()" &lt;&lt; std::endl; }
+  ~S() { std::cout &lt;&lt; "S::~S()" &lt;&lt; std::endl; }
+};
+ 
+void f() {
+  alignas(struct S) char space[sizeof(struct S)];
+  S *s1 = new (&space) S;
+ 
+  // ...
+ 
+  delete s1;
+}
+
+
+#include &lt;new&gt;
+  
+void f() {
+  int *i1, *i2;
+  try {
+    i1 = new int;
+    i2 = new int;
+  } catch (std::bad_alloc &) {
+    delete i1;
+    delete i2;
+  }
+}
+
+
+struct P {};
+ 
+class C {
+  P *p;
+   
+public:
+  C(P *p) : p(p) {}
+  ~C() { delete p; } 
+   
+  void f() {}
+};
+ 
+void g(C c) {
+  c.f();
+}
+ 
+void h() {
+  P *p = new P;
+  C c(p);
+  g(c);
+}
+
+
+void f() {
+  int *array = new int[10];
+  // ...
+  delete array;
+}
+
+
+
+#include &lt;cstdlib&gt;
+void f() {
+  int *i = static_cast&lt;int *&gt;(std::malloc(sizeof(int)));
+  // ...
+  delete i;
+}
+
+
+#include &lt;cstdlib&gt;
+  
+struct S {
+  ~S();
+};
+ 
+void f() {
+  S *s = new S();
+  // ...
+  std::free(s);
+}
+
+
+
+#include &lt;cstdlib&gt;
+#include &lt;new&gt;
+  
+struct S {
+  static void *operator new(std::size_t size) noexcept(true) {
+    return std::malloc(size);
+  }
+   
+  static void operator delete(void *ptr) noexcept(true) {
+    std::free(ptr);
+  }
+};
+ 
+void f() {
+  S *s = new S;
+  ::delete s;
+}
+
+
+#include &lt;memory&gt;
+ 
+struct S {};
+ 
+void f() {
+  std::unique_ptr&lt;S&gt; s{new S[10]};
+}
+
+
+#include &lt;memory&gt;
+ 
+struct S {};
+ 
+void f() {
+  std::shared_ptr&lt;S&gt; s{new S[10]};
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'MEM51-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        for obj_ref in class_ref.ent().refs("Define", "Member Object"):
+            obj_type = obj_ref.ent().type()
+
+            if obj_type and ("*" in obj_type):
+                for use_ref in obj_ref.ent().refs("Useby"):
+                    if not re.search(r"^~", use_ref.ent().name()):
+                        continue
+
+                    lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+                    lex = lex.previous(ignore_whitespace=True)
+
+                    if lex.text() == "delete":
+                        copycons_deleted = False
+                        assop_deleted = False
+
+                        for func_ref in class_ref.ent().refs("Declare Delete"):
+                            if (func_ref.ent().name() == class_ref.ent().name()) and (f"const {class_ref.ent().name()} &" in func_ref.ent().parameters()):
+                                copycons_deleted = True
+                            elif (func_ref.ent().name() == "operator=") and (f"const {class_ref.ent().name()} &" in func_ref.ent().parameters()):
+                                assop_deleted = True
+
+                        if not (copycons_deleted and assop_deleted):
+                            check.violation(obj_ref.ent(), use_ref.file(
+                            ), use_ref.line(), use_ref.column(), ERR1)
+
+                        break
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object"):
+            obj_type = obj_ref.ent().type()
+            init_value = obj_ref.ent().freetext("InitText")
+
+            if obj_type and init_value and re.search(r"unique_ptr<[^\[]>", obj_type) and re.search(r"new .*\[.+\]", init_value):
+                check.violation(obj_ref.ent(), obj_ref.file(
+                ), obj_ref.line(), obj_ref.column(), ERR1)
+            elif obj_type and init_value and ("shared_ptr" in obj_type) and re.search(r"new .*\[.+\]", init_value) and (not "delete []" in init_value):
+                check.violation(obj_ref.ent(), obj_ref.file(
+                ), obj_ref.line(), obj_ref.column(), ERR1)
+            elif obj_type and ("*" not in obj_type):
+                continue
+            elif not init_value or (init_value and (re.search(r"malloc|calloc|realloc", init_value) or re.search(r"new\s?\(.+\)", init_value) or re.search(r"new .*\[.+\]", init_value))):
+                for use_ref in obj_ref.ent().refs("Useby"):
+                    lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+                    lex = lex.previous(ignore_whitespace=True)
+
+                    if lex.text() == "delete":
+                        check.violation(use_ref.scope(), use_ref.file(
+                        ), use_ref.line(), use_ref.column(), ERR1)
+            elif init_value and re.search(r"new ", init_value):
+                _ent, _ = get_ent_type(obj_ref.ent())
+
+                if _ent.kind().check("Struct, Class"):
+                    for def_ref in _ent.refs("Define", "Function"):
+                        if def_ref.ent().name() == "operator new":
+                            for use_ref in obj_ref.ent().refs("Useby"):
+                                lex = use_ref.file().lexer().lexeme(
+                                    use_ref.line(), use_ref.column())
+                                lex = lex.previous(ignore_whitespace=True)
+
+                                if (lex.text() == "delete") and (lex.previous().text() == "::"):
+                                    check.violation(use_ref.scope(), use_ref.file(
+                                    ), use_ref.line(), use_ref.column(), ERR1)
+
+                            break
+
+                for assign_ref in obj_ref.ent().refs("Assignby Ptr"):
+                    if assign_ref.ent().parent() and (assign_ref.ent().parent().name() == "free"):
+                        check.violation(assign_ref.scope(), assign_ref.file(
+                        ), assign_ref.line(), assign_ref.column(), ERR1)

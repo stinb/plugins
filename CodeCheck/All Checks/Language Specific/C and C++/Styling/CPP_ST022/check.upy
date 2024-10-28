@@ -1,0 +1,148 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 7-13-2021
+import re
+
+ERR1 = 'Boolean expression does not test for equality or non-equality'
+
+def id():
+    return 'CPP_ST022'
+
+def name():
+    return "All Checks/Language Specific/C and C++/Styling/" +  """\
+Boolean expressions involving non-boolean values should always use an \
+explicit test for equality or non-equality."""
+
+
+def tags(id):
+    return {
+        'CPP_ST022': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Boolean expressions ("if","for", "while", "d"' and the first operand of the
+ternary operator "?:") involving non-boolean values should always use an
+explicit test for equality or non-equality.</p>
+<p>Example 1:</p>
+<pre><code language="C++">if (x - y) { // Unacceptable
+  statements;
+}
+
+if ((x - y) != 0) { // Acceptable
+  statements;
+}
+</code></pre>
+<p>Example 2:</p>
+<pre><code language="C++">int bar();
+void foo()
+{
+  if ( bar() ) // Unacceptable
+  {
+    statements;
+  }
+  if ( 0 != bar() ) // Acceptable
+  {
+    Statements;
+  }
+}</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # Skip files without these keywords
+    if not re.search(r'if|while|for|\?', file.contents()):
+        return
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    lexemes = lexer.lexemes()
+    for lexeme in lexemes:
+        ok = True
+        # Find if and while loops
+        if re.match(r'if|while', lexeme.text()) and lexeme.token() == 'Keyword':
+            line = lexeme.line_begin()
+            ok = False
+            # Find the main parenthesis of the if or while loop
+            while lexeme and lexeme.text() != '(':
+                lexeme = lexeme.next(True, True)
+            if lexeme:
+                close = findClose(lexeme)
+
+                if not close:
+                    continue
+
+            # Loop for comparitive operators
+            while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                if re.match(r'==|!=|<=|>=|<|>|&&|\|\||!', lexeme.text()):
+                    ok = True
+                    break
+                lexeme = lexeme.next(True, True)
+
+        # Find for loops
+        elif lexeme.text() == 'for' and lexeme.token() == 'Keyword':
+            ok = False
+            # Find the main parentheses of the for loop
+            while lexeme and lexeme.text() != '(':
+                lexeme = lexeme.next(True, True)
+            if lexeme:
+                close = findClose(lexeme)
+                if not close:
+                    continue
+            while lexeme and lexeme.text() != ';' and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                lexeme = lexeme.next(True, True)
+
+            # Find the first semicolon of the for loop
+            if lexeme and lexeme.text() == ';':
+                lexeme = lexeme.next(True, True)
+
+                # Loop for comparitive operators
+                while lexeme and lexeme.text() != ';' and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    if re.match(r'==|!=|<=|>=|<|>|&&|\|\||!', lexeme.text()):
+                        ok = True
+                        break
+                    lexeme = lexeme.next(True, True)
+
+
+        # Find ?: statements
+        elif lexeme.text() == '?':
+            ok = False
+            # Loop for comparitive operators
+            while lexeme and lexeme.text() != '=':
+                if re.match(r'==|!=|<=|>=|<|>|&&|\|\||!', lexeme.text()):
+                    ok = True
+                    break
+                
+                lexeme = lexeme.previous(True, True)
+
+
+        if not ok and lexeme:
+            check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+
+
+
+
+# Finds the corresponding closing curly brace when given an opening curly brace
+def findClose(lexeme):
+    count = 0
+    nextLex = lexeme.next(True, True)
+
+    while nextLex and not (nextLex.text() == ')' and count == 0):
+        if nextLex.text() == '(':
+            count += 1
+        elif nextLex.text() == ')':
+            count -= 1
+        nextLex = nextLex.next(True, True)
+
+    return nextLex

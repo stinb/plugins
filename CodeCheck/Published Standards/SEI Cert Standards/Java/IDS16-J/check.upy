@@ -1,0 +1,117 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 11/10/2022
+
+import re
+
+ERR1 = "Data identifier '%1' may not be validated, XML injection is possible"
+
+DEF_NAME = "Prevent XML Injection"
+
+# The ID for the check
+def ids():
+    return ('IDS16-J', 'JAVA_IDS16')
+
+# The short name of the check
+def name(id):
+    return {
+        'IDS16-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_IDS16': "All Checks/Language Specific/Java/Input Validation and Data Sanitization/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'IDS16-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+        ],
+        'JAVA_IDS16': [
+            'Language: Java',
+            'Input Validation and Data Sanitization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Prevent XML Injection</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to sanitize user input before processing or storing it can result in injection attacks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/IDS16-J.+Prevent+XML+Injection</i></p>
+<p><b>Exceptions</b></p>
+<p><i>N/A</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+
+public class OnlineStore {
+  private static void createXMLStreamBad(final BufferedOutputStream outStream,
+      final String quantity) throws IOException {
+    String xmlString = "&lt;item&gt;\n&lt;description&gt;Widget&lt;/description&gt;\n"
+        + "&lt;price&gt;500&lt;/price&gt;\n" + "&lt;quantity&gt;" + quantity
+        + "&lt;/quantity&gt;&lt;/item&gt;";
+    outStream.write(xmlString.getBytes());
+    outStream.flush();
+  }
+}
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    for string_ref in file.filerefs("Java Define, Java Set", "Variable", True):
+        if string_ref.ent().type() != "String":
+            continue
+
+        # check string value for </> and + characters
+        string_value = string_ref.ent().value()
+
+        if string_value and re.search(r"<\w+>.+<\/\w+>", string_value):
+            lexeme = lexer.lexeme(string_ref.line(), string_ref.column())
+            lexeme = lexeme.next()
+
+            while lexeme and lexeme.text() != ";":
+                if lexeme.ent() and lexeme.token() == "Identifier":
+                    data_ent = lexeme.ent()
+                    parsed = False
+
+                    if data_ent.value() and re.search(r".parse", data_ent.value()):
+                        parsed = True
+
+                    if parsed == False:
+                        check.violation(data_ent, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, data_ent)
+
+                lexeme = lexeme.next()
+
+
+
+
+
+
+

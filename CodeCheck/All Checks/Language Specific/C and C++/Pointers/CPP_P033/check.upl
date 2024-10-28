@@ -1,0 +1,126 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 7-28-2020
+
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'Pointer asterisk is not placed with the variable';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_P033";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Pointers\\" .  "For pointer declarations, the asterisk shall be placed with the variable";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Pointers',
+  );
+}
+
+sub description { return "For pointer declarations, the asterisk shall be placed with the variable, not the type.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Though you can declare pointers multiple ways in C++ without getting a compilation error, it is standard to place the asterisk with the variable
+and not the type. This check will work with multiple pointers and with scope resolution operators.<br><br>
+<p><b>Examples</b></p>
+int *myPointer; // VALID<br>
+int ***myTriplePointer; // VALID<br>
+int *className::classVariable = 10; // VALID<br><br>
+char* myChar;  // INVALID<br>
+char * myOtherChar; // INVALID<br>
+</p>
+
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 1;}
+
+sub test_global { return 0;}
+
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("C File ~unknown ~unresolved");
+
+  # grab lexemes from the file
+  my $lexer = $file->lexer;
+  return unless $lexer;
+  my $lexeme = $lexer->first;
+
+  my $violation;
+
+
+  while ($lexeme){
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+
+    if ($lexeme->inactive){
+      # ignore inactive lexemes
+    }
+
+    # search for asterisks where the next lexeme is an identifier, these are potential pointers
+    elsif ($lexeme->text() eq "*" && $lexeme->nextUseful()->token() eq "Identifier" && !($lexeme->nextUseful->ent && $lexeme->nextUseful->ent->kindname =~ /Function/)) {
+
+      # skip lexeme unless its associated ent has a pointer type or is a class (so it will cover class/struct access modifiers)
+      my $nextEnt = $lexeme->nextUseful()->ent();
+      unless ( $nextEnt && ($nextEnt->type() =~ /\*/ || $nextEnt->kind->check('Class') || $nextEnt->kind->check('Struct')
+        || $nextEnt->kind->check('Namespace')) ) {
+        $lexeme = $lexeme->next();
+        next;
+      }
+
+      # assign temporary variable to traverse in case of multiple *
+      my $tempLexeme = $lexeme;
+      while ($tempLexeme->prevUseful()->text() eq "*") {
+        $tempLexeme = $tempLexeme->prevUseful();
+      }
+      # valid condition, no whitespace between variable and *
+      if ( ( $lexeme->next && $lexeme->next->token ne 'Whitespace' ) && ( $tempLexeme->previous && $tempLexeme->previous->token eq 'Whitespace' ) ) {
+        $lexeme = $lexeme->next();
+        next;
+      }
+
+      # flag violation if the previous item is a keyword or typedef, indicating a true pointer
+      if ( $tempLexeme->prevUseful()->token() eq "Keyword" ) {
+        $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1);
+      } elsif ( $tempLexeme->prevUseful()->ent() ) {
+        my $tempEnt = $tempLexeme->prevUseful()->ent();
+        if ( $tempEnt->kind->check('typedef') ) {
+          $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1);
+
+        }
+      }
+      if ($violation){
+        my $prevLex;
+        if ($lexeme->previous->token() eq "Whitespace") {
+          $prevLex = $lexeme->previous;
+        }
+        else {
+          $prevLex = $lexeme;
+        }
+        my $nextLex = $lexeme->next;
+        $violation->add_fixit_hint($prevLex->line_begin, $prevLex->column_begin, $nextLex->line_begin, $nextLex->column_begin + length($nextLex->text), " *");
+      }
+    }
+    $violation = undef;
+
+    $lexeme = $lexeme->next();
+  }
+}

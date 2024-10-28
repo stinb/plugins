@@ -1,0 +1,268 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# Updated 1/20/15
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Unmodified value %1 not const qualified';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA08_7-1-1";}
+
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA-C++ 2008\\7-1-1 A variable which is not modified shall be const qualified";}
+
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Standard: MISRA C++ 2008',
+    'Category: Required',
+    'Variables',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { return "7-1-1 (Required)(Slow) A variable which is not modified shall be const qualified.";}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+
+<p><b>Rationale</b></p>
+If a variable does not need to be modified, then it shall be declared with <i>const</i> qualification so that
+it cannot be modified. A non-parametric variable will then require its initialization at the point of
+declaration. Also, future maintenance cannot accidentally modify the value.
+</p>
+
+<p><b>Example</b></p>
+</p>
+
+<pre><code language="C++">  void b ( int32_t * );
+  int32_t f ( int32_t * p1,         // Non-compliant
+              int32_t * const p2,   // Compliant
+              int32_t * const p3 )  // Compliant
+  {
+    *p1 = 10;
+    *p2 = 10;
+    b( p3 );
+    int32_t i = 0;                  // Non-compliant
+    return i;
+  }
+
+</code></pre>
+
+<p><b>See also</b><br>
+ISO/IEC 14882:2003 [1] §7.1.5.1
+</p>
+
+<p><b>Developer's Note</b></p>
+This check has some limitations. This check cannot detect if a set or modify reference is within a loop. Because of
+this, all set and modify references will be treated as a single reference. This will cause false positives for objects
+which are only modifed within a single loop.
+</p>
+
+<p>This check will likely have incorrect results the project is analyzed with
+the fuzzy parser.</p>
+
+<p>
+Objects that are passed out of scope, such as to a global variable, are not detected by this check.
+</p>
+
+<p>
+This check also cannot detect modifications made to parameters passed by reference or pointer. This check can detect
+that an object is passed by reference or is a pointer, but only counts this as a single use. This again will cause
+false positives. Parameters that are passed from one function to the next will also be flagged as a violation even if
+passed by reference or pointer.
+</p>
+
+<p>
+Selecting the checkbox from the options will lesson the requirements of this check so that if a single set or modify
+reference is enough to justify an object not being declared as constant. This will ensure all violations are valid,
+but will miss potential violations.
+</p>
+
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'passive', 'Only single modification of variable required', 0 );
+  $check->option->checkbox( 'param', 'Only single modification of parameter required', 0 );
+  $check->option->checkbox( 'fast', 'Uncheck this option to make the check slightly more accurate (by reducing some false positives) but dramatically increase the time of the check', 1);
+}
+
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check( 'C File' );
+  my $lexer;
+
+  # Pull a list of all objects and parameters that are defined within this file
+  my @objectsDefined = $file->filerefs( 'Define', 'C Parameter, C Object ~TemplateParameter ~Member ~Unknown ~Unresolved' );
+  return unless @objectsDefined;
+
+  # Loop through each object/parameter that is defined
+  OBJ : foreach my $object ( @objectsDefined ) {
+    next OBJ if $object->ent->name eq '[unnamed]';
+
+    my $measure = 2;
+
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+
+    # If this is a paramter and is used as a constructor initlization list, than these are not the droids we are looking for
+    if ( $object->ent->kind->check( 'C Parameter' ) ) {
+      $lexer = $file->lexer unless $lexer;
+      next OBJ if checkParam( $object, $lexer );
+      $measure-- if $check->option->lookup( 'param' );
+    } else {
+      $measure-- if $check->option->lookup( 'passive' );
+    }
+
+    # Skip anything already considered a constant and count all instances where this variable is modified
+    next if $object->ent->type =~ /\b\*const\b|\bconst\b/;
+    my @objectUses = $object->ent->refs( 'Setby, Modifyby, Addr Useby' );
+    my $total = 0 + @objectUses;
+
+    # Pass by reference is defined at the call site so we must check the called function
+    my @useReferences = $object->ent->refs( 'Useby ~Addr' );
+    foreach my $use ( @useReferences ) {
+      #Yield to GUI interupts
+      $check->yield();
+      return if $check->is_abort();
+
+      # Check to see if this object/parameter is passed to another function by pointer or reference
+      $lexer = $file->lexer unless $lexer;
+
+      $total += checkUse( $use, $check, $lexer ) unless $check->option->lookup( 'fast' );
+
+    }
+
+    # Throw a violation if this variable is not changed more than once
+    $check->violation( $object->ent, $object->file, $object->line, $object->column, ERR1, $object->ent->name ) if $total < $measure;
+
+  }
+}
+
+
+# This sub routine is designed to test if a parameter is used to set a datamember, if so, this parameter is exempt
+sub checkParam {
+
+  # Pull my object and create a lexeme for testing if use is within an init list or not
+  my $object = shift;
+  my $lexer = shift;
+  my $lexeme = $lexer->lexeme($object->line(), $object->column());
+  #my $lexeme = $object->lexeme;
+  $lexeme = $lexeme->nextUseful;
+
+  # Walk forward until we find our use or the end of our init list
+  while( $lexeme and $lexeme->text ne $object->ent->name and $lexeme->text ne '{' and $lexeme->text ne ';' ) {
+    $lexeme = $lexeme->nextUseful;
+  }
+
+  # Return success if we found or use case within an init list
+  return 0 unless $lexeme;
+  return 1 if $object->ent->name eq $lexeme->text;
+  return 0;
+
+}
+
+
+# This sub routine is designed to find out if a parameter is passed by reference
+sub checkUse {
+
+  # Use is a useby refence, if not used by a funcion, skip this reference
+  my $use = shift;
+  my $check = shift;
+  my $lexer = shift;
+  my $count = 0;
+
+  return $count unless $use->ent->kind->check( 'C Function' );
+
+  # Pull all call references for the calling function
+  my @callReferences = $use->ent->refs( 'C Call' );
+  foreach my $call ( @callReferences ) {
+
+    my $flag = 0;
+    my $parameterNumber = 0;
+    my $lexeme = $lexer->lexeme($call->line(), $call->column());
+    #my $lexeme = $call->lexeme;
+
+    # Check the entire function call
+    while ( $lexeme and $lexeme->text ne ';' ) {
+
+      # This keeps track of the parameter number that will be assigned to this variable
+      $parameterNumber++ if $lexeme->text eq ',';
+
+      # We are confirming that the call reference we saw earlier is being used in this function call
+      if ( $lexeme->ref and $lexeme->ref->scope->uniquename eq $use->scope->uniquename ) {
+
+        $flag = 1;
+        last;
+
+      }
+
+      $lexeme = $lexeme->nextUseful;
+
+    }
+
+    # We have confirmed the use reference inside the function and retrieved the parameter number
+    if ( $flag ) {
+
+      # Check to see if our parameter number is a pass by reference or is a pointer
+      if ( $call->ent->parameters ) {
+
+        my @parameters = $call->ent->parameters;
+        $count++ if @parameters[ $parameterNumber ] =~ /\&|\*/;
+
+      }
+    }
+  }
+
+  return $count;
+
+}

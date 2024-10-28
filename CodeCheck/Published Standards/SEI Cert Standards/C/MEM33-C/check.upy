@@ -1,0 +1,220 @@
+ERR1 = 'Allocate and copy structures containing a flexible array member dynamically.'
+
+
+# The ID for the check
+def id():
+    return ('MEM33-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MEM33-C': 'Published Standards/SEI Cert Standards/C/Allocate and copy structures containing a flexible array member dynamically',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MEM33-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Allocate and copy structures containing a flexible array member dynamically'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Allocate and copy structures containing a flexible array member dynamically</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to use structures with flexible array members correctly can result in undefined behavior. </p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/MEM33-C.++Allocate+and+copy+structures+containing+a+flexible+array+member+dynamically</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stddef.h&gt;
+
+struct flex_array_struct {
+  size_t num;
+  int data[];
+};
+
+void func(void) {
+  struct flex_array_struct flex_struct;
+  size_t array_size = 4;
+
+  /* Initialize structure */
+  flex_struct.num = array_size;
+
+  for (size_t i = 0; i &lt; array_size; ++i) {
+    flex_struct.data[i] = 0;
+  }
+}
+
+
+#include &lt;stddef.h&gt;
+
+struct flex_array_struct {
+  size_t num;
+  int data[];
+};
+
+void func(struct flex_array_struct *struct_a,
+          struct flex_array_struct *struct_b) {
+  *struct_b = *struct_a;
+}
+
+
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+struct flex_array_struct {
+  size_t num;
+  int data[];
+};
+
+void print_array(struct flex_array_struct struct_p) {
+  puts("Array is: ");
+  for (size_t i = 0; i &lt; struct_p.num; ++i) {
+    printf("%d ", struct_p.data[i]);
+  }
+  putchar('\n');
+}
+
+void func(void) {
+  struct flex_array_struct *struct_p;
+  size_t array_size = 4;
+
+  /* Space is allocated for the struct */
+  struct_p = (struct flex_array_struct *)malloc(
+    sizeof(struct flex_array_struct)
+    + sizeof(int) * array_size);
+  if (struct_p == NULL) {
+    /* Handle error */
+  }
+  struct_p-&gt;num = array_size;
+
+  for (size_t i = 0; i &lt; array_size; ++i) {
+    struct_p-&gt;data[i] = i;
+  }
+  print_array(*struct_p);
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object, Parameter"):
+            obj_type = obj_ref.ent().type()
+
+            if (obj_type is not None and ("struct" in obj_type)):
+                struct, _ = get_ent_type(obj_ref.ent())
+                mem_ctr = 0
+                stop = False
+
+                for mem_ref in sorted(struct.refs("Define", "Member"), key=lambda x: x.line()):
+                    mem_ctr += 1
+
+                if mem_ctr > 1 and mem_ref.ent().type() and ("[]" in mem_ref.ent().type()):
+                    lex = mem_ref.file().lexer().lexeme(mem_ref.line(), mem_ref.column())
+
+                    while lex and (lex.text() != ";"):
+                        if lex.ent() and lex.ent().id() == mem_ref.ent().id():
+                            if not ((lex.next().text() == "[") and (lex.next().next().text() == "]")):
+                                stop = True
+
+                        lex = lex.next()
+
+                    if stop:
+                        continue
+
+                    for ref in sorted(obj_ref.ent().refs(""), key=lambda x: x.line()):
+                        if (ref.ent().id() != func_ref.ent().id()) or (ref.line() <= obj_ref.line()):
+                            continue
+
+                        if ref.kind().check("Setby"):
+                            lex = lexer.lexeme(ref.line(), ref.column())
+                            on_set = False
+                            compliant = False
+
+                            while lex and (lex.text() != ";"):
+                                if lex.text() == "=":
+                                    on_set = True
+                                elif not on_set and lex.ent() and (lex.ent().id() == obj_ref.ent().id()) and (lex.next().text() in [".", "->"]):
+                                    break
+                                elif on_set and lex.text() in ["malloc", "calloc", "realloc", "kmalloc", "kzalloc", "kcalloc", "vmalloc"]:
+                                    compliant = True
+                                    break
+
+                                lex = lex.next(ignore_whitespace=True)
+
+                            if not compliant:
+                                check.violation(
+                                    ref.scope(), file, ref.line(), ref.column(), ERR1)
+
+                            break
+                        elif ref.kind().check("Useby") and obj_ref.ent().kind().check("Parameter") and ("*" not in obj_type):
+                            lex = lexer.lexeme(ref.line(), ref.column())
+                            on_struct = False
+
+                            while lex:
+                                if lex.ent() and lex.ent().id():
+                                    on_struct = True
+                                elif on_struct:
+                                    if (lex.text() == ".") and (lex.next().ent().id() == mem_ref.ent().id()):
+                                        check.violation(
+                                            ref.scope(), file, ref.line(), ref.column(), ERR1)
+                                        stop = True
+
+                                    break
+
+                                lex = lex.next()
+
+                        if stop:
+                            break

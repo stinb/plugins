@@ -1,0 +1,129 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 5/5/2022
+
+ERR1 = 'Do not expose private members of an outer class from within a nested class'
+
+DEF_NAME = "Do not expose private members of an outer class from within a nested class"
+
+# The ID for the check
+def ids():
+    return ('OBJ08-J', 'JAVA_OBJ08')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'OBJ08-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_OBJ08': "All Checks/Language Specific/Java/Object Orientation/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'OBJ08-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_OBJ08': [
+            'Language: Java',
+            'Object Orientation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not expose private members of an outer class from within a nested class</p>
+<p><b>Risk Assessment</b></p>
+<p>The Java language system weakens the accessibility of private members of an outer class when a nested inner class is present, which can result in an information leak.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/OBJ08-J.+Do+not+expose+private+members+of+an+outer+class+from+within+a+nested+class</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Coordinates {
+  private int x;
+  private int y;
+
+  public class Point {
+    public void getPoint() {
+      System.out.println("(" + x + "," + y + ")"); // Violation
+    }
+  }
+}
+
+class AnotherClass {
+  public static void main(String[] args) {
+    Coordinates c = new Coordinates();
+    Coordinates.Point p = c.new Point();
+    p.getPoint();
+  }
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    pass
+
+def check(check, file):
+    # get all classes
+    for cRef in file.filerefs("Define", "Class"):
+
+        # continue if they have a nested class
+        nestedClasses = cRef.ent().refs("Define", "Class ~Enum ~TypeVariable ~Anonymous")
+
+        if len(nestedClasses) > 0:
+            entNestedClasses = ref_to_ent_list(nestedClasses)
+            privateMembers = cRef.ent().refs("Define", "Private Member")
+
+
+            # check to see if they are exposed in nested class
+            for member in privateMembers:
+                for useRef in member.ent().refs("Useby"):
+                    useClass = reScope(useRef.ent(), "Class")
+                    useMethod = reScope(useRef.ent(), "", mulStopOn=["Method", "Constructor"])
+                    if useClass in entNestedClasses:
+                        mg = useMethod and "Private" in useMethod.kindname()
+                        cg = useClass and "Private" in useClass.kindname()
+                        if not mg and not cg:
+                            pm(ERR1, check, member.ent(), useRef.file(), useRef.line(), useRef.column())
+
+
+def ref_to_ent_list(l):
+    nl = []
+    for i in l:
+        nl.append(i.ent())
+    return nl
+
+def reScope(ent, stopOn, check=None, mulStopOn = []):
+    if mulStopOn != []:
+        for s in mulStopOn:
+            if s in ent.kindname():
+                return ent
+    else:
+        if stopOn in ent.kindname():
+            return ent
+
+    for p in ent.refs("Definein"):
+        return reScope(p.ent(), stopOn, check, mulStopOn)
+
+    return None
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

@@ -1,0 +1,172 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 4-20-22
+
+
+import re
+
+
+ERR1 = 'Space used between array name and open bracket ['
+ERR2 = 'Space used between variable and postfix unary operator %1'
+ERR3 = 'Space used between prefix unary operator %1 and variable'
+
+
+postfixUnaryOperators = {'++', '--'}
+prefixUnaryOperators = {'++', '--', '+', '-', '~', '!'}
+
+def ids():
+    return ('JAVA_39')
+
+def name(id):
+    return {
+        'JAVA_39': '''All Checks/Language Specific/Java/\
+White space shall not be used: between the name of an array and open bracket that introduces its index (e.g., array[i]), \
+or  between unary operators and the objects they operate on (e.g., -1). \
+''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_39': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+White space shall not be used:
+<ul>
+    <li>
+        between the name of an array and open bracket thath introduces its index (e.g., array[i]), or
+    </li>
+    <li>
+        between unary operators and the objects they operate on (e.g., -1).
+    </li>
+</ul>
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+All binary operators except . should be separated from their operands by spaces. Blank spaces should never separate unary operators such as unary minus, increment ("++"), and decrement ("--") from their operands.
+</p>
+
+<p>
+See 8.2 Blank Spaces:
+<i>
+https://www.oracle.com/java/technologies/javase/codeconventions-whitespace.html
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class Program {
+    public static void main(String[] args) {
+        int[] a = new int[10];
+        int x = 1;
+        int y = 2;
+        boolean b = true;
+        boolean c = false;
+        String s = "s";
+        String t = "t";
+
+        a [1] = 1;
+
+        x ++;
+        ++ x;
+
+        x --;
+        -- x;
+
+        y = + 1;
+
+        y = + x;
+
+        y = - x;
+
+        c = ~ b;
+
+        c = ! b;
+    }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer()
+    lexeme = lexer.first()
+
+    while lexeme:
+        text = lexeme.text()
+
+        # Index operator
+        if text == '[':
+            # Skip if it's a square bracket but not an index operator
+            operand = lexeme.previous(True, True)
+            if not operand or not operand.ent() or not operand.ent().type() or not re.match(r'.*\[\]$', operand.ent().type()):
+                lexeme = lexeme.next(True, True)
+                continue
+
+            # Skip if there's no whitespace
+            prev = lexeme.previous(False, False)
+            if prev.text() == operand.text():
+                lexeme = lexeme.next(True, True)
+                continue
+
+            check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+        # Unary operator
+        elif text in prefixUnaryOperators:
+            # Get the operand
+            prevOperand = lexeme.previous(True, True)
+            nextOperand = lexeme.next(True, True)
+            prevEnt = None
+            nextEnt = None
+            if prevOperand:
+                prevEnt = prevOperand.ent()
+            if nextOperand:
+                nextEnt = nextOperand.ent()
+
+
+            # Postfix operator
+            if text in postfixUnaryOperators and prevEnt and prevEnt.kind().check('Variable'):
+                # Skip if there's no whitespace
+                prev = lexeme.previous(False, False)
+                if prev.text() == prevOperand.text():
+                    lexeme = lexeme.next(True, True)
+                    continue
+
+                check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR2, text)
+
+            # Prefix operator
+            elif (nextEnt and nextEnt.kind().check('Variable')) or nextOperand.token() == 'Literal':
+                # Skip if there's no whitespace
+                nex = lexeme.next(False, False)
+                if nex.text() == nextOperand.text():
+                    lexeme = lexeme.next(True, True)
+                    continue
+
+                # Skip if there's an operand before
+                operandEnclosers = {')', ']'}
+                if prevOperand.token() in {'Identifier', 'Literal', 'String'} or prevOperand.text() in operandEnclosers:
+                    lexeme = lexeme.next(True, True)
+                    continue
+
+                check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR3, text)
+
+        lexeme = lexeme.next(True, True)

@@ -1,0 +1,90 @@
+#This script is designed to run with Understand - CodeCheck
+use base qw(Understand::Codecheck);
+use strict;
+
+
+use CodeCheck::Libraries::InfoSiftr qw(resolveTypedefs getObjectBitFieldWidth);
+
+use constant ERR1 => 'Violation: bit field type includes enum "%1", which is invalid.';
+
+sub register_tr_text {
+	my $check = shift;
+	$check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA08_9-6-3";}
+
+
+sub name { return "Published Standards\\MISRA-C++ 2008\\9-6-3 Bit-fields shall not have enum type.";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Standard: MISRA C++ 2008',
+    'Category: Required',
+    'Bit-fields',
+  );
+}
+
+sub description { '9-6-3 (Required) Bit-fields shall not have enum type.' }
+
+sub detailed_description { <<'END_DESC'
+The use of enum as a bit-field type is prohibited as ISO/IEC 14882:2003 [1] does not explicitly define the underlying representation as signed or unsigned. It is therefore not possible to determine the exact number of bits required to represent all values in the enumeration.
+<BR />
+<BR />
+<p><b>Developer's Note</b></p>
+In C++ 11 and later, enum classes have the ability to specify the underlying type and so this check may not apply.</p>
+<br>
+END_DESC
+}
+
+sub test_language {
+	my $language = shift;
+	return $language eq 'C++';
+}
+
+sub test_entity { 1 }
+
+sub test_global { 0 }
+
+sub define_options { }
+
+sub hasEnum {
+	my $type = shift;
+	my $db = shift;
+	
+	$type = resolveTypedefs($type, $db);
+	
+	my @words = split m/\s+/, $type;
+	for my $word (@words) {
+		if (my @ents = $db->lookup($word, 'enum')) {
+			return $ents[0]->longname;
+		}
+	}
+	
+	return 0;
+}
+
+sub check {
+	my $check = shift;
+	my $file = shift;
+	return unless $file->kind->check('c file');
+	
+	my $lexer = $file->lexer(0);
+	
+	foreach my $ref ($file->filerefs('define', 'object', 0)) {
+		my $ent = $ref->ent;
+		
+		# narrow down to bit fields (unsigned int var : 3)
+		my $bits = getObjectBitFieldWidth($ent, $lexer);
+		next unless defined $bits;
+		
+		if ($ent->type && (my $enum = hasEnum($ent->type, $check->db))) {
+			$check->violation($ent, $file, $ref->line, $ref->column, ERR1, $enum);
+		}
+	}
+	
+	return;
+}

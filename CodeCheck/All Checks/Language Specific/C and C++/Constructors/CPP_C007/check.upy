@@ -1,0 +1,164 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 3-6-23
+
+
+import re
+
+
+ERR1 = '''Copy constructor not declared. Classes with a single parameter\
+ template constructor need a copy constructor.'''
+
+# (const or volatile optional) ClassName & (identifier optional)
+PARAMETER_PATTERN = r'^((const|volatile)\s*)*[a-zA-Z0-9_]+\s*\&\s*[a-zA-Z0-9_]*$'
+
+
+def ids():
+    return ('MISRA08_14-5-2', 'CPP_C007')
+
+
+def name(id):
+    return {
+        'MISRA08_14-5-2': '''Published Standards/MISRA-C++ 2008/\
+14-5-2 A copy constructor shall be declared when there is a template\
+ constructor with a single parameter that is a generic parameter''',
+        'CPP_C007': '''All Checks/Language Specific/C and C++/Constructors/\
+A copy constructor shall be declared when there is a template constructor with\
+ a single parameter that is a generic parameter''',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'MISRA08_14-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Constructors',
+        ],
+        'CPP_C007': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>
+Contrary to possible developer expectations, a template constructor will not
+suppress the compiler generated <i>copy constructor</i>. This may lead to
+incorrect copy semantics for members requiring deep copies.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">  class A
+  {
+  public:
+    A ( );
+    // A ( A const & rhs );     Example 1 - implicitly generated
+    template &lt;typename T&gt;
+    A ( T const & rhs )     //  Example 2
+    : i ( new int32_t )
+    {
+      *i = *rhs.i;
+    }
+  private:
+    int32_t * i;            // Member requires deep copy
+  };
+  void f ( A const & a1 )
+  {
+    A a2 ( a1 );            // Non-compliant - Unexpectedly uses Example 1
+  }
+</code></pre>
+
+<p>
+The implicitly generated copy constructor, Example 1, will be used to construct
+<code>a2</code> from <code>a1</code>. Therefore, a shallow copy on the pointer
+member <code>i</code> will result in both <i>a1.i</i> and <i>a2.i</i> pointing
+to the same object. Was this the intent, or was it expected that a new object
+would be created and initialized?
+</p>
+'''
+
+
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # Loop through all the defined classes
+    for classRef in file.filerefs('Define', 'Class', True):
+        classEnt = classRef.ent()
+
+        if hasHasCopyCtor(classEnt):
+            continue
+
+        if not hasTemplateCtorWithOneGeneric(classEnt, file):
+            continue
+
+        check.violation(classEnt, file, classRef.line(), classRef.column(), ERR1)
+
+
+def hasHasCopyCtor(classEnt):
+    # Loop through each method looking for a copy constructor
+    for methodRef in classEnt.refs('Declare, Define', 'Function Member ~Template ~Implicit', True):
+        methodEnt = methodRef.ent()
+
+        # Skip if this is not a constructor
+        if methodEnt.name() != classEnt.name():
+            continue
+
+        # Found a copy constructor if the parameter matches
+        params = methodEnt.parameters()
+        if re.match(PARAMETER_PATTERN, params):
+            return True
+
+    return False
+
+
+def hasTemplateCtorWithOneGeneric(classEnt, file):
+    # Find a template constructor with a single generic parameter
+    for templateRef in classEnt.refs('Define', 'Function Member Template'):
+        templateEnt = templateRef.ent()
+
+        # Skip if this is not a constructor
+        if templateEnt.name() != classEnt.name():
+            continue
+        if not templateEnt.freetext('Inline'):
+            continue
+
+        # Start at the function definition and walk backwards
+        lex = file.lexer(False).lexeme(templateRef.line(), templateRef.column())
+
+        # Set a flag and walk backwards until we see the 'template' keyword
+        while lex and lex.text() != 'template':
+
+            # If we see a comma we know we have more than one template
+            # parameter, and that is outside the scope of this check
+            if lex.text() == ',':
+                break
+
+            # If we see a keyword, because of the nature of templates, it
+            # should mean that the template has a generic type
+            elif lex.token() == 'Keyword':
+                return True
+
+            lex = lex.previous(True, True)
+
+    return False

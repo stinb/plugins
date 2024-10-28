@@ -1,0 +1,160 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-8-21
+
+
+import re
+
+
+ERR1 = 'Expression of type "%1" is converted to "%2"'
+
+
+def ids():
+    return ('M5-0-9', 'MISRA08_5-0-9', 'CPP_T013')
+
+
+def name(id):
+    return {
+        'M5-0-9': 'Published Standards/AUTOSAR/An explicit integral conversion shall not change the signedness of the underlying type of a cvalue expression',
+        'MISRA08_5-0-9': 'Published Standards/MISRA-C++ 2008/5-0-9 An explicit integral conversion shall not change the signedness of the underlying type of a cvalue expression',
+        'CPP_T013': 'All Checks/Language Specific/C and C++/Types/An explicit integral conversion shall not change the signedness of the underlying type of a cvalue expression',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'M5-0-9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T013': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def description():
+    return 'An explicit integral conversion shall not change the signedness of the underlying type of a cvalue expression.'
+
+
+def detailed_description():
+    return '''\
+
+<p><b>Rationale</b></p>
+
+<p>
+A signed to unsigned conversion may lead to an expression having a value inconsistent with developer expectations.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f ( )
+{
+    int8_t s8;
+    uint8_t u8;
+    s8 = static_cast&lt; int8_t &gt;( u8 + u8 ); // Non-compliant
+    s8 = static_cast&lt; int8_t &gt;( u8 )
+    + static_cast&lt; int8_t &gt;( u8 ); // Compliant
+}
+</code></pre>
+
+<p>
+In the above example, the expression <code>( s16 + s16 )</code> is performed with an <i>underlying type</i> of <code>int16_t</code> rather than <code>int32_t</code>.
+</p>
+
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def matchString(lexeme, text):
+    if lexeme.text() == text:
+        return lexeme.next(ignore_comments=True, ignore_whitespace=True)
+    else:
+        return None
+
+
+def matchSet(lexeme, texts):
+    if lexeme.text() in texts:
+        return lexeme.next(ignore_comments=True, ignore_whitespace=True)
+    else:
+        return None
+
+
+def check(check, file):
+    casts = {'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast'}
+    signed = {'char', 'signed char', 'short', 'short int', 'signed short', 'signed short int', 'int', 'signed', 'signed int', 'long', 'long int', 'signed long', 'signed long int', 'long long', 'long long int', 'signed long long', 'signed long long int', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'int_fast8_t', 'int_fast16_t', 'int_fast32_t', 'int_fast64_t', 'int_least8_t', 'int_least16_t', 'int_least32_t', 'int_least64_t', 'float', 'double', 'long double'}
+    unsigned = {'unsigned char', 'unsigned short int', 'unsigned', 'unsigned int', 'unsigned long', 'unsigned long int', 'unsigned long long', 'unsigned long long int', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t', 'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t', 'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t'}
+    operators = {'+', '-', '*', '/', '%', '&', '|', '^', '<<', '>>'}
+
+    lexer = None
+
+    # Whenever a value is set by a cast
+    for toRef in file.filerefs('Set', 'Object'):
+        toEnt = toRef.ent()
+
+        # If the value being assigned is a number
+        if toEnt.type() in signed or toEnt.type() in unsigned:
+            
+            # Get the lexer and lexeme
+            if not lexer:
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(toRef.line(), toRef.column())
+            lexeme = lexeme.next(ignore_comments=True, ignore_whitespace=True)
+
+            # Match the following: = cast<float>
+            lexeme = matchString(lexeme, '=')
+            if not lexeme:
+                continue
+            lexeme = matchSet(lexeme, casts)
+            if not lexeme:
+                continue
+            lexeme = matchString(lexeme, '<')
+            if not lexeme:
+                continue
+            lexeme = matchSet(lexeme, unsigned | signed)
+            if not lexeme:
+                continue
+            lexeme = matchString(lexeme, '>')
+            if not lexeme:
+                continue
+            lexeme = matchString(lexeme, '(')
+            if not lexeme:
+                continue
+
+            fromEnt = lexeme.ent()
+            if not fromEnt:
+                continue
+
+            # If the fromEnt and toEnt change signs
+            if (fromEnt.type() in unsigned and toEnt.type() in signed) or (fromEnt.type() in signed and toEnt.type() in unsigned):
+
+                # If the next token is an operator
+                lexeme = lexeme.next(ignore_comments=True, ignore_whitespace=True)
+                if matchSet(lexeme, operators):
+    
+                    check.violation(toEnt, file, toRef.line(), toRef.column(), ERR1, fromEnt.type(), toEnt.type())

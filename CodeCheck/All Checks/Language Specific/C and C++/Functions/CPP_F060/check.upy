@@ -1,0 +1,101 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 11-13-2020
+
+import re
+
+# The ID for the check
+def ids():
+    return ('CPP_F060')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_F060':  "All Checks/Language Specific/C and C++/Functions/A method that does not change the visible properties of a class shall be declared const"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_F060': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+
+    }.get(id)
+
+def description():
+    return 'A method that does not change the visible properties of a class \
+shall be declared const.'
+
+def detailed_description():
+    return """\
+<p>Declaring the method const ensures that the class will retain the same 
+characteristics both before and after the method call. This also allows the 
+method to be called on a const object of this class type. A property of a class
+is "visible" if changing the property causes a change in the behavior or 
+contents of the class that can be detected externally to the class. Attributes 
+of a class that are not visible should be declared mutable, which allows them 
+to be changed within a const method.
+</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # pull all class methods defined in the file
+    class_methods = file.filerefs('define', 'member function', True)
+
+    # look for PUBLIC data members that are changed inside the method
+    for method in class_methods:
+        method_name = method.ent().simplename()
+
+        if method.ent().parent():
+            parent_class_name = method.ent().parent().simplename()
+        else:
+            parent_class_name = ''
+        destructor_name = "~" + parent_class_name
+
+        # ignore methods already declared const
+        const_meth = re.search(r"Const", method.ent().kind().longname(), re.IGNORECASE)
+        if const_meth:
+            pass
+        # ignore constructors and destructors
+        elif method_name == parent_class_name or method_name == destructor_name:
+            pass
+        else:
+            data_mems_changed = method.ent().refs('set, modify', 'public member object')
+
+            for data_mem in data_mems_changed:
+                # grab the data mem, find where it is defined
+                mem_definition = data_mem.ent().ref('definein')
+                if not mem_definition:
+                    return
+
+                # spin up lexer, search definition for mutable keyword
+                lexer = file.lexer()
+                lexeme = lexer.lexeme(mem_definition.line(), mem_definition.column())
+
+                mutable = False
+                while lexeme and lexeme.previous() and lexeme.previous().token() != "Newline":
+                    if lexeme.text() == "mutable" and lexeme.token() == "Keyword":
+                        mutable = True
+                    lexeme = lexeme.previous()
+
+                if not mutable:
+                    violation = check.violation(method.ent(), file, method.line(), method.column(), 
+                        "Class method '%1' changes visible property '%2', it should be declared const", method.ent(), data_mem.ent())
+
+                    lexeme = lexer.lexeme(method.line(), method.column())
+                    while lexeme and lexeme.text() != ')':
+                        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                    lexeme = lexeme.next()
+                    violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_begin(), lexeme.column_begin(), ' const')
+
+
+    # if the member is changed but is not declared MUTABLE, the method should be declared CONST

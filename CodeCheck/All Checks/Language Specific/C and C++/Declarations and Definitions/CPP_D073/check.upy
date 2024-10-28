@@ -1,0 +1,92 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 10-13-2020, rewritten 04-20-2022
+
+from difflib import SequenceMatcher
+
+def id():
+    return 'CPP_D073'
+
+def name():
+    return '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+There shall be one variable declaration per line \
+'''
+
+
+def tags(id):
+    return {
+        'CPP_D073': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+There shall be one variable declaration per line except where two or more variables are essentially identical."""
+
+def detailed_description():
+    return """\
+<p>The type does not need to be repeated for each declaration.
+Where two or more variables are essentially identical, they may be declared
+on the same line for clarity. \nFor example, multiple counter variables may
+be declared: </p>
+<pre><code language="C++">int i, j, k; /* Counter variables */ </code></pre>
+<p>or multiple status variables may be declared: </p>
+<pre><code language="C++">int status1, status2; /* Return values from func_a and func_b */ </code></pre>
+
+<p>Developer Note: This check uses the 'difflib' standard library to calculate a measure
+of two strings' similarity as a percentage. The similarity threshold can be adjusted
+in the Options section.</p>"""
+
+def define_options(check):
+    check.option().integer('ratio', 'Adjust similarity threshold [0-100]%', 80)
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+	# create a dictionary to hold object name and the line where it was seen (key = obj name string, value = line)
+	seen = {}
+	ratio = check.option().lookup('ratio')
+
+	# find every object declaration in file
+	for obj in file.filerefs('Define', 'Object', True):
+		name = obj.ent().name()
+
+		if obj.line() in seen.values():
+			# compare every other object name with the same KEY (line number) to see if they are identical or similar enough
+			prev_seen_object = get_key(obj.line(), seen)
+
+			# if the objects are 1 char long, they are likely counters or similar type objects
+			if len(prev_seen_object) == len(name) == 1:
+				pass
+
+			else:
+				# get the similarity ratio between our objects, compare to user-defined threshold
+				string1 = prev_seen_object.lower()
+				string2 = name.lower()
+				similarity_ratio = SequenceMatcher(a=string1, b=string2).ratio()
+				similarity_ratio_percent = similarity_ratio*100
+
+				# round our similarity ratio percentage to 2 significant figures
+				similarity_ratio_percent_adjusted = '{:g}'.format(float('{:.{p}g}'.format(similarity_ratio_percent, p=2)))
+
+				if similarity_ratio_percent < ratio:
+					check.violation(obj.ent(), file, obj.line(), obj.column(), "Variable '%1' shall be declared on its own line (%2% similarity ratio to '%3')", \
+						obj.ent(), similarity_ratio_percent_adjusted, prev_seen_object)
+
+		else:
+			# if the object is the first on its line, add it to the dictionary of seen items
+			seen[name] = obj.line()
+
+# function to return key for any value
+def get_key(val, dictInput):
+    for key, value in dictInput.items():
+        if val == value:
+            return key

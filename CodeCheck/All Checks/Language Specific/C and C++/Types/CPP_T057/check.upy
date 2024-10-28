@@ -1,0 +1,138 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 2-22-2022
+
+import re
+
+def ids():
+    return ('CPP_T057')
+
+def name(id):
+    return {
+        'CPP_T057': '''All Checks/Language Specific/C and C++/Types/\
+Actual arguments shall be explicitly type cast to the appropriate type'''
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_T057': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+
+    }.get(id)
+
+def detailed_description(id):
+    return {
+        'CPP_T057': '''\
+<p><b>Rationale</b></p>
+
+<p>
+Actual arguments shall be explicitly type cast to the appropriate type when it
+is not clear that the type promotion rules have the desired effect.
+</p>
+
+<p><b>Examples</b></p>
+
+<pre><code language="C++">void func_x (double arg) {
+
+    // ...
+
+} /* end of func_x */
+
+void example(void) {
+
+    int y = f();
+    /* Type cast argument y in the call to x */
+    func_x ((double)y);
+
+    return;
+
+}
+</code></pre>
+'''
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check_for_cast(lexer, call, arg_name_list, arg_list, i):
+	ok = False
+
+	# move lexer to that parameter
+	lexeme = lexer.lexeme(call.line(), call.column())
+
+	while lexeme and lexeme.next() and lexeme.text() != ";":
+
+		if lexeme.text() == arg_name_list[i] and lexeme.token() == "Identifier":
+
+			# look for explicit cast
+			if lexeme.previous().text() == ")" and lexeme.previous().previous().token() == "Keyword" and lexeme.previous().previous().previous().text() == "(":
+				ok = True
+
+		lexeme = lexeme.next()
+
+	return ok
+
+
+def check(check, file):
+	# spin up lexer
+	lexer = file.lexer()
+	if not lexer:
+		return
+
+	# for each unique function definition
+	for func_def in file.filerefs('define', 'function ~unresolved ~unknown', True):
+		func_ent = func_def.ent()
+
+		# gather a list of parameter types, split from string into list
+		if func_ent.parameters():
+			func_parameters = func_ent.parameters(shownames=False).split(",")
+
+			# go to each call of that function
+			if func_ent.refs("c callby"):
+
+				calls = func_ent.refs("c callby")
+
+				for call in calls:
+					# initialize empty list to hold call arguments
+					arg_list = []
+					arg_name_list = []
+
+					# within each call, gather list of arg types and check that they match up with parameter list
+					lexeme = lexer.lexeme(call.line(), call.column())
+
+					while lexeme and lexeme.next() and lexeme.text() != ";":
+
+						if lexeme.token() == "Identifier" and lexeme.ent():
+							# add the argument's type to the arg list)
+							arg_type = lexeme.ent().type()
+							arg_name = lexeme.ent().name()
+
+							arg_list.append(arg_type)
+							arg_name_list.append(arg_name)
+
+						lexeme = lexeme.next()
+
+					# pop hidden void argument
+					if len(arg_list):
+						arg_list.pop(0)
+						arg_name_list.pop(0)
+
+					# go through indexes of arg list and param list comparing them against each other
+					for i in range(len(arg_list)):
+						if i == len(func_parameters):
+							break
+
+						if func_parameters[i] != arg_list[i]:
+							cast_ok = check_for_cast(lexer, call, arg_name_list, arg_list, i)
+
+							if not cast_ok:
+								check.violation(call.scope(), file, call.line(), call.column(), "Parameter #%3 and corresponding argument do not match; Argument should be explicitly cast. Param: %1, Arg: %2", func_parameters[i], arg_list[i], i+1)
+

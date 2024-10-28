@@ -1,0 +1,117 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6-20-2022
+
+import re
+ERR1 = 'Arrays were compared with Object.equals()'
+
+DEF_NAME = "Do not use the Object.equals() method to compare two arrays."
+
+# The ID for the check
+def ids():
+    return ('EXP02-J', 'JAVA_EXP02')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'EXP02-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_EXP02': "All Checks/Language Specific/Java/Expressions/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P9',
+            'Level: L2',
+        ],
+        'JAVA_EXP02': [
+            'Language: Java',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Do not use the Object.equals() method to compare two arrays.</p>
+<p><b>Risk Assessment</b></p>
+<p>In Java, arrays are objects and support object methods such as
+Object.equals(). However, arrays do not support any methods besides those
+provided by Object. Consequently, using Object.equals() on any array compares
+only array references, not their contents. Programmers who wish to compare the
+contents of two arrays must use the static two-argument Arrays.equals() method.
+This method considers two arrays equivalent if both arrays contain the same
+number of elements, and all corresponding pairs of elements in the two arrays
+are equivalent, according to Object.equals(). In other words, two arrays are
+equal if they contain equivalent elements in the same order. To test for
+reference equality, use the reference equality operators, == and !=.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/EXP02-J.+Do+not+use+the+Ob\
+ject.equals%28%29+method+to+compare+two+arrays</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">int[] arr1 = new int[20]; // Initialized to 0
+int[] arr2 = new int[20]; // Initialized to 0
+System.out.println(arr1.equals(arr2)); // Prints false</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    # Skip if .equals() is not used
+    if not re.search(r'\.equals\(', file.contents()):
+        return
+    if not file.lexer():
+        return
+
+    lexer = None
+
+    # Gather all refs for when .equals() is used
+    refs = file.filerefs('Call', 'Method')
+
+    for ref in refs:
+        if ref.ent().name() != 'equals':
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        prevLex = lexeme
+        nextLex = lexeme
+        arrayBefore = False
+        arrayAfter = False
+        # Check if preceding ent is an array
+        if prevLex:
+            prevLex = prevLex.previous(True, True)
+            if prevLex and prevLex.text() == '.':
+                prevLex = prevLex.previous(True, True)
+                if prevLex and prevLex.ent() and re.search(r'\[.*\]', str(prevLex.ent().type())):
+                    arrayBefore = True
+        # Check if succeeding ent is an array
+        if nextLex and arrayBefore:
+            nextLex = nextLex.next(True, True)
+            if nextLex and nextLex.text() == '(':
+                nextLex = nextLex.next(True, True)
+                if nextLex and nextLex.ent() and re.search(r'\[.*\]', str(nextLex.ent().type())):
+                    arrayAfter = True
+
+        # Throw violation if preceeding and suceeding ents are arrays
+        if arrayBefore and arrayAfter:
+            check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)

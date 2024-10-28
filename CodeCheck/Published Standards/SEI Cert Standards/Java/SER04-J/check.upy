@@ -1,0 +1,159 @@
+ERR1 = 'Do not allow serialization to bypass the security manager.'
+ERR2 = 'Do not allow deserialization to bypass the security manager.'
+
+
+# The ID for the check
+def ids():
+    return ('SER04-J', 'JAVA_SER04')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'SER04-J': 'Published Standards/SEI Cert Standards/Java/Do not allow serialization and deserialization to bypass the security manager',
+        'JAVA_SER04': 'All Checks/Language Specific/Java/Serialization/Do not allow serialization and deserialization to bypass the security manager',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'SER04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'JAVA_SER04': [
+            'Language: Java',
+            'Serialization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not allow serialization and deserialization to bypass the security manager'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not allow serialization and deserialization to bypass the security manager</p>
+<p><b>Risk Assessment</b></p>
+<p>Allowing serialization or deserialization to bypass the security manager may result in classes being constructed without required security checks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/SER04-J.+Do+not+allow+serialization+and+deserialization+to+bypass+the+security+manager</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class Hometown implements Serializable {
+  // Private internal state
+  private String town;
+  private static final String UNKNOWN = "UNKNOWN";
+
+  void performSecurityManagerCheck() throws AccessDeniedException {
+    // ...
+  }
+
+  void validateInput(String newCC) throws InvalidInputException {
+    // ...
+  }
+
+  public Hometown() {
+    performSecurityManagerCheck();
+
+    // Initialize town to default value
+    town = UNKNOWN;
+  }
+
+  // Allows callers to retrieve internal state
+  String getValue() {
+    performSecurityManagerCheck();
+    return town;
+  }
+
+  // Allows callers to modify (private) internal state
+  public void changeTown(String newTown) {
+    if (town.equals(newTown)) {
+      // No change
+      return;
+    } else {
+      performSecurityManagerCheck();
+      validateInput(newTown);
+      town = newTown;
+    }
+  }
+
+  private void writeObject(ObjectOutputStream out) throws IOException {
+    out.writeObject(town);
+  }
+
+  private void readObject(ObjectInputStream in) throws IOException {
+    in.defaultReadObject();
+    // If the deserialized name does not match the default value normally
+    // created at construction time, duplicate the checks
+    if (!UNKNOWN.equals(town)) {
+      validateInput(town);
+    }
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>Since it is infeasible to identify security manager check methods, we made an assumption with the criterion that they are called from the constructor, throw any exception and are not part of the standard library.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def get_call_refs(ref, called_meths):
+    for call_ref in ref.ent().refs("Call", "Method Member"):
+        ent_lib = call_ref.ent().library()
+
+        if (ent_lib and ent_lib == "Standard") or not (call_ref.ent().ref("Throw")) or (call_ref.ent().id() in called_meths):
+            continue
+
+        called_meths.append(call_ref.ent().id())
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        called_meths_cons = []  # ent ids of methods called on constructor
+        called_meths_readobj = []   # ent ids of methods called on readObject
+        called_meths_writeobj = []  # ent ids of methods called on writeObject
+        read_obj = None
+        write_obj = None
+
+        for meth_ref in class_ref.ent().refs("Define", "Method Member"):
+            if meth_ref.ent().name() == class_ref.ent().name():
+                get_call_refs(meth_ref, called_meths_cons)
+            elif meth_ref.ent().name() == "readObject":
+                read_obj = meth_ref
+                get_call_refs(meth_ref, called_meths_readobj)
+            elif meth_ref.ent().name() == "writeObject":
+                write_obj = meth_ref
+                get_call_refs(meth_ref, called_meths_writeobj)
+
+        if read_obj or write_obj:
+            for called_meth in called_meths_cons:
+                if read_obj and (called_meth not in called_meths_readobj):
+                    check.violation(read_obj.ent(), file,
+                                    read_obj.line(), read_obj.column(), ERR2)
+                    read_obj = None
+                if write_obj and (called_meth not in called_meths_writeobj):
+                    check.violation(write_obj.ent(), file,
+                                    write_obj.line(), write_obj.column(), ERR1)
+                    write_obj = None
+                if not (read_obj and write_obj):
+                    break

@@ -1,0 +1,78 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+use warnings;
+
+sub checkID { return "PYTH_01";}
+
+
+# Required - Return the short name of the check
+sub name { return "All Checks\\Language Specific\\Python\\Unnecessary Imports";}
+
+sub tags {
+  return (
+    'Language: Python',
+    'Unnecessary Constructs',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Identify Imports that are unnecessary";}
+
+# Required - Return the long description of the check
+sub detailed_description { return "Identify Imports that are unnecessary";}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language eq "Python" 
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+# Optional - define configurable options for the check.
+sub define_options{
+  my $check = shift;  
+}
+
+
+# Required - Run the check and return violations if any.
+# This is called for each file if test_entity is set to 1 and $file is the Understand::Ent object for the file
+# it is also called once with $file set to null if test_global is set to 1
+sub check {
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift;  # Will be empty if test_global set to 1 and test_entity set to 0
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check("file"); 
+  my @includes = $file->refs("import","",1);
+  return unless @includes;
+
+  my $depends = $file->depends();
+  return unless $depends;
+  INC:foreach my $incRef (@includes){
+    $check->violation($incRef->ent,$file,-1,-1,@includes." imports");
+    my $modDef = $incRef->ent->ref("define");
+    if (! $modDef){
+      $check->violation($incRef->ent,$file,$incRef->line,$incRef->column,"import module not found");
+      next INC;
+    }
+    my $modFile = $modDef->file;
+    my @fileDeps = $depends->value($modFile);
+    DEP:foreach my $depRef (@fileDeps){
+      next DEP if $depRef->kind->check("import");
+      next INC;
+    }
+    $check->violation($incRef->ent,$file,$incRef->line,$incRef->column,"import file not directly used"); 
+  }
+}
+
+

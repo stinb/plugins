@@ -1,0 +1,142 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 8/02/2022
+
+import re
+
+ERR1 = 'Fixed Value(Magic Number) used incorrectly: '
+
+DEF_NAME = "All fixed values will be defined final."
+
+BIT_OP = ["~", "<<", ">>", "&", "^", "|"]
+
+# The ID for the check
+def ids():
+    return ('JAVA_01')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'JAVA_01': "All Checks\\Language Specific\\Java\\" + DEF_NAME
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_01': [
+            'Language: Java',
+            'Variables',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p>Using fixed values(Magic Number) in code makes it difficult to know
+why the engineer chose that number and makes it hard to adapt and extend
+the program. Magic numbers should be replaced with name constants to
+make them more usable.</p>
+<p><b>Exceptions</b></p>
+<p>Bit operations or index values may be allowed.</p>
+<p>Any exceptions should be in a comma delimited list of  literals that
+will not be tested. For example: 0,1,1024</p>"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox('bitOp', 'Allow bit operations', False)
+    check.option().checkbox('indexes', 'Allow indexes', False)
+    check.option().text('exceptions','Exception List (Comma Delimited)','0,1')
+
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+    lexeme = lexer.first()
+
+    textList = check.option().lookup('exceptions')
+    textList = re.sub(r'\s', '', textList)
+    exceptions = textList.split(',')
+    
+    indexC = 0
+    funC = 0
+    isFinit = False
+
+    while lexeme:
+        # if in an index
+        if lexeme.text() == "[" and lexeme.token() == "Punctuation":
+            indexC+=1
+        if lexeme.text() == "]" and lexeme.token() == "Punctuation":
+            indexC-=1
+
+        # is in a funtion
+        if funC == 0 and lexeme.token() == "Identifier" and lexeme.ref() and "Callby" in lexeme.ref().kind().longname():
+            #go to paren
+            lexeme = lexeme.next(True, True)
+            if not lexeme:
+                return
+
+            if lexeme.text() == "(" and lexeme.token() == "Punctuation":
+                funC += 1
+                lexeme = lexeme.next()
+
+        # in a fun, so we need to count our parens
+        if funC > 0:   
+            if lexeme.text() == "(" and lexeme.token() == "Punctuation":
+                funC += 1     
+            if lexeme.text() == ")" and lexeme.token() == "Punctuation":
+                funC -= 1       
+        
+        # if in a final init
+        if isFinalInitialization(lexeme, check):
+            isFinit = True
+        if lexeme.text() == ";" and lexeme.token() == "Punctuation":
+            isFinit = False
+
+        # this all maters only if a literal
+        if lexeme.token() == "Literal":
+
+            # rules
+            exception = lexeme.text() in exceptions
+            inBito = isBitOp(lexeme) and check.option().lookup('bitOp')
+            inIndex = indexC != 0 and check.option().lookup('indexes')
+            inFinal = isFinit and not inIndex and funC == 0
+
+            if not exception and not inBito and not inIndex and not inFinal:
+                pm(ERR1 + lexeme.text(), check, file, file, lexeme.line_begin(), lexeme.column_begin())
+
+        
+        lexeme = lexeme.next()
+        
+        
+def isFinalInitialization(lexeme, check = None):
+    t = lexeme.token()
+    e = lexeme.ent()
+    r = lexeme.ref()
+
+    if r and ("Set" in r.kindname() or "Define" in r.kindname()) and "Final Variable" in e.kindname():
+        return True
+
+def isBitOp(lexeme):
+    prevLex = lexeme.previous(True, True)
+    nextLex = lexeme.next(True, True)
+    for o in BIT_OP:
+        if prevLex and o in prevLex.text() or nextLex and o in nextLex.text():
+            return True      
+    return False
+  
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

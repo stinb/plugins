@@ -1,0 +1,193 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8/14/24
+
+import re
+
+ERR1 = 'The operands for the operator %1 are not of the same essential type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_10.4', 'MISRA23_10.4', 'CPP_E075')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_10.4': 'Published Standards/MISRA C 2012/' + """\
+10.4 Both operands of an operator in which the usual arithmetic conversions are
+performed shall have the same essential type category""",
+        'MISRA23_10.4': 'Published Standards/MISRA C 2023/' + """\
+10.4 Both operands of an operator in which the usual arithmetic conversions are
+performed shall have the same essential type category""",
+        'CPP_E075': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+Both operands of an operator in which the usual arithmetic conversions are
+performed shall have the same essential type category""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_10.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_10.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E075': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p></p>
+<p><b>Amplification</b></p>
+<p>This rule applies to operators that are described in usual arithmetic
+conversions section in the C Standard. This includes all the binary operators,
+excluding the shift, logical &&, logical || and comma operators. In addition,
+the second and third operands of the ternary operator are covered by this rule.
+</p>
+<p>Note: the increment and decrement operators are not covered by this rule.</p>
+<p><b>Rationale</b></p>
+<p>The C language allows the programmer considerable freedom and will permit
+conversions between different arithmetic types to be performed automatically.
+However, the use of these implicit conversions can lead to unintended results,
+with the potential for loss of value, sign or precision. Further details of
+concerns with the C type system can be found in Appendix C. The use of stronger
+typing, as enforced by the MISRA essential type model, allows implicit
+conversions to be restricted to those that should then produce the answer
+expected by the developer.</p>
+<p>The use of stronger typing, as enforced by the MISRA essential type model,
+allows implicit conversions to be restricted to those that should then produce
+the answer expected by the developer.</p>
+<p><b>Exception</b></p>
+<p>The following are permitted to allow a common form of character manipulation
+to be used:</p>
+<ol>
+<li>The binary + and += operators may have one operand with essentially
+character type and the other operand with an essentially signed or essentially
+unsigned type;</li>
+<li>The binary - and -= operators may have a left-hand operand with essentially
+character type and a right-hand operand with an essentially signed or
+essentially unsigned type.</li>
+</ol>
+<p><b>Example</b></p>
+<pre><code language="C++">enum enuma { A1, A2, A3 } ena;
+enum enumb { B1, B2, B3 } enb;</code></pre>
+<p>The following are compliant as they have the same essential type category:
+</p>
+<pre><code language="C++">ena > A1
+u8a + u16b</pre></code>
+<p>The following is compliant by exception 1:</p>
+<pre><code language="C++">cha += u8a</pre></code>
+<p>The following is compliant by exception 1, but violates Rule 10.3:</p>
+<pre><code language="C++">u8a += cha /* unsigned and char */</pre></code>
+<pre><code language="C++"></pre></code>
+<p>The following is compliant by exception 3.</p>
+<pre><code language="C++">cf32a += f32a; /* complex floating and real floating */
+</pre></code>
+<p>The following is non-compliant with this rule and also violates Rule 10.3:
+</p>
+<pre><code language="C++">s8a += u8a /* signed and unsigned */</pre></code>
+<p>The following are non-compliant:</p>
+<pre><code language="C++">u8b + 2 /* unsigned and signed */
+enb > A1 /* enum<enumb> and enum<enuma> */
+ena == enb /* enum<enuma> and enum<enumb> */</pre></code>
+"""
+    return {
+        'MISRA12_10.4': desc,
+        'MISRA23_10.4': desc,
+        'CPP_E075': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # All possible operators for the standard
+    operators = ['+', '-', '*', '/', '%', '==', '!=', '>', '<', '>=', '<=', '+=', '-=', '&', '|', '^', '?']
+    if not file.lexer():
+        return
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+    for lexeme in lexemes:
+        # Check the operands if the operator is in the list
+        if lexeme.text() in operators:
+            left = ''
+            right = ''
+            leftEnt = None
+            prevLex = lexeme.previous(True, True)
+            nextLex = lexeme.next(True, True)
+            while prevLex and prevLex.text() not in [';', '{', '}', '(', ')']:
+                if prevLex.ent():
+                    left = prevLex.ent().type()
+                    leftEnt = prevLex.ent()
+                    break
+                prevLex = prevLex.previous(True, True)
+            while nextLex and nextLex.text() not in [';', '{', '}', '(', ')']:
+                if nextLex.ent():
+                    right = nextLex.ent().type()
+                    break
+                nextLex = nextLex.next(True, True)
+            if left and right:
+                if not sameEssentialType(left, right, lexeme.text()):
+                    check.violation(leftEnt, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text())
+
+# Checks if both operands are the same essential type or one of the exceptions
+def sameEssentialType(left, right, operator):
+    if left == right:
+        return True
+    # Checks for the exceptions for the +, -, +=, and -= operators
+    if re.search(r'\+|\-', operator):
+        if 'char' in left:
+            if 'int' in right:
+                return True
+        elif 'char' in right and '+' in operator:
+            if 'int' in left:
+                return True
+    # Checks if the same enum is used or an object within the same enum
+    if 'enum' in left and 'enum' in right:
+        if left in right or right in left:
+            return True
+        return False
+    types = ['int', 'bool', 'float', 'char']
+    for type in types:
+        # Check for types that are essentially the same but not the same exact
+        if type in left:
+            if type not in right:
+                return False
+            if type == 'int':
+                if re.search(r'unsigned|uint', left):
+                    if re.search(r'unsigned|uint', right):
+                        return True
+                elif re.search(r'unsigned|uint', right):
+                    return False
+            return True
+
+        elif type in right:
+            return False
+
+    return True

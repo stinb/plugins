@@ -1,0 +1,170 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10/02/24
+
+import re
+import Modules
+
+ERR1 = 'Conversion found between a pointer to an incomplete type and another type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_11.2', 'MISRA23_11.2', 'CPP_E079')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_11.2': 'Published Standards/MISRA C 2012/' + """\
+11.2 Conversions shall not be performed between a pointer to an incomplete type
+and any other type""",
+        'MISRA23_11.2': 'Published Standards/MISRA C 2023/' + """\
+11.2 Conversions shall not be performed between a pointer to an incomplete type
+and any other type""",
+        'CPP_E079': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+Conversions shall not be performed between a pointer to an incomplete type and
+any other type""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_11.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_11.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E079': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>A pointer to an incomplete type shall not be converted into another type.</p>
+<p>A conversion shall not be made into a pointer to incompl ete type.</p>
+<p>Although a pointer to void is also a pointer to an incomplete type, this rule
+does not apply to pointers to void as they are covered by Rule 11.5.</p>
+<p><b>Rationale</b></p>
+<p>Conversion into or from a pointer to an incomplete type may result in a
+pointer that is not correctly aligned, resulting in undefi ned behaviour .</p>
+<p>Conversion of a pointer to an incomplete type into or from a floating type
+always results in undefined behaviour.</p>
+<p>Pointers to an incomplete type are sometimes used to hide the representation
+of an object. Converting a pointer to an incomplete type into a pointer to
+object would break this encapsulation.</p>
+<p><b>Exception</b></p>
+<ol>
+<li>A null pointer constant may be converted into a pointer to an incomplete
+type.</li>
+<li>A pointer to an incomplete type may be converted into void.</li>
+</ol>
+<p><b>Example</b></p>
+<pre><code language="C++">struct s; /* Incomplete type */
+struct t; /* A different incomplete type */
+struct s *sp;
+struct t *tp;
+int16_t *ip;
+#include <stdlib.h> /* To obtain macro NULL */
+ip = ( int16_t * ) sp; /* Non-compliant */
+sp = ( struct s * ) 1234; /* Non-compliant */
+tp = ( struct t * ) sp; /* Non-compliant - casting pointer into a
+* different incomplete type */
+sp = NULL; /* Compliant - exception 1 */
+struct s *f ( void );
+( void ) f ( ); /* Compliant - exception 2 */</pre></code>
+"""
+    return {
+        'MISRA12_11.2': desc,
+        'MISRA23_11.2': desc,
+        'CPP_E079': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Declare', 'Unresolved Struct Type')
+    for ref in refs:
+        typeRefs = ref.ent().refs('Typedby')
+        for typeRef in typeRefs:
+            if not re.search(r'\*', str(typeRef.ent().type())):
+                continue
+            setRefs = typeRef.ent().refs('Setby')
+            useRefs = typeRef.ent().refs('Useby')
+            # Go through the setby refs
+            for setRef in setRefs:
+                if not lexer:
+                    if not file.lexer():
+                        return
+                    lexer = file.lexer()
+                lexeme = lexer.lexeme(setRef.line(), setRef.column())
+
+                # Find = sign
+                while lexeme and not re.match(r'=|;', lexeme.text()):
+                    lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '=':
+                    while lexeme and not re.match(r';|{|}', lexeme.text()):
+                        if lexeme.text() == '(':
+                            lexeme = Modules.findClose(lexeme)
+                        # Skip if null (exception)
+                        elif lexeme.ent() and lexeme.text().lower() != 'null':
+                            # Flag if different type
+                            if str(lexeme.ent().type()) != str(typeRef.ent().type()):
+                                check.violation(setRef.ent(), setRef.file(), setRef.line(), setRef.column(), ERR1)
+                                break
+                        # Flag literals
+                        elif lexeme.token() == 'Literal':
+                            check.violation(setRef.ent(), setRef.file(), setRef.line(), setRef.column(), ERR1)
+                            break
+
+                        lexeme = lexeme.next(True, True)
+
+
+            # Go through the useby refs
+            for useRef in useRefs:
+                if not lexer:
+                    if not file.lexer():
+                        return
+                    lexer = file.lexer()
+                lexeme = lexer.lexeme(useRef.line(), useRef.column())
+
+                # Find = sign
+                while lexeme and not re.match(r'=|;|{|}', lexeme.text()):
+                    lexeme = lexeme.previous(True, True)
+                if lexeme and lexeme.text() == '=':
+                    while lexeme and not re.match(r';|{|}', lexeme.text()):
+                        if lexeme.text() == ')':
+                            lexeme = Modules.findOpen(lexeme)
+                        elif lexeme.ent():
+                            # Flag if different type
+                            if str(lexeme.ent().type()) != str(typeRef.ent().type()):
+                                check.violation(useRef.ent(), useRef.file(), useRef.line(), useRef.column(), ERR1)
+                                break
+
+                        lexeme = lexeme.previous(True, True)

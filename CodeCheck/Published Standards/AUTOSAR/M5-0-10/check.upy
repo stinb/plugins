@@ -1,0 +1,193 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-10-21
+
+
+import re
+
+
+ERR1 = 'Result of bitwise operator ~ on type "%1" may contain high order bits'
+ERR2 = 'Result of bitwise operator << on type "%1" may contain high order bits'
+
+
+def ids():
+    return ('M5-0-10', 'MISRA08_5-0-10', 'MISRA04_10.5', 'CPP_T014')
+
+
+def name(id):
+    return {
+        'M5-0-10': 'Published Standards/AUTOSAR/If the bitwise operators ~ and << are applied to an operand with an underlying type of unsigned char or unsigned short, the result shall be immediately cast to the underlying type of the operand',
+        'MISRA08_5-0-10': 'Published Standards/MISRA-C++ 2008/5-0-10 If the bitwise operators ~ and << are applied to an operand with an underlying type of unsigned char or unsigned short, the result shall be immediately cast to the underlying type of the operand',
+        'MISRA04_10.5': 'Published Standards/MISRA-C 2004/10.5 If the bitwise operators ~ and << are applied to an operand with an underlying type of unsigned char or unsigned short, the result shall be immediately cast to the underlying type of the operand',
+        'CPP_T014': 'All Checks/Language Specific/C and C++/Types/If the bitwise operators ~ and << are applied to an operand with an underlying type of unsigned char or unsigned short, the result shall be immediately cast to the underlying type of the operand',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-10': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'MISRA04_10.5': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Types',
+        ],
+        'M5-0-10': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T014': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def description():
+    return 'If the bitwise operators ~ and << are applied to an operand with an underlying type of unsigned char or unsigned short, the result shall be immediately cast to the underlying type of the operand.'
+
+
+def detailed_description():
+    return '''\
+
+<p><b>Rationale</b></p>
+
+<p>
+When the operators <code>~</code> and <code>&lt;&lt;</code> are applied to <i>small integer types</i> (<i>unsigned char</i> or <i>unsigned short</i>), the operations are preceded by integral promotion, and the result may unexpectedly contain high order bits.
+</p>
+
+<p><b>Exception</b></p>
+
+<p>
+The immediate assignment of the result obtained by the use of <code>~</code> or <code>&lt;&lt;</code> on an operand of type <i>unsigned char</i> or <i>unsigned short</i> to an object of the same underlying type complies with this rule (including use as a function argument or function return value), even though the conversion is implicit.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">uint8_t port = 0x5aU;
+uint8_t result_8;
+uint16_t result_16;
+uint16_t mode;
+result_8 = ( ~port ) &gt;&gt; 4; // Non-compliant
+</code></pre>
+
+<p>
+<code>~port</code> is 0xffa5 on a 16-bit machine but 0xffffffa5 on a 32-bit machine. In either case the value of <code>result</code> is 0xfa, but 0x0a may have been expected. This danger is avoided by inclusion of the cast as shown below:
+</p>
+
+<pre><code language="C++">result_8 = ( static_cast&lt; uint8_t &gt; (~port) ) &gt;&gt; 4 ; // Compliant
+</code></pre>
+
+<p>
+A similar problem exists when the <code>&lt;&lt;</code> operator is used on <i>small integer types</i> and high order bits are retained. For example:
+</p>
+
+<pre><code language="C++">result_16 = ( ( port &lt;&lt; 4 ) & mode ) &gt;&gt; 6; // Non-compliant
+</code></pre>
+
+<p>
+The value in <code>result_16</code> will depend on the implemented size of an <i>int</i>. Addition of a cast avoids any ambiguity.
+</p>
+
+<pre><code language="C++">result_16 =
+    ( static_cast &lt; uint16_t &gt; ( static_cast&lt; uint16_t &gt; ( port ) &lt;&lt; 4 )
+    & mode ) &gt;&gt; 6; // Compliant
+</code></pre>
+
+<p>
+Using intermediate steps would make this clearer:
+</p>
+
+<pre><code language="C++">uint16_t port_16 = static_cast&lt; uint16_t &gt; ( port );
+uint16_t port_shifted = static_cast&lt; uint16_t &gt; ( port_16 &lt;&lt; 4 );
+result_16 = ( port_shifted & mode ) &gt;&gt; 6; // Compliant
+</code></pre>
+
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def matchString(lexeme, text):
+    if lexeme.text() == text:
+        return lexeme.next(ignore_comments=True, ignore_whitespace=True)
+    else:
+        return None
+
+
+def matchSet(lexeme, texts):
+    if lexeme.text() in texts:
+        return lexeme.next(ignore_comments=True, ignore_whitespace=True)
+    else:
+        return None
+
+
+def check(check, file):
+    casts = {'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast', ')'}
+    small = {'unsigned char', 'uint8_t', 'uint_fast8_t', 'uint_least8_t'}
+    endOfExpression = {',', '=', ';', '{', '}'}
+
+    lexer = None
+
+    # Whenever a value is set by a cast
+    for ref in file.filerefs('Use', 'Object'):
+        ent = ref.ent()
+
+        # If the value being assigned is a number
+        if ent.type() in small:
+
+            # Get the lexer and lexeme
+            if not lexer:
+                lexer = file.lexer()
+
+            # If the previous lexeme is ~
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            lexeme = lexeme.previous(ignore_comments=True, ignore_whitespace=True)
+            if lexeme.text() == '~':
+                
+                # If the value is not cast
+                while lexeme and lexeme.text() not in casts:
+                    lexeme = lexeme.previous(ignore_comments=True, ignore_whitespace=True)
+                    if lexeme and lexeme.text() in endOfExpression:
+                        check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.type())
+                        break
+
+            # If a future lexeme is >>
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            leftShift = False
+            while lexeme and lexeme.text() not in endOfExpression:
+                lexeme = lexeme.next(ignore_comments=True, ignore_whitespace=True)
+                if lexeme and lexeme.text() == '<<':
+                    leftShift = True
+                    break
+
+            # If the value left shifted is not cast
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            if leftShift:
+                while lexeme and lexeme.text() not in casts:
+                    lexeme = lexeme.previous(ignore_comments=True, ignore_whitespace=True)
+                    if lexeme and lexeme.text() in endOfExpression:
+                        check.violation(ent, file, ref.line(), ref.column(), ERR2, ent.type())
+                        break

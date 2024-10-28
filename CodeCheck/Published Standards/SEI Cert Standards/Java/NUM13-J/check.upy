@@ -1,0 +1,276 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 6-21-22
+
+
+import re
+
+
+ERR1 = 'Precision lost by cast conversion from %1 to %2'
+ERR2 = 'Precision lost by assignment conversion from %1 to %2'
+ERR3 = 'Precision lost by parameterization conversion from %1 to %2'
+
+
+def ids():
+    return ('NUM13-J', 'JAVA_NUM13')
+
+
+def name(id):
+    return {
+        'NUM13-J': 'Published Standards/SEI Cert Standards/Java/Avoid loss of precision when converting primitive integers to floating-point',
+        'JAVA_NUM13': 'All Checks/Language Specific/Java/Numeric Types and Operations/Avoid loss of precision when converting primitive integers to floating-point',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'NUM13-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_NUM13': [
+            'Language: Java',
+            'Numeric Types and Operations',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Do not convert an int to float or a long to a float/double
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Converting integer values to floating-point types whose mantissa has fewer bits
+than the original integer value can result in a rounding error.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/NUM13-J.+Avoid+loss+of+precision+when+converting+primitive+integers+to+floating-point
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+NUM13-J-EX0: Conversion from integral types to floating-point types without a
+range check is permitted when suitable numerical analysis demonstrates that the
+loss of the least significant bits of precision is acceptable.
+</i></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">strictfp class WideSample {
+  public static int subFloatFromInt(int op1, float op2) {
+    return op1 - (int)op2;
+  }
+
+  public static void main(String[] args) {
+    int result = subFloatFromInt(1234567890, 1234567890);
+    // This prints -46, not 0, as may be expected
+    System.out.println(result);
+  }
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Because this check doesn't get types & values from expression parsing, it will\
+ not flag conversions of expressions. Additionally, it does not track\
+ identifiers with multiple sets/assignments, so conversions of these\
+ identifiers are flagged.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def literalToInt(text):
+    # Remove unneccessary characters
+    text = re.sub(r'_|l|L', '', text)
+    if not re.match(r'0x[\d|a-f]+$', text, re.IGNORECASE):
+        text = re.sub(r'f|F', '', text)
+    # Binary
+    if re.match(r'0b[0|1]+$', text, re.IGNORECASE):
+        return int(text, 2)
+    # Decimal
+    if re.match(r'\d+$', text):
+        return int(text)
+    # Hexadecimal
+    if re.match(r'0x[\d|a-f]+$', text, re.IGNORECASE):
+        return int(text, 16)
+
+
+def getValue(lex):
+    # Identifier is only set/modified once
+    if lex.token() == 'Identifier' and lex.ent() and lex.ent().value() and len(lex.ent().refs('Set, Modify')) == 1:
+        return literalToInt(lex.ent().value())
+    # Literal
+    if lex.token() == 'Literal':
+        return literalToInt(lex.text())
+
+
+def getLiteralIntType(text):
+    if re.match(r'\w+[l|L]$', text):
+        return 'long'
+    if re.match(r'\d+[f|F]$', text):
+        return # float
+    if re.match(r'\w+$', text):
+        return 'int'
+
+
+def getType(lex):
+    if lex.token() == 'Identifier' and lex.ent():
+        return lex.ent().type()
+    if lex.token() == 'Literal':
+        return getLiteralIntType(lex.text())
+
+
+def castType(lex):
+    lex = lex.previous(True, True)
+    if lex.text() != ')':
+        return
+
+    lex = lex.previous(True, True)
+    if lex.token() != 'Keyword':
+        return
+
+    return lex.text()
+
+
+def assignmentType(lex):
+    lex = lex.previous(True, True)
+    if lex.text() != '=':
+        return
+
+    lex = lex.previous(True, True)
+    if lex.token() != 'Identifier' or not lex.ent():
+        return
+
+    return lex.ent().type()
+
+
+def getParameterType(method, i):
+    parameters = method.ents('Define', 'Parameter')
+    if len(parameters) > i:
+        return parameters[i].type()
+
+
+def parameterizationType(lex):
+    l = lex.previous(True, True)
+    if l.text() not in {'(', ','}:
+        return
+
+    r = lex.next(True, True)
+    if not r or r.text() not in {')', ','}:
+        return
+
+    # Go back until the end of the call/statement
+    commas = 0
+    while lex and lex.text() not in {'(', ';', '{'}:
+        if lex.text() == ',':
+            commas += 1
+        lex = lex.previous(True, True)
+
+    # Go back until method
+    lex = lex.previous(True, True)
+    if not lex or lex.token() != 'Identifier' or not lex.ref():
+        return
+
+    # See if the identifier is being created or called
+    ent = lex.ent()
+    if not ent.kind().check('Method, Class Type'):
+        return
+
+    # Get parameter type of method
+    if ent.kind().check('Method'):
+        return getParameterType(ent, commas)
+    # Get parameter type of class constructor
+    else:
+        constructors = ent.ents('Define', 'Constructor')
+        if not constructors:
+            return
+        constructor = constructors[0]
+        return getParameterType(constructor, commas)
+
+
+def check(check, file):
+    lexer = None
+
+    ints = {
+        'int':    4,
+        'long':   8,
+    }
+    floats = {
+        'float':  4,
+        'double': 8,
+    }
+    biggestMantissas =  {
+        'float': 1 << 24,
+        'double': 1 << 53,
+    }
+
+    # Get define and end for each method
+    for define in file.filerefs('Define', 'Method ~Implicit'):
+        method = define.ent()
+        if not lexer:
+            lexer = file.lexer()
+        end = method.ref('End')
+
+        # Process lexemes of method
+        for lex in lexer.lexemes(define.line(), end.line()):
+            if lex.token() not in {'Identifier', 'Literal'}:
+                continue
+
+            error = None
+
+            value = getValue(lex)
+
+            # Conversion by cast
+            newType = castType(lex)
+            possibleError = ERR1
+
+            # Conversion by assignment
+            if not newType:
+                newType = assignmentType(lex)
+                possibleError = ERR2
+
+            # Conversion by parameterization
+            if not newType:
+                newType = parameterizationType(lex)
+                possibleError = ERR3
+
+            # Compare sizes of types
+            if newType:
+                oldType = getType(lex)
+                if oldType not in ints or newType not in floats:
+                    continue
+                if ints[oldType] >= floats[newType]:
+                    error = possibleError
+
+            # Skip if there is no conversion (int -> float) or (long -> float/double)
+            if not error:
+                continue
+
+            # Skip if the value is small enough to not lose precision
+            if value != None and value < biggestMantissas[newType]:
+                continue
+
+            check.violation(method, file, lex.line_begin(), lex.column_begin(), error, oldType, newType)

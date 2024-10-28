@@ -1,0 +1,110 @@
+ERR1 = 'Wrap functions that can spuriously wake up in a loop.'
+
+
+# The ID for the check
+def id():
+    return ('CON36-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON36-C': 'Published Standards/SEI Cert Standards/C/Wrap functions that can spuriously wake up in a loop',
+    }[id]
+
+
+def tags(id):
+    return {
+        'CON36-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+            'Functions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Wrap functions that can spuriously wake up in a loop'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Wrap functions that can spuriously wake up in a loop</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to enclose calls to the cnd_wait() or cnd_timedwait() functions inside a while loop can lead to indefinite blocking and denial of service (DoS).</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/CON36-C.+Wrap+functions+that+can+spuriously+wake+up+in+a+loop</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stddef.h&gt;
+#include &lt;threads.h&gt;
+
+struct node_t {
+  void *node;
+  struct node_t *next;
+};
+
+struct node_t list;
+static mtx_t lock;
+static cnd_t condition;
+
+void consume_list_element(void) {
+  if (thrd_success != mtx_lock(&lock)) {
+    /* Handle error */
+  }
+
+  if (list.next == NULL) {
+    if (thrd_success != cnd_wait(&condition, &lock)) {
+      /* Handle error */
+    }
+  }
+
+  /* Proceed when condition holds */
+
+  if (thrd_success != mtx_unlock(&lock)) {
+    /* Handle error */
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        lines_on_loop = []
+        func_ent = func_ref.ent()
+        func_cfg = func_ent.control_flow_graph()
+
+        if func_cfg is None:
+          return
+
+        for node in func_cfg.nodes():
+            if node.kind() in {"do-while", "while-for", "for", "while"}:
+                start_line = node.line_begin()
+                node_end = node.end_node()
+
+                while start_line and node_end and node_end.line_end() and (start_line <= node_end.line_end()):
+                    lines_on_loop.append(start_line)
+                    start_line += 1
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in {"cnd_wait", "cnd_timedwait", "pthread_cond_wait", "pthread_cond_timedwait"} and call_ref.line() not in lines_on_loop:
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), ERR1)

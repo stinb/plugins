@@ -1,0 +1,174 @@
+ERR1 = 'Control is transferred into a try or catch block using a goto or a switch statement'
+
+
+# The ID for the check
+def ids():
+    return ('M15-0-3', 'CPP_C048')
+
+def name(id):
+    return {
+        'M15-0-3': """\
+Published Standards/AUTOSAR/Transferring Control to a Try or Catch Block Using \
+Goto or Switch Statement""",
+        'CPP_C048': """\
+All Checks/Language Specific/C and C++/Control Flow/Transferring Control to a \
+Try or Catch Block Using Goto or Switch Statement"""
+
+    }[id]
+
+
+
+
+
+
+
+
+def tags(id):
+    return {
+        'M15-0-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C048': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Control shall not be transferred into a try or catch block using a goto or a switch statement.'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Control shall not be transferred into a try or catch block
+using a goto or a switch statement.</p>
+<p><b>Rationale</b></p>
+<p>A program is ill-formed if control is transferred into a try or catch block using a goto or switch
+statement; however, not all compilers issue a diagnostic message.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">void f ( int32_t i )
+{
+ if ( 10 == i )
+ {
+ goto Label_10; // Non-compliant
+ }
+ if ( 11 == i )
+ {
+ goto Label_11; // Non-compliant
+ }
+ switch ( i )
+ {
+ case 1:
+ try
+ {
+ Label_10:
+ case 2: // Non-compliant – also violates switch rules
+ // Action
+ break;
+ }
+ catch ( ... )
+ {
+ Label_11:
+ case 3: // Non-compliant – also violates switch rules
+ // Action
+ break;
+ }
+ break;
+ default:
+ {
+ // Default Action
+ break;
+ }
+ }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ent, line, column):
+        check.violation(ent, file, line, column, ERR1)
+
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        end_ref = func_ref.ent().ref("End, Endby")
+        on_switch = False
+        on_try = False
+        on_catch = False
+        switch_bracket = []
+        try_bracket = []
+        catch_bracket = []
+        lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+        if not end_ref:
+            continue
+
+        while lex and (lex.line_begin() != end_ref.line()):
+            if lex.text() == "switch" and lex.token() == "Keyword":
+                on_switch = True
+            elif lex.text() == "try" and lex.token() == "Keyword":
+                on_try = True
+            elif lex.text() == "catch" and lex.token() == "Keyword":
+                on_catch = True
+            elif lex.text() == "{":
+                if on_switch:
+                    switch_bracket.append(lex.text())
+
+                if on_try:
+                    try_bracket.append(lex.text())
+
+                if on_catch:
+                    catch_bracket.append(lex.text())
+            elif lex.text() == "}":
+                if on_switch:
+                    switch_bracket.pop()
+
+                    if not switch_bracket:
+                        on_switch = False
+
+                if on_try:
+                    try_bracket.pop()
+
+                    if not try_bracket:
+                        on_try = False
+
+                if on_catch:
+                    catch_bracket.pop()
+
+                    if not catch_bracket:
+                        on_catch = False
+            elif lex.ent() and "Label" in lex.ent().kindname():
+                if on_try or on_catch:
+                    label_ref = lex.ent().ref("Useby")
+                    check_violation(label_ref.ent(),
+                                    label_ref.line(), label_ref.column())
+            elif (on_catch or on_try) and lex.text() == "case" and lex.token() == "Keyword":
+                check_violation(None, lex.line_begin(), lex.column_begin())
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)

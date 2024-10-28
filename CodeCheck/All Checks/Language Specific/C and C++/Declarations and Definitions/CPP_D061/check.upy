@@ -1,0 +1,135 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-17-21
+
+
+import re
+
+
+ERR1 = 'Constructor does not initialize virtual base class "%1"'
+ERR2 = 'Constructor does not initialize direct non-virtual base class "%1"'
+ERR3 = 'Constructor does not initialize data member "%1"'
+
+
+def ids():
+    return ('A12-1-1', 'CPP_D061')
+
+
+def name(id):
+    return {
+        'A12-1-1': 'Published Standards/AUTOSAR/Constructors shall explicitly initialize all virtual base classes, all direct non-virtual base classes and all non-static data members.',
+        'CPP_D061': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Constructors shall explicitly initialize all virtual base classes, all direct non-virtual base classes and all non-static data members.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A12-1-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D061': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+A constructor of a class is supposed to completely initialize its object. Explicit initialization of all virtual base classes, direct non-virtual base classes and non-static data members reduces the risk of an invalid state after successful construction.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A12-1-1.cpp 271696 2017-03-23 09:23:09Z piotr.tanski $
+#include &lt;cstdint&gt;
+class Base
+{
+    // Implementation
+};
+class VirtualBase
+{
+};
+class A : public virtual VirtualBase, public Base
+{
+public:
+    A() : VirtualBase{}, Base{}, i{0}, j{0} // Compliant
+    {
+    }
+    A(A const& oth)
+        : Base{}, j{0} // Non-compliant - VirtualBase base class and member
+                       // i not initialized
+    {
+    }
+
+private:
+    std::int32_t i;
+    std::int32_t j;
+    static std::int32_t k;
+};
+std::int32_t A::k{0};
+</code></pre>
+
+<p><b>See also</b><br>
+• MISRA C++ 2008 [7]: Rule 12-1-2 All constructors of a class should explicitly call a constructor for all of its immediate base classes and all virtual base classes.<br>
+• HIC++ v4.0 [9]:12.4.2 Ensure that a constructor initializes explicitly all base classes and non-static data members.<br>
+• JSF December 2005 [8]: AV Rule 71: Calls to an externally visible operation of an object, other than its constructors, shall not be allowed until the object has been fully initialized.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+
+    for funRef in file.filerefs('Define', 'Public Member Function'):
+        funEnt = funRef.ent()
+        classEnt = funEnt.parent()
+
+        # If the function is a constructor of a class
+        if funEnt.name() == classEnt.name() and 'Class' in classEnt.kindname():
+
+            # Get all the virtual base classes
+            virtualBases = set()
+            for base in classEnt.ents('Virtual Base', ''):
+                virtualBases.add(base.id())
+            # Find implicit initialization of virtual base classes
+            for baseFun in funEnt.ents('Call Implicit', 'Public Member Function'):
+                if baseFun.parent() and baseFun.parent().id() in virtualBases:
+                    check.violation(funEnt, file, funRef.line(), funRef.column(), ERR1, baseFun.name())
+
+            # Get all the direct non-virtual base classes
+            directBases = set()
+            for base in classEnt.ents('~Virtual Base', ''):
+                directBases.add(base.id())
+            # Find implicit initialization of direct non-virtual base classes
+            for baseFun in funEnt.ents('Call Implicit', 'Public Member Function'):
+                if baseFun.parent() and baseFun.parent().id() in directBases:
+                    check.violation(funEnt, file, funRef.line(), funRef.column(), ERR2, baseFun.name())
+
+            # Get all the initialized non-static data members
+            dataMembersInit = set()
+            for member in funEnt.ents('Set Init', 'Member Object ~Static'):
+                dataMembersInit.add(member.id())
+            # Find the non-static data members not initialized
+            for member in classEnt.ents('Define', 'Member Object ~Static'):
+                if member.id() not in dataMembersInit:
+                    check.violation(funEnt, file, funRef.line(), funRef.column(), ERR3, member.name())

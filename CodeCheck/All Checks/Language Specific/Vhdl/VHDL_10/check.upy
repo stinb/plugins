@@ -1,0 +1,109 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 7-6-2023
+
+ERR1 = "Signal is never initialized prior to use"
+ERR2 = "Signal is used prior to initialization"
+
+# The ID for the check
+def id():
+    return 'VHDL_10'
+
+# The short name of the check
+def name():
+    return "All Checks/Language Specific/Vhdl/VHDL_10" +  ' Signals not initialized before use'
+
+
+def tags(id):
+    return {
+        'VHDL_10': [
+            'Language: VHDL',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Signals not initialized before use.'
+
+# The long description of the check
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Signals not Initialized before Use</p>
+
+<p><b>Description</b></p>
+<p>
+Initializing signals before use in VHDL is crucial for ensuring deterministic 
+behavior, avoiding latches, aiding synthesis, simplifying debugging, 
+improving code readability, and preventing race conditions. It establishes 
+a known and predictable starting state for signals, reducing the risk of 
+unpredictable behavior and issues in synthesized hardware. Initialization is 
+particularly important in FPGA and ASIC designs to prevent the inference of 
+undesirable latches and ensure that synthesis tools generate the desired 
+hardware logic.
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="VHDL">\
+signal X: std_logic;
+signal Y: std_logic;
+
+begin
+  if X = '1' then  -- Using X without initialization
+    Y &lt;= '1';
+  else
+    Y &lt;= '0';
+  end if;
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>None</p>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'VHDL'
+
+def check(check, file):
+    # grab all signals
+    for sig_ref in file.filerefs("Declare", "Vhdl Signal"):
+
+        # if signal has useby,modifyby, but no setby init, flag
+        sig_ent = sig_ref.ent()
+
+        is_used = False
+        is_init = False
+        sig_init_line = None
+
+        if sig_ent.refs("Useby, Modifyby"):
+            is_used = True
+
+        if sig_ent.ref("Setby Init"):
+            is_init = True
+            sig_init_line = sig_ent.ref("Setby Init").line()
+
+        # grab all lines where signal has useby or modifyby ref, add to a list of line numbers
+        sig_use_lines = []
+        for sig_use in sig_ent.refs("Useby, Modifyby"):
+            sig_use_line = sig_use.line()
+            if sig_use_line not in sig_use_lines:
+                sig_use_lines.append(sig_use_line)
+
+
+
+        # if signal was used but never initialized, flag
+        if is_used == True and is_init == False:
+            check.violation(sig_ent, file, sig_ref.line(), sig_ref.column(), ERR1)
+
+        elif is_used == True and is_init == True and sig_init_line:
+            init_before_use = False
+            for val in sig_use_lines:
+                if val < sig_init_line:
+                    check.violation(sig_ent, file, sig_ref.line(), sig_ref.column(), ERR2)

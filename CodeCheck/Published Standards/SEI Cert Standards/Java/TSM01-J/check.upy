@@ -1,0 +1,176 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-07-12
+
+
+import re
+import Modules
+
+
+ERR1 = 'Anonymous class created in nonprivate constructor'
+ERR2 = 'Assignment with "this" before initialization'
+ERR3 = 'Assignment with "this" to nonvolatile nonfinal public variable'
+ERR4 = 'Ancestor method uses "this"'
+ERR5 = 'Thread uses "this" and starts in constructor'
+ERRORS = [ERR1, ERR2, ERR3, ERR4, ERR5]
+
+
+def ids():
+    return ('TSM01-J', 'JAVA_TSM01')
+
+
+def name(id):
+    return {
+        'TSM01-J': 'Published Standards/SEI Cert Standards/Java/Do not let the this reference escape during object construction',
+        'JAVA_TSM01': 'All Checks/Language Specific/Java/Thread-Safety Miscellaneous/Do not let the this reference escape during object construction',
+    }[id]
+
+
+def tags(id):
+    return {
+        'TSM01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_TSM01': [
+            'Language: Java',
+            'Thread-Safety Miscellaneous',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''
+<p>
+Do not let the <code>this</code> reference escape during object construction
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Allowing the <code>this</code> reference to escape can result in improper initialization and runtime exceptions.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/TSM01-J.+Do+not+let+the+this+reference+escape+during+object+construction
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+TSM01-J-EX0: It is safe to create a thread in the constructor, provided the thread is not started until after object construction is complete, because a call to start() on a thread happens-before any actions in the started thread [JLS 2015].
+</i></p>
+<p><i>
+Even though this code example creates a thread that references this in the constructor, the thread is started only when its start() method is called from the startThread() method [Goetz 2002], [Goetz 2006a].
+</i></p>
+
+<p><b>Noncompliant Code Example (Publish before Initialization)</b></p>
+<pre><code language="Java">final class Publisher {
+  public static volatile Publisher published;
+  int num;
+
+  Publisher(int number) {
+    published = this;
+    // Initialization
+    this.num = number;
+    // ...
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Nonvolatile Public Static Field)</b></p>
+<pre><code language="Java">final class Publisher {
+  public static Publisher published;
+  int num;
+
+  Publisher(int number) {
+    // Initialization
+    this.num = number;
+    // ...
+    published = this;
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Handlers)</b></p>
+<pre><code language="Java">// Class DefaultExceptionReporter
+public class DefaultExceptionReporter implements ExceptionReporter {
+  public DefaultExceptionReporter(ExceptionReporter er) {
+    // Carry out initialization
+    // Incorrectly publishes the "this" reference
+    er.setExceptionReporter(this);
+  }
+
+  // Implementation of setExceptionReporter() and report()
+}
+// Class MyExceptionReporter derives from DefaultExceptionReporter
+public class MyExceptionReporter extends DefaultExceptionReporter {
+  private final Logger logger;
+
+  public MyExceptionReporter(ExceptionReporter er) {
+    super(er); // Calls superclass's constructor
+    // Obtain the default logger
+    logger = Logger.getLogger("com.organization.Log");
+  }
+
+  public void report(Throwable t) {
+    logger.log(Level.FINEST,"Loggable exception occurred", t);
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Inner Class)</b></p>
+<pre><code language="Java">public class DefaultExceptionReporter implements ExceptionReporter {
+  public DefaultExceptionReporter(ExceptionReporter er) {
+    er.setExceptionReporter(new ExceptionReporter() {
+        public void report(Throwable t) {
+          // report exception
+        }
+        public void setExceptionReporter(ExceptionReporter er) {
+          // register ExceptionReporter
+        }
+    });
+  }
+  // Default implementations of setExceptionReporter() and report()
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Thread)</b></p>
+<pre><code language="Java">final class ThreadStarter implements Runnable {
+  public ThreadStarter() {
+    Thread thread = new Thread(this);
+    thread.start();
+  }
+
+  @Override public void run() {
+    // ...
+  }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    thisEscapesConstructor = Modules.javaThisEscapesConstructor
+
+    # Find violations with 'this' or anonymous functions in constructors
+    for ref in file.filerefs('Define', 'Class Type ~TypeVariable'):
+        thisEscapesConstructor(ref.ent(), check, ERRORS)

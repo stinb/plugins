@@ -1,0 +1,123 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 5-24-2023
+
+VALID_LOOPS = ["for", "while"]
+
+# The ID for the check
+def id():
+    return 'VHDL_25'
+
+# The short name of the check
+def name():
+    return "All Checks/Language Specific/Vhdl/VHDL_25" +  ' Do not use Loop without For'
+
+
+def tags(id):
+    return {
+        'VHDL_25': [
+            'Language: VHDL',
+            'Control Flow',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not use Loop without For.'
+
+# The long description of the check
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Do Not Use Loop Without For</p>
+
+<p><b>Description</b></p>
+<p>
+Using a 'loop' without a 'for' in VHDL is not a typical construct, and it's 
+generally not recommended because it lacks explicit termination conditions. 
+In VHDL, loops are typically used in conjunction with a 'for' statement or a 
+'while' statement to provide clear control and termination conditions. When 
+you use 'loop' without specifying when the loop should end, it creates an infinite 
+loop, which may lead to unintended consequences, such as: infinite execution, lack 
+of clarity, and risk of unintended behavior.
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="VHDL">\
+entity parity_check is
+port(
+  i_clk             : in  std_logic;
+  i_data            : in  std_logic_vector(7 downto 0);
+  o_parity          : out std_logic);
+end parity_check;
+
+architecture rtl of parity_check is
+
+signal r_data            : std_logic_vector(7 downto 0);
+
+begin
+
+p_parity_check : process (i_clk)
+variable vparity           : std_logic;
+begin
+  if rising_edge(i_clk) then
+    r_data  &lt;= i_data;
+
+    vparity := '0';
+    l_parity : for k in 0 to r_data'length-1 loop  -- valid for loop
+      vparity := vparity xor r_data(k);
+    end loop l_parity;
+
+    l_parity : loop                                -- invalid loop, no for keyword
+      vparity := vparity xor r_data(k);
+    end loop l_parity;
+
+    o_parity &lt;= vparity;
+  end if;
+end process p_parity_check;
+
+end rtl;
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>None</p>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'VHDL'
+
+def check(check, file): 
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        if lexeme.text() == "loop" and lexeme.token() == "Keyword":
+            for_found = False
+            end_loop = False
+            backscan_lex = lexeme
+
+            # backscan_lex's job is to scan lexemes back to the preceding statement
+            while backscan_lex and backscan_lex.text() != ";":
+                if backscan_lex.text() in VALID_LOOPS and backscan_lex.token() == "Keyword":
+                    for_found = True
+                elif backscan_lex.text() == "end" and backscan_lex.token() == "Keyword":
+                    end_loop = True
+
+                backscan_lex = backscan_lex.previous(True,True)
+
+            if not (for_found or end_loop):
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), "Loop used without For keyword")
+
+        lexeme = lexeme.next()

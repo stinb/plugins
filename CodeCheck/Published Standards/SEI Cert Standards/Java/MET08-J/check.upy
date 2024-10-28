@@ -1,0 +1,475 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-11-01
+
+
+import re
+from Modules import lexemeBefore, javaAncestorOfLongnameExists
+
+
+ERR1 = 'Definition of equals method may not properly compare the types'
+ERR2 = 'Usage of equals method on a key and no other comparisons in this scope'
+ERR3 = 'Usage of non-compliant equals method'
+
+
+translationUnitCache = dict()
+
+
+def ids():
+    return ('MET08-J', 'JAVA_MET08')
+
+
+def name(id):
+    return {
+      'MET08-J': '''Published Standards/SEI Cert Standards/Java/\
+Preserve the equality contract when overriding the equals() method''',
+      'JAVA_MET08': '''All Checks/Language Specific/Java/Methods/\
+Preserve the equality contract when overriding the equals() method''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MET08-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_MET08': [
+            'Language: Java',
+            'Methods',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+      'MET08-J': '''\
+<p>
+When overriding the <code>equals()</code> method, make sure it is reflexive,
+symmetric, transitive, consistent. Finally, for any non-null reference value
+<code>x</code>, <code>x.equals(null)</code> must return false.
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Violating the general contract when overriding the <code>equals()</code> method
+can lead to unexpected results.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/MET08-J.+Preserve+the+equality\
++contract+when+overriding+the+equals%28%29+method
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+MET08-J-EX0: Requirements of this rule may be violated provided that the
+incompatible types are never compared. There are classes in the Java platform
+libraries (and elsewhere) that extend an instantiable class by adding a value
+component. For example, <code>java.sql.Timestamp</code> extends
+<code>java.util.Date</code> and adds a nanoseconds field. The
+<code>equals()</code> implementation for <code>Timestamp</code> violates
+symmetry and can cause erratic behavior when <code>Timestamp</code> and
+<code>Date</code> objects are used in the same collection or are otherwise
+intermixed [Bloch 2008].
+</i></p>
+
+<p><b>Noncompliant Code Example (Symmetry)</b></p>
+<pre><code language="Java">public final class CaseInsensitiveString {
+  private String s;
+
+  public CaseInsensitiveString(String s) {
+    if (s == null) {
+      throw new NullPointerException();
+    }
+    this.s = s;
+  }
+
+  // This method violates symmetry
+  public boolean equals(Object o) {
+    if (o instanceof CaseInsensitiveString) {
+      return s.equalsIgnoreCase(((CaseInsensitiveString)o).s);
+    }
+
+    if (o instanceof String) {
+      return s.equalsIgnoreCase((String)o);
+    }
+    return false;
+  }
+
+  // Comply with MET09-J
+  public int hashCode() {/* ... */}
+
+  public static void main(String[] args) {
+    CaseInsensitiveString cis = new CaseInsensitiveString("Java");
+    String s = "java";
+    System.out.println(cis.equals(s)); // Returns true
+    System.out.println(s.equals(cis)); // Returns false
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Transitivity)</b></p>
+<pre><code language="Java">public class Card {
+  private final int number;
+
+  public Card(int number) {
+    this.number = number;
+  }
+
+  public boolean equals(Object o) {
+    if (!(o instanceof Card)) {
+      return false;
+    }
+
+    Card c = (Card)o;
+    return c.number == number;
+  }
+
+  public int hashCode() {/* ... */}
+
+}
+
+class XCard extends Card {
+  private String type;
+  public XCard(int number, String type) {
+    super(number);
+    this.type = type;
+  }
+
+  public boolean equals(Object o) {
+    if (!(o instanceof Card)) {
+      return false;
+    }
+
+    // Normal Card, do not compare type
+    if (!(o instanceof XCard)) {
+      return o.equals(this);
+    }
+
+    // It is an XCard, compare type as well
+    XCard xc = (XCard)o;
+    return super.equals(o) && xc.type == type;
+  }
+
+  public int hashCode() {/* ... */}
+
+  public static void main(String[] args) {
+    XCard p1 = new XCard(1, "type1");
+    Card p2 = new Card(1);
+    XCard p3 = new XCard(1, "type2");
+    System.out.println(p1.equals(p2)); // Returns true
+    System.out.println(p2.equals(p3)); // Returns true
+    System.out.println(p1.equals(p3)); // Returns false
+                                       // violating transitivity
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Consistency)</b></p>
+<pre><code language="Java">public class Filter {
+  public static void main(String[] args) throws MalformedURLException {
+    final URL allowed = new URL("http://mailwebsite.com");
+    if (!allowed.equals(new URL(args[0]))) {
+      throw new SecurityException("Access Denied");
+    }
+    // Else proceed
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>java.security.Key</code>)</b></p>
+<pre><code language="Java">private static boolean keysEqual(Key key1, Key key2) {
+  if (key1.equals(key2)) {
+    return true;
+  }
+  return false;
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Because of variety, the equality contract for an <code>equals()</code> method
+definition should be tested using dynamic analysis. This static analysis tool
+checks type comparison using either 1 <code>instanceof</code> keyword or 2 calls
+to the method <code>getClass()</code>.
+</p>
+''',
+      'JAVA_MET08': '''\
+<p>
+When overriding the <code>equals()</code> method, make sure it is reflexive,
+symmetric, transitive, consistent. Finally, for any non-null reference value
+<code>x</code>, <code>x.equals(null)</code> must return false.
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Violating the general contract when overriding the <code>equals()</code> method
+can lead to unexpected results.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/MET08-J.+Preserve+the+equality\
++contract+when+overriding+the+equals%28%29+method
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+Requirements of this rule may be violated provided that the
+incompatible types are never compared. There are classes in the Java platform
+libraries (and elsewhere) that extend an instantiable class by adding a value
+component. For example, <code>java.sql.Timestamp</code> extends
+<code>java.util.Date</code> and adds a nanoseconds field. The
+<code>equals()</code> implementation for <code>Timestamp</code> violates
+symmetry and can cause erratic behavior when <code>Timestamp</code> and
+<code>Date</code> objects are used in the same collection or are otherwise
+intermixed [Bloch 2008].
+</i></p>
+
+<p><b>Noncompliant Code Example (Symmetry)</b></p>
+<pre><code language="Java">public final class CaseInsensitiveString {
+  private String s;
+
+  public CaseInsensitiveString(String s) {
+    if (s == null) {
+      throw new NullPointerException();
+    }
+    this.s = s;
+  }
+
+  // This method violates symmetry
+  public boolean equals(Object o) {
+    if (o instanceof CaseInsensitiveString) {
+      return s.equalsIgnoreCase(((CaseInsensitiveString)o).s);
+    }
+
+    if (o instanceof String) {
+      return s.equalsIgnoreCase((String)o);
+    }
+    return false;
+  }
+
+  // Comply with MET09-J
+  public int hashCode() {/* ... */}
+
+  public static void main(String[] args) {
+    CaseInsensitiveString cis = new CaseInsensitiveString("Java");
+    String s = "java";
+    System.out.println(cis.equals(s)); // Returns true
+    System.out.println(s.equals(cis)); // Returns false
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Transitivity)</b></p>
+<pre><code language="Java">public class Card {
+  private final int number;
+
+  public Card(int number) {
+    this.number = number;
+  }
+
+  public boolean equals(Object o) {
+    if (!(o instanceof Card)) {
+      return false;
+    }
+
+    Card c = (Card)o;
+    return c.number == number;
+  }
+
+  public int hashCode() {/* ... */}
+
+}
+
+class XCard extends Card {
+  private String type;
+  public XCard(int number, String type) {
+    super(number);
+    this.type = type;
+  }
+
+  public boolean equals(Object o) {
+    if (!(o instanceof Card)) {
+      return false;
+    }
+
+    // Normal Card, do not compare type
+    if (!(o instanceof XCard)) {
+      return o.equals(this);
+    }
+
+    // It is an XCard, compare type as well
+    XCard xc = (XCard)o;
+    return super.equals(o) && xc.type == type;
+  }
+
+  public int hashCode() {/* ... */}
+
+  public static void main(String[] args) {
+    XCard p1 = new XCard(1, "type1");
+    Card p2 = new Card(1);
+    XCard p3 = new XCard(1, "type2");
+    System.out.println(p1.equals(p2)); // Returns true
+    System.out.println(p2.equals(p3)); // Returns true
+    System.out.println(p1.equals(p3)); // Returns false
+                                       // violating transitivity
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Consistency)</b></p>
+<pre><code language="Java">public class Filter {
+  public static void main(String[] args) throws MalformedURLException {
+    final URL allowed = new URL("http://mailwebsite.com");
+    if (!allowed.equals(new URL(args[0]))) {
+      throw new SecurityException("Access Denied");
+    }
+    // Else proceed
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>java.security.Key</code>)</b></p>
+<pre><code language="Java">private static boolean keysEqual(Key key1, Key key2) {
+  if (key1.equals(key2)) {
+    return true;
+  }
+  return false;
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Because of variety, the equality contract for an <code>equals()</code> method
+definition should be tested using dynamic analysis. This static analysis tool
+checks type comparison using either 1 <code>instanceof</code> keyword or 2 calls
+to the method <code>getClass()</code>.
+</p>
+''',
+    }[id]
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def match(lex, texts):
+    for text in texts:
+        if not lex:
+            break
+        if text == None or lex.text() == text:
+            lex = lex.next(True, True)
+    return lex
+
+
+def equalsMethodNoTypeComparison(define):
+    method = define.ent()
+
+    # Skip methods besides "equals"
+    if method.name() != 'equals':
+        return False
+
+    # Skip unless there's only 1 parameter of type Object
+    if not re.match(r'Object \S+$', method.parameters()):
+        return False
+
+    # Skip if there's either 1 instanceof or 2 getClass()
+    instanceof = 0
+    getClass   = 0
+    lex = define.file().lexer(False).lexeme(define.line(), define.column())
+    end = method.ref('End')
+    while lex and lexemeBefore(lex, end.line(), end.column()):
+        if lex.text() == 'instanceof':
+            instanceof += 1
+        elif lex.text() == 'getClass':
+            getClass += 1
+        lex = lex.next(True, True)
+    if (instanceof == 1 and getClass == 0) or (instanceof == 0 and getClass == 2):
+        return False
+
+    return True
+
+
+def methodInvalidKeyComparison(method):
+    # Skip unless the method receives 2+ Key objects
+    keys = []
+    keyPattern = r'^java\.security\.Key$'
+    for param in method.ents('Define', 'Parameter'):
+        typed = param.ref('Typed')
+        if not typed:
+            continue
+        if not javaAncestorOfLongnameExists(typed.ent(), keyPattern, translationUnitCache):
+            continue
+        keys.append(param)
+    if len(keys) < 2:
+        return False
+
+    # Skip unless the keys call "equals" and no other methods
+    keysCompared = False
+    keyCallsEquals = False
+    keyCallsBesidesEquals = 0
+    for key in keys:
+        for use in key.refs('Useby Deref Partial'):
+            # Get the lexeme after the object usage and the dot
+            lexer = use.file().lexer(False)
+            lex = lexer.lexeme(use.line(), use.column())
+            lex = match(lex, [None, '.'])
+            # Look at the method called on the key object
+            if lex.text() == 'equals':
+                keyCallsEquals = True
+            else:
+                keyCallsBesidesEquals += 1
+            # If enough info is gathered, stop going through the lexemes
+            if keyCallsEquals and keyCallsBesidesEquals > 1:
+                keysCompared = True
+                break
+        # If enough info is gathered, stop going through the key parameters
+        if keysCompared:
+            break
+    if not keyCallsEquals or keyCallsBesidesEquals > 1:
+        return False
+
+    return True
+
+
+def check(check, file):
+    for ref in file.filerefs('Define', 'Method'):
+        ent = ref.ent()
+
+        # Definition of "equals" that doesn't check for the same type
+        if equalsMethodNoTypeComparison(ref):
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+        # Definition of method that compares Key parameters
+        if methodInvalidKeyComparison(ent):
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+
+
+    for ref in file.filerefs('Call', 'Method'):
+        ent = ref.ent()
+
+        # Usage of "equals" on URL
+        if ent.longname() == 'java.net.URL.equals':
+            check.violation(ent, file, ref.line(), ref.column(), ERR3)
+
+

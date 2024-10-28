@@ -1,0 +1,97 @@
+# Declare each variable in a separate declaration statement.
+use base ("Understand::Codecheck");
+use strict;
+use constant ERR1 => "Multiple Variable Declaration";
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_V003";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Variables\\Declare each variable in a separate declaration statement";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Variables',
+  );
+}
+
+sub description {
+	return "Declare each variable in a separate declaration statement";
+}
+
+sub detailed_description {
+	return "Allowed exception: \'for\' loop variables may have multiple declarations.
+ Assumptions:
+ 1. both local and global variables should be checked.
+ 2. both definitions and declarations (ie. externs) should be checked.
+ 3. members should be checked.
+ ";
+}
+
+sub test_language {
+	my $language = shift;
+	return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+	return 1;
+}
+
+sub test_global {
+	return 0;
+}
+
+sub check {
+
+	my $check = shift;
+	my $file = shift;
+	return unless $file->kind->check("c file ~unresolved ~unknown");
+
+	# run through the entire lexer.
+	my $lexer = $file->lexer();
+	return unless $lexer;
+	my $lexeme = $lexer->first();
+	my $in_decl=0;
+	my $in_for=0;
+	my $in_func_header=0;
+
+	while ($lexeme) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+    
+		# find variable decl/defn
+		my $ref = $lexeme->ref();
+		my $ent = $lexeme->ent();
+
+		if (!$in_func_header && $ref && $ref->kind()->check("c declarein,c definein,c setby init")) {
+
+			my $ent = $lexeme->ent();
+			if ($ent && $ent->kind()->check("c object ~TemplateParameter")) {
+				if ($in_decl && !$in_for) {
+					$check->violation($ent,$file,$ref->line,$ref->column,ERR1);
+				} else {
+					$in_decl = 1;
+				}
+			} elsif ($ent && $ent->kind()->check("c function")) {
+				$in_func_header = 1;
+			}
+		} else {
+			my $text = $lexeme->text();
+			if ($text eq ";") {
+				$in_decl = $in_for = $in_func_header = 0;
+			} elsif ($text eq "for") {
+				$in_for = 1;
+			} elsif ($in_func_header && $text eq "{") {
+				$in_func_header = 0;
+			}
+		}
+		$lexeme = $lexeme->next();
+	}
+}

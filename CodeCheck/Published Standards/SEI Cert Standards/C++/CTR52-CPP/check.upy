@@ -1,0 +1,273 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-11-20
+
+
+import re
+
+
+ERR1 = 'Library function can overflow beyond the destination vector'
+
+
+def ids():
+    return ('CTR52-CPP', 'CPP_L015')
+
+
+def name(id):
+    return {
+        'CTR52-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Guarantee that library functions  do not overflow''',
+        'CPP_L015': '''All Checks/Language Specific/C and C++/Libraries/\
+Guarantee that library functions do not overflow''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'CTR52-CPP': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+        ],
+        'CPP_L015': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Guarantee that library functions do not overflow</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Copying data to a buffer that is too small to hold the data results in a
+buffer overflow. Attackers can exploit this condition to execute arbitrary
+code.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR52-CPP.+Guarantee+that+library+functions+do+not+overflow'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR52-CPP.+Guarantee+that+library+functions+do+not+overflow</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+#include &lt;algorithm&gt;
+#include &lt;vector&gt;
+
+void f(const std::vector&lt;int&gt; &src) {
+  std::vector&lt;int&gt; dest;
+  std::copy(src.begin(), src.end(), dest.begin());
+  // ...
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This implementation is limited to simple arguments.</p>
+<p>Supported functions:</p>
+<ul>
+<li><code>std::copy</code></li>
+<li><code>std::copy_if</code></li>
+<li><code>std::fill_n</code></li>
+</ul>
+<p>Supported containers:</p>
+<ul>
+<li><code>std::vector</code></li>
+</ul>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+
+    for call in file.filerefs('Call', 'Function'):
+        fn = call.ent()
+        longname = fn.longname()
+
+        violation = False
+
+        if re.search(r'^std::copy(_if)?$', longname):
+            violation = violationWithCopy(file, call)
+        elif longname == 'std::fill_n':
+            violation = violationWithFill(file, call)
+
+        if violation:
+            check.violation(fn, file, call.line(), call.column(), ERR1)
+
+
+def violationWithCopy(file, call):
+    # Get std::copy arguments or assume no violataion
+    copyArgs = getArgumentsAsLexemes(file, call)
+    if call.ent().name() == 'copy':
+        if len(copyArgs) == 3:
+            sourcePosition = 0
+            destinationPosition = 2
+        elif len(copyArgs) == 4:
+            sourcePosition = 1
+            destinationPosition = 3
+        else:
+            return False
+    # Name is copy_if
+    else:
+        if len(copyArgs) == 4:
+            sourcePosition = 0
+            destinationPosition = 2
+        elif len(copyArgs) == 5:
+            sourcePosition = 1
+            destinationPosition = 3
+        else:
+            return False
+
+    # Get source & destination vector arguments or assume no violation
+    sourceArg = copyArgs[sourcePosition]
+    if not sourceArg or not sourceArg[0]:
+        return False
+    destinationArg = copyArgs[destinationPosition]
+    if not destinationArg or not destinationArg[0]:
+        return False
+
+    # Get destination vector at start of argument or assume no violation
+    destinationEnt = destinationArg[0].ent()
+    if not isVector(destinationEnt):
+        return False
+
+    # Violation if destination vector is not initialized with arguments
+    initArgs = getArgumentsAsLexemes(file, destinationEnt.ref('Definein'))
+    if not initArgs:
+        return True
+
+    # Violation if destination vector is not initialized with source count
+    initArgCount = initArgs[0]
+    if not initArgCount or initArgCount[0].ent() != sourceArg[0].ent():
+        return True
+    if not matchLexemesAndTexts(initArgCount, [None, '.', 'size', '(', ')']):
+        return True
+
+    return False
+
+
+def matchLexemesAndTexts(lexemes, texts):
+    if len(lexemes) != len(texts):
+        return False
+
+    for i in range(len(texts)):
+        if texts[i] == None:
+            continue
+        if texts[i] != lexemes[i].text():
+            return False
+
+    return True
+
+
+def violationWithFill(file, call):
+    # Get arguments or assume there's no violation
+    fillArgs = getArgumentsAsLexemes(file, call)
+    if len(fillArgs) == 3:
+        vectorPosition = 0
+        sizePosition = 1
+    elif len(fillArgs) == 4:
+        vectorPosition = 1
+        sizePosition = 2
+    else:
+        return False
+
+    # Get vector & size arguments or assume no violation
+    vectorArg = fillArgs[vectorPosition]
+    if not vectorArg or not vectorArg[0]:
+        return False
+    sizeArg = fillArgs[sizePosition]
+    if not sizeArg or not sizeArg[0]:
+        return False
+
+    # Get vector at start of argument or assume no violation
+    vectorEnt = vectorArg[0].ent()
+    if not isVector(vectorEnt):
+        return False
+
+    # Violation if vector is not initialized with arguments
+    initArgs = getArgumentsAsLexemes(file, vectorEnt.ref('Definein'))
+    if not initArgs:
+        return True
+
+    # Violation if vector is not initialized with enough space
+    initCountArg = initArgs[0]
+    if not initCountArg or initCountArg[0].text() != sizeArg[0].text():
+        return True
+
+    return False
+
+
+def isVector(ent):
+    if not ent or not ent.kind().check('Object, Parameter'):
+        return False
+
+    typed = ent.ref('Typed')
+    if not typed or typed.ent().longname() != 'std::vector':
+        return False
+
+    return True
+
+
+def getArgumentsAsLexemes(file, call):
+    args = []
+    i = 0
+
+    if not call:
+        return args
+
+    # Find (
+    lex = file.lexer().lexeme(call.line(), call.column())
+    while lex and lex.text() != '(':
+        lex = lex.next(True, True)
+
+    # Find arguments between ( and )
+    parenCount = 0
+    braceCount = 0
+    while lex:
+        text = lex.text()
+
+        # Parse argument separators
+        argumentSeparator = False
+        if text == '(':
+            parenCount += 1
+            argumentSeparator = parenCount == 1 and braceCount == 0
+        elif text == ')':
+            parenCount -= 1
+            argumentSeparator = parenCount == 0 and braceCount == 0
+            if argumentSeparator:
+                break
+        elif text == '{':
+            braceCount += 1
+        elif text == '}':
+            braceCount -= 1
+        elif text == ',':
+            argumentSeparator = parenCount == 1 and braceCount == 0
+            i += 1
+
+        if argumentSeparator:
+            args.append([])
+        else:
+            args[i].append(lex)
+
+        lex = lex.next(True, True)
+
+    return args

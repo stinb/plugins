@@ -1,0 +1,115 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Ian Reed, merging an old perl version of the check, and Jordan Colbeth's MISRA2012 version, with some improvements.
+# September 2023
+
+import understand
+import re
+
+def ids():
+    return ("CPP_D012", "MISRA04_8.8", "MISRA12_8.5", "MISRA23_8.5")
+    
+def name(id):
+    return {
+            "CPP_D012": "All Checks\\Language Specific\\C and C++\\Declarations and Definitions\\An external object or function shall be declared in one and only one file",
+            "MISRA04_8.8": "Published Standards\\MISRA-C 2004\\8.8 An external object or function shall be declared in one and only one file",
+            "MISRA12_8.5": "Published Standards\\MISRA C 2012\\8.5 An external object or function shall be declared once in one and only one file",
+            "MISRA23_8.5": "Published Standards\\MISRA C 2023\\8.5 An external object or function shall be declared once in one and only one file",
+            }[id]
+
+def tags(id):
+    return {
+        "CPP_D012": [
+            "Language: C",
+            "Language: C++",
+            "Declarations and Definitions",
+            ],
+        "MISRA04_8.8": [
+            "Language: C",
+            "Standard: MISRA C 2004",
+            "Category: Required",
+            ],
+        "MISRA12_8.5": [
+            "Language: C",
+            "Standard: MISRA C 2012",
+            "Category: Required",
+            ],
+        "MISRA23_8.5": [
+            "Language: C",
+            "Standard: MISRA C 2023",
+            "Category: Required",
+            ],
+    }.get(id)
+
+def description():
+    return "An external object or function shall be declared once in one and only one file."
+
+def detailed_description():
+    return """\
+            <p><b>Amplification</b><br>
+This rule applies to non-defining declarations only.
+</p>
+
+<p><b>Rationale</b><br>
+Typically, a single declaration will be made in a <i>header file</i> that will be included in any translation unit in
+which the identifier is defined or used. This ensures consistency between:
+</p>
+
+<p>
+• The declaration and the definition;
+</p>
+
+<p>
+• Declarations in different translation units.
+</p>
+
+<p>
+<i>Note</i>: there may be many header files in a project, but each external object or function shall only be
+declared in one header file.
+</p>
+
+<p><b>Example</b><br>
+</p>
+
+<pre><code language="C++">  /* featureX.h                         */
+  extern int16_t a;       /* Declare a  */
+
+  /* file.c                             */
+  #include "featureX.h"
+  int16_t a = 0;          /* Define a   */
+
+</code></pre>
+"""
+
+# These functions determine when the check will run
+def test_entity(file):
+    return file.kind().check('code file, header file')
+def test_language(language):
+    return language == "C++"
+
+ERR1 = "%1 declared %2 times"
+alreadyReportedEntIDs = []
+def check(check, file):
+    # I found that if I pass true for the unique bool I won't see multiple declares for the same function in the same file, because they point to the same target ent, but further down when I call ent.refs and get declareins I will get multiple refs because their target ents are distinct enclosing scopes.
+  # Noticing this with strchr in regexp.c on lines 709 and 808. This is why I chose to not exclude duplicates here, in case we want to output violations for all declare locations, not just one of them.
+  refs = file.filerefs("Declare ~Implicit", "C Function ~Member, C Object Global ~Static")
+  for ref in refs:
+      ent = ref.ent()
+      if re.search(r"^std::", ent.longname()):
+        continue
+      # uncomment these 3 lines if you only want 1 violation per entity. Since the error reports how many times you declared the entity, I felt it was better to report 1 violation per declaration so you can easily find all the locations of the extra declarations. It also seems more correct to not favor one declaration over another for the violation.
+      # Also, if we only report one per entity then a violation may show up when you only run on a single file, but then disappear when you run on all files, because it was detected and reported somewhere else first. That sort of inconsistent behavior seems bad to me.
+      #if ent.id() in alreadyReportedEntIDs:
+      #  continue
+      #alreadyReportedEntIDs.append(ent.id())
+      declRefs = ent.refs("declarein ~implicit", "c")
+      if len(declRefs) > 1:
+          for declRef in declRefs:
+              for defRef in declRef.ent().refs("define"):
+                  if defRef.line() == declRef.line() and defRef.column() == declRef.column():
+                      declRefs.remove(declRef)
+                      break
+
+
+
+          if len(declRefs) > 1:
+              check.violation(ent, ref.file(), ref.line(), ref.column(), ERR1, ent.name(), len(declRefs))

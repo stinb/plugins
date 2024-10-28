@@ -1,0 +1,144 @@
+ERR1 = 'Do not destroy a mutex while it is locked.'
+
+
+# The ID for the check
+def id():
+    return ('CON31-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON31-C': 'Published Standards/SEI Cert Standards/C/Do not destroy a mutex while it is locked',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'CON31-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not destroy a mutex while it is locked'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not destroy a mutex while it is locked</p>
+<p><b>Risk Assessment</b></p>
+<p>Destroying a mutex while it is locked may result in invalid control flow and data corruption.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/CON31-C.+Do+not+destroy+a+mutex+while+it+is+locked</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdatomic.h&gt;
+#include &lt;stddef.h&gt;
+#include &lt;threads.h&gt;
+
+mtx_t lock;
+/* Atomic so multiple threads can modify safely */
+atomic_int completed = ATOMIC_VAR_INIT(0);
+enum { max_threads = 5 };
+
+int do_work(void *arg) {
+  int *i = (int *)arg;
+
+  if (*i == 0) { /* Creation thread */
+    if (thrd_success != mtx_init(&lock, mtx_plain)) {
+      /* Handle error */
+    }
+    atomic_store(&completed, 1);
+  } else if (*i &lt; max_threads - 1) { /* Worker thread */
+    if (thrd_success != mtx_lock(&lock)) {
+      /* Handle error */
+    }
+    /* Access data protected by the lock */
+    atomic_fetch_add(&completed, 1);
+    if (thrd_success != mtx_unlock(&lock)) {
+      /* Handle error */
+    }
+  } else { /* Destruction thread */
+    mtx_destroy(&lock);
+  }
+  return 0;
+}
+
+int main(void) {
+  thrd_t threads[max_threads];
+
+  for (size_t i = 0; i &lt; max_threads; i++) {
+    if (thrd_success != thrd_create(&threads[i], do_work, &i)) {
+      /* Handle error */
+    }
+  }
+  for (size_t i = 0; i &lt; max_threads; i++) {
+    if (thrd_success != thrd_join(threads[i], 0)) {
+      /* Handle error */
+    }
+  }
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call", "Unresolved Function"):
+        if call_ref.ent().name() in {"thrd_create", "pthread_create"}:
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param and lex.ent() and lex.ent().kind().check("Function"):
+                    mutex_locked = False
+                    mutex_destroyed = None
+
+                    for ref in lex.ent().refs("Call", "Unresolved Function"):
+                        if ref.ent().name() in {"mtx_lock", "pthread_mutex_lock"}:
+                            mutex_locked = True
+                        elif ref.ent().name() in {"mtx_destroy", "pthread_mutex_destroy"}:
+                            mutex_destroyed = ref
+
+                    if mutex_locked and mutex_destroyed:
+                        check.violation(mutex_destroyed.ent(
+                        ), file, mutex_destroyed.line(), mutex_destroyed.column(), ERR1)
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)

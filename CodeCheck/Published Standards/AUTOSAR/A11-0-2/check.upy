@@ -1,0 +1,142 @@
+import re
+
+
+ERR1 = 'Struct contains a protected or private data member'
+ERR2 = 'Struct contains a function'
+ERR3 = 'Struct is a base of another struct or class'
+ERR4 = 'Struct inherits from another struct or class'
+
+
+# The ID for the check
+def ids():
+    return ('A11-0-2', 'CPP_S003')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A11-0-2': 'Published Standards/AUTOSAR/A type defined as struct shall: (1) provide only public data members, (2) not provide any special member functions or methods, (3) not be a base of another struct or class, (4) not inherit from another struct or class',
+        'CPP_S003': 'All Checks/Language Specific/C and C++/Structures and Unions/A type defined as struct shall: (1) provide only public data members, (2) not provide any special member functions or methods, (3) not be a base of another struct or class, (4) not inherit from another struct or class',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A11-0-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Structures and Unions'
+        ],
+        'CPP_S003': [
+            'Language: C',
+            'Language: C++',
+            'Structures and Unions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A type defined as struct shall: (1) provide only public data members, (2) not provide any special member functions or methods, (3) not be a base of another struct or class, (4) not inherit from another struct or class.</p>
+<p><b>Rationale</b></p>
+<p>This is consistent with developer expectations that a class provides its invariant,
+interface and encapsulation guarantee, while a struct is only an aggregate without any
+class-like features.</p>
+<p>An example of a struct type is POD type.</p>
+<p>See: POD-type.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A11-0-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 struct A // Compliant
+4 {
+5 std::int32_t x;
+6 double y;
+7 };
+8 struct B // Compliant
+9 {
+10 std::uint8_t x;
+11 A a;
+12 };
+13 struct C // Compliant
+14 {
+15 float x = 0.0f;
+16 std::int32_t y = 0;
+17 std::uint8_t z = 0U;
+18 };
+19 struct D // Non-compliant
+20 {
+21 public:
+22 std::int32_t x;
+23
+24 protected:
+25 std::int32_t y;
+26
+27 private:
+28 std::int32_t z;
+29 };
+30 struct E // Non-compliant
+31 {
+32 public:
+33 std::int32_t x;
+34 void Fn() noexcept {}
+35
+36 private:
+37 void F1() noexcept(false) {}
+38 };
+39 struct F : public D // Non-compliant
+40 {
+41 };
+</code></pre>
+<p><b>See also</b></p>
+<p>• stackoverflow.com [17]: When should you use a class vs a struct in C++?</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"struct", file.contents()):
+        return
+
+    for struct_ref in file.filerefs("Define", "Struct"):
+        parent = struct_ref.ent().ref("Derive")
+        derived = struct_ref.ent().ref("Base")
+
+        if parent:
+            check_violation(check, struct_ref, file, ERR3)
+            continue
+        elif derived:
+            check_violation(check, struct_ref, file, ERR4)
+            continue
+
+        for ref in struct_ref.ent().refs("Define"):
+            ref_kind = ref.ent().kind().longname()
+
+            if ref_kind and ("Protected" in ref_kind or "Private" in ref_kind):
+                check_violation(check, struct_ref, file, ERR1)
+                break
+            elif ref_kind and "Function" in ref_kind:
+                check_violation(check, struct_ref, file, ERR2)
+                break
+
+
+def check_violation(check, ref, file, error_message):
+    check.violation(ref.ent(), file, ref.line(), ref.column(), error_message)

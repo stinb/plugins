@@ -1,0 +1,119 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2-14-2022
+import re
+
+ERR1 = 'Variable %1 may cause a division by zero and isn\'t checked'
+
+def ids():
+    return ('A5-6-1A', 'CPP_E050A')
+
+def name(id):
+    return {
+        'A5-6-1A': """\
+Published Standards/AUTOSAR/The right hand operand of the integer division or \
+remainder operators shall not be equal to zero""",
+        'CPP_E050A': """\
+All Checks/Language Specific/C and C++/Expressions/Evaluation of the operand to \
+the typeid operator shall not contain side effects""",
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A5-6-1A': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E050A': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>The result is undefined if the right hand operand of the integer division or
+the remainder operator is zero.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  // $Id: A5-6-1.cpp 305629 2018-01-29 13:29:25Z piotr.serwa $
+2  #include &lt;cstdint&gt;
+3  #include &lt;stdexcept&gt;
+4  std::int32_t Division1(std::int32_t a, std::int32_t b) noexcept
+5  {
+6    return (a / b); // Non-compliant - value of b could be zero
+7  }
+8  std::int32_t Division2(std::int32_t a, std::int32_t b)
+9  {
+10   if (b == 0)
+11   {
+12     throw std::runtime_error("Division by zero error");
+13   }
+14   return (a / b); // Compliant - value of b checked before division
+15 }
+16 double Fn()
+17 {
+18   std::int32_t x = 20 / 0; // Non-compliant - undefined behavior
+19   x = Division1(20, 0); // Undefined behavior
+20   x = Division2(20,
+21   0); // Preconditions check will throw a runtime_error from
+22   // division2() function
+23   std::int32_t remainder = 20 % 0; // Non-compliant - undefined behavior
+24 }
+</code></pre>
+<p><b>Developer's Note</b></p>
+<p>Part A of this check will check for simple violations that regard variables
+that could possibly equal zero. Also this check only checks for if it is used
+in an if statment. It does not check the actual logic of the if statement.</p>
+<p>Part B of this check uses utilize clang warnings that catch violations
+regarding literal digits and their expressions</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not re.search(r'\/|%', file.contents()):
+        return
+
+    lexer = file.lexer()
+
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        if not re.match(r'(\/|%)$', lexeme.text()):
+            continue
+
+
+        lexeme = lexeme.next(True, True)
+
+        while lexeme and not re.match(r'(;|{|})$', lexeme.text()):
+            # Check each variable on the right hand side of the '/' or '%' to see if it was checked in an if statement
+            if lexeme and lexeme.ent() and re.search(r'object|parameter', str(lexeme.ent().kind()).lower()):
+                ok = False
+                refs = lexeme.ent().refs('Useby')
+                for ref in refs:
+                    prevLex = lexer.lexeme(ref.line(), ref.column())
+                    while prevLex and not re.match(r'(;|{|})$', prevLex.text()):
+                        if prevLex.text() == 'if':
+                            ok = True
+                            break
+                        prevLex = prevLex.previous(True, True)
+
+                    if ok:
+                        break
+                if not ok:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text())
+
+
+            lexeme = lexeme.next(True, True)

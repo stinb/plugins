@@ -1,0 +1,133 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-27-2021
+import re
+from Modules import stringIsStd
+
+ERR1 = 'Iterator was implicitly converted to const_iterator'
+
+def ids():
+    return ('A23-0-1', 'CPP_L021')
+
+def name(id):
+    return {
+        'A23-0-1': """\
+Published Standards/AUTOSAR/An iterator shall not be implicitly converted to \
+const_iterator""",
+        'CPP_L021': """\
+All Checks/Language Specific/C and C++/Libraries/An iterator shall not be \
+implicitly converted to const_iterator"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A23-0-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Libraries',
+        ],
+        'CPP_L021': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>The Standard Template Library introduced methods for returning const
+iterators to containers. Making a call to these methods and immediately
+assigning the value they return to a const_iterator, removes implicit
+conversions.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  //% $Id: A23-0-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2  #include &lt;cstdint&gt;
+3  #include &lt;vector&gt;
+4
+5  void Fn1(std::vector&lt;std::int32_t&gt;& v) noexcept
+6  {
+7    for (std::vector&lt;std::int32_t&gt;::const_iterator iter{v.cbegin()},
+8    end{v.cend()};
+9    iter != end;
+10   ++iter) // Compliant
+11   {
+12     // ...
+13   }
+14 }
+15
+16 void Fn2(std::vector&lt;std::int32_t&gt;& v) noexcept
+17 {
+18   for (auto iter{v.cbegin()}, end{v.cend()}; iter != end;
+19   ++iter) // Compliant
+20   {
+21     // ...
+22   }
+23 }
+24
+25 void Fn3(std::vector&lt;std::int32_t&gt;& v) noexcept
+26 {
+27   for (std::vector&lt;std::int32_t&gt;::const_iterator iter{v.begin()},
+28   end{v.end()};
+29   iter != end;
+30   ++iter) // Non-compliant
+31   {
+32     // ...
+33   }
+34 }
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Object')
+
+    for ref in refs:
+        if not re.search(r'const_iterator', str(ref.ent().type())):
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        lexeme = lexeme.next(True, True)
+        if lexeme and lexeme.text() == '{':
+            close = findClose(lexeme)
+            if not close:
+                continue
+
+            while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                if lexeme.ent() and str(lexeme.ent().type()) == 'iterator':
+                    check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                    break
+
+
+                lexeme = lexeme.next(True, True)
+
+# Find the corresponding closing curly brace to a given opening curly brace
+def findClose(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == '}' and count == 0):
+        if lexeme.text() == '{':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme.text() == '}':
+            count -= 1
+
+    return lexeme

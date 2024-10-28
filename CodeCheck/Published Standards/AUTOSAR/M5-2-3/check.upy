@@ -1,0 +1,146 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-3-21
+
+
+import re
+
+
+ERR1 = 'Pointer of polymorphic class "%1" downcast to "%2"'
+
+
+def ids():
+    return ('M5-2-3', 'MISRA08_5-2-3', 'CPP_T020')
+
+
+def name(id):
+    return {
+        'M5-2-3': 'Published Standards/AUTOSAR/Casts from a base class to a derived class should not be performed on polymorphic types',
+        'MISRA08_5-2-3': 'Published Standards/MISRA-C++ 2008/5-2-3 Casts from a base class to a derived class should not be performed on polymorphic types',
+        'CPP_T020': 'All Checks/Language Specific/C and C++/Types/Casts from a base class to a derived class should not be performed on polymorphic types',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-2-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Advisory',
+            'Types',
+        ],
+        'M5-2-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T020': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+
+<p><b>Rationale</b></p>
+A downcast occurs when a class type is converted to another class type that is derived from that first class.
+</p>
+
+<p>
+Polymorphism enables strong abstraction between the interface and implementation of a hierarchy. Explicit casts bypass this layer of abstraction resulting in higher levels of coupling and dependency.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class Colour { /* ... */ };
+void setColour ( Colour const & );
+class Obj
+{
+public:
+    virtual bool hasColour ( ) const = 0;
+    virtual Colour getColour ( ) const = 0;
+};
+class ObjWithColour : public Obj
+{
+public:
+    virtual bool hasColour ( ) const
+    {
+        return true;
+    }
+    virtual Colour getColour ( ) const
+    {
+        return m_colour;
+    }
+private:
+    Colour m_colour;
+};
+void badPrintObject ( Obj const & obj )
+{
+    ObjWithColour const * pObj =
+    dynamic_cast&lt;objwithcolour const*&gt;( &obj ); // Non-compliant
+    if ( 0 != pObj )
+    {
+        setColour ( pObj-&gt;getColour ( ) );
+    }
+}
+void goodPrintObject ( Obj const & obj )
+{
+    if ( obj.hasColour ( ) )
+    {
+        setColour ( obj.getColour ( ) );
+    }
+}
+</code></pre>
+
+<p>
+The function <code>badPrintObject</code> now requires knowledge of how objects in the <code>Obj</code> hierarchy are structured. In the future, the hierarchy may be changed so that objects are split into specific colours, and any clients dependent on the colour will then have to be modified to include this change. Clients using virtual functions however, will remain unchanged.
+</p>
+
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):	
+    # When a value from a cast is used
+    for ref in file.filerefs('Cast Use'):
+        ent = ref.ent()
+
+        # If the cast type is a class
+        if 'Class' in ent.kindname():
+
+            # Get the class of the object being cast
+            fromClass = None
+            for toClassEnt in ent.ents('', 'Object'):
+                if fromClass: break
+                for toClassRef in toClassEnt.refs('Setby'):
+                    if fromClass: break
+                    for fromObject in toClassEnt.ents('Assign Ptr'):
+                        if fromClass: break
+                        for fromClass in fromObject.ents('', 'Abstract Class Type'):
+                            break
+
+            # See if the object is being downcast
+            if fromClass:
+                for derive in fromClass.ents('Derive'):
+                    if derive == ent:
+                        check.violation(derive, file, toClassRef.line(), toClassRef.column(), ERR1, fromClass.name(), derive.name())
+                        break

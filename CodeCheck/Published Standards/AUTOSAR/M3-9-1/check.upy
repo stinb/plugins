@@ -1,0 +1,156 @@
+ERR1 = "Declaration and re-declaration are not token-for-token identical"
+
+
+# The ID for the check
+def ids():
+    return ('M3-9-1', 'MISRA08_3-9-1', 'CPP_T006')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M3-9-1': 'Published Standards/AUTOSAR/The types used for an object, a function return type, or a function parameter shall be token-for-token identical in all declarations and re-declarations',
+        'MISRA08_3-9-1': 'Published Standards/MISRA-C++ 2008/3-9-1 The types used for an object, a function return type, or a function parameter shall be token-for-token identical in all declarations and re-declarations',
+        'CPP_T006': 'All Checks/Language Specific/C and C++/Types/The types used for an object, a function return type, or a function parameter shall be token-for-token identical in all declarations and re-declarations',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_3-9-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'M3-9-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T006': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'The types used for an object, a function return type, or a function parameter shall be token-for-token identical in all declarations and re-declarations.'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>If a re-declaration has compatible types but not types which are token-for-token identical, it may not be clear to which declaration that re-declaration refers.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">typedef int32_t INT;
+       INT     i;
+extern int32_t i;    // Non-compliant
+       INT j;
+extern INT j;        // Compliant
+// The following lines break Rule 3-9-2
+extern void f ( signed int );
+       void f (        int );    // Non-compliant
+extern void g ( const  int );
+       void g (        int );    // Non-compliant
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 3-2-1, Rule 3-9-2</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+    flagged_ents = []
+
+    if not lexer:
+        return
+
+    for declare_ref in file.filerefs("Declare ~Implicit", "Object, Function"):
+        invalid = False
+        flagged = False
+        is_object = True if declare_ref.ent().kind().check("Object") else False
+
+        if declare_ref.ent().id() in flagged_ents:
+            continue
+
+        for other_ref in declare_ref.ent().refs("Callby, Useby, Implicit"):
+            if other_ref.file().name() == file.name() and other_ref.line() == declare_ref.line():
+                invalid = True
+                break
+
+        if invalid or is_macro(declare_ref, lexer):
+            continue
+
+        declaration = get_declaration(
+            declare_ref, lexer, declare_ref.ent(), is_object)
+
+        for redeclare_ref in declare_ref.ent().refs("Declarein ~Default"):
+            if flagged:
+                break
+
+            if file.name() != redeclare_ref.file().name() or redeclare_ref.line() != declare_ref.line():
+                redeclaration = get_declaration(
+                    redeclare_ref, redeclare_ref.file().lexer(), redeclare_ref.scope(), is_object)
+
+                if declaration != redeclaration:
+                    violation_ref = redeclare_ref if file == redeclare_ref.file() else declare_ref
+                    check.violation(declare_ref.ent(), violation_ref.file(),
+                                    violation_ref.line(), violation_ref.column(), ERR1)
+                    flagged_ents.append(declare_ref.ent().id())
+                    flagged = True
+                    break
+
+
+def get_declaration(_ref, _lexer, _ent, _is_object):
+    _declaration = ""
+    stopper = _ent.name() if _is_object else ";"
+    lex = _lexer.lexeme(_ref.line(), 0)
+
+    while lex and lex.token() == "Whitespace":
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    while lex and lex.text() != stopper:
+        if lex.token() == "Keyword" and lex.text() == "extern":
+            pass
+        else:
+            _declaration += f"{lex.text()} "
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return _declaration.rstrip()
+
+
+def is_macro(_ref, _lexer):
+    lex = _lexer.lexeme(_ref.line(), _ref.column())
+
+    if lex and lex.ent() and lex.ent().kind().check("Macro"):
+        return True
+
+    return False

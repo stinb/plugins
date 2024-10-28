@@ -1,0 +1,161 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+# Violation messages should use constants and can have additonal parameters 
+# indicated with %1, %2, %3 etc. like printf does
+use constant ERR1 => 'Parameter %1 is defined in %2, but not declared';
+use constant ERR2 => 'Bad parse. Could not test Parameter %1 in %2';
+
+# Required - Violation messages should be registred for translation
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+  $check->add_tr_text(ERR2);
+}
+
+# Required - Return the short name of the check
+
+sub checkID { return "CPP_F015";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Functions\\Missing parameter name in function declarations";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Functions',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Missing parameter name in function declarations";}
+
+# Required - Return the long description of the check
+sub detailed_description { return <<"END_DESC"
+Assumptions:
+ 1. Only check functions that we have definitions for.
+ 2. Ignore unnamed parameters in definitions.
+ 3. Don\'t match parameters within function pointer types.
+END_DESC
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; 
+  return 1;
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+
+sub check {
+
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift; 
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check( "c file ~unresolved ~unknown" ); 
+  
+  my $lexer = $file->lexer();
+  return unless $lexer;
+  
+  do_lexer( $lexer, $file, $check );  
+}
+
+
+# run through the entire lexer
+sub do_lexer {
+
+	my ( $lexer, $file, $check) = @_;
+	my $lexeme = $lexer->first();
+
+	while ( $lexeme ) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+    
+		my $ent = $lexeme->ent();
+		my $ref = $lexeme->ref();
+		if ( $ent && $ent->kind()->check( "c function ~unknown ~unresolved" ) && $ref && $ref->kind()->check( "c declarein" ) ) {
+	  	check_function( $file, $lexeme, $ent, $check );
+		}
+		$lexeme = $lexeme->next();
+	}
+}
+
+
+# check a function declaration for proper parameters
+sub check_function {
+
+  my ( $file, $lexeme, $ent, $check ) = @_;
+  my $define_ref = $ent->ref( "c definein" ) or return;
+  my @param_refs = $ent->refs( "c define", "c parameter" ) or return;
+
+  # advance lexeme to beginning of first parameter
+  while ($lexeme->text() ne "(") {
+    $lexeme = $lexeme->next() or return;
+  }
+  $lexeme = $lexeme->next() or return;
+
+  # Attempt to match name, if not ... or [unnamed] in defn.
+  # Only match before any parens, or before the end of the first
+  # as second and further parens is within a function pointer type.
+  # Each param is delimited by ',' not within paren, or ')'.
+  foreach my $param_ref ( @param_refs ) {
+
+		my $name = $param_ref->ent()->name();
+		my $match = ( $name eq "..."  || $name eq "[unnamed]" );
+	
+		my $paren = 0;
+		my $angle = 0;
+		while ( $lexeme ) {
+
+			my $text = $lexeme->text();
+
+			# Track opening and closing symbols
+			if ( $text eq "(" ) {
+				++$paren;
+			} elsif ( $text eq ")" ) {
+				--$paren;
+			} elsif ( $text eq "<" ) {
+				++$angle;
+			} elsif ( $text eq ">" ) {
+				--$angle;
+
+			# Special case << and >> so they aren't treated as right and left shift operators
+			} elsif ( $text eq "<<" ) {
+				++$angle;
+				++$angle;
+			} elsif ( $text eq ">>" ) {
+				--$angle;
+				--$angle;
+
+			# If we ever drop below 0 parens, something went wrong. Throw error and return
+			} elsif ( $paren < 0 ) {
+				$check->violation( $ent, $file, $lexeme->line_begin, $lexeme->column_begin, ERR2, $name, $ent->name );
+				return;
+
+			# Test for compliance condition
+			} elsif ( $text eq $name ) {
+			  $match = 1;
+			}
+
+			# Adnvance token and test for end of loop
+			$lexeme = $lexeme->next() or return;
+			last if $paren == 0 && $angle == 0 && ( $lexeme->text() eq "," or $lexeme->text() eq ")" );
+
+		}		
+  	$check->violation( $ent, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1, $name, $ent->name) and return if !$match;
+	}
+}

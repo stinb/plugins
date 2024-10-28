@@ -1,0 +1,188 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Empty throw command used outside a compound-statement of a catch handler in file %1';
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_E005";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Exception Handling\\An empty throw (throw;) shall only be used in the compound-statement of a catch handler";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Exception Handling',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { return "An empty throw (throw;) shall only be used in the compound-statement of a catch handler.";}
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+An empty <i>throw</i> re-throws the temporary object that represents an exception. Its use is intended to
+enable the handling of an exception to be split across two or more handlers.</p>
+<p>
+However, syntactically, there is nothing to prevent throw; being used outside a catch handler,
+where there is no exception object to re-throw. This may lead to an <i>implementation-defined</i>
+program termination.</p>
+<br>
+<p><b>Example</b></p><pre><code language="C++">  void f1 ( void )
+  {
+    try
+    {
+      throw ( 42 );
+    }
+    catch ( int32_t i ) // int will be handled here first
+    {
+      if ( i &gt; 0 )
+      {
+        throw; // and then re-thrown - Compliant
+      }
+    }
+  }
+  void g1 ( void )
+  {
+    try
+    {
+      f1 ( );
+    }
+    catch ( int32_t i )
+    {
+      // Handle re-throw from f1 ( )
+      // after f1's handler has done what it needs
+    }
+  }
+  void f2 ( void )
+  {
+    throw; // Non-compliant
+  }
+  void g2 ( void )
+  {
+    try
+    {
+      throw; // Non-compliant
+    }
+    catch ( ... )
+    {
+      // ...
+    }
+  }
+</code></pre>
+END_DESC
+}
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+# This determines if this script is per file
+sub test_entity { return 1;}
+
+# This determines if this script is per project or per file
+sub test_global { return 0;}
+
+# Any defined options go here
+sub define_options{}
+
+# Use this function for throwing errors
+sub throwError {
+  my $check = shift;
+  my $ent = shift;
+  my $file = shift;
+  my $line = shift;
+  my $column = shift;
+  my $error = shift;
+  my $name = shift;
+  $check->violation($ent,$file,$line,$column,$error,$name);
+}
+
+# This is the actual test being performed on the user's code
+sub check {
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift; 
+  my $file = shift;
+  return unless $file->kind->check('c file');
+  
+  # Check the file for an empty "throw;"
+  my $foundTHROW;
+  my $fileText = $file->contents;
+  $foundTHROW = 1 if $fileText =~ /throw;/;
+  return unless $foundTHROW;
+  
+  # This check requires use of the Understand lexer. Initialize and check for failure 
+  my $lexer = $file->lexer(0,,0,0);
+  return unless $lexer;
+  
+  # $lexeme is intialized as the first element returned from the lexer
+  my $lexeme = $lexer->first();
+  
+  # Initialize a counter of { and } characters to track whether or not we are inside a catch block
+  my $counter = 0;
+  my $catchFlag = 0;
+  
+  # While the lexer has lexemes ...
+  while ($lexeme) {
+    # Set the flag and start counted curly braces
+    if ($lexeme->text eq "catch") {
+	  $catchFlag = 1;
+	}
+	# Increment counter for  {
+    elsif ($lexeme->text eq "{" && $catchFlag == 1) {
+	  $counter++
+	}
+	# Decrement counter for } and check for 0 on counter and turn of flag if so
+	elsif ($lexeme->text eq "}" && $catchFlag == 1) {
+	  $counter--;
+	  $catchFlag = 0 if $counter == 0;
+	}
+	# This is the text we are looking for, check for flag and throw error
+	elsif ($lexeme->text eq "throw" && $lexeme->next->text eq ";") {
+	  throwError($check, $lexeme->ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1,$file->name) if $catchFlag == 0;
+	}
+  }
+  # Set $lexeme to the next value from $lexer
+  continue {
+    $lexeme = $lexeme->next;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

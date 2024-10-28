@@ -1,0 +1,121 @@
+import re
+
+
+ERR1 = 'Close files when they are no longer needed.'
+
+
+# The ID for the check
+def id():
+    return ('FIO51-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO51-CPP': 'Published Standards/SEI Cert Standards/C++/Close files when they are no longer needed',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Close files when they are no longer needed'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Close files when they are no longer needed</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to properly close files may allow an attacker to exhaust system resources and can increase the risk that data written into in-memory file buffers will not be flushed in the event of abnormal program termination.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/FIO51-CPP.+Close+files+when+they+are+no+longer+needed</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;exception&gt;
+#include &lt;fstream&gt;
+#include &lt;string&gt;
+ 
+void f(const std::string &fileName) {
+  std::fstream file(fileName);
+  if (!file.is_open()) {
+    // Handle error
+    return;
+  }
+  // ...
+  std::terminate();
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'FIO51-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        file_objs = {}  # key: file ent id, value: 0 - close, 1 - open
+
+        for obj_ref in func_ref.ent().refs("Define", "Object"):
+            obj_type = obj_ref.ent().type()
+
+            if obj_type and re.search(r"(std::)?(i|o)?fstream", obj_type):
+                file_objs[obj_ref.ent().id()] = 0
+
+        if not file_objs:
+            continue
+
+        lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+        file_openlex = {}  # key: file ent id, value: lex when file was opened
+        on_param = 0
+        on_body = 0
+
+        while lex:
+            if not on_body and lex.text() == "(":
+                on_param += 1
+            elif not on_body and lex.text() == ")":
+                on_param -= 1
+            elif not on_param and lex.text() == "{":
+                on_body += 1
+            elif not on_param and lex.text() == "}":
+                on_body -= 1
+
+                if not on_body:
+                    break
+            elif (on_body == 1) and lex.ent() and (lex.ent().id() in file_objs):
+                if (lex.next().text() == ".") and (lex.next().next().text() in ["open", "is_open"]):
+                    file_objs[obj_ref.ent().id()] = 1
+                    file_openlex[obj_ref.ent().id()] = lex
+                elif (lex.next().text() == ".") and (lex.next().next().text() == "close"):
+                    file_objs[obj_ref.ent().id()] = 0
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+        for obj in file_objs:
+            if file_objs[obj]:
+                check.violation(file_openlex[obj].ent(), file, file_openlex[obj].line_begin(
+                ), file_openlex[obj].column_begin(), ERR1)

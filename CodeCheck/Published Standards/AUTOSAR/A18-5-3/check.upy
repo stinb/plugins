@@ -1,0 +1,118 @@
+import re
+
+DEF_NAME = "The form of the delete expression shall match the form of the new expression used to allocate the memory"
+
+# The ID for the check
+def ids():
+    return ('A18-5-3', 'CPP_M001')
+
+# The short name of the check
+def name(id):
+    return {
+        'A18-5-3': """\
+Published Standards/AUTOSAR/""" + DEF_NAME,
+        'CPP_M001': """\
+All Checks/Language Specific/C and C++/Memory Allocation/""" + DEF_NAME
+
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-5-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Memory Allocation',
+        ],
+        'CPP_M001': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Plain and array forms of new and delete expressions must not be mixed. If an array was allocated using a new expression, then an array delete expression must be used to deallocate it and vice versa.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A18-5-3.cpp 316977 2018-04-20 12:37:31Z christof.meerwald $
+2 #include &lt;cstdint&gt;
+3
+4 void Fn1()
+5 {
+6 std::int32_t* array =
+7 new std::int32_t[10]; // new expression used to allocate an
+8 // array object
+9 // ...
+10 delete array; // Non-compliant - array delete expression supposed
+11 // to be used
+12 }
+13 void Fn2()
+14 {
+15 std::int32_t* object = new std::int32_t{0}; // new operator used to
+16 // allocate the memory for an
+17 // integer type
+18 // ...
+19 delete[] object; // Non-compliant - non-array delete expression supposed
+20 // to be used
+21 }
+22 void Fn3()
+23 {
+24 std::int32_t* object = new std::int32_t{0};
+25 std::int32_t* array = new std::int32_t[10];
+26 // ...
+27 delete[] array; // Compliant
+28 delete object; // Compliant
+29 }
+</code></pre>
+<p><b>See also</b></p>
+<p>HIC++ v4.0 [9]: 5.3.3 Ensure that the form of delete matches the form of new used to allocate the memory.
+</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = file.lexer()
+    for ref in file.filerefs("","Object", True):
+        is_array_new = False
+        is_array_del = False
+        if ref.ent() and "*" in str(ref.ent().type()) and re.search(r"new", str(ref.ent().value())):
+
+            if re.findall(r"\[(\d+)\]", ref.ent().value()):
+                is_array_new = True
+
+            for inner in ref.ent().refs("C Useby"):
+                line_check = False
+                lex = lexer.lexeme(inner.line(), inner.column())
+                lex_scope = str(lex.ent().ref().scope())
+
+                while lex and lex.token() != "Punctuation" and lex.token() != "Comment":
+                    if lex.text() =="]" and lex.previous(ignore_whitespace=True, ignore_comments=True).text() == "[":
+                        is_array_del = True
+                    if lex.text() == "delete" and lex.token() == "Keyword":
+                        line_check = True
+                    lex = lex.previous()
+
+                if line_check and str(inner.scope()) == str(lex_scope):
+                    if not is_array_del == is_array_new:
+                        if inner.ent():
+                            check.violation(ref.ent(), file, inner.line(), inner.column(), DEF_NAME)
+                        else:
+                            check.violation(None, file, inner.line(), inner.column(), DEF_NAME)

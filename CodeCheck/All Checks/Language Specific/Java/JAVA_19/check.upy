@@ -1,0 +1,99 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 6-2-22
+
+
+import re
+
+
+ERR1 = 'Incorrect indentation for member of %2'
+
+
+def id():
+    return ('JAVA_19')
+
+
+def name(id):
+    return {'JAVA_19' : '''All Checks/Language Specific/Java/A method definition statement and member (nested) class definition statement\
+ shall begin at the standard indentation relative to the enclosing class definition statement.'''}[id]
+
+
+
+
+def tags(id):
+    return {
+        'JAVA_19': [
+            'Language: Java',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''\
+
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def define_options(check):
+    check.options().checkbox('tabs', 'Using tabs', False)
+    check.options().integer('tabSize', 'Tab size', 4)
+
+
+def firstOnLine(lex):
+    original = lex
+    line = lex.line_begin()
+    while lex:
+        if lex.line_begin() != line:
+            return lex.next(True, True)
+        lex = lex.previous(True, True)
+    return original
+
+
+def check(check, file):
+    tabs = check.options().lookup('tabs')
+    if tabs:
+        tabSize = 8
+    else:
+        tabSize = check.options().lookup('tabSize')
+
+    lexer = None
+
+    # Check the spacing of blocks for methods & nested classes
+    for memberRef in file.filerefs('Begin', 'Method, Class Type ~Anonymous'):
+        member = memberRef.ent()
+
+        # Skip if the entity isn't a class member
+        parent = member.parent()
+        if not parent or not parent.kind().check('Class Type'):
+            continue
+
+        # Get member line & column
+        memberLine = memberRef.line()
+        memberColumn = memberRef.column()
+
+        # Get parent line & column
+        parentRef = parent.ref('Begin')
+        parentLine = parentRef.line()
+        parentColumn = parentRef.column()
+        # Get the first lexeme of the line for anonymous class type parents
+        if parent.kind().check('Anonymous'):
+            if not lexer:
+                lexer = file.lexer(lookup_ents=False, tabstop=tabSize)
+            lex = firstOnLine(lexer.lexeme(parentLine, parentColumn))
+            parentColumn = lex.column_begin()
+
+        # Check the indentation
+        indentationLength = parentColumn + tabSize
+        if memberColumn == indentationLength:
+            continue
+
+        check.violation(member, file, memberLine, memberColumn, ERR1, parent)

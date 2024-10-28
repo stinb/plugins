@@ -1,0 +1,168 @@
+ERR1 = 'Declare objects with appropriate storage durations.'
+
+
+# The ID for the check
+def id():
+    return ('DCL30-C-A')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'DCL30-C-A': 'Published Standards/SEI Cert Standards/C/Declare objects with appropriate storage durations - assigning addresses',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'DCL30-C-A': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Declare objects with appropriate storage durations'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Declare objects with appropriate storage durations</p>
+<p><b>Risk Assessment</b></p>
+<p>Referencing an object outside of its lifetime can result in an attacker being able to execute arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/DCL30-C.+Declare+objects+with+appropriate+storage+durations</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+const char *p;
+void dont_do_this(void) {
+  const char c_str[] = "This will change";
+  p = c_str; /* Dangerous */
+}
+
+void innocuous(void) {
+  printf("%s\\n", p);
+}
+
+int main(void) {
+  dont_do_this();
+  innocuous();
+  return 0;
+}
+
+char *init_array(void) {
+  char array[10];
+  /* Initialize array */
+  return array;
+}
+
+
+void squirrel_away(char **ptr_param) {
+  char local[10];
+  /* Initialize array */
+  *ptr_param = local;
+}
+
+void rodent(void) {
+  char *ptr;
+  squirrel_away(&ptr);
+  /* ptr is live but invalid here */
+}
+</code></pre>
+<p><i>Developer Notes: </i>The check may flag a false violation of an assignment to a pointer using a local object that is just used as a temporary storage.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref, ent):
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            last_set = None
+
+            if "**" not in param_ref.ent().type():
+                continue
+
+            for set_ref in sorted(param_ref.ent().refs("Deref Setby"), key=lambda x: x.line()):
+                last_set = set_ref
+
+            if last_set:
+                lex = lexer.lexeme(last_set.line(), last_set.column())
+                on_set = False
+
+                if lex.previous().text() != "*":
+                    continue
+
+                while lex and lex.text() != ";":
+                    if lex.text() == "=" and lex.token() == "Operator":
+                        on_set = True
+                    elif on_set:
+                        if lex.token() == "Identifier" and lex.ent() and lex.ent().kind().check("Local"):
+                            check_violation(last_set, lex.ent())
+                            break
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+        for obj_ref in func_ref.ent().refs("Define", "Local Object"):
+            if obj_ref.ent().type() in {"va_list"}:
+                continue
+
+            for assign_ref in obj_ref.ent().refs("Assignby", "Global Object"):
+                utype = assign_ref.ent().freetext("UnderlyingType")
+                compliant = False
+                last_set = None
+
+                if utype and "volatile" in utype:
+                    continue
+
+                for set_ref in sorted(assign_ref.ent().refs("Setby"), key=lambda x: x.line()):
+                    if set_ref.ent().id() == func_ref.ent().id() and set_ref.line() > assign_ref.line():
+                        last_set = set_ref
+
+                if last_set:
+                    lex = lexer.lexeme(last_set.line(), last_set.column())
+                    on_set = False
+
+                    while lex and lex.text() != ";":
+                        if lex.text() == "=" and lex.token() == "Operator":
+                            on_set = True
+                        elif on_set:
+                            if lex.token() == "Identifier" and lex.ent() and lex.ent().type() in {"((void*)0)", "null", "NULL"}:
+                                compliant = True
+                                break
+
+                        lex = lex.next(ignore_whitespace=True,
+                                       ignore_comments=True)
+
+                if not compliant:
+                    check_violation(assign_ref, obj_ref.ent())

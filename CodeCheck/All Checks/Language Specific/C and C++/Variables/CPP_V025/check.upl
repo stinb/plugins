@@ -1,0 +1,128 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 7-21-2020
+
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => "Variable %1 has been declared without a specific type";
+
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "CPP_V025";}
+
+sub name{ return "All Checks\\Language Specific\\C and C++\\Variables\\Every variable shall be declared with a specific type";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Variables',
+  );
+}
+
+sub description { return "Every variable shall be declared with a specific type. The default type of int shall not be assumed.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Every variable shall be declared with a specific type. The default type of int shall not be assumed.
+Some compilers allow a default type while others generate compiler errors. For example, the following is not permitted:
+<pre><code language="C++">/* Global variables */
+char *file_name; /* Name of the data file */
+
+      temp1; /* No type specified - defaults to int */
+</code></pre>
+</p>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("C File ~unknown ~unresolved");
+
+  my $lexer = $file->lexer();
+  return unless $lexer;
+  my $lexeme = $lexer->first();
+
+  while($lexeme) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+
+    # find variable declaration
+    my $ref = $lexeme->ref();
+    my $ent = $lexeme->ent();
+
+    if ($ref && $ref->kind()->check("c declarein,c definein") && $ent && $ent->kind()->check("c object ~TemplateParameter")) {
+      # check that lexeme is an identifier
+      if ($lexeme->token() eq "Identifier") {
+        # handles any number of pointer indirections
+        if ($lexeme->prevUseful() && $lexeme->prevUseful()->token() eq "Operator" && $lexeme->prevUseful()->text() eq "*") {
+          my $tempLexeme =  $lexeme->prevUseful();
+          while ( $tempLexeme && $tempLexeme->text() eq '*' ) {
+            $tempLexeme = $tempLexeme->prevUseful();
+          }
+
+          if ($tempLexeme->token() eq "Keyword" || $tempLexeme->token() eq "Operator") {
+            # skip
+          }
+          # handle structs, macros, and typedefs
+          elsif ($tempLexeme->ent() && ($tempLexeme->ent()->kindname() eq "Struct")) {
+            # skip
+          }
+          elsif ($tempLexeme->ent() && ($tempLexeme->ent()->kindname() eq "Macro")) {
+            #skip
+          }
+          elsif ($tempLexeme->ent() && ($tempLexeme->ent()->kindname() eq "Typedef")) {
+            # skip
+          }
+          else {
+            my $violation = $check->violation($ent,$file,$ref->line,$ref->column,ERR1, $lexeme->text());
+            $violation->add_fixit_hint($tempLexeme->line_begin, $tempLexeme->column_begin, $tempLexeme->line_begin, $tempLexeme->column_begin, $ent->type . " ")
+          }
+
+        }
+        # handle keywords and listed variables
+        if ($lexeme->prevUseful()->token() eq "Keyword" || $lexeme->prevUseful()->token() eq "Operator") {
+          # skip
+        }
+        # handle structs, macros, and typedefs
+        elsif ($lexeme->prevUseful()->ent() && ($lexeme->prevUseful()->ent()->kindname() eq "Struct")) {
+          # skip
+        }
+        elsif ($lexeme->prevUseful()->ent() && ($lexeme->prevUseful()->ent()->kindname() eq "Macro")) {
+          #skip
+        }
+        elsif ($lexeme->prevUseful()->ent() && ($lexeme->prevUseful()->ent()->kindname() eq "Typedef")) {
+          # skip
+        }
+        else {
+          my $violation = $check->violation($ent,$file,$ref->line,$ref->column,ERR1, $lexeme->text());
+          $violation->add_fixit_hint($lexeme->line_begin, $lexeme->column_begin, $lexeme->line_begin, $lexeme->column_begin, $ent->type . " ")
+
+        }
+      }
+    }
+
+    $lexeme = $lexeme->next();
+  }
+}

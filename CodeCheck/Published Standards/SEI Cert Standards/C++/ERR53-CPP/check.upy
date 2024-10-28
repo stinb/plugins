@@ -1,0 +1,147 @@
+import re
+
+
+ERR1 = 'Do not reference base classes or class data members in a constructor or destructor function-try-block handler.'
+
+
+# The ID for the check
+def id():
+    return ('ERR53-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ERR53-CPP': 'Published Standards/SEI Cert Standards/C++/Do not reference base classes or class data members in a constructor or destructor function-try-block handler',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not reference base classes or class data members in a constructor or destructor function-try-block handler'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not reference base classes or class data members in a constructor or destructor function-try-block handler</p>
+<p><b>Risk Assessment</b></p>
+<p>Accessing nonstatic data in a constructor's exception handler or a destructor's exception handler leads to undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/ERR53-CPP.+Do+not+reference+base+classes+or+class+data+members+in+a+constructor+or+destructor+function-try-block+handler</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;string&gt;
+  
+class C {
+  std::string str;
+  
+public:
+  C(const std::string &s) try : str(s) {
+    // ...
+  } catch (...) {
+    if (!str.empty()) {
+      // ...
+    }
+  }
+};
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'ERR53-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        member_ids = []
+
+        for obj_ref in class_ref.ent().refs("Define", "Member Object"):
+            member_ids.append(obj_ref.ent().id())
+
+        for base_ref in class_ref.ent().refs("Base"):
+            for bobj_ref in base_ref.ent().refs("Define", "Member Object"):
+                member_ids.append(bobj_ref.ent().id())
+
+        for func_ref in class_ref.ent().refs("Define", "Function"):
+            if not re.search(f"^~|{class_ref.ent().name()}", func_ref.ent().name()):
+                continue
+
+            lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+
+                lex = lex.next(ignore_whitespace=True)
+
+            if not lex:
+                continue
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+            if lex.text() == "try":
+                on_body = 0
+
+                while lex:
+                    if lex.text() == "{":
+                        on_body += 1
+                    elif lex.text() == "}":
+                        on_body -= 1
+
+                        break
+                    elif on_body and lex.ent() and lex.ent().id() in member_ids:
+                        check.violation(
+                            lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+                while lex.text() != "catch":
+                    lex = lex.next()
+
+                on_body = 0
+
+                while lex:
+                    if lex.text() == "{":
+                        on_body += 1
+                    elif lex.text() == "}":
+                        on_body -= 1
+
+                        break
+                    elif on_body and lex.ent() and lex.ent().id() in member_ids:
+                        check.violation(
+                            lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)

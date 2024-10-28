@@ -1,0 +1,162 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 02-09-2023
+
+import re
+import Modules
+
+DEF_NAME = "Do not grant dangerous combinations of permissions"
+
+# The ID for the check
+def ids():
+    return ('ENV03-J', 'JAVA_ENV03')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'ENV03-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_ENV03': "All Checks/Language Specific/Java/Runtime Environment/" + DEF_NAME,
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'ENV03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P27',
+            'Level: L1',
+        ],
+        'JAVA_ENV03': [
+            'Language: Java',
+            'Runtime Environment',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Do not grant dangerous combinations of permissions</p>
+<p><b>Risk Assessment</b></p>
+<p>Certain combinations of permissions can produce significant capability
+increases and should not be granted. Other permissions should be granted only to
+special code.</p>
+<p><i>AllPermission</i></p>
+<p>The permission java.security.AllPermission grants all possible permissions to
+code. This facility was included to reduce the burden of managing a multitude of
+permissions during routine testing as well as when a body of code is completely
+trusted. Code is typically granted AllPermission via the security policy file;
+it is also possible to programmatically associate AllPermission with a
+ProtectionDomain. This permission is dangerous in production environments. Never
+grant AllPermission to untrusted code.</p>
+<p><i>ReflectPermission, suppressAccessChecks</i></p>
+<p>Granting ReflectPermission on the target suppressAccessChecks suppresses all
+standard Java language access checks when the permitted class attempts to
+operate on package-private, protected, or private members of another class.
+Consequently, the permitted class can obtain permissions to examine any field or
+invoke any method belonging to an arbitrary class [Reflect 2006]. As a result,
+ReflectPermission must never be granted with target suppressAccessChecks.</p>
+<p>According to the technical note Permissions in the Java SE 6 Development Kit
+[Permissions 2008], Section ReflectPermission, target suppressAccessCheck</p>
+<p>Warning: Extreme caution should be taken before granting this permission to
+code, for it provides the ability to access fields and invoke methods in a
+class. This includes not only public, but protected and private fields and
+methods as well.</p>
+<p><i>RuntimePermission, createClassLoader</i></p>
+<p>The permission java.lang.RuntimePermission applied to target
+createClassLoader grants code the permission to create a ClassLoader object.
+This permission is extremely dangerous because malicious code can create its own
+custom class loader and load classes by assigning them arbitrary permissions. A
+custom class loader can define a class (or ProtectionDomain) with permissions
+that override any restrictions specified in the systemwide security policy file.
+</p>
+<p>Permissions in the Java SE 6 Development Kit [Permissions 2008] states:</p>
+<p>This is an extremely dangerous permission to grant. Malicious applications
+that can instantiate their own class loaders could then load their own rogue
+classes into the system. These newly loaded classes could be placed into any
+protection domain by the class loader, thereby automatically granting the
+classes the permissions for that domain.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/ENV03-J.+Do+not+grant+dange\
+rous+combinations+of+permissions</i>
+</p>
+<p><b>Noncompliant Code Example (PermissionCollection)</b></p>
+<p>This noncompliant code example shows an overridden getPermissions() method,
+defined in a custom class loader. It grants java.lang.ReflectPermission with
+target suppressAccessChecks to any class that it loads.</p>
+<pre><code language="Java">protected PermissionCollection getPermissions(CodeSource cs) {
+  PermissionCollection pc = super.getPermissions(cs);
+  pc.add(new ReflectPermission("suppressAccessChecks"));   // Permission to create a class loader
+  // Other permissions
+  return pc;
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    lexer = None
+    # Permission combinations to check for
+    searchStr = 'AllPermission|ReflectPermission|suppressAccessChecks|RuntimePermission|createClassLoader'
+    refs = file.filerefs('Java Use Annotation', 'Annotation')
+
+    for ref in refs:
+        if ref.ent().name() != 'Override':
+            continue
+
+        # Look for refs that are associated with PermissionCollection
+        if str(ref.scope().type()) == 'PermissionCollection':
+            cRefs = ref.scope().refs('Call')
+            for cRef in cRefs:
+
+                # Look for refs for calling the function 'add'
+                if cRef.ent().name() == 'add':
+                    if not lexer:
+                        lexer = file.lexer()
+                    lexeme = lexer.lexeme(cRef.line(), cRef.column())
+                    if lexeme:
+                        lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.text() == '(':
+                            close = Modules.findClose(lexeme)
+                            ok = True
+
+
+                            # Look two levels deep of local variables to check for the invalid permission combinations
+                            while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                                if lexeme.ent() and re.search(r'local', lexeme.ent().kind().longname().lower()):
+                                    if re.search(searchStr, lexeme.ent().value()):
+                                        ok = False
+                                    else:
+                                        sRefs = lexeme.ent().refs('Setby')
+                                        for sRef in sRefs:
+                                            tempLex = lexer.lexeme(sRef.line(), sRef.column())
+                                            while tempLex and tempLex.text() != '=':
+                                                tempLex = tempLex.next(True, True)
+                                            while tempLex and tempLex.text() != ';':
+                                                if tempLex.ent() and re.search(r'local', lexeme.ent().kind().longname()):
+                                                    if re.search(searchStr, lexeme.ent().value()):
+                                                        ok = False
+                                                        break
+
+                                                tempLex = tempLex.next(True, True)
+
+                                elif re.search(searchStr, lexeme.text()):
+                                    ok = False
+
+                                lexeme = lexeme.next(True, True)
+
+                            if not ok:
+                                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), DEF_NAME)
+
+

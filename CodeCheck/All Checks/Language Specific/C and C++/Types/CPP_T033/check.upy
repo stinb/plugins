@@ -1,0 +1,153 @@
+import re
+
+
+ERR1 = '"Consume" parameter has not been moved from.'
+
+
+# The ID for the check
+def ids():
+    return ('A8-4-5', 'CPP_T033')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A8-4-5': 'Published Standards/AUTOSAR/"consume" parameters declared as X && shall always be moved from.',
+        'CPP_T033': 'All Checks/Language Specific/C and C++/Types/"consume" parameters declared as X && shall always be moved from.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A8-4-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T033': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+A "consume" parameter is declared with a type of rvalue reference to non-const nontemplate type (X &&). This documents that the value will be consumed in the function (i.e. left in a moved-from state) and requires an explicit 'std::move' at the call site if an lvalue is passed to the function (an rvalue reference can implicitly bind only to an rvalue).
+</p>
+
+<p>
+Note: Other operations may be performed on the "consume" parameter before being moved.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A8-4-5.cpp 305588 2018-01-29 11:07:35Z michal.szczepankiewicz $
+
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+class A
+{
+  public:
+    explicit A(std::vector&lt;std::string&gt; &&v)
+      : m_v{std::move(v)} // Compliant, move from consume parameter
+    {
+    }
+
+  private:
+    std::vector&lt;std::string&gt; m_v;
+};
+
+class B
+{
+  public:
+    explicit B(std::vector&lt;std::string&gt; &&v)
+      : m_v{v} // Non-Compliant, consume parameter not moved from
+    {
+    }
+
+    std::vector&lt;std::string&gt; m_v;
+};
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>• C++ Core Guidelines [11]: F.18: For "consume" parameters, pass by X&& and
+std::move the parameter</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        consume_params = {}
+        template_params = []
+
+        for tempparam_ref in func_ref.ent().refs("Define", "TemplateParameter"):
+            template_params.append(tempparam_ref.ent().name())
+
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            param_type = param_ref.ent().type()
+
+            if not param_type:
+                continue
+
+            if any(temptype in param_type for temptype in template_params):
+                continue
+
+            if "const" not in param_type and "&&" in param_type:
+                consume_params[param_ref.ent().name()] = param_ref
+
+        if consume_params:
+            lex = lexer.lexeme(func_ref.line(), func_ref.column())
+            end_definition = func_ref.ent().ref("End")
+            in_move = False
+
+            while lex and lex.line_begin() != end_definition.line():
+                lex_name = lex.ent().longname() if lex.ent() else ""
+
+                if re.search(r"std::(__1::)?move", str(lex_name)):
+                    in_move = True
+                elif in_move and lex.token() == "Identifier":
+                    in_move = False
+
+                    if lex.text() in consume_params:
+                        consume_params.pop(lex.text())
+
+                        if not consume_params:
+                            break
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if consume_params:
+                for ref in consume_params.values():
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

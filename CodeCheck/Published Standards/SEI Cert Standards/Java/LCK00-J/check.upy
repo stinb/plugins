@@ -1,0 +1,187 @@
+ERR1 = 'Use private final lock objects to synchronize classes that may interact with untrusted code.'
+
+
+# The ID for the check
+def ids():
+    return ('LCK00-J', 'JAVA_LCK00')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'LCK00-J': 'Published Standards/SEI Cert Standards/Java/Use private final lock objects to synchronize classes that may interact with untrusted code',
+        'JAVA_LCK00': 'All Checks/Language Specific/Java/Locking/Use private final lock objects to synchronize classes that may interact with untrusted code',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'LCK00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_LCK00': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Use private final lock objects to synchronize classes that may interact with untrusted code'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Use private final lock objects to synchronize classes that may interact with untrusted code</p>
+<p><b>Risk Assessment</b></p>
+<p>Exposing the lock object to untrusted code can result in DoS.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/LCK00-J.+Use+private+final+lock+objects+to+synchronize+classes+that+may+interact+with+untrusted+code</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class SomeObject {
+
+  // Locks on the object's monitor
+  public synchronized void changeValue() {
+    // ...
+  }
+
+  public static SomeObject lookup(String name) {
+    // ...
+  }
+}
+
+// Untrusted code
+String name = // ...
+SomeObject someObject = SomeObject.lookup(name);
+if (someObject == null) {
+  // ... handle error
+}
+synchronized (someObject) {
+  while (true) {
+    // Indefinitely lock someObject
+    Thread.sleep(Integer.MAX_VALUE);
+  }
+}
+
+
+
+public class SomeObject {
+  public Object lock = new Object();
+
+  public void changeValue() {
+    synchronized (lock) {
+      // ...
+    }
+  }
+}
+
+
+public class SomeObject {
+  private volatile Object lock = new Object();
+
+  public void changeValue() {
+    synchronized (lock) {
+      // ...
+    }
+  }
+
+  public void setLock(Object lockValue) {
+    lock = lockValue;
+  }
+}
+
+
+
+public class SomeObject {
+  public final Object lock = new Object();
+
+  public void changeValue() {
+    synchronized (lock) {
+      // ...
+    }
+  }
+}
+
+
+public class SomeObject {
+  //changeValue locks on the class object's monitor
+  public static synchronized void changeValue() {
+    // ...
+  }
+}
+
+// Untrusted code
+synchronized (SomeObject.class) {
+  while (true) {
+    Thread.sleep(Integer.MAX_VALUE); // Indefinitely delay someObject
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for method_ref in file.filerefs("Define", "Method"):
+        if "synchronized" in method_ref.ent().contents():
+            compliant = False
+            lex = lexer.lexeme(method_ref.line(), method_ref.column())
+            on_body = 0
+            synchronize_lex = None
+
+            while lex:
+                if lex.text() == "{" and lex.token() == "Punctuation":
+                    on_body += 1
+                elif lex.text() == "}" and lex.token() == "Punctuation":
+                    on_body -= 1
+
+                    if not on_body:
+                        break
+                elif lex.text() == "synchronized" and lex.token() == "Keyword":
+                    lock_ent = None
+                    synchronize_lex = lex
+
+                    while lex.text() != ")":
+                        if lex.token() == "Identifier" and lex.ref() and lex.ref().kind().check("Useby"):
+                            lock_ent = lex.ent()
+                            break
+
+                        lex = lex.next(ignore_whitespace=True)
+
+                    if lock_ent and lock_ent.kind().check("Private Final, Private Static Final"):
+                        compliant = True
+
+                    break
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if not compliant and synchronize_lex != None:
+                check.violation(method_ref.ent(), file,
+                                synchronize_lex.line_begin(), synchronize_lex.column_begin(), ERR1)

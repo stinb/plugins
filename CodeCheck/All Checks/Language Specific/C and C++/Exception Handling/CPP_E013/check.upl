@@ -1,0 +1,264 @@
+# Throw exceptions by value, not by pointer.
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+# Violation messages should use constants and can have additonal parameters 
+# indicated with %1, %2, %3 etc. like printf does
+use constant ERR1 => "Exception not thrown by value";
+use constant ERR2 => "Possible Violation: Exception not thrown by value";
+use constant OPT1 => "Determine how to handle unknown functions:";
+use constant OPT1WORST=> "Report as a violation, on the worst-case assumption";
+use constant OPT1POSSIBLE=> "Report as a possible violation";
+use constant OPT1IGNORE=> "Ignore (and override assumption #1)";
+our @lexemes=();
+our $lexeme_pos=0;
+# Required - Violation messages should be registred for translation
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+
+# Required - Return the short name of the check
+
+sub checkID { return "CPP_E013";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Exception Handling\\Throw exceptions by value, not by pointer";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Exception Handling',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Exceptions must be thrown by value, not by pointer";}
+
+# Required - Return the long description of the check
+sub detailed_description { return <<"END_DESC"
+Exceptions must be thrown by value, not by pointer. Throw only objects of class type, not built-in types.
+ Assumption:
+ 1. Assume unknown functions return a disallowed type, and thus are a violation.
+END_DESC
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; 
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+sub define_options{
+  my $check = shift;  
+  $check->option->radio_vert("handleUnknown",OPT1,[OPT1WORST,OPT1POSSIBLE,OPT1IGNORE],OPT1POSSIBLE);
+  $check->option->checkbox("ignoreInactive", "Ignore inactive code", 0);
+}
+
+#
+# OPTIONS
+#
+
+my $handleUnknownFunction=1;
+# Determine how to handle unknown functions:
+# 0 = report as a violation, on the worst-case assumption
+# 1 = report as a possible violation
+# 2 = ignore (and override assumption #1)
+
+
+
+sub check {
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift; 
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check("c file ~unresolved ~unknown"); 
+  
+  my $lexer = $file->lexer;
+  return unless $lexer;
+  
+  #loop through functions defined in the file
+  foreach my $ref ($file->filerefs("define","function",1)) {
+	    my $func = $ref->ent();
+	    my ($begin,$end) = getFunctionDefnLines($func);
+	    next if (!$begin);
+
+	    $lexer = $file->lexer() if (!$lexer);
+      return unless $lexer;
+      setupLexemes($lexer,$begin,$end);
+      my $rethrow_okay=0;
+      check_context($check,$file,$func,$lexer,$rethrow_okay);
+  
+  }
+  @lexemes=();
+  $lexeme_pos=0;
+}
+
+
+sub check_context {
+    my ($check,$file,$func,$lexer,$rethrow_okay) = @_;
+    while (my $lexeme=nextLexeme()) {
+	my $text = $lexeme->text();
+	if ($text eq "{") {
+	    check_context($check,$file,$func,$lexer,$rethrow_okay);
+	    next;
+	} elsif ($text eq "}") {
+	    return;
+	} elsif ($text eq "catch") {
+	    $rethrow_okay = check_catch($check,$file,$func,$lexer);
+	} elsif ($text eq "throw") {
+	    check_throw($check,$file,$func,$lexer,$rethrow_okay);
+	}
+    }
+}
+
+
+sub check_throw {
+    my ($check,$file,$func,$lexer,$rethrow_okay) = @_;
+    my $rethrow=1;
+    my $deref=0;
+    my $unknown_func=0;
+    my $lexeme;
+    while ($lexeme = nextLexeme()) {
+      my $text = $lexeme->text();
+      last if $text eq ";";
+      $rethrow = 0;
+      my $token = $lexeme->token();
+      last if $text eq "new" || $text eq "&";
+      last if $token eq "Literal" || $token eq "String" || $token eq "Keyword";
+      $deref++ and next if $text eq "*";
+      next if $token ne "Identifier";
+      my $ent = $lexeme->entity() or next;
+      $unknown_func=$ent if $ent->kind()->check("c unknown function");
+      next if $ent->kind()->check("c class,c struct,c union");
+      next if !$deref && checkPointerType($ent);
+      next if !checkClassType($ent) && !checkConstructor($ent);
+      return;
+    }
+
+    my $inactive = $check->option->lookup("ignoreInactive");
+    if ($inactive and $lexeme->inactive()) {
+        # pass
+    } else {
+      localViolation($check,$func,$lexeme,$file,$unknown_func) if !$rethrow || !$rethrow_okay;
+    }
+}
+
+
+sub check_catch {
+    my ($check,$file,$func,$lexer) = @_;
+    my $see_class = 0;
+    my $see_ptr = 0;
+    while (my $lexeme = nextLexeme()) {
+      my $text = $lexeme->text();
+      if ($text eq "*") {
+        $see_ptr = 1;
+      } elsif ($lexeme->token() eq "Identifier") {
+        my $ent = $lexeme->entity() or next;
+        if ($ent->kind()->check("c class,c struct,c union")) {
+          $see_class = 1;
+        }
+      } elsif ($text eq "{") {
+          my $rethrow_okay = ($see_class && !$see_ptr);
+          check_context($check,$file,$func,$lexer,$rethrow_okay);
+          return;
+        }
+    }
+}
+
+
+# Print violation
+sub localViolation {
+    my $check = shift;
+    my $func = shift;
+    my $lexeme = shift;
+    my $file = shift;
+    my $unknown_func = shift;
+    my $line = $lexeme? $lexeme->line_begin(): -1;
+    my $column = $lexeme? $lexeme->column_begin(): -1;
+    if (!$unknown_func || $check->option->lookup("handleUnknown") eq OPT1WORST) {
+      $check->violation($func,$file,$line,$column,ERR1);
+    } elsif ($unknown_func && $check->option->lookup("handleUnknown") eq OPT1POSSIBLE) {
+      $check->violation($func,$file,$line,$column,ERR2);
+    } elsif ($unknown_func && $check->option->lookup("handleUnknown") eq OPT1IGNORE) {
+    }
+}
+
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Setup the global lexemes array once per function, to use
+# the NextLexeme() sub.
+
+sub setupLexemes {
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+    @lexemes = $lexer->lexemes($begin,$end);
+    $lexeme_pos = 0;
+}
+
+# Return the next interesting lexeme or undef when all lexemes
+# are used.
+sub nextLexeme {
+    while ($lexeme_pos < $#lexemes) {
+	my $lexeme = $lexemes[$lexeme_pos++];
+	next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+	return $lexeme;
+    };
+    return undef;
+}
+
+# Return true if entity type is a pointer type.
+sub checkPointerType {
+    my $ent = shift;
+    return 0 if !$ent;
+    return 1 if $ent->type() =~ m/[*\[]/;
+    my $type_ent = $ent->ents("typed","typedef");
+    return 0 if !$type_ent;
+    return checkPointerType($type_ent);
+}
+
+
+# Return true if entity type is a class type.
+sub checkClassType {
+    my $ent = shift or return 0;
+    my $type_ent = $ent->ents("typed") or return 0;
+    return checkClassType($type_ent) if $type_ent->kind()->check("typedef");
+    return $type_ent->kind()->check("class,struct,union");
+}
+
+
+# Return true if entity is a constructor.
+sub checkConstructor {
+    my $ent = shift or return 0;
+    return 0 if !$ent->kind()->check("member");
+    my $parent = $ent->parent() or return 0;
+    return $ent->name() eq $parent->name();
+}

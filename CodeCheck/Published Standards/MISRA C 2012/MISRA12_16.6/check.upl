@@ -1,0 +1,229 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Richard Knudsen
+# 10-10-16
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => "Redundant switch statement.";
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA12_16.6";}
+
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA C 2012\\16.6 Every switch statement shall have at least two switch-clauses";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2012',
+    'Category: Required',
+    'Control Flow',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return "16.6 ( Required ) Every switch statement shall have at least two switch-clauses";
+}
+
+
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Rationale</b></p>
+A <i>switch</i> statement with a single path is redundant and may be indicative of a programming error.
+</p>
+
+<p><b>Example</b></p>
+
+
+<pre><code language="C++">switch ( x )
+{
+  default:      /* Non-compliant - switch is redundant */
+    x = 0;
+    break;
+}
+
+switch ( y )
+{
+  case 1:
+  default:      /* Non-compliant - switch is redundant */
+    y = 0;
+    break;
+}
+
+switch ( z )
+{
+  case 1:
+    z = 2;
+    break;
+  default:      /* Compliant */
+    z = 0;
+    break;
+}
+
+</code></pre>
+
+<p><b>See also</b><br>
+Rule 16.1
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{}
+
+
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file ~unknown ~unresolved");
+
+  my @functions = $file->filerefs("Define", "Function");
+
+
+  foreach my $function (@functions){
+
+    # Pull text of function and skip if there isn't a switch word present
+    my $text = $file->contents;
+    # Remove any // style comments
+    $text =~ s/\/\/.*?\n/\n/g;
+    # Remove any /* */ style comments
+    $text =~ s/\/\*.*?\*\//\n/gs;
+    next unless $text =~ /\bswitch\b/;
+    # Get the endpoint of the function
+    my $end = $function->ent->ref("End");
+    next unless $end;
+    # Create the lexeme.
+    my $lexeme = $function->lexeme;
+    while($lexeme and $lexeme->line_begin <= $end->line) {
+      #$check->violation($lexeme->ent,$file,$lexeme->line_begin,$lexeme->column_begin, "%1 %2", $lexeme->text, $lexeme->token);
+      if ($lexeme->text eq 'switch' and $lexeme->token eq 'Keyword') {
+        $lexeme = hasMultipleClauses($check, $lexeme, $file);
+      }
+      else {
+        $lexeme = $lexeme->nextUseful;
+      }
+
+    }
+
+  }
+
+}
+
+sub hasMultipleClauses {
+  my $check = shift;
+  my $lexeme = shift;
+  my $file = shift;
+  my $bracket = 1;
+  my $clauses = 0;
+  my $action = 0;
+  my $errLine = $lexeme->line_begin;
+  my $errColumn = $lexeme->column_begin;
+
+  while($lexeme and $lexeme->text ne '{'){
+    $lexeme = $lexeme->nextUseful;
+  }
+  $lexeme = $lexeme->nextUseful;
+
+  while($lexeme and $bracket > 0){
+    if ($clauses > 1) {
+      return $lexeme;
+    }
+    $action = 0;
+    if($lexeme->token eq 'Keyword' and ($lexeme->text eq 'case' or $lexeme->text eq 'default')){
+      $action = 1;
+      $clauses += 1;
+      while($lexeme and $lexeme->text ne ':'){
+        $lexeme = $lexeme->nextUseful;
+      }
+      $lexeme = $lexeme->nextUseful;
+
+      if( $lexeme->text eq '{' ){
+
+        $bracket +=1;
+        $lexeme = $lexeme->nextUseful;
+
+        while ( $lexeme->token eq 'Pnctuation' ) {
+          if( $lexeme->text eq '}' ){
+            $bracket -=1;
+          }
+          if( $lexeme->text eq '{' ){
+            $bracket +=1;
+          }
+          $lexeme = $lexeme->nextUseful;
+        }
+      }
+
+      if( $lexeme->token eq 'Keyword' and ( $lexeme->text eq 'case' or $lexeme->text eq 'default' ) ){
+        $clauses -= 1;
+      }
+    }
+    if( $lexeme->text eq '}'){
+      $bracket -=1;
+    }
+    if( $lexeme->text eq '{'){
+      $bracket +=1;
+    }
+    if($lexeme->token eq 'Keyword' and $lexeme->text eq 'switch' ){
+      $action = 1;
+      $lexeme = hasMultipleClauses($check, $lexeme, $file);
+    }
+    if ($action == 0) {
+      $lexeme = $lexeme->nextUseful;
+    }
+  }
+
+  if($clauses < 2){
+    $check->violation($lexeme->ent,$file,$errLine,$errColumn,ERR1);
+
+  }
+
+
+
+  return $lexeme;
+
+}

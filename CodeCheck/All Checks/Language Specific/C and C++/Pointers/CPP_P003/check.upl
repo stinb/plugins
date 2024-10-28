@@ -1,0 +1,116 @@
+# Pointer function parameters must be tested for equality to 0 before accessing the data being pointed to.
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+# Violation messages should use constants and can have additonal parameters 
+# indicated with %1, %2, %3 etc. like printf does
+use constant ERR1 => 'Untested pointer parameter in function %1';
+
+# Required - Violation messages should be registred for translation
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+# Required - Return the short name of the check
+
+sub checkID { return "CPP_P003";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Pointers\\Pointer function parameters must be tested for equality to 0 before accessing the data being pointed to";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Pointers',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Pointer function parameters must be tested for equality to 0 before accessing the data being pointed to";}
+
+# Required - Return the long description of the check
+sub detailed_description { return <<"END_DESC"
+Assumptions:
+ 1. It is sufficient that the parameter have a non-dereference set/use before any dereference set/use.
+END_DESC
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; 
+  return 1;
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+sub check {
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift; 
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check('c file');
+  
+  my @refs = $file->filerefs("define","function ~unknown ~unresolved",1);
+  my @ents = map{$_->ent()}@refs;
+  
+  foreach my $function (@ents){
+    do_one_function($check,$function);
+  }
+}
+
+
+# check one function
+sub do_one_function {
+    my $check = shift;
+    my $func = shift;
+    # loop through all parameters
+    foreach my $param ($func->ents("define","parameter")) {
+	next if !checkPointerType($param);
+	# get the earliest non-deref ref line/col
+	my $ref_line=undef;
+	my $ref_col;
+	foreach my $ref ($param->refs()) {
+	    if ($ref->kind()->check("setby ~deref,useby ~deref,modifyby ~deref")) {
+		if (!$ref_line
+		    || $ref->line() < $ref_line
+		    || ($ref->line() == $ref_line && $ref->column() < $ref_col)) {
+		    $ref_line = $ref->line();
+		    $ref_col = $ref->column();
+		}
+	    }
+	}
+	# find all deref refs that are before the first non-deref ref line/col
+	foreach my $ref ($param->refs()) {
+	    if ($ref->kind()->check("setby deref,useby deref,modifyby deref")) {
+		if (!$ref_line
+		    || $ref->line() < $ref_line
+		    || ($ref->line() == $ref_line && $ref->column() < $ref_col)) {
+        $check->violation($param,$ref->file,$ref->line,$ref->column,ERR1,$func->name); 
+		}
+	    }
+	}
+    }
+}
+
+
+# Return true if entity type is a pointer type.
+sub checkPointerType {
+    my $ent = shift;
+    return 0 if !$ent;
+    return 1 if $ent->type() =~ m/[*\[]/;
+    my $type_ent = $ent->ents("typed","typedef");
+    return 0 if !$type_ent;
+    return checkPointerType($type_ent);
+}

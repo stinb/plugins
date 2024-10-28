@@ -1,0 +1,154 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10/15/24
+
+import re
+import Modules
+
+ERR1 = 'Cast between pointer to object type and a pointer to a different object type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_11.3', 'MISRA23_11.3', 'CPP_E080')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_11.3': 'Published Standards/MISRA C 2012/' + """\
+11.3 A cast shall not be performed between a pointer to object type and a pointer to a different object type""",
+        'MISRA23_11.3': 'Published Standards/MISRA C 2023/' + """\
+11.3 A cast shall not be performed between a pointer to object type and a pointer to a different object type""",
+        'CPP_E080': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+A cast shall not be performed between a pointer to object type and a pointer to a different object type""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_11.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_11.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E080': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>This rule applies to the unqualified types that are pointed to by the
+pointers.</p>
+<p><b>Rationale</b></p>
+<p>Casting a pointer to object into a pointer to a different object may result
+in a pointer that is not correctly aligned, resulting in undefi ned behaviour.
+</p>
+<p>Even if conversion is known to produce a pointer that is correctly aligned,
+the behaviour may be undefined if that pointer is used to access an object. For
+example, if an object whose type is int is accessed as a short the behaviour is
+undefined even if int and short have the same representation and alignment
+requirements. See C90 Section 6.3, C99 Section 6.5, paragraph 7 for details.</p>
+<p><b>Exception</b></p>
+<p>It is permitted to convert a pointer to object type into a pointer to one of
+the object types char, signed char or unsigned char. The Standard guarantees
+that pointers to these types can be used to access the individual bytes of an
+object.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">uint8_t *p1;
+uint32_t *p2;
+/* Non-compliant - possible incompatible alignment */
+p2 = ( uint32_t * ) p1;
+extern uint32_t read_value ( void );
+extern void print ( uint32_t n );
+void f ( void )
+{
+uint32_t u = read_value ( );
+uint16_t *hi_p = ( uint16_t * ) &u; /* Non-compliant even though
+* probably correctly aligned */
+*hi_p = 0; /* Attempt to clear high 16-bits on big-endian machine */
+print ( u ); /* Line above may appear not to have been performed */
+}</pre></code>
+<p>The following example is compliant because the rule applies to the
+unqualified pointer types. It does not prevent type qualifiers from being added
+to the object type.</p>
+<pre><code language="C++">const short *p;
+const volatile short *q;
+q = ( const volatile short * ) p; /* Compliant */</code></pre>
+<p>The following example is non-compliant because the unqualified pointer types
+are different, namely "pointer to const-qualified int" and "pointer to int".</p>
+<pre><code language="C++">int * const * pcpi;
+const int * const * pcpci;
+pcpci = ( const int * const * ) pcpi;</code></pre>
+"""
+    return {
+        'MISRA12_11.3': desc,
+        'MISRA23_11.3': desc,
+        'CPP_E080': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Object')
+    for ref in refs:
+        if not '*' in str(ref.ent().type()):
+            continue
+        setRefs = ref.ent().refs('Setby ~Deref')
+        type0 = re.sub(r'(volatile)|[^a-z\d]', '', str(ref.ent().type()).lower())
+
+        for setRef in setRefs:
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(setRef.line(), setRef.column())
+            while lexeme and not re.match(r'=|;|{|}', lexeme.text()):
+                lexeme = lexeme.next(True, True,)
+
+            if lexeme and lexeme.text() == '=':
+                while lexeme and not re.match(r';|{|}', lexeme.text()):
+                    if lexeme.text() == '(' or lexeme.text() == '[':
+                        lexeme = Modules.findClose(lexeme)
+                        if not lexeme:
+                            break
+                    # Look for ents
+                    if lexeme.ent():
+                        nextLex = lexeme.next(True, True)
+                        if nextLex and nextLex.text() == '->':
+                            lexeme = nextLex
+                            continue
+                        # Remove volatile keywords
+                        type1 = re.sub(r'(volatile)|[^a-z\d]', '', str(lexeme.ent().type()).lower())
+                        # Check if types are the same
+                        if type0 != type1:
+                            check.violation(ref.ent(), file, setRef.line(), setRef.column(), ERR1)
+                            break
+                    lexeme = lexeme.next(True, True)
+

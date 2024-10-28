@@ -1,0 +1,125 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Boolean operator used incorrectly in %1.';
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA04_12.6";}
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA-C 2004\\12.6 The operands of logical operators (&&, || and !) should be effectively Boolean. Expressions that are effectively Boolean should not be used as operands to operators other than (&&, ||, !, =, ==, != and ?:)";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2004',
+    'Category: advisory',
+    'Expressions',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { return "12.6 (Advisory) The operands of logical operators (&&, || and !) should be effectively Boolean. Expressions that are effectively Boolean should not be used as operands to operators other than (&&, ||, !, =, ==, != and ?:).";}
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+The logical operators &&, || and ! can be easily confused with the bitwise operators &, | and ~.
+</p>
+<br>
+<p><b>Example</b></p><pre><code language="C++">  bool b1 = true;
+  bool b2 = false;
+  int8_t s8a;
+  if ( b1 & b2 ) // Non-compliant
+  if ( b1 &lt; b2 ) // Non-compliant
+  if ( ~b1 ) // Non-compliant
+  if ( b1 ^ b2 ) // Non-compliant
+  if ( b1 == false ) // Compliant
+  if ( b1 == b2 ) // Compliant
+  if ( b1 != b2 ) // Compliant
+  if ( b1 && b2 ) // Compliant
+  if ( !b1 ) // Compliant
+  s8a = b1 ? 3 : 7; // Compliant
+</code></pre>
+
+<BR />
+<p><b>Developer's Note</b></p>
+This check only looks at boolean type objects. Currently, Understand's Code Check feature cannot evaluate
+an expression statically; therefore, any expression or function that returns a boolean will not be tested
+with this check.</p>
+<br>
+END_DESC
+}
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+# This determines if this script is per file
+sub test_entity { return 1;}
+
+# This determines if this script is per project or per file
+sub test_global { return 0;}
+
+# Any defined options go here
+sub define_options{
+}
+
+# Use this function for throwing errors
+sub throwError {
+  my $check = shift;
+  my $ent = shift;
+  my $file = shift;
+  my $line = shift;
+  my $column = shift;
+  my $error = shift;
+  my $name = shift;
+  $check->violation($ent,$file,$line,$column,$error,$name);
+}
+
+# This is the actual test being performed on the user's code
+sub check {
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift; 
+  my $file = shift;
+  return unless $file->kind->check("c file");
+
+  # Pull a list of all boolean refs
+  my @booleans = $file->filerefs("Use");
+  
+  # Loop through all use references and check if they are booleans
+  foreach my $bool(@booleans) {
+    next unless $bool->ent->type eq "bool" || $bool->ent->type eq "_Bool";
+
+    # Pull the previous symbol and the next symbol for testing
+    my $lexeme = $bool->lexeme;
+    my $prevToken = $lexeme->prevUseful->text;
+    my $nextToken = $lexeme->nextUseful->text;
+
+    # Initialize flag and check for bad symbols
+    my $flag = 0;
+    my $regex = '^\+$|^\-$|^\*$|^\/$|^\%$|^\+\+$|^\-\-$|^\>$|^\<$|^\>\=$|^\<\=$|^\|$|^\^$|^\~$|^\<\<$|^\>\>$|^\+\=$|^\-\=$|^\*\=$|^\/\=$|^\%\=$|^\<\<\=$|^\>\>\=$|^\&\=$|^\^\=$|^\|\=$';
+    $regex .= '|^\&$' if $lexeme->prevUseful->prevUseful and $lexeme->prevUseful->prevUseful->token eq 'Identifier';
+
+
+    $flag = 1 if $prevToken =~ /$regex/;
+    $flag = 1 if $nextToken =~ /$regex/;
+
+    # Throw and error if we found a bad token
+    throwError($check, $bool->ent, $file, $bool->line, $bool->column, ERR1, $bool->ent->name) if $flag;
+  }
+}

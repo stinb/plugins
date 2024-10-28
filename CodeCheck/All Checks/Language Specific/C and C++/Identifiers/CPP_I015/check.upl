@@ -1,0 +1,100 @@
+#This script is designed to run with Understand - CodeCheck
+use base qw(Understand::Codecheck);
+use strict;
+
+
+use constant ERR1 => 'Violation: identifier "%1" reused in multiple C name spaces.';
+
+sub register_tr_text {
+	my $check = shift;
+	$check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_I015";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Identifiers\\No identifier in one name space should have the same spelling as an identifier in another name space.";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Identifiers',
+  );
+}
+
+sub description { '(Global)No identifier in one name space should have the same spelling as an identifier in another name space, with the exception of structure member and union member names.' }
+
+sub detailed_description { <<'END_DESC'
+No identifier in one name space should have the same spelling as an identifier in another name space, with the exception of structure member and union member names.
+<br>Name space and scope are different. This rule is not concerned with scope. For example, ISO C allows the same identifier (vector) for both a tag and a typedef at the same scope.
+<pre><code language="C++">typedef struct vector { uint16_t x ; uint16_t y; uint16_t z; } vector;
+/* Rule violation ^^                                              ^^ */
+</code></pre>
+ISO C defines a number of different name spaces (see ISO/IEC 9899:1990 6.1.2.3 [2]). It is technically possible to use the same name in separate name spaces to represent completely different items. However this practice is deprecated because of the confusion it can cause, and so names should not be reused, even in separate name spaces.<br>
+Name spaces are defined as: 1) label names, 2) tags of structures, unions and enumerators, 3) Members of structures or unions and 4) all other identifiers
+END_DESC
+}
+
+sub test_language {
+	my $language = shift;
+	return $language eq 'C++';
+}
+
+sub test_entity { 0 }
+
+sub test_global { 1 }
+
+sub define_options { }
+
+
+sub check {
+	my $check = shift;
+	my $db = $check->db;
+	
+	my %seen;
+	my %errors;
+  
+  
+  my (%labelid,%labelname,%labelflag,%tagid,%tagname,%tagflag,%memberid,%membername,%memberflag,%identifierid,%identifiername,%identifierflag);
+  foreach my $ent ($check->db->ents("~macro ~unknown ~unresolved")){
+    if ($ent->kind->check("label")){
+      $labelid{$ent->id}=$ent;
+      $labelname{$ent->name}=$ent;
+    }elsif($ent->kind->check("struct,enum,union")){
+      $tagid{$ent->id}=$ent;
+      $tagname{$ent->name}=$ent;
+    }elsif($ent->parent && $ent->parent->kind->check("struct,union")){
+      $memberid{$ent->id}=$ent;
+      $membername{$ent->name}=$ent;
+    }else{
+      $identifierid{$ent->id}=$ent;
+      $identifiername{$ent->name}=$ent;
+    }
+  }
+   
+	foreach my $file ($check->get_files()) {
+		next unless $file->kind->check('c file');
+		foreach my $ref ($file->filerefs('define', '~macro ~lambda', 0)) {
+      my $ent = $ref->ent;
+      next if $ent->name() eq "[unnamed]";
+      my $reuse = 0;
+      if($labelid{$ent->id} && ! $labelflag{$ent->name}){
+        $reuse = 1 if $tagname{$ent->name} || $membername{$ent->name} || $identifiername{$ent->name};
+        $labelflag{$ent->name}=1;
+      }elsif($tagid{$ent->id} && !$tagflag{$ent->name}){
+        $reuse = 1 if $labelname{$ent->name} || $membername{$ent->name} || $identifiername{$ent->name};
+        $tagflag{$ent->name}=1;
+      }elsif($memberid{$ent->id} && ! $memberflag{$ent->name}){
+        $reuse = 1 if $labelname{$ent->name} || $tagname{$ent->name} || $identifiername{$ent->name};
+        $memberflag{$ent->name}=1;
+      }elsif($identifierid{$ent->id} && ! $identifierflag{$ent->name}){
+        $reuse = 1 if $labelname{$ent->name} || $tagname{$ent->name} || $membername{$ent->name};
+        $identifierflag{$ent->name}=1;
+      }
+      $check->violation($ent,$file,$ref->line,$ref->column,ERR1,$ent->name) if $reuse;
+		}
+	}
+	
+	return;
+}

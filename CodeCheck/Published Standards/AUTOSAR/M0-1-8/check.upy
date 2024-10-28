@@ -1,0 +1,121 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8-18-2021
+import re
+
+ERR1 = 'No external side effects were used in void function %1'
+
+def ids():
+    return ('M0-1-8', 'MISRA08_0-1-8', 'CPP_F025')
+
+def name(id):
+    return {
+        'M0-1-8': 'Published Standards/AUTOSAR/All functions with void return type shall have external side effect(s)',
+        'MISRA08_0-1-8': 'Published Standards/MISRA-C++ 2008/0-1-8 All functions with void return type shall have external side effect(s)',
+        'CPP_F025': 'All Checks/Language Specific/C and C++/Functions/All functions with void return type shall have external side effect(s)',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_0-1-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Functions',
+        ],
+        'M0-1-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions',
+        ],
+        'CPP_F025': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+
+<p><b>Rationale</b></p>
+A function which does not return a value and which does not have external side effects will only consume time and will not contribute to the generation of any outputs, which may not meet developer expectations.
+</p>
+
+<p>
+The following are examples of external side effects:
+<ul>
+<li>Reading or writing to a file, stream, etc.;</li>
+<li>Changing the value of a non local variable;</li>
+<li>Changing the value of an argument having reference type;</li>
+<li>Using a volatile object;</li>
+<li>Raising an exception.</li>
+</ul>
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void pointless ( void ) // Non-compliant - no external side effects
+{
+  int16_t local;
+  local = 0;
+}
+
+</code></pre>
+
+'''
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    refs = file.filerefs('Define', 'Function')
+
+    # Go through all function refs
+    for ref in refs:
+        # Skip for nonvoid functions
+        if not ref.ent().type() == 'void':
+            continue
+        ok = False
+        begin = ref.ent().ref('definein').line()
+        end = ref.ent().ref('end').line()
+
+        # Gather and go through global refs that are modified or set in the function
+        oRefs = ref.ent().refs('Modify, Set, Use', 'Object, Parameter')
+        for oRef in oRefs:
+            if oRef.kind().check("Use"):
+                if re.search('vector', str(oRef.ent().type()).lower()):
+                    ok = True
+                    break
+            if re.search(r'&', str(oRef.ent().type())) or oRef.ent().kind().check("global, member"):
+                if oRef.file() == ref.file() and oRef.line() >= begin and oRef.line() <= end:
+                    ok = True
+                    break
+        if ok:
+            continue
+
+        # Gather and go through function refs that are called in the void function
+        callRefs = ref.ent().refs('Call', 'Function')
+        for callRef in callRefs:
+            if callRef.ent().name() != ref.ent().name():
+                ok = True
+                break
+
+        if not ok:
+            exceptions = ref.ent().refs('Throw Exception')
+            if len(exceptions) > 0:
+                ok = True
+
+
+        if not ok:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())

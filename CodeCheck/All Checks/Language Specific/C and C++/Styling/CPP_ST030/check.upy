@@ -1,0 +1,122 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 06-24-2021
+
+import re
+
+ERR1 = """\
+Class %1 design did not follow the format"""
+
+def id():
+    return 'CPP_ST030'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/Class design should include the \
+following format"""
+
+
+def tags(id):
+    return {
+        'CPP_ST030': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<pre><code language="C++">#ifndef Class_nameH
+#define Class_nameH
+class Class_name {
+private:
+    // private data and functions here...
+    void copy(const Class_name &);
+    void free();
+public:
+    // Constructors and destructor
+    Class_name();
+    Class_name(const Class_name & obj) {
+        Copy (obj);
+    }
+    // other constructors here ...
+    ~Class_name() { free(); }
+    // Modifiers
+    const Class_name & operator=(const Class_name & obj) {
+        if (this != &obj) {
+            free();
+            copy(obj);
+        }
+        return *this;
+    }
+    // other member functions here ...
+// Selectors
+    // const member functions here ...
+};
+#endif
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Class')
+
+    for ref in refs:
+        if not lexer:
+            lexer = file.lexer()
+
+        ok = True
+        define = False
+        ifndef = False
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        prevLex = lexeme
+        nextLex = lexeme
+
+        # Look for define and ifndef preprocessors
+        while prevLex and not re.match(r';|}|\)', prevLex.text()):
+            if prevLex.text() == 'define' and prevLex.previous(True, True).text() == '#' and prevLex.next(True, True).text() == ref.ent().name() + 'H':
+                define = True
+            if define and prevLex.text() == 'ifndef' and prevLex.previous(True, True).text() == '#' and prevLex.next(True, True).text() == ref.ent().name() + 'H':
+                ifndef = True
+                break
+            
+            prevLex = prevLex.previous(True, True)
+
+        if not (prevLex and define and ifndef):
+            ok = False
+
+        else:
+            private = True
+            public = True
+            # Look for private and public keywords
+            while nextLex and nextLex.line_begin() != ref.ent().ref('End', 'Class').line():
+                if nextLex.text() == 'private':
+                    private = True
+
+                if private and nextLex.text() == 'public':
+                    public = True
+
+
+
+                nextLex = nextLex.next(True, True)
+        
+
+            if nextLex:
+                nextLex = nextLex.next(True, True)
+                
+                # Look for the endif preprocessor
+                while nextLex and re.match(r';|#|endif', nextLex.text()):
+                    if nextLex.text() == 'endif':
+                        ok = True
+                    nextLex = nextLex.next(True, True)
+
+        if not ok:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+

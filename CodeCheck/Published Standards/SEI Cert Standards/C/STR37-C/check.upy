@@ -1,0 +1,137 @@
+ERR1 = 'Arguments to character-handling functions must be representable as an unsigned char.'
+CHAR_HANDLING_FUNCS = {"isalnum", "isalpha", "isascii", "isblank", "iscntrl", "isdigit", "isgraph", "islower",
+                       "isprint", "ispunct", "isspace", "isupper", "isxdigit", "toascii", "toupper", "tolower"}
+
+
+# The ID for the check
+def id():
+    return ('STR37-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'STR37-C': 'Published Standards/SEI Cert Standards/C/Arguments to character-handling functions must be representable as an unsigned char',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'STR37-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Functions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Arguments to character-handling functions must be representable as an unsigned char'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Arguments to character-handling functions must be representable as an unsigned char</p>
+<p><b>Risk Assessment</b></p>
+<p>Passing values to character handling functions that cannot be represented as an unsigned char to character handling functions is undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/STR37-C.+Arguments+to+character-handling+functions+must+be+representable+as+an+unsigned+char</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;ctype.h&gt;
+#include &lt;string.h&gt;
+
+size_t count_preceding_whitespace(const char *s) {
+  const char *t = s;
+  size_t length = strlen(s) + 1;
+  while (isspace(*t) && (t - s &lt; length)) {
+    ++t;
+  }
+  return t - s;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for use_ref in file.filerefs("Call, Use", "Unresolved Function, Unresolved Macro"):
+        if use_ref.ent().name() not in CHAR_HANDLING_FUNCS:
+            continue
+
+        lex = lexer.lexeme(use_ref.line(), use_ref.column())
+        on_param = 0
+        has_cast = False
+        check_cast = True
+        cast = ""
+
+        while lex:
+            #print(f"{lex.text()} {lex.token()}")
+            if lex.text() == "(":
+                on_param += 1
+
+                if on_param == 2 and check_cast and lex.text() == "(":
+                    has_cast = True
+            elif lex.text() == ")":
+                on_param -= 1
+
+                if on_param == 1 and has_cast:
+                    if cast != "unsignedchar":
+                        check.violation(use_ref.ent(), use_ref.file(
+                        ), use_ref.line(), use_ref.column(), ERR1)
+                    break
+
+                if not on_param:
+                    break
+            elif has_cast:
+                cast += lex.text()
+            elif on_param and lex.token() == "Identifier":
+                if lex.ent() and lex.ent().type() != "int":
+                    check.violation(use_ref.ent(), use_ref.file(),
+                                    use_ref.line(), use_ref.column(), ERR1)
+                    break
+
+            if check_cast and on_param and lex.token() in {"Keyword", "Identifier"}:
+                check_cast = False
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)

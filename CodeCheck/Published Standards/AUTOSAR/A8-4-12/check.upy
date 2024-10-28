@@ -1,0 +1,173 @@
+import re
+
+
+ERR1 = 'Invalid use of passing a parameter using std::unique_ptr'
+
+
+# The ID for the check
+def ids():
+    return ('A8-4-12', 'CPP_P031')
+
+def name(id):
+    return {
+        'A8-4-12': """\
+Published Standards/AUTOSAR/Invalid Use of std::unique_ptr""",
+        'CPP_P031': """\
+All Checks/Language Specific/C and C++/Pointers/Invalid Use of std::unique_ptr"""
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A8-4-12': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P031': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A std::unique_ptr shall be passed to a function as: (1) a copy to express the
+function assumes ownership (2) an lvalue reference to express that the
+function replaces the managed object.</p>
+<p><b>Rationale</b></p>
+<p>Transferring ownership in the (1) case is unconditional. A temporary std::unique_ptr is
+constructed implicitly and move-initialized from the caller’s std::unique_ptr and then
+passed to the function. This guarantees that the caller’s std::unique_ptr object is
+empty.</p>
+<p>Passing an lvalue reference is suggested to be used if a called function is supposed
+to replace the object managed by the passed std::unique_ptr, e.g. call assignment
+operator or reset method. Otherwise, it is recommended to pass an lvalue reference
+to the underlying object instead, see A8-4-11, A8-4-10.</p>
+<p>Note: Passing a const lvalue reference to std::unique_ptr does not take ownership
+and does not allow to replace the managed object. Also, the const qualifier does not
+apply to the underlying object, but to the smart pointer itself. It is suggested to pass a
+const lvalue reference to the underlying object instead, see A8-4-11, A8-4-10.</p>
+<p><b>Exception</b></p>
+<p>It is allowed to transfer ownership by passing a std::unique_ptr by an rvalue reference
+in case this reference is moved into a std::unique_ptr object inside the called function.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A8-4-12.cpp 308795 2018-02-23 09:27:03Z michal.szczepankiewicz $
+2
+3 #include &lt;memory&gt;
+4 #include &lt;iostream&gt;
+5
+6 //compliant, transfers an ownership
+7 void Value(std::unique_ptr&lt;int&gt; v) { }
+8
+9 //compliant, replaces the managed object
+10 void Lv1(std::unique_ptr&lt;int&gt;& v)
+11 {
+12 v.reset();
+13 }
+14
+15 //non-compliant, does not replace the managed object
+16 void Lv2(std::unique_ptr&lt;int&gt;& v) {}
+17
+18
+19 //compliant by exception
+20 void Rv1(std::unique_ptr&lt;int&gt;&& r)
+21 {
+22 std::unique_ptr&lt;int&gt; v(std::move(r));
+23 }
+24
+25 //non-compliant
+26 void Rv2(std::unique_ptr&lt;int&gt;&& r) {}
+27
+28 int main(void)
+29 {
+30 auto sp = std::make_unique&lt;int&gt;(7);
+31 Value(std::move(sp));
+32 //sp is empty
+33
+34 auto sp2 = std::make_unique&lt;int&gt;(9);
+35 Rv1(std::move(sp2));
+36 //sp2 is empty, because it was moved from in Rv1 function
+37
+38 auto sp3 = std::make_unique&lt;int&gt;(9);
+39 Rv2(std::move(sp3));
+40 //sp3 is not empty, because it was not moved from in Rv1 function
+41
+42 return 0;
+43 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• HIC++ v4.0 [9]: 8.2.4: Do not pass std::unique_ptr by const reference.</p>
+<p>• C++ Core Guidelines [11]: R.32: Take a unique_ptr&lt;widget&gt; parameter to
+express that a function assumes ownership of a widget.</p>
+<p>• C++ Core Guidelines [11]: R.33: Take a unique_ptr&lt;widget&gt;& parameter to
+express that a function reseats the widget.</p>
+<p>• C++ Core Guidelines [11]: I.11: Never transfer ownership by a raw pointer (T*) or
+reference (T&).</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(False, 8, False, False)
+
+    if not (lexer and re.search(r"unique_ptr", file.contents())):
+        return
+
+    for func_ref in file.filerefs("Define", "Function ~Macro ~Lambda"):
+        if not re.search(r"unique_ptr", func_ref.ent().parameters()):
+            continue
+
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            if "&" not in param_ref.ent().type():
+                continue
+
+            for type_ref in param_ref.ent().refs("Typed"):
+                if type_ref.ent().name() == "unique_ptr":
+                    compliant = False
+
+                    for use_ref in param_ref.ent().refs("Useby, Assignby Ref"):
+                        lex = lexer.lexeme(
+                            use_ref.line(), use_ref.column())
+                        ent_type = use_ref.ent().type()
+
+                        if use_ref.ent().kind().check("Parameter") and use_ref.ent().parent() and (use_ref.ent().parent().name() == "move"):
+                            compliant = True
+                            break
+
+                        if ent_type and "unique_ptr" in ent_type:
+                            compliant = True
+                            break
+
+                        while lex and lex.text() != ";":
+                            if lex.text() == "reset" and lex.token() == "Identifier":
+                                compliant = True
+                                break
+
+                            lex = lex.next(
+                                ignore_whitespace=True, ignore_comments=True)
+
+                    if not compliant:
+                        check.violation(func_ref.ent(), file,
+                                        func_ref.line(), func_ref.column(), ERR1)

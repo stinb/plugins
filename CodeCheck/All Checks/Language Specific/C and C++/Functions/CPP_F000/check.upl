@@ -1,0 +1,99 @@
+#This script is designed to run with Understand - CodeCheck
+use base qw(Understand::Codecheck);
+use strict;
+
+
+use CodeCheck::Libraries::InfoSiftr qw(getFunctionParams);
+
+use constant ERR1 => 'Violation: function prototype for "%1" missing identifiers for the following arguments: %2';
+use constant ERR2 => 'Violation: macro "%1" used to generate function declaration';
+
+sub register_tr_text {
+	my $check = shift;
+	$check->add_tr_text(ERR1);
+	$check->add_tr_text(ERR2);
+}
+
+
+sub checkID { return "CPP_F000";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Functions\\All prototype parameters must have an identifier.";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Functions',
+  );
+}
+
+sub description { 'Identifiers shall be given for all of the parameters in a function prototype declaration.' }
+
+sub detailed_description { <<'END_DESC'
+Names shall be given for all the parameters in the function declaration for reasons of compatibility, clarity and maintainability.
+END_DESC
+}
+
+sub test_language {
+	my $language = shift;
+	return $language eq 'C++';
+}
+
+sub test_entity { 1 }
+
+sub test_global { 0 }
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'flagMacro', 'Flag macros used to generate function declarations', 1 );
+}
+
+sub check {
+	my $check = shift;
+	my $file = shift;
+	return unless $file->kind->check('c file');
+	
+	my $lexer = $file->lexer( 1, 8, 0, 1 );
+	return unless $lexer;
+	
+	REF : foreach my $ref ($file->filerefs('declare ~implicit ~default ~delete', 'function', 0)) {
+
+		my $currentLexeme = $ref->lexeme;
+		if ( $currentLexeme->ent and $currentLexeme->ent->kind->check( 'Macro' ) ) {
+			$check->violation( $ref->ent, $ref->file, $ref->line, $ref->column, ERR2, $currentLexeme->text ) if $check->option->lookup( 'flagMacro' );
+			next REF;
+		}
+
+		my @params = getFunctionParams($ref, $lexer, 0);
+		my @rawParams = getFunctionParams($ref, $lexer, 1);
+		
+		my @badParams;
+		for (my $i = 0; $i < @params; ++$i) {
+			my $param = $params[$i];
+			my $rawParam = $rawParams[$i];
+			
+			my @tokens = grep { # filter out '...' and 'void'
+				$_->{token} ne 'Punctuation'
+				&& $_->{text} ne 'void'
+			} @$rawParam;
+			next unless @tokens;
+			
+			@tokens = grep { $_->{token} eq 'Identifier' } @tokens;
+			
+			if (@tokens && $tokens[0]->{ent} && $check->db->lookup($tokens[0]->{text}, 'typedef, enum, struct, class, union', 1)) {
+				my $trash = shift @tokens; # weed out named types, like typedefs, enums, structs, classes
+			}
+			
+			unless (@tokens) {
+				push @badParams, $param;
+			}
+		}
+		
+		if (@badParams) {
+			$check->violation($ref->ent, $ref->file, $ref->line, $ref->column, ERR1, $ref->ent->longname, join ', ', @badParams);
+		}
+	}
+	
+	return;
+}

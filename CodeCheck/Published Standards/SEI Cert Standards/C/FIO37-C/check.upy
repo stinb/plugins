@@ -1,0 +1,112 @@
+ERR1 = 'Do not assume that fgets() or fgetws() returns a nonempty string when successful.'
+
+
+# The ID for the check
+def id():
+    return ('FIO37-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO37-C': 'Published Standards/SEI Cert Standards/C/Do not assume that fgets() or fgetws() returns a nonempty string when successful',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO37-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not assume that fgets() or fgetws() returns a nonempty string when successful'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not assume that fgets() or fgetws() returns a nonempty string when successful</p>
+<p><b>Risk Assessment</b></p>
+<p>Incorrectly assuming that character data has been read can result in an out-of-bounds memory write or other flawed logic.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO37-C.+Do+not+assume+that+fgets%28%29+or+fgetws%28%29+returns+a+nonempty+string+when+successful</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+enum { BUFFER_SIZE = 1024 };
+
+void func(void) {
+  char buf[BUFFER_SIZE];
+
+  if (fgets(buf, sizeof(buf), stdin) == NULL) {
+    /* Handle error */
+  }
+  buf[strlen(buf) - 1] = '\\0';
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check will flag the strlen() when used after fgets() or fgetsw().</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    RISK_FUNCTIONS = {"strlen"}
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in {"fgets", "fgetws"}:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                str_ent = None
+
+                while lex and (lex.text() != ","):
+                    if lex.ent() and lex.ref() and lex.ref().kind().check("Useby"):
+                        str_ent = lex.ent()
+
+                        for use_ref in sorted(str_ent.refs("Useby"), key=lambda x: x.line()):
+                            if use_ref.line() > call_ref.line():
+                                use_lex = lexer.lexeme(
+                                    use_ref.line(), use_ref.column())
+
+                                while use_lex and (use_lex.line_begin() == use_ref.line()):
+                                    if use_lex.token() == "Identifier" and use_lex.text() != use_ref.scope().name():
+                                        if use_lex.ent().kind().check("Unresolved Function") and use_lex.text() in RISK_FUNCTIONS:
+                                            check.violation(
+                                                use_ref.scope(), file, use_ref.line(), use_ref.column(), ERR1)
+                                        break
+
+                                    use_lex = use_lex.previous(
+                                        ignore_whitespace=True)
+
+                                break
+
+                    lex = lex.next(ignore_whitespace=True)

@@ -1,0 +1,105 @@
+ERR1 = 'Do not call signal() from within interruptible signal handlers.'
+
+
+# The ID for the check
+def id():
+    return ('SIG34-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'SIG34-C': 'Published Standards/SEI Cert Standards/C/Do not call signal() from within interruptible signal handlers',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'SIG34-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not call signal() from within interruptible signal handlers'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not call signal() from within interruptible signal handlers</p>
+<p><b>Risk Assessment</b></p>
+<p>Two signals in quick succession can trigger a race condition on nonpersistent platforms, causing the signal's default behavior despite a handler's attempt to override it.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/SIG34-C.+Do+not+call+signal%28%29+from+within+interruptible+signal+handlers</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;signal.h&gt;
+
+void handler(int signum) {
+  if (signal(signum, handler) == SIG_ERR) {
+    /* Handle error */
+  }
+  /* Handle signal */
+}
+
+void func(void) {
+  if (signal(SIGUSR1, handler) == SIG_ERR) {
+    /* Handle error */
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == ("signal" or "sigaction"):
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                param_ctr = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.text() == ",":
+                        param_ctr += 1
+                    elif (param_ctr == 1) and lex.ent() and (lex.ent().id() == func_ref.ent().id()):
+                        check.violation(call_ref.ent(), file,
+                                        call_ref.line(), call_ref.column(), ERR1)
+                        break
+
+                    lex = lex.next(ignore_whitespace=True)

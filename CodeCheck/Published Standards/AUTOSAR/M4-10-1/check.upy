@@ -1,0 +1,207 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-01-13
+
+
+import re
+
+from Modules import searchContents
+
+
+ERR1 = 'NULL used as assignment for type %1'
+ERR2 = 'NULL used as parameter for type %1'
+
+INT_TYPES = {'char', 'signed char', 'short', 'short int', 'signed short',
+'signed short int', 'int', 'signed', 'signed int', 'long', 'long int',
+'signed long', 'signed long int', 'long long', 'long long int',
+'signed long long', 'signed long long int', 'int8_t', 'int16_t', 'int32_t',
+'int64_t', 'int_fast8_t', 'int_fast16_t', 'int_fast32_t', 'int_fast64_t',
+'int_least8_t', 'int_least16_t', 'int_least32_t', 'int_least64_t',
+'unsigned char', 'unsigned short int', 'unsigned', 'unsigned int',
+'unsigned long', 'unsigned long int', 'unsigned long long',
+'unsigned long long int', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t',
+'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t'}
+
+params_cache = dict()
+
+
+def ids():
+    return ('M4-10-1', 'MISRA08_4-10-1', 'CPP_T024')
+
+
+def name(id):
+    return {
+        'M4-10-1': 'Published Standards/AUTOSAR/\
+NULL shall not be used as an integer value',
+        'MISRA08_4-10-1': 'Published Standards/MISRA-C++ 2008/\
+4-10-1 NULL shall not be used as an integer value',
+        'CPP_T024': 'All Checks/Language Specific/C and C++/Types/\
+NULL shall not be used as an integer value',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_4-10-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'M4-10-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T024': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+In C++, the literal 0 is both an integer type and the
+<i>null-pointer-constant</i>. To meet developer expectations, <i>NULL</i> should
+be used as the <i>null-pointer-constant</i>, and 0 for the integer zero.
+</p>
+
+<p>
+Note: as a result of this rule, NULL is considered to have pointer type.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">#include &lt;cstddef&gt;
+void f1 ( int32_t );
+void f2 ( int32_t * );
+void f3 ( )
+{
+    f1 ( NULL );    // Not-compliant, NULL used as an integer
+    f2 ( NULL );    // Compliant
+}
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # Skip if there's no NULL
+    if not searchContents(file, 'NULL'):
+        return
+
+    # NULL used as an assignment
+    for obj_ref in file.filerefs('Set', 'Object'):
+        obj_ent = obj_ref.ent()
+
+        # Ignore non-integer types
+        if not obj_ent.type() or obj_ent.type() not in INT_TYPES:
+            continue
+
+        lexer = file.lexer(lookup_ents=False)
+        lex = lexer.lexeme(obj_ref.line(), obj_ref.column())
+
+        # Ignore assignments to anything but NULL
+        lex = lex.next(True, True)
+        if lex.text() != '=':
+            continue
+        lex = lex.next(True, True)
+        if lex.text() != 'NULL':
+            continue
+
+        check.violation(obj_ent, file, lex.line_begin(), lex.column_begin(), ERR1, obj_ent.type())
+
+    # NULL used as a parameter
+    for func_ref in file.filerefs('Call', 'Function'):
+        func_ent = func_ref.ent()
+
+        # Get array of strings/None for parameters: whether they are integers
+        params = get_params_if_any_int(func_ent)
+
+        # Skip if the function doesn't have integer parameters
+        if not params:
+            continue
+
+        lexer = file.lexer(lookup_ents=False)
+        lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+        # Skip if the lexeme is not correct, like in a macro
+        # (We can't use expand_macros because NULL is a macro)
+        if lex.text() != func_ent.name():
+            continue
+
+        # Parse the arguments of the call
+        args = []
+        in_param = 0
+        param = ''
+        while lex and lex.text() != ';':
+            if lex.text() == '(' and lex.token() == 'Punctuation':
+                in_param += 1
+            elif lex.text() == ')' and lex.token() == 'Punctuation':
+                in_param -= 1
+                if not in_param:
+                    args.append(param)
+                    break
+            elif in_param and lex.text() != ',':
+                param += lex.text()
+            elif in_param and lex.text() == ',':
+                args.append(param)
+                param = ''
+
+            lex = lex.next(True, True)
+
+        # Each argument in the call
+        for i, arg in enumerate(args):
+            # Stop if there are somehow more arguments than parameters
+            if i >= len(params):
+                break
+            # Skip if the parameter isn't an integer or the argument isn't NULL
+            if not params[i] or arg != 'NULL':
+                continue
+            check.violation(func_ent, file, func_ref.line(), func_ref.column(), ERR2, params[i])
+
+
+def get_params_if_any_int(func_ent):
+    # Return early if already cached
+    if func_ent in params_cache:
+        return params_cache[func_ent]
+
+    # Get array of strings/None for parameters: whether they are integers
+    params_cache[func_ent] = []
+    has_int_params = False
+    for param_ref in func_ent.refs('Declare, Define', 'Parameter', True):
+        param_type = param_ref.ent().type()
+        if param_type and param_type in INT_TYPES:
+            params_cache[func_ent].append(param_type)
+            has_int_params = True
+        else:
+            params_cache[func_ent].append(None)
+
+    # Instead of an array of strings/None, return None if no integer parameters
+    if not has_int_params:
+        params_cache[func_ent] = None
+
+    return params_cache[func_ent]

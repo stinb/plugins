@@ -1,0 +1,267 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 6/21/2022
+
+import re
+
+ERR1 = 'Do not use floating-point variables as loop counters: '
+
+DEF_NAME = "Do not use floating-point variables as loop counters"
+
+FLOAT_TYPES = ["float", "Float", "double", "Double"]
+
+
+# The ID for the check
+def ids():
+    return ('NUM09-J', 'JAVA_NUM09')
+
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'NUM09-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_NUM09': "All Checks/Language Specific/Java/Numeric Types and Operations/" + DEF_NAME,
+    }[id]
+
+
+def tags(id):
+    return {
+        'NUM09-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'JAVA_NUM09': [
+            'Language: Java',
+            'Numeric Types and Operations',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use floating-point variables as loop counters</p>
+<b>Risk Assessment</b>
+<p>Using floating-point loop counters can lead to unexpected behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/NUM09-J.+Do+not+use+floating-point+variables+as+loop+counters</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">for (float x = 0.1f; x &#60;= 1.0f; x += 0.1f) {
+  System.out.println(x);
+}</code></pre>
+<p><i>Developer Notes: </i>Due to the difficulty of checking potential indirectness of loops and their counters, some violations that escape the scope of their loops may not get flagged.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    pass
+
+def check(check, file):
+    # find all for loops
+    lexer = file.lexer()
+    forLoops = find_all_for_loops(file, lexer, check)
+    doWhileLoops = find_all_do_while(file, lexer, check)
+
+    for loopLex in forLoops:
+        #check 1/3 slots for item that is being counted, if it is a float, return an error
+        oneItem = look_for_counter(loopLex[0], 0, file, check)
+        if oneItem:
+            if oneItem.ent().type() in FLOAT_TYPES:
+                pm(ERR1 + oneItem.ent().name(), check, oneItem.ent(), file, oneItem.line_begin(), oneItem.column_begin())
+            continue
+
+        # if the 1st doesnt have
+        threeItem = look_for_counter(loopLex[2], 0, file, check)
+        if threeItem:
+            if threeItem.ent().type() in FLOAT_TYPES:
+                pm(ERR1 + threeItem.ent().name(), check, threeItem.ent(), file, threeItem.line_begin(), threeItem.column_begin())
+            continue
+
+    for loopLex in doWhileLoops:
+        items = look_for_counter(loopLex[0],-1,file,check)
+        counter = None
+        for i in items:
+            if check_is_counter(i ,loopLex[1], check):
+                counter = i
+                break
+        if counter:
+            if counter.ent().type() in FLOAT_TYPES:
+                pm(ERR1 + counter.ent().name(), check, counter.ent(), file, counter.line_begin(), counter.column_begin())
+
+
+def check_is_counter(lexeme, other = None, check = None):
+    e = lexeme.ent()
+    if e is None:
+        return False
+
+    closeLexeme = other
+    found = False
+    if closeLexeme is None:
+        closeLexeme = lexeme
+        while closeLexeme.text() != "{":
+            if closeLexeme.text() == ";":
+                found = True
+                break
+            closeLexeme = closeLexeme.next(True, True)
+
+        if not found:
+            found = True
+            closeLexeme = findClose(closeLexeme)
+
+    for ref in e.refs("Modifyby"):
+        if found:
+            #while
+            if withinCodePos(ref, lexeme.line_begin(), lexeme.column_begin(), closeLexeme.line_begin(), closeLexeme.column_begin(), lex = None):
+                return True
+        else:
+            #do
+            if withinCodePos(ref, closeLexeme.line_begin(), closeLexeme.column_begin(), lexeme.line_begin(), lexeme.column_begin(), lex = None):
+                return True
+
+    return False
+
+
+
+
+# checks the perfered position if there for a variable and returns it
+def look_for_counter(lexeme, perfPos, file, check):
+    ent = None
+    entL = []
+    if lexeme is None:
+        return None
+
+    lexeme = lexeme.next(True, True)
+    c = 0
+    pCount = 0
+
+    while lexeme and not (lexeme.text() in [";", ")"] and pCount == 0):
+        if lexeme.text() == "(":
+            pCount += 1
+
+        if lexeme.text() == ")":
+            pCount -= 1
+
+        if lexeme.ent() and lexeme.ent().kindname() == "Variable":
+            if perfPos == -1:
+                entL.append(lexeme)
+            else:
+                ent = lexeme
+                c += 1
+                if c > perfPos:
+                    break
+
+        lexeme = lexeme.next(True, True)
+
+    if perfPos == -1:
+        return entL
+    return ent
+
+def find_all_do_while(file, lexer, check = None):
+    l = []
+
+    for match in re.finditer(r'(do |do{)[\S\s]*?while\s*?(\()', file.contents()):
+        pos = line_pos_from_regex(file.contents(), match.start(2))
+        posStart = line_pos_from_regex(file.contents(), match.start(1))
+        lexeme = lexer.lexeme(pos[0], pos[1])
+        lexemeC = lexer.lexeme(posStart[0], posStart[1])
+        l.append([lexeme, lexemeC])
+
+    for match in re.finditer(r'while\s*?(\()', file.contents()):
+        pos = line_pos_from_regex(file.contents(), match.start(1))
+        lexeme = lexer.lexeme(pos[0], pos[1])
+        bad = False
+        for i in l:
+            if i[0].line_begin() == lexeme.line_begin() and i[0].column_begin() == lexeme.column_begin():
+                bad = True
+                break
+        if not bad:
+            l.append([lexeme, None])
+
+    return l
+
+# returns a list of lexemes that are on the for
+def find_all_for_loops(file, lexer, check = None): # WHILE, maybe need to get block andlook for use? determin which one is good
+    l = []
+    for match in re.finditer(r'for\s*?(\()[^:]*?(;)[^:]*?(;)[\s\S]*?\)', file.contents()):
+        positions = []
+        for i in range(3):
+            pos = line_pos_from_regex(file.contents(), match.start(i + 1))
+            lexeme = lexer.lexeme(pos[0], pos[1])
+            positions.append(lexeme)
+        l.append(positions)
+    return l
+
+def line_pos_from_regex(input, indexPosition):
+    lineNumber = 1
+    columnNumber = 1
+    for i in range(indexPosition):
+        if input[i] == '\n':
+            lineNumber+=1
+            columnNumber = 0
+        else:
+            columnNumber +=1
+    return (lineNumber, columnNumber)
+
+#check if a ref is within two positions of code
+def withinCodePos(ref, startLine, startColumn, closeLine, closeColumn, lex = None):
+    line = ref.line()
+    column = ref.column()
+    if lex:
+        line = lex.line_begin()
+        column = lex.column_begin()
+    #check start
+    if startLine < line or ( startLine == line and startColumn <= column):
+        #check end
+        if closeLine > line or ( closeLine == line and closeColumn  >= column):
+            return True
+
+    return False
+
+# Find corresponding closing curly brace or parenthesis of given opening curly
+# brace or parenthesis
+def findClose(lexeme, getAll = False, keepWhite = False):
+    all = []
+    count = 0
+    open = lexeme.text()
+    if lexeme.text() == '{':
+        close = '}'
+    elif lexeme.text() == '(':
+        close = ')'
+    else:
+        return None
+
+    while lexeme and not (lexeme.text() == close and count == 0):
+        if getAll and count > 0:
+            all.append(lexeme)
+
+        if lexeme.text() == open:
+            count += 1
+
+        lexeme = lexeme.next(not keepWhite, not keepWhite)
+
+        if lexeme.text() == close:
+            count -= 1
+
+    if getAll:
+        return all
+    return lexeme
+
+
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

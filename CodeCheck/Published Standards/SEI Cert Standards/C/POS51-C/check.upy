@@ -1,0 +1,260 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-01-15
+
+
+import re
+
+from Modules import lexemeBefore
+from Modules import nextSiblingDictionary
+from Modules import refBetweenNodes
+
+
+ERR1 = 'POSIX thread mutex lock could result in deadlock'
+
+
+def ids():
+    return ('POS51-C', 'CPP_L030')
+
+
+def name(id):
+    return {
+        'POS51-C': '''Published Standards/SEI Cert Standards/C/\
+Avoid deadlock with POSIX threads by locking in predefined order''',
+        'CPP_L030': '''All Checks/Language Specific/C and C++/Libraries/\
+Avoid deadlock with POSIX threads by locking in predefined order''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POS51-C': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'CPP_L030': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Avoid deadlock with POSIX threads by locking in predefined order</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Deadlock prevents multiple threads from progressing, thus halting the
+executing program. A denial-of-service attack is possible because the attacker
+can force deadlock situations. Deadlock is likely to occur in multithreaded
+programs that manage multiple shared resources.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/c/POS51-C.+Avoid+deadlock+with+POSIX+threads+by+locking+in+predefined+order'>
+https://wiki.sei.cmu.edu/confluence/display/c/POS51-C.+Avoid+deadlock+with+POSIX+threads+by+locking+in+predefined+order</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+typedef struct {
+  int balance;
+  pthread_mutex_t balance_mutex;
+} bank_account;
+
+typedef struct {
+  bank_account *from;
+  bank_account *to;
+  int amount;
+} deposit_thr_args;
+
+void create_bank_account(bank_account **ba, int initial_amount) {
+  int result;
+  bank_account *nba = malloc(sizeof(bank_account));
+  if (nba == NULL) {
+    /* Handle error */
+  }
+
+  nba-&gt;balance = initial_amount;
+  result = pthread_mutex_init(&nba-&gt;balance_mutex, NULL);
+  if (result) {
+    /* Handle error */
+  }
+
+  *ba = nba;
+}
+
+
+void *deposit(void *ptr) {
+  int result;
+  deposit_thr_args *args = (deposit_thr_args *)ptr;
+
+  if ((result = pthread_mutex_lock(&(args-&gt;from-&gt;balance_mutex))) != 0) {
+    /* Handle error */
+  }
+
+  /* Not enough balance to transfer */
+  if (args-&gt;from-&gt;balance &lt; args-&gt;amount) {
+    if ((result = pthread_mutex_unlock(&(args-&gt;from-&gt;balance_mutex))) != 0) {
+      /* Handle error  */
+    }
+    return NULL;
+  }
+
+  if ((result = pthread_mutex_lock(&(args-&gt;to-&gt;balance_mutex))) != 0) {
+    /* Handle error */
+  }
+
+  args-&gt;from-&gt;balance -= args-&gt;amount;
+  args-&gt;to-&gt;balance += args-&gt;amount;
+
+  if ((result = pthread_mutex_unlock(&(args-&gt;from-&gt;balance_mutex))) != 0) {
+    /* Handle error */
+  }
+  if ((result = pthread_mutex_unlock(&(args-&gt;to-&gt;balance_mutex))) != 0) {
+    /* Handle error */
+  }
+
+  free(ptr);
+  return NULL;
+}
+
+int main(void) {
+
+  pthread_t thr1, thr2;
+  int result;
+
+  bank_account *ba1;
+  bank_account *ba2;
+  create_bank_account(&ba1, 1000);
+  create_bank_account(&ba2, 1000);
+
+  deposit_thr_args *arg1 = malloc(sizeof(deposit_thr_args));
+  if (arg1 == NULL) {
+    /* Handle error */
+  }
+  deposit_thr_args *arg2 = malloc(sizeof(deposit_thr_args));
+  if (arg2 == NULL) {
+    /* Handle error */
+  }
+
+  arg1-&gt;from = ba1;
+  arg1-&gt;to = ba2;
+  arg1-&gt;amount = 100;
+
+  arg2-&gt;from = ba2;
+  arg2-&gt;to = ba1;
+  arg2-&gt;amount = 100;
+
+  /* Perform the deposits */
+  if ((result = pthread_create(&thr1, NULL, deposit, (void *)arg1)) != 0) {
+    /* Handle error */
+  }
+  if ((result = pthread_create(&thr2, NULL, deposit, (void *)arg2)) != 0) {
+    /* Handle error */
+  }
+
+  pthread_exit(NULL);
+  return 0;
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This check simply checks for a call to <code>pthread_mutex_lock</code> which
+was not preceded by an if-statement that compares with the &lt; or &gt;
+operator.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for define in file.filerefs('Define', 'Function'):
+        caller = define.ent()
+
+        # Skip if no control flow
+        cfg = caller.control_flow_graph()
+        if not cfg:
+            continue
+        nextSiblings = nextSiblingDictionary(cfg)
+
+        # Get if/else nodes and previous siblings of else nodes
+        importantNodes = []
+        previousSiblings = dict()
+        getImportantNodes(cfg, importantNodes, previousSiblings, nextSiblings)
+
+        # Get each lock function call
+        for call in caller.refs('Call', 'Function'):
+            callee = call.ent()
+
+            # Skip if not the lock function
+            if callee.name() != 'pthread_mutex_lock':
+                continue
+
+            # See if an id was compared
+            idCompared = False
+            for node in importantNodes:
+                # Skip if call is outside of the node
+                if not refBetweenNodes(node, call, nextSiblings[node]):
+                    continue
+
+                # Get the 'if' node to see what's compared
+                ifNode = node if node.kind() == 'if' else previousSiblings[node]
+
+                # Find an id comparison in the 'if' condition
+                lex = file.lexer(False, 1).lexeme(ifNode.line_begin(), ifNode.column_begin())
+                lineEnd, columnEnd = ifNode.line_end(), ifNode.column_end()
+                while lex and lexemeBefore(lex, lineEnd, columnEnd):
+                    if lex.text() in {'<', '>'}:
+                        idCompared = True
+                        break
+                    lex = lex.next(True, True)
+
+                # Stop if there was a comparison
+                if idCompared:
+                    break
+
+            # Skip if inside of if/else node where an id is compared
+            if idCompared:
+                continue
+
+            check.violation(callee, file, call.line(), call.column(), ERR1)
+
+
+def getImportantNodes(cfg, importantNodes, previousSiblings, nextSiblings):
+    for node in cfg.nodes():
+        # Skip if somehow the next sibling is unknown
+        if node not in nextSiblings:
+            continue
+
+        if node.kind() == 'if':
+            # Remember that this node is the previous 'if' sibling of the next
+            for child in node.children():
+                if node.child_label(child) == 'no':
+                    previousSiblings[child] = node
+                    break
+        elif node.kind() == 'else':
+            # Skip if somehow the previous 'if' sibling is unknown
+            if node not in previousSiblings:
+                continue
+        else:
+            continue
+
+        importantNodes.append(node)

@@ -1,0 +1,181 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3-16-2022
+
+import re
+
+ERR1 = 'Continuation line was not indented at least one level'
+
+# The ID for the check
+def id():
+    return 'CPP_ST018'
+
+# The short name of the check
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/Continuation lines shall be indented at least one level from the line being continued"""
+
+
+def tags(id):
+    return {
+        'CPP_ST018': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+<p>Continuation lines shall be indented at least one level from the line being 
+continued. The programmer should use good judgment in using additional 
+indentation to enhance readability.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+# Options for the check
+def define_options(check):
+    check.option().integer('level', 'Enter the number of spaces to be used as one level of indentation (set this to 0 to allow any amount of increased indentation)', 0)
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file): 
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+    lexemes = lexer.lexemes()
+    violationLines = []
+    level = check.option().lookup('level')
+    first = True
+    for lexeme in lexemes:
+        if lexeme.token() == 'Newline':
+            # Check continuation lines in comments
+            nextComment = lexeme.next(ignore_whitespace=True)
+            if nextComment and nextComment.token() == 'Comment' and not re.match(r'\/\/', nextComment.text()):
+                whitespace = nextComment.previous()
+                if (whitespace and whitespace.token() != 'Whitespace') or not whitespace:
+                    whitespace = whitespace.next()
+                    whitespaceLength = 0
+                else:
+                    whitespaceLength = len(whitespace.text())
+
+                if level > 0:
+                    wsCount = r'\s{' + str(level + whitespaceLength) + '}'
+                else:
+                    wsCount = r'\s{' + str(whitespaceLength + 1) + ',}'
+                if not re.search(r'^.*([\n\r]+' + wsCount + r'.*)+[\n\r]?.*\*\/$', nextComment.text()) and nextComment.line_begin() not in violationLines:
+                    violation = check.violation(file, file, nextComment.line_begin(), nextComment.column_begin(), ERR1)
+                    level1 = level
+                    if level <= 0:
+                        level1 = 1
+                        
+                    violation.add_fixit_hint(nextComment.line_begin(), nextComment.column_begin(), nextComment.line_end(), nextComment.column_end() + 1, re.sub(r'[\n\r][^\S\n\r]*', '\n' + (' ' * (level1 + whitespaceLength)), nextComment.text()))
+                    violationLines.append(nextComment.line_begin())
+                    
+
+
+
+
+            # Set up variables to keep track of before and after the newline
+            prevLex = lexeme.previous(True, True)
+            nextLex = lexeme.next(True, True)
+
+
+            # Skip everything that wouldn't be a continuation line and assign whitespace variable
+            if not prevLex or not nextLex:
+                continue
+            whitespace = nextLex.previous()
+            if (whitespace and whitespace.token() != 'Whitespace') or not whitespace:
+                whitespace = whitespace.next()
+                whitespaceLength = 0
+            else:
+                whitespaceLength = len(whitespace.text())
+            if prevLex and re.search(r';|{|}', prevLex.text()):
+                continue
+            if nextLex and re.search(r'{|}', nextLex.text()):
+                continue
+            if prevLex and prevLex.ent() and re.search(r'include', str(prevLex.ent().ref().kind()).lower()):
+                continue
+            if prevLex and nextLex and prevLex.text() == '(' and nextLex.text() == '{':
+                continue
+            if not nextLex or not prevLex:
+                continue
+
+
+            # Find last piece of code that isn't part of current statement
+            lastPrevLex = prevLex
+            while prevLex and (not re.search(r';|{|}', prevLex.text()) or (prevLex.ent() and re.search(r'include', str(prevLex.ent().ref().kind()).lower()))):
+                lastPrevLex = prevLex
+                prevLex = prevLex.previous(True, True)
+
+            # Find whitespace before statement
+            if not prevLex:
+                prevLex = lastPrevLex
+            else:
+                while prevLex and prevLex.token() != 'Newline':
+                    prevLex = prevLex.next()
+
+                if prevLex:
+                    prevLex = prevLex.next(True, True)
+                    if prevLex:
+                        prevLex = prevLex.previous()
+
+
+
+            # Keep track of the indent the current statement has
+            if prevLex and prevLex.token() == 'Whitespace':
+                indent = len(prevLex.text())
+            else:
+                indent = 0
+
+            # If 'level' option is set to 0 (defautl)
+            if level == 0:
+
+                # Throw violation if the continuation line isn't indented more
+                if whitespaceLength <= indent:
+                    violation = check.violation(file, file, nextLex.line_begin(), nextLex.column_begin(), ERR1)
+                    lineB = whitespace.line_begin()
+                    lineE = whitespace.line_end()
+                    columnB = whitespace.column_begin()
+                    columnE = whitespace.column_end() + 1
+                    addIndent = ' ' * (indent + level)
+                    if whitespaceLength == 0:
+                        lineB = whitespace.line_begin()
+                        lineE = lineB
+                        columnB = whitespace.column_begin()
+                        columnE = columnB
+                        addIndent = '  '
+
+                    violation.add_fixit_hint(lineB, columnB, lineE, columnE, addIndent)
+
+
+            # If 'level' option is set to a custom value
+            # Throw violation if the continuation line is indented more or less
+            # than 'level' plus the indent of original statment
+            elif len(whitespace.text()) != level + indent:
+
+                    violation = check.violation(file, file, nextLex.line_begin(), nextLex.column_begin(), ERR1)
+                    lineB = whitespace.line_begin()
+                    lineE = whitespace.line_end()
+                    columnB = whitespace.column_begin()
+                    columnE = whitespace.column_end() + 1
+                    addIndent = ' ' * (indent + level)
+                    if whitespaceLength == 0:
+                        lineB = whitespace.line_begin()
+                        lineE = lineB
+                        columnB = whitespace.column_begin()
+                        columnE = columnB
+                        addIndent = '  '
+
+                    violation.add_fixit_hint(lineB, columnB, lineE, columnE, addIndent)
+
+            
+

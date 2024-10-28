@@ -1,0 +1,115 @@
+ERR1 = 'Use offsetof() on valid types and members.'
+
+
+# The ID for the check
+def id():
+    return ('EXP59-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP59-CPP': 'Published Standards/SEI Cert Standards/C++/Use offsetof() on valid types and members',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Use offsetof() on valid types and members'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Use offsetof() on valid types and members</p>
+<p><b>Risk Assessment</b></p>
+<p>Passing an invalid type or member to offsetof() can result in undefined behavior that might be exploited to cause data integrity violations or result in incorrect values from the macro expansion.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP59-CPP.+Use+offsetof%28%29+on+valid+types+and+members</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;cstddef&gt;
+  
+struct D {
+  virtual void f() {}
+  int i;
+};
+  
+void f() {
+  size_t off = offsetof(D, i);
+  // ...
+}
+
+
+#include &lt;cstddef&gt;
+  
+struct S {
+  static int i;
+  // ...
+};
+int S::i = 0;
+  
+extern void store_in_some_buffer(void *buffer, size_t offset, int val);
+extern void *buffer;
+  
+void f() {
+  size_t off = offsetof(S, i);
+  store_in_some_buffer(buffer, off, 42);
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'EXP59-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        for use_ref in func_ref.ent().refs("Use", "Unresolved Macro"):
+            if use_ref.ent().name() == "offsetof":
+                lex = file.lexer().lexeme(use_ref.line(), use_ref.column())
+                on_param = 0
+                param_ctr = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and (lex.text() == ","):
+                        param_ctr += 1
+                    elif (on_param == 1) and (param_ctr == 1) and lex.ent() and (lex.token() == "Identifier"):
+                        parent_ent = lex.ent().parent()
+
+                        if parent_ent and (parent_ent.ref("", "Virtual Function") or (parent_ent.ref("", "Private Member ~Static") and parent_ent.ref("", "Public Member ~Static")) or (parent_ent.ref("Virtual Base", ""))):
+                            check.violation(
+                                use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True)

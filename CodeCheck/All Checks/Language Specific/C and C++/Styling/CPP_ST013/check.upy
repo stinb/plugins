@@ -1,0 +1,161 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 5-13-2021
+import re
+
+ERR1 = 'Switch statement should be used instead'
+
+def id():
+    return 'CPP_ST013'
+
+def name():
+    return "All Checks/Language Specific/C and C++/Styling/" +  """\
+Switch statements should be used instead of deeply nested else-ifs when \
+testing a variable for multiple values"""
+
+
+def tags(id):
+    return {
+        'CPP_ST013': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>switch statements should be used instead of deeply nested
+else-ifs when testing a variable for multiple values. For
+example, the following should be done:</p>
+<pre><code language="C++">switch (msl_number)
+{
+    case MSL_1:
+        statements;
+        break;
+    case MSL_2:
+        statements;
+        break;
+    ...
+    default:
+        statements;
+        break;
+} /* end switch */
+</code></pre><p>instead of:</p>
+<pre><code language="C++">if (msl_number == MSL_1)
+{
+    statements;
+}
+else if (msl_number == MSL_2)
+{
+    statements;
+}
+...
+else
+{
+    statements;
+}</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def define_options(check):
+    check.option().integer('level', 'Enter an integer for amount of "else if"\'s to be considered deep', 5)
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    level = check.option().lookup('level')
+
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        if lexeme.text() == 'if' and lexeme.token() == 'Keyword':
+            start = lexeme
+            count = 0
+
+            # Look for the first opening curly brace after the if keyword
+            while lexeme and not re.match(r'{|;', lexeme.text()):
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                if lexeme.text() == '(':
+                    lexeme = findClose(lexeme)
+
+            while lexeme and lexeme.text() == ';' and lexeme.next(ignore_whitespace=True, ignore_comments=True).text() == 'else':
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                while lexeme and not re.match(r'{|;', lexeme.text()):
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                
+            close = lexeme
+            if lexeme and lexeme.text() == ';':
+                lexeme = start
+            if lexeme and lexeme.text() == '{':
+                close = findClose(lexeme)
+                lexeme = start
+
+            # Count 'else if' statements
+            while lexeme and close and (lexeme.line_begin() != close.line_begin() or lexeme.column_begin() != close.column_begin()):
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                if lexeme.text() == 'else' and lexeme.next(ignore_whitespace=True, ignore_comments=True).text() == 'if':
+                    count += 1
+
+            # Throw violation if the amount of 'else if' statements exceed or
+            # equal the 'level' set by the user
+            if count >= level:
+                check.violation(file, file, start.line_begin(), start.column_begin(), ERR1)
+
+
+        if lexeme:
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+
+
+
+
+# Finds the closing curly brace at the end of an 'if else' statment or
+# closing parenthesis
+def findClose(lexeme):
+    braces = 0
+    if lexeme.text() == '(':
+        close = ')'
+    if lexeme.text() == '{':
+        close = '}'
+
+    nextLex = lexeme
+
+    while nextLex and not (nextLex.text() == close and braces == 0):
+        if nextLex.text() == lexeme.text():
+            braces += 1
+
+        nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+
+        if nextLex and nextLex.text() and nextLex.text() == close:
+            braces -= 1
+            if braces < 0:
+                break
+
+        if nextLex and nextLex.text() and nextLex.text() == '}' and braces == 0 and nextLex.next(ignore_whitespace=True, ignore_comments=True).text() == 'else':
+            nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+            while not re.match(r'{|;', nextLex.text()):
+                nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+                if nextLex.text() == '(':
+                    nextLex = findClose(nextLex)
+
+            if nextLex.text() == ';':
+                nextLex1 = nextLex
+                while nextLex1 and not re.match(r'{|else', nextLex1.text()):
+                    nextLex1 = nextLex1.next(ignore_whitespace=True, ignore_comments=True)
+
+                if not nextLex1:
+                    return nextLex
+                
+
+
+    return nextLex

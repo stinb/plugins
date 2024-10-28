@@ -1,0 +1,111 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8-12-2021
+import re
+
+ERR1 = 'Object %1 was not grouped in alphabetical order'
+ERR2 = 'Object %1 was not grouped by type'
+
+# The ID for the check
+def ids():
+    return ('CPP_ST010')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_ST010':  "All Checks/Language Specific/C and C++/Styling/Items should be logically grouped"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_ST010': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>For instance, group variables by type, alphabetize within group and separate
+the declarations in header files by subsystem and/or functionality.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.option().choice('choice', '', ['Type', 'Alphabetize'], 'Alphabetize')
+    check.option().checkbox('global', 'Global', True)
+    check.option().checkbox('function', 'Function', True)
+
+def check(check, file):
+
+    funcs = None
+    # Check for variables at function scopes
+    if check.option().lookup('function'):
+        funcs = file.filerefs('Define', 'Function')
+        for func in funcs:
+            dict1 = {}
+            dict2 = {}
+            funcRefs = func.ent().refs('Define', 'Object')
+            # Populate dictionaries with ref and ref type
+            for funcRef in funcRefs:
+                dict1[funcRef.ent().name()] = funcRef
+                dict2[funcRef.ent().name()] = funcRef.ent().type()
+
+            if check.option().lookup('choice') == 'Alphabetize':
+                checkSortedA(dict1, check, file)
+
+            elif check.option().lookup('choice') == 'Type':
+                checkSortedT(dict1, dict2, check, file)
+
+
+    # Check for variables at the global scope
+    refs = None
+    if check.option().lookup('global'):
+        refs = file.filerefs('Define', 'Global Object')
+    if not refs:
+        return
+
+    dict1 = {}
+    dict2 = {}
+    # Populate dictionaries with ref and ref type
+    for ref in refs:
+        dict1[ref.ent().name()] = ref
+        dict2[ref.ent().name()] = ref.ent().type()
+
+    if check.option().lookup('choice') == 'Alphabetize':
+        checkSortedA(dict1, check, file)
+
+    elif check.option().lookup('choice') == 'Type':
+        checkSortedT(dict1, dict2, check, file)
+
+
+# Check if sorted alphabetically
+def checkSortedA(dict1, check, file):
+    line = 0
+    for i in sorted (dict1.keys()):
+        if dict1[i].line() < line:
+            check.violation(dict1[i].ent(), file, dict1[i].line(), dict1[i].column(), ERR1, i)
+        else:
+            line = dict1[i].line()
+
+# Check if sorted by type
+def checkSortedT(dict1, dict2, check, file):
+    types = []
+    current = None
+
+    for i in (dict2.keys()):
+        if dict2[i] not in types:
+            types.append(dict2[i])
+            current = dict2[i]
+
+        elif dict2[i] != current:
+            check.violation(dict1[i].ent(), file, dict1[i].line(), dict1[i].column(), ERR2, i)
+            current = dict2[i]

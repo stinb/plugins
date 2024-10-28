@@ -1,0 +1,141 @@
+ERR1 = 'Prevent class initialization cycles.'
+
+
+# The ID for the check
+def ids():
+    return ('DCL00-J', 'JAVA_DCL00')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'DCL00-J': 'Published Standards/SEI Cert Standards/Java/Prevent class initialization cycles',
+        'JAVA_DCL00': 'All Checks/Language Specific/Java/Declarations and Definitions/Prevent class initialization cycles',
+    }[id]
+
+
+def tags(id):
+    return {
+        'DCL00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_DCL00': [
+            'Language: Java',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Prevent class initialization cycles'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Prevent class initialization cycles</p>
+<p><b>Risk Assessment</b></p>
+<p>Initialization cycles may lead to unexpected results.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/DCL00-J.+Prevent+class+initialization+cycles</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class Cycle {
+  private final int balance;
+  private static final Cycle c = new Cycle();
+  private static final int deposit = (int) (Math.random() * 100); // Random deposit
+
+  public Cycle() {
+    balance = deposit - 10; // Subtract processing fee
+  }
+
+  public static void main(String[] args) {
+    System.out.println("The account balance is: " + c.balance);
+  }
+}
+
+
+
+class A {
+  public static final int a = B.b + 1;
+  // ...
+}
+
+class B {
+  public static final int b = A.a + 1;
+  // ...
+}
+
+
+class A {
+  public static int a = B.b();
+  public static int c() { return 1; }
+}
+
+class B {
+  public static int b() { return A.c(); }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class Type"):
+        class_members = []
+
+        for member_ref in sorted(class_ref.ent().refs("Define", "Static Variable Member"), key=lambda x: x.line()):
+            class_members.append(member_ref.ent().id())
+            lex = lexer.lexeme(member_ref.line(), member_ref.column())
+
+            while lex and lex.text() != ";":
+                if lex.ent() and lex.ent().kind().check("Class Type") and lex.ent().id() != class_ref.ent().id():
+                    for member_ref_2 in lex.ent().refs("Define", "Member"):
+                        class_file = member_ref_2.file()
+
+                        try:
+                            sub_lex = class_file.lexer().lexeme(
+                                member_ref_2.line(), member_ref_2.column())
+                        except:
+                            continue
+
+                        while sub_lex and sub_lex.text() != ";":
+                            if sub_lex.ent() and sub_lex.ent().kind().check("Class Type") and sub_lex.ent().id() == class_ref.ent().id():
+                                check.violation(
+                                    lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                                break
+
+                            sub_lex = sub_lex.next(
+                                ignore_whitespace=True, ignore_comments=True)
+
+                elif lex.ent() and lex.ent().id() == class_ref.ent().id() and lex.ref().kind().check("Createby"):
+                    for create_ref in lex.ent().refs("Define", "Method Constructor Member"):
+                        for use_ref in create_ref.ent().refs("Set, Use", "Static Variable Member"):
+                            if use_ref.ent().parent().id() == class_ref.ent().id() and use_ref.ent().id() not in class_members:
+                                check.violation(
+                                    lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                                break
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)

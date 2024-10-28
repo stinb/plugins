@@ -1,0 +1,118 @@
+# This script is designed to run with Understand - CodeCheck
+# Jordan Colbeth - 6/28/2022
+
+import re
+
+ERR1 = 'Thread-safe method overriden with method that is not thread-safe'
+
+DEF_NAME = "Do not override thread-safe methods with methods that are not thread-safe"
+
+# The ID for the check
+def ids():
+    return ('TSM00-J', 'JAVA_TSM00')
+
+# The short name of the check
+def name(id):
+    return {
+        'TSM00-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_TSM00': "All Checks/Language Specific/Java/Thread-Safety Miscellaneous/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'TSM00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_TSM00': [
+            'Language: Java',
+            'Thread-Safety Miscellaneous',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not override thread-safe methods with methods that are not thread-safe</p>
+<p><b>Risk Assessment</b></p>
+<p>Overriding thread-safe methods with methods that are unsafe for concurrent access can result in unexpected behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TSM00-J.+Do+not+override+thread-safe+methods+with+methods+that+are+not+thread-safe</i></p>
+<p><b>Exceptions</b></p>
+<p><i>N/A</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Base {
+  public synchronized void doSomething() {
+    // ...
+  }
+}
+
+class Derived extends Base {
+  @Override public void doSomething() {
+    // ...
+  }
+}
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    # case 1: synchronized method
+    base_sync = False
+    derived_sync = False
+
+    # grab all java method definitions
+    for java_method_def in file.filerefs("Define", "Java Method Public Member"):
+
+        # if java method is overridden by another
+        if java_method_def.ent().ref("Java Overriddenby"):
+            override_ref = java_method_def.ent().ref("Java Overriddenby")
+
+            # look at original definition, look for 'synchronized'
+            lexeme = lexer.lexeme(java_method_def.line(), java_method_def.column())
+
+            while lexeme and lexeme.token() != "Newline":
+                if lexeme.text() == "synchronized":
+                    base_sync = True
+
+                lexeme = lexeme.previous()
+
+            if re.search(r"synchronized", java_method_def.ent().contents()):
+                base_sync = True
+
+            # if base has keyword, look at overriding method and look for synchronized
+            if base_sync == True:
+                #print("Got here with base_sync being true for method", java_method_def.ent())
+
+                if re.search(r"synchronized", override_ref.ent().contents()):
+                    derived_sync = True
+                    #print("overridden method ", java_method_def.ent(), " is synchronized")
+
+                if derived_sync == False:
+                    check.violation(java_method_def.ent(), file, override_ref.line(), override_ref.column(), ERR1)
+
+

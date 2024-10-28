@@ -1,0 +1,165 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/11/21
+import re
+
+ERR1 = 'Parameter %1 was passed by value in function %2.'
+
+# The ID for the check
+def id():
+    return 'EFFECTIVECPP_20'
+
+# The short name of the check
+def name():
+    return "Published Standards\\Effective C++ (3rd Edition) Scott Meyers\\20. Prefer pass-by-reference-to-const to pass by value"
+
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_20': [
+            'Language: C',
+            'Language: C++',
+            'Standard: Effective C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+When passing a parameter to a function, instead of passing by value prefer to
+pass by reference to a const."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>By default, C++ passes objects to and from functions by value (a
+characteristic it inherits from C). Unless you specify otherwise, function
+parameters are initialized with copies of the actual arguments, and function
+callers get back a copy of the value returned by the function. These copies
+are produced by the objects' copy constructors. This can make pass-by-value an
+expensive operation. For example, consider the following class hierarchy:</p>
+<pre><code language="C++">    class Person {
+    public:
+        Person();                   //parameters omitted for simplicity
+        virtual ~Person();          //see item 7 for why this is virtual
+        ...
+
+    private:
+        std::string name;
+        std::string address;
+    };
+
+    class Student: public Person {
+    public:
+        Student();
+        virtual ~Student();         //parameters again omitted
+        ...
+
+    private:
+        std::string schoolName;
+        std::string schoolAddress;
+    };
+</code></pre>
+<p>Now consider the following code, in which we call a function,
+validateStudent, that takes a Student argument (by value) and returns
+whether it has been validated:</p>
+<pre><code language="C++">    bool validateStudent(Student s);        //function taking a student
+                                            //by value
+    Student plato;                          //Plato studied under Socrates
+    bool platoIsOK = validateStudent(plato);//Call the student
+</code></pre>
+<p>What happens when this function is called?</p>
+<p>Clearly, the Student copy constructor is called to initialize the parameter
+s from plato. Equally clearly, s is destoryed when validateStudent returns.
+So the parameter-passing cost of this function is one call to the Student
+copy constructor and one call to the Student destructor.</p>
+<p>But thats not the whole story. A student object has two string objects
+within it, so every time you construct a Student object you must also construct
+two string objects. A Student object also inherits from a Person object, so
+every time you construct a Student object you must also construct a Person
+object. A Person object has two additional string objects inside it, so each
+Person construction also entails two more string constructions. The end result
+is that passing a Student object by value leads to one call to the Student copy
+constructor, one call to the Person copy constructor, and four calls to the
+string copy constructor. When the copy of the Student object is destroyed, each
+constructor call is matched by a destructor call, so the overall cost of
+passing a Student by value is six constructors and six destructors!</p>
+<p>Now, this is correct and desirable behavior. After all, you want all your
+objects to be reliably initialized and destroyed. Still, it would be nice if
+there were a way to bypass all those constructions and destructions. There is
+pass by reference-to-const:</p>
+<pre><code language="C++">    bool validateStudent(const Student& s);
+</code></pre>
+<p>This is much more efficient: no constructors or destructors are called
+because no new objects are being created. The const in the revised parameter
+declaration is important. The original version of validate Student took a
+Student parameter by value, so callers knew that they were shielded from any
+changes the function might make to the Stu dent they passed in; validateStudent
+would be able to modify only a copy of it. Now that the Student is being passed
+by reference, it's necessary to also declare it const, because otherwise callers
+would have to worry about validateStudent making changes to the Student they
+passed in.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    # Gather function refs
+    refs = file.filerefs('define', 'function ~unresolved ~unknown')
+    for ref in refs:
+        # Gather parameter refs of each function
+        parameterRefs = ref.ent().refs('define', 'parameter ~unresolved ~unknown', True)
+        for parameterRef in parameterRefs:
+            if not parameterRef.ent():
+                continue
+
+            # check if parameter was passed by const to reference, pointer, or reference
+            if not re.match(r'const[\w\:\s]+&', parameterRef.ent().type()) and not re.search(r'.+\*.*', parameterRef.ent().type()) and not re.search(r'.+\&.*', parameterRef.ent().type()):
+                violation = check.violation(parameterRef.ent(), file, parameterRef.line(), parameterRef.column(), ERR1, parameterRef.ent().name(), ref.ent().longname())
+                if not lexer:
+                    lexer = file.lexer()
+
+                lexeme = lexer.lexeme(parameterRef.line(), parameterRef.column())
+                prevLex = lexeme
+                nextLex = lexeme
+                # Get beginning and end of parameter
+                while prevLex and  not re.match(r'\(|,|\)|\n', prevLex.text()):
+                    prevLex = prevLex.previous(ignore_comments=True)
+                while nextLex and not re.match(r'\(|\)|,|\n|;', nextLex.text()):
+                    nextLex = nextLex.next(ignore_comments=True)
+
+
+                prevLex = prevLex.next(ignore_whitespace=True, ignore_comments=True)
+                nextLex = nextLex.previous(ignore_whitespace=True, ignore_comments=True)
+
+
+                if not prevLex or not nextLex:
+                    continue
+                if re.match(r'Whitespace|Newline', prevLex.token()):
+                    prevLex = prevLex.next(ignore_whitespace=True, ignore_comments=True)
+                if re.match(r'Whitespace|Newline', nextLex.token()):
+                    nextLex = nextLex.previous(ignore_whitespace=True, ignore_comments=True)
+
+                if nextLex.text() == parameterRef.ent().longname():
+                    nextLex = nextLex.previous()
+
+                # Next if pointer
+                if re.match(r'.+\*.*', parameterRef.ent().type()):
+                    continue
+                    # In case we do want to change pointers as well then this will do it
+                    #type = re.sub(r'\*', '&', parameterRef.ent().type())
+                else:
+                    type = parameterRef.ent().type() + ' &'
+
+                
+                violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), nextLex.line_end(), nextLex.column_end() + 1, 'const ' + type)

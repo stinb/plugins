@@ -1,0 +1,168 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 05-12-22
+
+import re
+
+ERR1 = "Last call of the finalizer is not to super.finalize()"
+ERR2 = "Finalizer never makes call to super.finalize()"
+
+
+def id():
+    return ('JAVA_20')
+
+
+def name(id):
+    return {
+        'JAVA_20': "All Checks/Language Specific/Java/The last call of the finalizer shall be to super.finalize(), unless Object is the immediate superclass",
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'JAVA_20': [
+            'Language: Java',
+            'Functions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+The last call of the finalizer shall be to super.finalize(), unless Object is the immediate superclass.
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Calling super.finalize() at the end of the finalizer method implementation is highly recommended, in case parent implementations must dispose of system resources
+or perform other cleanup.
+</p>
+<p>
+See:
+<i>
+https://docs.oracle.com/en/java/javase/18/docs/api/java.base/java/lang/Object.html#finalize()
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class C extends A {
+
+    public void finalize()                 /* UndCC_Violation - no call to super.finalize() */
+
+    {
+
+        System.out.println("Finalize C");
+
+    }
+
+}
+
+
+class D extends A {
+
+    public void finalize()                /* UndCC_Violation - D.finalize call should come last */
+
+    {
+
+        super.finalize();
+
+        System.out.println("Finalize D");
+
+    }
+
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+	# spin up lexer
+	if file.lexer():
+		lexer = file.lexer()
+	else:
+		return
+
+    # find all defined classes in the file
+	for class_def in file.filerefs("Define", "Java Class"):
+
+    	# for each class, look at the 'extends' ref
+		class_ent = class_def.ent()
+		extends_ref = class_ent.ref("Java Extend Couple")
+
+		# if extends ref is to Object, ignore/pass
+		if extends_ref and extends_ref.ent().name() == "Object":
+			pass
+    	# otherwise, search the class for a 'define' ref to 'finalize' (i.e. make sure it has a finalizer)    	
+		else:
+			finalizer_ref = None
+			finalizer_ent = None
+			has_finalizer = False
+			for define_ref in class_ent.refs("Define"):
+				if define_ref.ent().name() == "finalize":
+					finalizer_ref = define_ref
+					finalizer_ent = define_ref.ent()
+					has_finalizer = True
+
+			if has_finalizer == False:
+				pass
+			# if it does have a finalizer, check entire contents of finalize() method for 'super.finalize()'
+			else:
+				if finalizer_ref != None and finalizer_ent != None:
+					finalizer_contents = finalizer_ent.contents()
+
+					# if no call to super.finalize at all, flag violation
+					if re.search(r"super.finalize()", finalizer_contents):
+						# if super.finalize found, spin up lexer at finalizer ref
+						lexeme = lexer.lexeme(finalizer_ref.line(), finalizer_ref.column())
+						# search lexer for 'super.finalize();' - when found, check that next lexeme (ignore whitespace and comments) is a closing curly brace
+						while lexeme:
+							if lexeme and lexeme.token() == "Keyword" and lexeme.text() == "super":
+								traverse_lex = lexeme
+								while traverse_lex and traverse_lex.text() != ";":
+
+									traverse_lex = traverse_lex.next(ignore_whitespace=True, ignore_comments=True)
+
+								next_meaningful_lex = traverse_lex.next(ignore_whitespace=True, ignore_comments=True)
+
+								if next_meaningful_lex and next_meaningful_lex.text() != "}":
+									check.violation(finalizer_ref.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+									break
+
+							lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True) 
+
+					else:
+						check.violation(finalizer_ref.ent(), file, finalizer_ref.line(), finalizer_ref.column(), ERR2)
+						break
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

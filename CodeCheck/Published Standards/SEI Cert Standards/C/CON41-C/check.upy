@@ -1,0 +1,110 @@
+ERR1 = 'Wrap functions that can fail spuriously in a loop.'
+
+
+# The ID for the check
+def id():
+    return ('CON41-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON41-C': 'Published Standards/SEI Cert Standards/C/Wrap functions that can fail spuriously in a loop',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'CON41-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+            'Functions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Wrap functions that can fail spuriously in a loop'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Wrap functions that can fail spuriously in a loop</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to wrap the atomic_compare_exchange_weak() and atomic_compare_exchange_weak_explicit() functions in a loop can result in incorrect values and control flow.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/CON41-C.+Wrap+functions+that+can+fail+spuriously+in+a+loop</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdatomic.h&gt;
+#include &lt;stdbool.h&gt;
+
+struct data {
+  struct data *next;
+  /* ... */
+};
+
+extern void cleanup_data_structure(struct data *head);
+
+int reorganize_data_structure(void *thread_arg) {
+  struct data *_Atomic *ptr_to_head = thread_arg;
+  struct data *old_head = atomic_load(ptr_to_head);
+  struct data *new_head;
+  bool success;
+
+  /* ... Reorganize the data structure ... */
+
+  success = atomic_compare_exchange_weak(ptr_to_head,
+                                         &old_head, new_head);
+  if (!success) {
+    cleanup_data_structure(new_head);
+  }
+  return success; /* Exit the thread */
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        lines_on_loop = []
+        func_ent = func_ref.ent()
+        func_cfg = func_ent.control_flow_graph()
+
+        if func_cfg is None:
+            return
+
+        for node in func_cfg.nodes():
+            if node.kind() in {"do-while", "while-for", "for", "while"}:
+                start_line = node.line_begin()
+                node_end = node.end_node()
+                if start_line and node_end:
+
+                    while (start_line and node_end and node_end.line_end() and (start_line <= node_end.line_end())):
+                        lines_on_loop.append(start_line)
+                        start_line += 1
+
+        for use_ref in func_ref.ent().refs("Use", "Unresolved Macro"):
+            if use_ref.ent().name() in {"atomic_compare_exchange_weak", "atomic_compare_exchange_weak_explicit"} and use_ref.line() not in lines_on_loop:
+                check.violation(use_ref.ent(), file,
+                                use_ref.line(), use_ref.column(), ERR1)

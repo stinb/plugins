@@ -1,0 +1,275 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-08-25
+
+
+import re
+
+from Modules import nthParamOfCall
+
+
+ERR1 = 'Argument used but not validated'
+
+
+validatedParams = dict()
+checkedParams = set()
+flaggedParams = set()
+
+
+def ids():
+    return ('MET00-J', 'JAVA_MET00')
+
+
+def name(id):
+    return {
+        'MET00-J': '''Published Standards/SEI Cert Standards/Java/\
+Validate method arguments''',
+        'JAVA_MET00': '''All Checks/Language Specific/Java/Methods/\
+Validate method arguments'''
+    }[id]
+
+
+def tags(id):
+    return {
+        'MET00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P9',
+            'Level: L2',
+        ],
+        'JAVA_MET00': [
+            'Language: Java',
+            'Methods',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Validate method arguments</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Failure to validate method arguments can result in inconsistent computations,
+runtime exceptions, and control flow vulnerabilities.</p>
+
+<p><b>Exceptions</b></p>
+
+<p><b>MET00-J-EX0:</b> Argument validation inside a method may be omitted when
+the stated contract of a method requires that the <i>caller</i> must validate
+arguments passed to the method. In this case, the validation must be performed
+by the caller for all invocations of the method.</p>
+
+<p><b>MET00-J-EX1:</b> Argument validation may be omitted for arguments whose
+type adequately constrains the state of the argument. This constraint should be
+clearly documented in the code.</p>
+
+<p>This exception may apply to arguments whose values (as permitted by their
+type) are not necessarily valid but are still correctly handled by the method.
+In the following code, the arguments <code>x</code> and <code>y</code> are not
+validated even though their product might not be a valid <code>int</code>. The
+code is safe because it adequately handles all <code>int</code> values for
+<code>x</code> and <code>y</code>.</p>
+
+<pre><code language="Java">\
+public int product(int x, int y) {
+  long result = (long) x * y;
+  if (result &lt; Integer.MIN_VALUE || result &gt; Integer.MAX_VALUE) {
+    // Handle error
+  }
+  return (int) result;
+}
+</code></pre>
+
+<p><b>MET00-J-EX2:</b> Complete validation of all arguments of all methods may
+introduce added cost and complexity that exceeds its value for all but the most
+critical code. In such cases, consider argument validation at API boundaries,
+especially those that may involve interaction with untrusted code.</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">\
+private Object myState = null;
+
+// Sets some internal state in the library
+void setState(Object state) {
+  myState = state;
+}
+
+// Performs some action using the state passed earlier
+void useState() {
+  // Perform some action here
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('ignorePrimitive', 'Ignore primitive parameters', True)
+    check.options().checkbox('ignoreCallerValidated', 'Ignore caller-validated parameters', True)
+    check.options().checkbox('onlyFirstUse', 'Flag only the first use of parameters', True)
+
+
+def refInNode(ref, node):
+    if ref.line() < node.line_begin() or ref.line() > node.line_end():
+        return False
+    if ref.line() == node.line_begin() and ref.column() < node.column_begin():
+        return False
+    if ref.line() == node.line_end() and ref.column() > node.column_end():
+        return False
+
+    return True
+
+
+def refInIf(method, ref):
+    for node in method.control_flow_graph().nodes():
+        if node.kind() == 'if' and refInNode(ref, node):
+            return True
+    return False
+
+
+def entInIf(method, ent):
+    for use in ent.refs('Useby'):
+        if refInIf(method, use):
+            return True
+    return False
+
+
+def isPrimitive(ent):
+    primitives = {'byte', 'short', 'int', 'long', 'float', 'double', 'char', 'boolean'}
+    return ent.type() and ent.type() in primitives
+
+
+def getParamNum(method, param):
+    params = method.ents('Define', 'Parameter')
+    for paramNum in range(len(params)):
+        if params[paramNum] == param:
+            return paramNum
+
+
+def getPreParameters(method, param, paramNum):
+    varsAndMethods = dict()
+
+    # Every time this method is called
+    for callby in method.refs('Callby'):
+        caller = callby.ent()
+
+        # Skip if the caller is not a method
+        if not caller.kind().check('Method'):
+            continue
+
+        # Skip direct/indirect recursion
+        if caller == method or caller in method.ents('Call', 'Method'):
+            continue
+
+        # Find the lexemes that make the parameter
+        lexemes = nthParamOfCall(callby, paramNum)
+
+        # Parameter not validated if there are multiple lexemes
+        if len(lexemes) != 1:
+            return dict()
+
+        # Get the entity
+        lex = lexemes[0]
+        ent = lex.ent()
+
+        # Parameter not validated if the entity isn't a variable/parameter of the same type
+        if not ent or ent.type() != param.type() or not ent.kind().check('Variable, Parameter'):
+            return dict()
+
+        varsAndMethods[ent] = caller
+
+    return varsAndMethods
+
+
+def preParametersValidated(method, varOrParam):
+    # Base case: variable already validated/invalidated
+    if varOrParam in validatedParams:
+        return validatedParams[varOrParam]
+
+    # Base case: variable
+    if varOrParam.kind().check('Variable'):
+        return entInIf(method, varOrParam)
+
+    # Invalid if parameter number not found
+    paramNum = getParamNum(method, varOrParam)
+    if paramNum == None:
+        validatedParams[varOrParam] = False
+        return validatedParams[varOrParam]
+
+    # Get all the variables the become this parameter
+    varsAndMethods = getPreParameters(method, varOrParam, paramNum)
+
+    # Invalid if all pre-parameters weren't found
+    if not varsAndMethods:
+        validatedParams[varOrParam] = False
+        return validatedParams[varOrParam]
+
+    # Make sure each variable is in an if statement
+    for otherVarOrParam, otherMethod in varsAndMethods.items():
+        if not entInIf(otherMethod, otherVarOrParam):
+            # Parameter
+            if otherVarOrParam.kind().check('Parameter'):
+                validated = preParametersValidated(otherMethod, otherVarOrParam)
+                validatedParams[varOrParam] = validated
+                return validatedParams[varOrParam]
+
+            # Variable
+            else:
+                validatedParams[varOrParam] = False
+                return validatedParams[varOrParam]
+
+    validatedParams[varOrParam] = True
+    return validatedParams[varOrParam]
+
+
+def checkMethod(check, method):
+    for use in method.refs('Use', 'Parameter'):
+        param = use.ent()
+
+        # Skip if the parameter was previously flagged
+        if param in flaggedParams:
+            if not check.options().lookup('onlyFirstUse'):
+                check.violation(param, use.file(), use.line(), use.column(), ERR1)
+            continue
+
+        # Skip parameters that were previously checked
+        if param in checkedParams:
+            continue
+        checkedParams.add(param)
+
+        # Skip simple numeric types
+        if check.options().lookup('ignorePrimitive') and isPrimitive(param):
+            continue
+
+        # Skip if this reference is in an if statement in this method
+        if refInIf(method, use):
+            continue
+
+        # Skip if each caller validates this parameter
+        if check.options().lookup('ignoreCallerValidated') and preParametersValidated(method, param):
+            continue
+
+        check.violation(param, use.file(), use.line(), use.column(), ERR1)
+        flaggedParams.add(param)
+
+
+def check(check, file):
+    for define in file.filerefs('Define', 'Method'):
+        method = define.ent()
+
+        checkMethod(check, method)

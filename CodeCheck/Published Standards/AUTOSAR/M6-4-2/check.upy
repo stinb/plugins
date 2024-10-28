@@ -1,0 +1,228 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 09-25-2023
+
+import re
+import Modules
+
+ERR1 = "Else If with no following Else"
+
+# The ID for the check
+def ids():
+  return ("M6-4-2", "CPP_C047", "MISRA04_14.10", "MISRA08_6-4-2", "MISRA12_15.7", "MISRA23_9.4.1", "MISRA23_15.7")
+
+# The short name of the check
+def name(id):
+    return {
+      "M6-4-2": "Published Standards/AUTOSAR/All if and else if constructs shall be terminated with an else clause",
+      "CPP_C047": "All Checks/Language Specific/C and C++/Control Flow/All if and else if constructs shall be terminated with an else clause",
+      "MISRA04_14.10": "Published Standards/MISRA-C 2004/14.10 All if ... else if constructs shall be terminated with an else clause",
+      "MISRA08_6-4-2": "Published Standards/MISRA-C++ 2008/6-4-2 All if ... else if constructs shall be terminated with an else clause",
+      "MISRA12_15.7": "Published Standards/MISRA C 2012/15.7 All if ... else if constructs shall be terminated with an else statement",
+      "MISRA23_9.4.1": "Published Standards/MISRA C++ 2023/9.4.1 All if ... else if constructs shall be terminated with an else statement",
+      "MISRA23_15.7": "Published Standards/MISRA C 2023/15.7 All if ... else if constructs shall be terminated with an else statement",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'M6-4-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C047': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+        'MISRA04_14.10': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Control Flow',
+        ],
+        'MISRA08_6-4-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA12_15.7': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA23_9.4.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA23_15.7': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+  if id == 'MISRA23_15.7':
+    return """
+<p><b>Amplification</b></p>
+<p>A final else statement shall always be provided whenever an if statement is followed by a sequence of
+one or more else if constructs. The else statement shall contain at least either one side effect or a
+comment.</p>
+<p>A function call is considered to be a side effect for the purposes of this rule.</p>
+<p><b>Rationale</b></p>
+<p>Terminating a sequence of if … else if constructs with an else statement is defensive programming
+and complements the requirement for a default clause in a switch statement (see Rule 16.5).
+</p>
+<p>The else statement is required to have a side effect or a comment to ensure that a positive indication
+is given of the desired behaviour, aiding the code review process.
+</p>
+<p>Note: a final else statement is not required for a simple if statement.</p>
+<p><b>Example</b></p>
+<p>The following example is non-compliant as there is no explicit indication that no action is to be taken
+by the terminating else.</p>
+<pre><code language="C++">if ( flag_1 )
+{
+ action_1 ( );
+}
+else if ( flag_2 )
+{
+ action_2 ( );
+}
+/* Non-compliant */</code></pre>
+<p>The following shows a compliant terminating else.</p>
+<pre>else
+{
+ ; /* No action required - ; is optional */
+}<code language="C++"></code></pre>
+<p><b>See also</b></p>
+<p>Rule 16.4</p>
+    """
+
+  return """\
+<p><b>Rationale</b></p>
+<p>When an if statement is followed by one or more else if statements then the final else if shall be followed by an else statement. In the case of a simple if statement the else statement need not be included.</p>
+<p>The final else statement, which should either take appropriate action or contain a suitable comment as to why no action is taken, is defensive programming.</p>
+<p><b>Example</b></p>
+<p>For example this code is a simple if statement:</p>
+<pre><code language="C++">  if ( x &lt; 0 )
+  {
+    log_error( 3 );
+    x = 0;
+  }
+  // else not needed
+</code></pre>
+<p>Whereas the following code demonstrates an if, else if construct</p>
+<pre><code language="C++">  if ( x &lt; 0 )
+  {
+    log_error ( 3 );
+    x = 0;
+  }
+  else if ( y &lt; 0 )
+  {
+    x = 3;
+  }
+  else // this else clause is required, even if the
+  {    // developer expects this will never be reached
+    // No change in value of x
+  }
+</code></pre>"""
+
+# Tests the type of file
+def test_entity(file):
+  return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+  return False
+
+def test_language(language):
+  return language == 'C++'
+
+def check(check, file):
+    if not file.lexer():
+        return
+
+    lexer = file.lexer()
+
+    for lexeme in lexer.lexemes():
+        # Find 'if' statements
+        if lexeme.text() == 'if':
+            lastClose = None
+            prevLex = lexeme.previous(True, True)
+            # Skip if no 'if else'
+            if prevLex and prevLex.text() == 'else':
+                continue
+            # Skip to opening curly brace or end of single line 'if' statements
+            while lexeme and not re.search(r'^{|;$', lexeme.text()):
+                if lexeme.text() == '(':
+                    lexeme = Modules.findClose(lexeme)
+                if lexeme:
+                    lexeme = lexeme.next(True, True)
+
+            # Go to closing curly brace
+            if lexeme and lexeme.text() == '{':
+                lexeme = Modules.findClose(lexeme)
+                if lexeme:
+                    lexeme = lexeme.next(True, True)
+
+            # Go to next lexeme if single line 'if' statement
+            elif lexeme and lexeme.text() == ';':
+                lexeme = lexeme.next(True, True)
+
+            ok = True
+            if lexeme:
+                # Pass through 'else if' statements and mark ok if an 'else' statement is found
+                while lexeme and lexeme.text() == 'else':
+                    lexeme = lexeme.next(True, True)
+                    ok = True
+                    if lexeme and lexeme.text() == 'if':
+                        ok = False
+                        lexeme = lexeme.next(True, True)
+                        while lexeme and not re.search(r'^{|;$', lexeme.text()):
+                            if lexeme.text() == '(':
+                                lexeme = Modules.findClose(lexeme)
+                            lexeme = lexeme.next(True, True)
+
+                        if lexeme and lexeme.text() == '{':
+                            lexeme = Modules.findClose(lexeme)
+                            if lexeme:
+                                # Save closing curly brace for violation location
+                                lastClose = lexeme
+                                lexeme = lexeme.next(True, True)
+
+                        elif lexeme and lexeme.text() == ';':
+                            lexeme = lexeme.next(True, True)
+
+                        # Skip through preprocessor that could be in between 'else if' and 'else' statements
+                        if lexeme and lexeme.token() == 'Preprocessor':
+                            while lexeme and not re.search(r'^{|}|;$', lexeme.text()):
+                                if lexeme.text() == 'else' and lexeme.token() != 'Preprocessor':
+                                    break
+
+                                lexeme = lexeme.next(True, True)
+
+
+                    
+                if not ok:
+                    if not lastClose:
+                        lastClose = lexeme.previous(True, True)
+
+                    check.violation(file, file, lastClose.line_begin(), lastClose.column_begin(), ERR1)
+                                    

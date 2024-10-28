@@ -1,0 +1,424 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-04-19
+
+
+import functools
+import re
+
+from Modules import refBetweenRefs, refComparatorSameFile
+
+
+ERR1 = 'String argument with known value is not null-terminated'
+ERR2 = 'String argument with unknown value may not be null-terminated'
+
+REF_KIND_ASSIGN = 'Setby, Assignby'
+
+QUALIFIER        = r'\b(const|volatile|restrict)\b'
+STR_TYPE         = r'^\s*(char|wchar_t)\s*(\*|\[\d+\])\s*$'
+STR_SIZE         = r'^.*\[(\d+)\]$'
+STR_INNER_VALUE  = r'^\w*"(.*)"\w*$'
+STR_ARRAY_BRACES = r'^{(.*)}$'
+STR_ARRAY_VALUE  = r"(?<!\\)'(.+?)(?<!\\)'"
+ESCAPE_OCT       = r'\\([0-7]{1,3}|o{[0-7]+})'
+ESCAPE_HEX       = r'\\x([0-9a-fA-F]+|{[0-9a-fA-F]+})'
+ESCAPE_UNI_VALUE = r'\\(u[0-9|a-f|A-F]{4}|u{[0-9|a-f|A-F]+}|U[0-9|a-f|A-F]{8})'
+ESCAPE_UNI_NAME  = r'\\N{.*}'
+COMPLEX_ESCAPES  = (ESCAPE_OCT, ESCAPE_HEX, ESCAPE_UNI_VALUE, ESCAPE_UNI_NAME)
+ESCAPE_ZERO      = r'^\\x?(0{1,3}|o{0+}|x0+|x{0+})$'
+CHAR_INNER_VALUE = r'^\w*\'(.*)\'\w*$'
+INTEGER_ZERO     = r'^(0[xb])?0*(l|u|z)*$'
+
+limitedFunctions = { 'c16rtomb', 'c32rtomb', 'c8rtomb', 'fgetws', 'gets_s',
+'mblen', 'mbrlen', 'mbrtoc16', 'mbrtoc32', 'mbrtoc8', 'mbrtowc', 'mbsrtowcs_s',
+'mbsrtowcs', 'mbstowcs_s', 'mbstowcs', 'mbtowc', 'memccpy', 'memchr', 'memcmp',
+'memcpy_s', 'memcpy', 'memmove_s', 'memmove', 'memset_explicit', 'memset_s',
+'memset', 'strcat_s', 'strcpy_s', 'strerror_s', 'strfromd', 'strfromf',
+'strfroml', 'strncat_s', 'strncat', 'strncmp', 'strncpy_s', 'strncpy',
+'strndup', 'strnlen_s', 'strnlen_s', 'strtok_s', 'strxfrm', 'tmpnam_s',
+'wcrtomb_s', 'wcrtomb', 'wcscat_s', 'wcscpy_s', 'wcsncat_s', 'wcsncat',
+'wcsncmp', 'wcsncpy_s', 'wcsncpy', 'wcsnlen_s', 'wcsrtombs_s', 'wcsrtombs',
+'wcstok_s', 'wcstombs_s', 'wcstombs', 'wcsxfrm', 'wctomb_s', 'wmemchr',
+'wmemcmp', 'wmemcpy_s', 'wmemcpy', 'wmemmove_s', 'wmemmove', 'wmemset' }
+
+# NOTE: some functions may have several string arguments, but if at least 1 is
+# unlimited, then it's considered an unlimited string function
+UNLIMITED_FUNCTIONS = { 'atof', 'atoi', 'atol', 'atoll', 'fgets', 'fopen',
+'fprintf', 'fprintf_s', 'fputs', 'fputws', 'freopen', 'freopen_s', 'fscanf',
+'fscanf_s', 'fwprintf', 'fwprintf_s', 'fwscanf', 'fwscanf_s', 'getenv',
+'getenv_s', 'gets', 'perror', 'printf', 'printf_s', 'puts', 'remove', 'rename',
+'scanf', 'scanf_s', 'setbuf', 'setlocale', 'setvbuf', 'snprintf', 'snprintf_s',
+'snwprintf_s', 'sprintf', 'sprintf_s', 'sscanf', 'sscanf_s', 'strcat', 'strchr',
+'strcmp', 'strcoll', 'strcpy', 'strcspn', 'strdup', 'strlen', 'strpbrk',
+'strrchr', 'strspn', 'strstr', 'strtod', 'strtof', 'strtoimax', 'strtok',
+'strtol', 'strtold', 'strtoll', 'strtoul', 'strtoull', 'strtoumax', 'swprintf',
+'swprintf_s', 'swscanf', 'swscanf_s', 'system', 'tmpnam', 'vfprintf',
+'vfprintf_s', 'vfscanf', 'vfscanf_s', 'vfwprintf', 'vfwprintf_s', 'vfwscanf',
+'vfwscanf_s', 'vprintf', 'vprintf_s', 'vscanf', 'vscanf_s', 'vsnprintf',
+'vsnprintf_s', 'vsnwprintf_s', 'vsprintf', 'vsprintf_s', 'vsscanf', 'vsscanf_s',
+'vswprintf', 'vswprintf_s', 'vswscanf', 'vswscanf_s', 'vwprintf', 'vwprintf_s',
+'vwscanf', 'vwscanf_s', 'wcscat', 'wcschr', 'wcscmp', 'wcscoll', 'wcscpy',
+'wcscspn', 'wcslen', 'wcspbrk', 'wcsrchr', 'wcsspn', 'wcsstr', 'wcstod',
+'wcstof', 'wcstoimax', 'wcstok', 'wcstol', 'wcstold', 'wcstoll', 'wcstoul',
+'wcstoull', 'wcstoumax', 'wprintf', 'wprintf_s', 'wscanf', 'wscanf_s' }
+
+
+def ids():
+    return ('STR32-C')
+
+
+def name(id):
+    return {
+        'STR32-C': '''Published Standards/SEI Cert Standards/C/\
+Null-terminated strings passed to library functions''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'STR32-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'STR32-C': '''\
+<p>
+Do not pass a non-null-terminated character sequence to a library function that
+expects a string
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to properly null-terminate a character sequence that is passed to a
+library function that expects a string can result in buffer overflows and the
+execution of arbitrary code with the permissions of the vulnerable process.
+Null-termination errors can also result in unintended information disclosure.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/c/STR32-C.+Do+not+pass+a+non-null-terminated+character+sequence+to+a+library+function+that+expects+a+string
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void func(void) {
+  char c_str[3] = "abc";
+  printf("%s\\n", c_str);
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Due to the complexity of the rule, there are many limitations. The only
+supported way to prove that a string is null-terminated is to assign zero with
+the subscript operator before the function call. There shouldn't be control-flow
+between the assignment and the call. Additionally, this check does not
+differentiate between string arguments for functions like <code>snprintf</code>
+where the buffer string has a size but the format string does not.
+</p>
+''',
+    }[id]
+
+
+def define_options(check):
+    check.options().checkbox('onlyStandardLib', 'Only check standard library functions', True)
+    check.options().checkbox('checkParameters', 'Check strings from parameters', False)
+    check.options().text('limitedFunctions', 'Names of limited functions to allow (space-separated)', '')
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    onlyStandardLib = check.options().lookup('onlyStandardLib')
+    stringKinds = 'Object'
+    if check.options().lookup('checkParameters'):
+        stringKinds += ', Parameter'
+    moreLimitedFunctions = check.options().lookup('limitedFunctions')
+    limitedFunctions.update(moreLimitedFunctions.split())
+
+    for call in file.filerefs('Call', 'Function'):
+        func = call.ent()
+
+        # Skip if only checking the standard library, and this function either
+        # has a size limit to stop early or it is not in the standard library
+        if onlyStandardLib and func.name() not in UNLIMITED_FUNCTIONS:
+            continue
+
+        # Skip if the function uses a size limit to stop early
+        if func.name() in limitedFunctions:
+            continue
+
+        # Each string argument and all its first ref in the call
+        lexer = file.lexer(expand_macros=True)
+        if not lexer:
+            continue
+        lex = lexer.lexeme(call.line(), call.column())
+        for strEnt, strRef in getStringArgs(lex, stringKinds).items():
+            if not isNullTerminatedKnownValue(strEnt):
+                check.violation(strEnt, file, strRef.line(), strRef.column(), ERR1)
+            elif not isNullTerminatedUnknownValue(strEnt, call, func):
+                check.violation(strEnt, file, strRef.line(), strRef.column(), ERR2)
+
+
+# For a call lexeme, get the arguments which are string ents
+def getStringArgs(lex, stringKinds):
+    commas          = 0
+    openParentheses = 0
+    openBrackets    = 0
+    openBraces      = 0
+
+    stringDict = dict()
+
+    while lex:
+        text = lex.text()
+
+        # Punctuation/operator
+        if text == ',':
+            # Commas of the call
+            if openParentheses == 1 and openBrackets == 0 and openBraces == 0:
+                commas += 1
+        elif text == '(':
+            openParentheses += 1
+        elif text == ')':
+            openParentheses -= 1
+            # Stop at the end of the call
+            if openParentheses == 0:
+                return stringDict
+        elif text == '[':
+            openBrackets += 1
+        elif text == ']':
+            openBrackets -= 1
+        elif text == '{':
+            openBraces += 1
+        elif text == '}':
+            openBraces -= 1
+        # Entity
+        elif lex.ent():
+            ent = lex.ent()
+            if ent.kind().check(stringKinds) and isString(ent):
+                if ent not in stringDict:
+                    stringDict[ent] = lex.ref()
+
+        lex = lex.next(True, True)
+
+    return stringDict
+
+
+# See if the entity type is a string
+def isString(ent):
+    if not ent.type():
+        return False
+    if not re.match(STR_TYPE, re.sub(QUALIFIER, '', ent.type())):
+        return False
+    return True
+
+
+# If the string value is known, then make sure it's null-terminated
+def isNullTerminatedKnownValue(ent):
+    # Get string value as a list of strings, or assume true
+    value = ent.value()
+    if not value or len(ent.refs(REF_KIND_ASSIGN)) != 1:
+        return True
+    # Value using quotes
+    CHARmp = re.match(STR_INNER_VALUE, value)
+    valueTemp = re.match(STR_INNER_VALUE, value)
+    if valueTemp:
+        value = stringToList(valueTemp[1])
+    # Value using braces
+    else:
+        hasBraces = re.match(STR_ARRAY_BRACES, value)
+        if hasBraces:
+            value = re.findall(STR_ARRAY_VALUE, value)
+    if not value:
+        return True
+
+    # Get string size, or assume true
+    size = re.match(STR_SIZE, ent.type())
+    if not size:
+        return True
+    try:
+        size = int(size[1])
+    except:
+        return True
+
+    # Trim the value if it's too long
+    if len(value) > size:
+        value = value[:size]
+
+    # If the actual value size is exactly expected size, then look for zero
+    if len(value) == size:
+        i = len(value)
+        while i > 0:
+            i -= 1
+            if re.match(ESCAPE_ZERO, value[i]):
+                return True
+        return False
+
+    # Actual size is short, so the implicit zero is there
+    else:
+        return True
+
+
+# Given the inner part of a string literal, get an array of characters
+def stringToList(string):
+    chars = []
+
+    i = 0
+    length = len(string)
+    while i < length:
+        # Normal character
+        if string[i] != '\\':
+            chars.append(string[i])
+        # Escape sequence
+        else:
+            # Complex escape sequences
+            remainder = string[i:]
+            match = None
+            for escape in COMPLEX_ESCAPES:
+                match = re.search(escape, remainder)
+                if match:
+                    chars.append(match[0])
+                    i += len(chars[-1])
+                    break
+            # Simple escape sequence
+            if not match:
+                chars.append(string[i:i+2])
+                i += 2
+                continue
+
+        i += 1
+
+    return chars
+
+
+# If the value is unknown, see if the last assignment null-terminates the string
+def isNullTerminatedUnknownValue(strEnt, call, func):
+    # Get the begin ref of this function, or assume true
+    func = call.scope()
+    begin = func.ref('Beginby')
+    if not begin or begin.file() != call.file():
+        return True
+
+    # Get the assignments in this function before the call, or assume true
+    assignmentsBeforeCall = []
+    for assign in strEnt.refs(REF_KIND_ASSIGN):
+        if refBetweenRefs(begin, assign, call):
+            assignmentsBeforeCall.append(assign)
+    if not assignmentsBeforeCall:
+        return True
+
+    # If the value is known, then assume true
+    if len(assignmentsBeforeCall) == 1 and strEnt.value():
+        return True
+
+    # See if the previous assignment null-terminates the string
+    assignmentsBeforeCall.sort(key=refComparatorSameFile)
+    assign = assignmentsBeforeCall[-1]
+    return assignmentNullTerminates(assign, call, func)
+
+
+def assignmentNullTerminates(assign, call, func):
+    lexer = assign.file().lexer(expand_macros=True)
+    lex = lexer.lexeme(assign.line(), assign.column())
+
+    # Make sure that there's a control flow graph
+    cfg = func.control_flow_graph()
+    if not cfg:
+        return False
+
+    # Make sure that the assignment certainly happens before the call
+    assignNode = locationToNode(cfg, assign.line(), assign.column())
+    callNode = locationToNode(cfg, call.line(), call.column())
+    if not assignNode or not callNode or assignNode == callNode:
+        return False
+    if not onlyPassiveNodesBetween(assignNode, callNode):
+        return False
+
+    # Match [
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '[':
+        return False
+
+    # Match until ]
+    while lex and lex.text() != ']':
+        lex = lex.next(True, True)
+
+    # Match =
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '=':
+        return False
+
+    # Match zero
+    lex = lex.next(True, True)
+    if not lex:
+        return False
+    elif lex.token() == 'String':
+        charValue = re.match(CHAR_INNER_VALUE, lex.text())
+        return charValue and re.match(ESCAPE_ZERO, charValue[1])
+    elif lex.token() == 'Literal':
+        return re.match(INTEGER_ZERO, lex.text(), re.IGNORECASE)
+
+    return False
+
+
+def locationToNode(cfg, line, column):
+    unvisited = [cfg.start()]
+    visited = set()
+
+    # Check unvisited nodes
+    while unvisited:
+        node = unvisited.pop()
+        visited.add(node)
+
+        # Base case for the node to find
+        if node.line_begin() != None:
+            if node.line_begin() <= line <= node.line_end():
+                if node.column_begin() <= column <= node.column_end():
+                    return node
+
+        # Recurse for child nodes
+        for child in node.children():
+            if child not in visited:
+                unvisited.append(child)
+
+    return None
+
+
+def onlyPassiveNodesBetween(nodeFirst, nodeLast):
+    node = nodeFirst
+
+    while node:
+        if node.kind() != 'passive':
+            return False
+        if node == nodeLast:
+            return True
+        children = node.children()
+        if len(children) != 1:
+            return False
+        node = children[0]
+
+    return False

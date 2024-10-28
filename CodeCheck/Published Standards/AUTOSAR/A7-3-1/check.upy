@@ -1,0 +1,209 @@
+ERR1 = 'All overloads of a function shall be visible from where it is called'
+
+
+# The ID for the check
+def ids():
+    return ('A7-3-1', 'CPP_F044')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A7-3-1': 'Published Standards/AUTOSAR/Overloaded Function Not Visible From Where it is Called',
+        'CPP_F044': 'All Checks/Language Specific/C and C++/Functions/Overloaded Function Not Visible From Where it is Called',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A7-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions',
+        ],
+        'CPP_F044': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>All overloads of a function shall be visible from where it is called.</p>
+<p><b>Rationale</b></p>
+<p>Additional identifiers introduced by a using declaration makes only prior declarations
+of this identifier visible. Any potential subsequent declarations will not be added to the
+current scope, which may lead to unexpected results and developers confusion.</p>
+<p>Overriding or overloading a member function in a derived class causes other member
+functions with the same name to be hidden. Thus, a potential function call may result
+in a different function being called depending on if the call was made using the derived
+or base class reference/pointer. Introducing hidden names into the derived class by a
+using declaration helps to avoid such misleading situations.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A7-3-1.cpp 312801 2018-03-21 16:17:05Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3
+4 class Base
+5 {
+6 public:
+7 void P(uint32_t);
+8
+9 virtual void V(uint32_t);
+10 virtual void V(double);
+11 };
+12
+13 class NonCompliant : public Base
+14 {
+15 public:
+16 //hides P(uint32_t) when calling from the
+17 //derived class
+18 void P(double);
+19 //hides V(uint32_t) when calling from the
+20 //derived class
+21 void V(double) override;
+22 };
+23
+24 class Compliant : public Base
+25 {
+26 public:
+27 //both P(uint32_t) and P(double) available
+28 //from the derived class
+29 using Base::P;
+30 void P(double);
+31
+32 //both P(uint32_t) and P(double)
+33 using Base::V;
+34 void V(double) override;
+35 };
+36
+37 void F1()
+38 {
+39 NonCompliant d{};
+40 d.P(0U); // D::P (double) called
+41 Base& b{d};
+42 b.P(0U); // NonCompliant::P (uint32_t) called
+43
+44 d.V(0U); // D::V (double) called
+45 b.V(0U); // NonCompliant::V (uint32_t) called
+46 }
+47
+48 void F2()
+49 {
+50 Compliant d{};
+51 d.P(0U); // Compliant::P (uint32_t) called
+52 Base& b{d};
+53 b.P(0U); // Compliant::P (uint32_t) called
+54
+55 d.V(0U); // Compliant::V (uint32_t) called
+56 b.V(0U); // Compliant::V (uint32_t) called
+57 }
+58
+59 namespace NS
+60 {
+61 void F(uint16_t);
+62 }
+63
+64 //includes only preceding declarations into
+65 //the current scope
+66 using NS::F;
+67
+68 namespace NS
+69 {
+70 void F(uint32_t);
+71 }
+72
+73 void B(uint32_t b)
+74 {
+75 //non-compliant, only F(uint16_t) is available
+76 //in this scope
+77 F(b);
+78 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• MISRA C++ 2008 [7]: 7-3-5: Multiple declarations for an identifier in the same
+namespace shall not straddle a using-declaration for that identifier.</p>
+<p>• HIC++ v4.0 [9]: 13.1.1: Ensure that all overloads of a function are visible from
+where it is called.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(_ref):
+        check.violation(_ref.ent(), _ref.file(),
+                        _ref.line(), _ref.column(), ERR1)
+
+    for class_ref in file.filerefs("Define", "Class"):
+        flagged_func = []
+        class_funcs = class_ref.ent().refs("Define", "~Static ~Lambda Function")
+        funcs = {}
+
+        for func_ref in class_funcs:
+            _key = func_ref.ent().name()
+
+            if func_ref.ent().name() not in funcs:
+                funcs[_key] = []
+
+            for param_ref in func_ref.ent().refs("Define", "Parameter"):
+                if param_ref.ent().type() not in funcs[_key]:
+                    funcs[_key].append(param_ref.ent().type())
+
+        for base_ref in class_ref.ent().refs("Base"):
+            for func_ref in base_ref.ent().refs("Define", "~Static ~Lambda Function"):
+                if func_ref.ent().name() in funcs:
+                    for child_func in class_funcs:
+                        identical_param = True
+
+                        if child_func.ent().id() in flagged_func:
+                            continue
+
+                        params = [param_ref.ent().type() for param_ref in func_ref.ent().refs(
+                            "Define", "Parameter")]
+
+                        if any(param not in funcs[func_ref.ent().name()] for param in params):
+                            identical_param = False
+
+                        if child_func.ent().name() == func_ref.ent().name() and not identical_param:
+                            compliant = False
+
+                            for using_ref in class_ref.ent().refs("Using"):
+                                if using_ref.ent().name() == func_ref.ent().name() and using_ref.ent().parent() and using_ref.ent().parent().id() == base_ref.ent().id():
+                                    compliant = True
+
+                            if not compliant:
+                                flagged_func.append(
+                                    child_func.ent().id())
+                                check_violation(child_func)
+
+    for declare_ref in file.filerefs("Declarein Using", "File"):
+        defined_func = {}
+
+        for define_ref in declare_ref.scope().refs("Definein"):
+            for func_ref in sorted(define_ref.ent().refs("Define", "Function"), key=lambda x: x.line()):
+                if func_ref.line() < declare_ref.line():
+                    if func_ref.ent().name() not in defined_func:
+                        defined_func[func_ref.ent().name(
+                        )] = func_ref.ent().parameters()
+                elif func_ref.ent().name() in defined_func and defined_func[func_ref.ent().name()] != func_ref.ent().parameters():
+                    check_violation(func_ref)

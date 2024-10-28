@@ -1,0 +1,128 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-28-2021
+import re
+from Modules import stringIsStd
+
+ERR1 = 'Input and output were alternated before flushing file stream'
+
+def ids():
+    return ('A27-0-3', 'CPP_L026')
+
+def name(id):
+    return {
+        'A27-0-3': """\
+Published Standards/AUTOSAR/Alternate input and output operations on a file \
+stream shall not be used without an intervening flush or positioning call""",
+        'CPP_L026': """\
+All Checks/Language Specific/C and C++/Libraries/Alternate input and output \
+operations on a file stream shall not be used without an intervening flush or \
+positioning call"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A27-0-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Libraries',
+        ],
+        'CPP_L026': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>There are following restrictions on reading and writing operations called for
+an object of class basic_filebuf&lt;chart, traits>:</p>
+<ul>
+<li>output shall not be directly followed by input without an intervening call
+to the fflush function or to a file positioning function (fseek, fsetpos, or
+rewind).</li>
+<li>input shall not be directly followed by output without an intervening call
+to a file positioning function, unless the input operation encounters
+end-of-file.</li>
+</ul>
+<p>It is recommended to use a file stream either for output (std::ofstream) or
+input(std::ifstream) and not for both in the same context. This avoids the
+mentioned problem altogether.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  // $Id: A27-0-3.cpp 311495 2018-03-13 13:02:54Z michal.szczepankiewicz $
+2
+3  #include &lt;fstream&gt;
+4  #include &lt;string&gt;
+5
+6  int main(void)
+7  {
+8    std::fstream f("testfile");
+9
+10   f &lt;&lt; "Output";
+11   std::string str1;
+12   f &gt;&gt; str1; // non-compliant
+13
+14   f &lt;&lt; "More output";
+15   std::string str2;
+16   f.seekg(0, std::ios::beg);
+17   f &gt;&gt; str2; //compliant
+18
+19   return 0;
+20 }
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Object')
+
+    for ref in refs:
+        # Skip anything but std::fstream
+        if not stringIsStd(str(ref.ent().type()), 'fstream'):
+            continue
+
+        input = False
+        output = False
+
+        useRefs = ref.ent().refs('Useby')
+
+        for useRef in useRefs:
+            if not lexer:
+                lexer = file.lexer(lookup_ents=False)
+
+            lexeme = lexer.lexeme(useRef.line(), useRef.column())
+
+            lexeme = lexeme.next(True, True)
+
+            if lexeme and lexeme.text() == '<<':
+                output = True
+
+            if lexeme and lexeme.text() == '>>':
+                input = True
+
+            if lexeme.text() == '.':
+                lexeme = lexeme.next(True, True)
+
+                # Reset variables since flush keyword was found
+                if lexeme and lexeme.text() == 'seekg':
+                    input = False
+                    output = False
+
+
+            # If both of these are true then input and output were alternated
+            if input and output:
+                check.violation(useRef.ent(), file, useRef.line(), useRef.column(), ERR1)

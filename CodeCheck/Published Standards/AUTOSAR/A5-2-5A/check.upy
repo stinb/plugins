@@ -1,0 +1,158 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 04-21-2022
+
+import re
+
+ERR1 = 'Potential violation: identifier may be out of bounds of the array'
+
+# The ID for the check
+def ids():
+    return ('A5-2-5A', 'CPP_T054A')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A5-2-5A': 'Published Standards/AUTOSAR/An array or container shall not be accessed beyond its range (Part A)',
+        'CPP_T054A': 'All Checks/Language Specific/C and C++/Types/An array or container shall not be accessed beyond its range (Part A)',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A5-2-5A': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T054A': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>An array or container shall not be accessed beyond its range</p>
+<p><b>Risk Assessment</b></p>
+<p>To avoid undefined behavior, range checks should be coded to ensure that container access via iterator arithmetic or subscript operator is within defined bounds.
+This could also be achieved by accessing an array via a subscript operator with constant indices only.
+When copying data via standard library algorithms (such as std::copy or std::transform), the target destination must be guaranteed to be large enough to hold the data.
+Note: This rule applies to C-style arrays and all other containers (including std::basic_string) that access their elements via iterators or via an index. The term iterator includes pointers.
+Note: Calculating an iterator one past the last element of the array is well defined, but dereferencing such an iterator is not.</p>
+<p>For the full standard: <i>HIC++ v4.0 [9]: 5.2.1</i></p>
+<b>Exceptions</b><p><i>None</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">// $Id: A5-2-5.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;array&gt;
+#include &lt;cstdint&gt;
+#include &lt;iostream&gt;
+void Fn1() noexcept
+{
+	constexpr std::int32_t arraySize = 16;
+	std::int32_t array[arraySize]{0};
+
+	std::int32_t elem1 =
+		array[0];  // Compliant - access with constant literal that
+	           	   // is less than ArraySize
+	std::int32_t elem2 =
+	    array[12];  // Compliant - access with constant literal that
+					// is less than ArraySize
+	for (std::int32_t idx = 0; idx &lt; 20; ++idx)
+	{
+		std::int32_t elem3 =
+		    array[idx];  // Non-compliant - access beyond ArraySize
+		    			 // bounds, which has 16 elements
+	}
+
+	std::int32_t shift = 25;
+	std::int32_t elem4 =
+		*(array + shift);  // Non-compliant - access beyond ArraySize bounds
+
+	std::int32_t index = 0;
+	std::cin &gt;&gt; index;
+	std::int32_t elem5 =
+	    array[index];  // Non-compliant - index may exceed the ArraySize bounds
+	if (index &lt; arraySize)
+	{
+	    std::int32_t elem6 = array[index];  // Compliant - range check coded
+	}
+}
+
+void Fn2() noexcept
+{
+    constexpr std::int32_t arraySize = 32;
+	std::array&lt;std::int32_t, arraySize&gt; array;
+	array.fill(0);
+
+	std::int32_t elem1 =
+	array[10];  // Compliant - access with constant literal that
+	            // is less than ArraySize
+	std::int32_t index = 40;
+	std::int32_t elem2 =
+	    array[index];  // Non-compliant - access beyond ArraySize bounds
+	try
+	{
+		std::int32_t elem3 =
+		    array.at(50);  // Compliant - at() method provides a
+		                   // range check, throwing an exception if
+		                   // input exceeds the bounds
+	}
+	catch (std::out_of_range&)
+	{
+		// Handle an error
+	}
+	for (auto&& e : array)  // The std::array provides a possibility to iterate
+	                        // over its elements with range-based loop
+	{
+	// Iterate over all elements
+	}
+}
+</code></pre>
+<p><i>Developer Notes: </i>There are two parts to this check. Part A looks for identifiers used to size an array, which may lead to the array being accessed
+outside its range. Part B looks for hard-coded values that are outside of the array or container's range. This is done as two separate Codechecks (A5-2-5A, A5-2-5B)</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+	if file.lexer():
+		lexer = file.lexer()
+	else:
+		return
+
+	lexeme = lexer.first()
+
+	use_refs = file.filerefs("C Use", "C Object ~unresolved ~unknown")
+
+	for use_ref in use_refs:
+		# place lexeme at the reference
+		lexeme = lexer.lexeme(use_ref.line(), use_ref.column())
+
+		# look at next and previous lexemes to see [ and ]
+		next_lex = lexeme.next()
+		prev_lex = lexeme.previous()
+		two_lex_back = prev_lex.previous()
+
+		if next_lex and prev_lex and two_lex_back and two_lex_back.ent() and next_lex.text() == "]" and prev_lex.text() == "[" \
+		and two_lex_back.token() == "Identifier" and two_lex_back.ent().type() and re.search(r".*\[.*\]", two_lex_back.ent().type()):
+			check.violation(lexeme.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+			next

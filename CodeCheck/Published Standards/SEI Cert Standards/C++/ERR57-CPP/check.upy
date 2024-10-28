@@ -1,0 +1,176 @@
+ERR1 = 'Do not leak resources when handling exceptions.'
+
+
+# The ID for the check
+def id():
+    return ('ERR57-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ERR57-CPP': 'Published Standards/SEI Cert Standards/C++/Do not leak resources when handling exceptions',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not leak resources when handling exceptions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not leak resources when handling exceptions</p>
+<p><b>Risk Assessment</b></p>
+<p>Memory and other resource leaks will eventually cause a program to crash. If an attacker can provoke repeated resource leaks by forcing an exception to be thrown through the submission of suitably crafted data, then the attacker can mount a denial-of-service attack.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/ERR57-CPP.+Do+not+leak+resources+when+handling+exceptions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;new&gt;
+ 
+struct SomeType {
+  SomeType() noexcept; // Performs nontrivial initialization.
+  ~SomeType(); // Performs nontrivial finalization.
+  void process_item() noexcept(false);
+};
+ 
+void f() {
+  SomeType *pst = new (std::nothrow) SomeType();
+  if (!pst) {
+    // Handle error
+    return;
+  }
+ 
+  try {
+    pst-&gt;process_item();
+  } catch (...) {
+    // Process error, but do not recover from it; rethrow.
+    throw;
+  }
+  delete pst;
+}
+
+
+struct A {/* ... */};
+struct B {/* ... */};
+
+class C {
+  A *a;
+  B *b;
+protected:
+  void init() noexcept(false);
+public:
+  C() : a(new A()), b(new B()) {
+    init();
+  }
+};
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'ERR57-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+            'Exception Handling',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class, Struct"):
+        for obj_ref in class_ref.ent().refs("Define", "Member Object"):
+            ent_type = obj_ref.ent().type()
+
+            if ent_type and ("*" in ent_type):
+                for init_ref in obj_ref.ent().refs("Init"):
+                    lex = file.lexer().lexeme(init_ref.line(), init_ref.column())
+                    on_param = 0
+
+                    if lex and lex.next().text() == "(":
+                        while lex:
+                            if lex.text() == "(":
+                                on_param += 1
+                            elif lex.text() == ")":
+                                on_param -= 1
+
+                                if not on_param:
+                                    break
+                            elif (on_param == 1) and (lex.text() == "new") and (lex.token() == "Keyword"):
+                                check.violation(
+                                    obj_ref.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                            lex = lex.next(ignore_whitespace=True)
+
+    for func_ref in file.filerefs("Define", "Function"):
+        func_cfg = func_ref.ent().control_flow_graph()
+
+        if not func_cfg:
+            continue
+
+        for node in func_cfg.nodes():
+            if node.kind() == "try":
+                resources = {}  # key: lex.ent().id(), value: lex
+
+                lex = file.lexer().lexeme(
+                    node.line_begin(), node.column_begin())
+                on_body = 0
+                on_param = 0
+                on_catch = False
+
+                while lex:
+                    if not on_body and (lex.text() == "("):
+                        on_param += 1
+                    elif not on_body and (lex.text() == ")"):
+                        on_param -= 1
+                    elif not on_param and (lex.text() == "{"):
+                        on_body += 1
+                    elif not on_param and (lex.text() == "}"):
+                        on_body -= 1
+
+                        if not on_body and (lex and lex.next(ignore_whitespace=True) and lex.next(ignore_whitespace=True).text() == "catch"):
+                            on_catch = True
+
+                            lex = lex.next()
+                            continue
+                        elif not on_body:
+                            break
+                    elif not on_catch and on_body and lex.ent():
+                        init_value = lex.ent().freetext("InitText")
+
+                        if init_value and ("new" in init_value):
+                            if lex.ent().id() not in resources:
+                                resources[lex.ent().id()] = lex
+                    elif on_catch and (lex.text() == "delete"):
+                        lex = lex.next(ignore_whitespace=True)
+
+                        if lex.ent() and (lex.ent().id() in resources):
+                            resources.pop(lex.ent().id())
+
+                    lex = lex.next(ignore_whitespace=True)
+
+                for resource in resources.values():
+                    check.violation(resource.ent(), file,
+                                    resource.line_begin(), resource.column_begin(), ERR1)

@@ -1,0 +1,199 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-15-21
+
+
+import re
+
+
+ERR1 = 'Member has type with undefined size: %1'
+ERR2 = 'Enumerator has type with undefined size: %1'
+
+
+def ids():
+    return ('A9-6-1', 'CPP_T047')
+
+def name(id):
+    return {
+        'A9-6-1': """\
+Published Standards/AUTOSAR/Data types used for interfacing""",
+        'CPP_T047': """\
+All Checks/Language Specific/C and C++/Types/Data types used for interfacing"""
+
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A9-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Partially Automated',
+            'Types',
+        ],
+        'CPP_T047': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>Data types used for interfacing with hardware or conforming to communication protocols shall be trivial, standard-layout and only contain members of types with defined sizes./<p>
+<p><b>Rationale</b></p>
+When the layout of data types is important, only those types that have a defined size shall be used (see A3-9-1, this excludes <code>bool</code>, <code>wchar_t</code>, pointers, and pointers to members). Enumeration types may be used if they have been explicitly declared with an underlying type that has a defined size.
+</p>
+
+<p>
+Note: As the use of bit-fields is only allowed for interfacing with hardware or conforming to communication protocols, this restriction on types also applies to bit-fields, see A9-6-2.
+</p>
+
+<p>
+Note: The signed exact-width integer types like <code>std::int16_t</code> are guaranteed to have a two's complement representation.
+</p>
+
+<p><b>Developer's Note</b></p>
+1. It is up to the developer to determine if the data types are used for interfacing with hardware or conforming to communication protocols.<br>
+2. To reduce the number of violations, violations of enumerators occur when an enum is defined, not when each enumerator value is set.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A9-6-1.cpp 319312 2018-05-15 08:29:17Z christof.meerwald $
+#include &lt;cstdint&gt;
+
+enum class E1 : std::uint8_t
+{
+    E11,
+    E12,
+    E13
+};
+enum class E2 : std::int16_t
+{
+    E21,
+    E22,
+    E23
+};
+enum class E3
+{
+    E31,
+    E32,
+    E33
+};
+enum E4
+{
+    E41,
+    E42,
+    E43
+};
+
+class C
+{
+public:
+    std::int32_t a : 2; // Compliant
+    std::uint8_t b : 2U; // Compliant
+
+    bool c : 1; // Non-compliant - the size of bool is implementation defined
+
+    char d : 2; // Non-compliant
+    wchar_t e : 2; // Non-compliant - the size of wchar_t is implementation defined
+
+    E1 f1 : 2; // Compliant
+    E2 f2 : 2; // Compliant
+    E3 f3 : 2; // Non-compliant - E3 enum class does not explicitly define
+    // underlying type
+    E4 f4 : 2; // Non-compliant - E4 enum does not explicitly define underlying
+    // type
+};
+
+struct D
+{
+    std::int8_t a; // Compliant
+
+    bool b; // Non-compliant - the size of bool is
+    // implementation defined
+
+    std::uint16_t c1 : 8; // Compliant
+    std::uint16_t c2 : 8; // Compliant
+};
+
+    void Fn() noexcept
+{
+    C c;
+    c.f1 = E1::E11;
+}
+</code></pre>
+
+<p><b>See also</b><br>
+• MISRA C++ 2008 [7]: A9-6-2: Bit-fields shall be either bool type or an explicitly
+unsigned or signed integral type<br>
+• JSF December 2005 [8]: AV Rule 154: Bit-fields shall have explicitly unsigned
+integral or enumeration types only<br>
+• HIC++ v4.0 [9]: 9.2.1: Declare bit-fields with an explicitly unsigned integral or
+enumeration type
+</p>
+
+'''
+
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def nextUseful(lexeme):
+    return lexeme.next(ignore_comments=True, ignore_whitespace=True)
+
+def matchString(lexeme, text):
+    if lexeme.text() == text:
+        return nextUseful(lexeme)
+    else:
+        return None
+
+
+def check(check, file):
+
+    definedSizes = {'int8_t', 'int16_t', 'int32_t', 'int64_t', 'int_fast8_t', 'int_fast16_t', 'int_fast32_t', 'int_fast64_t', 'int_least8_t', 'int_least16_t', 'int_least32_t', 'int_least64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t', 'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t', 'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t'}
+    undefinedSizes = {'bool', 'char', 'wchar_t', 'signed char', 'unsigned char', 'short', 'short int', 'signed short', 'signed short int', 'unsigned short int', 'int', 'signed', 'signed int', 'unsigned', 'unsigned int', 'long', 'long int', 'signed long', 'signed long int', 'unsigned long', 'unsigned long int', 'long long', 'long long int', 'signed long long', 'signed long long int', 'unsigned long long', 'unsigned long long int', 'float', 'double', 'long double', 'size_t'}
+
+    lexer = None
+
+    for ref in file.filerefs('Define', 'Member Object, Enum'):
+        ent = ref.ent()
+
+        if ent:
+
+            # Member type size is undefined, and member is named
+            undefinedSizeType = None
+            if ent.type() in undefinedSizes and ent.name() != '[unnamed]':
+                undefinedSizeType = ent.type()
+                check.violation(ent, file, ref.line(), ref.column(), ERR1, undefinedSizeType)
+
+            # Enum size is undefined
+            elif ent.kindname() == 'Enum':
+                if not lexer:
+                    lexer = file.lexer()
+                lexeme = lexer.lexeme(ref.line(), ref.column())
+                if lexeme:
+                    lexeme = nextUseful(lexeme)
+                    lexeme = matchString(lexeme, ':')
+                    if not lexeme:
+                        undefinedSizeType = '(No explicit type)'
+                    while lexeme and lexeme.text() != '{':
+                        if lexeme.text() in undefinedSizes:
+                            undefinedSizeType = lexeme.text()
+                            break
+                        lexeme = nextUseful(lexeme)
+                if undefinedSizeType:
+                    check.violation(ent, file, ref.line(), ref.column(), ERR2, undefinedSizeType)

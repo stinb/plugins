@@ -1,0 +1,127 @@
+import re
+
+
+ERR1 = 'Detect errors when converting a string to a number.'
+
+
+# The ID for the check
+def id():
+    return ('ERR62-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ERR62-CPP': 'Published Standards/SEI Cert Standards/C++/Detect errors when converting a string to a number',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Detect errors when converting a string to a number'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Detect errors when converting a string to a number</p>
+<p><b>Risk Assessment</b></p>
+<p>It is rare for a violation of this rule to result in a security vulnerability unless it occurs in security-sensitive code. However, violations of this rule can easily result in lost or misinterpreted data.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/ERR62-CPP.+Detect+errors+when+converting+a+string+to+a+number</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;iostream&gt;
+ 
+void f() {
+  int i, j;
+  std::cin &gt;&gt; i &gt;&gt; j;
+  // ...
+}
+</pre>
+<p><i>Developer Notes: </i>This check automatically flags the use of the following functions: atoi, atol, atoll, atof, scanf, sscanf.</p>
+"""
+
+
+def tags(id):
+    return {
+        'ERR62-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        try_lines = []
+
+        func_cfg = func_ref.ent().control_flow_graph()
+
+        if func_cfg:
+            for node in func_cfg.nodes():
+                if node.kind() in {"try"}:
+                    node_line = node.line_begin()
+
+                    while node_line <= node.end_node().line_end():
+                        try_lines.append(node_line)
+                        node_line += 1
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in ["atoi", "atol", "atoll", "atof", "scanf", "sscanf"]:
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), ERR1)
+
+        for use_ref in func_ref.ent().refs("Use", "Unresolved Object Global"):
+            if use_ref.ent().name() == "cin":
+                if use_ref.line() in try_lines:
+                    continue
+
+                lex = file.lexer().lexeme(use_ref.line(), use_ref.column())
+                check_next_line = False
+
+                if lex.next(ignore_whitespace=True).text() == ">>":
+                    while lex.text() != ";":
+                        if lex.ent():
+                            underlying_type = lex.ent().freetext("UnderlyingType")
+
+                            if underlying_type and re.search(r"int|float|double", underlying_type):
+                                check_next_line = True
+                                break
+
+                        lex = lex.next(ignore_whitespace=True)
+
+                if check_next_line:
+                    next_line = use_ref.line() + 1
+                    lex = file.lexer().lexeme(next_line, 0)
+                    cin_checked = False
+
+                    while lex.line_begin() == next_line:
+                        if (lex.text() == "cin") and (lex.next().next().text() == "fail"):
+                            cin_checked = True
+                            break
+
+                        lex = lex.next(ignore_whitespace=True)
+
+                    if not cin_checked:
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)

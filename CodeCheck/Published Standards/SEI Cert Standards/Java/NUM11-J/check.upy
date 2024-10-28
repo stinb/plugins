@@ -1,0 +1,144 @@
+import re
+
+
+ERR1 = 'Do not compare or inspect the string representation of floating-point values.'
+
+
+# The ID for the check
+def ids():
+    return ('NUM11-J', 'JAVA_NUM11')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'NUM11-J': 'Published Standards/SEI Cert Standards/Java/Do not compare or inspect the string representation of floating-point values',
+        'JAVA_NUM11': 'All Checks/Language Specific/Java/Numeric Types and Operations/Do not compare or inspect the string representation of floating-point values',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'NUM11-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'JAVA_NUM11': [
+            'Language: Java',
+            'Numeric Types and Operations',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not compare or inspect the string representation of floating-point values'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not compare or inspect the string representation of floating-point values</p>
+<p><b>Risk Assessment</b></p>
+<p>Comparing or inspecting the string representation of floating-point values may have unexpected results.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/NUM11-J.+Do+not+compare+or+inspect+the+string+representation+of+floating-point+values</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">int i = 1;
+String s = Double.valueOf(i / 1000.0).toString();
+if (s.equals("0.001")) {
+  // ...
+}
+
+
+int i = 1;
+String s = Double.valueOf(i / 1000.0).toString();
+s = s.replaceFirst("[.0]*$", "");
+if (s.equals("0.001")) {
+  // ...
+}
+
+
+
+int i = 1;
+String s = Double.valueOf(i / 10000.0).toString();
+s = s.replaceFirst("[.0]*$", "");
+if (s.equals("0.0001")) {
+  // ...
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    for meth_ref in file.filerefs("Define", "Method"):
+        for set_var in meth_ref.ent().refs("Set", "Variable"):
+            if set_var.ent().type() == "String":
+                lex = lexer.lexeme(set_var.line(), set_var.column())
+                is_fpoint = False
+                on_set = False
+
+                while lex.text() != ";":
+                    if lex.text() == "=" and lex.token() == "Operator":
+                        on_set = True
+                    elif on_set and lex.text() == "valueOf" and lex.token() == "Identifier":
+                        on_param = 0
+
+                        while lex:
+                            if lex.text() == "(":
+                                on_param += 1
+                            elif lex.text() == ")":
+                                on_param -= 1
+
+                                if not on_param:
+                                    break
+                            elif on_param and lex.token() == "Literal" and re.search(r"\d*\.\d+", lex.text()):
+                                is_fpoint = True
+                                break
+                            elif on_param and lex.token() == "Identifier" and lex.ent() and lex.ent().type() and  lex.ent().type().lower() in {"float", "double"}:
+                                is_fpoint = True
+                                break
+
+                            lex = lex.next()
+
+                        break
+
+                    lex = lex.next(ignore_whitespace=True)
+
+                if is_fpoint:
+                    for use_ref in set_var.ent().refs("Useby Deref Partial", "Static Method Public Member"):
+                        if use_ref.ent().id() != meth_ref.ent().id():
+                            continue
+
+                        lex = lexer.lexeme(use_ref.line(), use_ref.column())
+
+                        while lex:
+                            if lex.text() == "." and lex.token() == "Punctuation":
+                                if lex.next().text() == "equals":
+                                    check.violation(
+                                        set_var.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                                break
+
+                            lex = lex.next()

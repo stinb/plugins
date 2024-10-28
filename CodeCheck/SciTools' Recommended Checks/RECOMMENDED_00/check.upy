@@ -1,0 +1,435 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-11-14
+
+
+import re
+
+
+ERR1 = 'Comment appears to contain code'
+ERR2 = 'The use of "#if 0" is considered to be "commenting out"'
+
+# Make regex for statements and preprocessor directives
+PREPROCESSOR = r'^\s*#(if|ifdef|ifndef|else|elif|elifdef|elifndef|endif|define|undef|include|error|warning|pragma|line)($|\s)'
+COMMENT_OR_END_OF_LINE = r'($|\n|\s*(\/\/|\/\*))'
+STATEMENT = r'[^@][;{}]' + COMMENT_OR_END_OF_LINE # Not @ then any ; { }
+FAKE_STATEMENT_0 = r'\w+\s+\w+\s+\w+;' + COMMENT_OR_END_OF_LINE # 3 words then ;
+FAKE_STATEMENT_1 = r'&gt;' + COMMENT_OR_END_OF_LINE # &gt then ;
+CONDITION = r'\b(if|do|for|while)\b\s*\(.*\)\s*{?' + COMMENT_OR_END_OF_LINE # if/do/for/while then ( )
+PHRASE = r'\s*' + r'[A-Z]?[a-z]+[,.?:;!-]?[\s]+' * 4
+SENTENCE = r'^[\s\S]*[a-z]+\.\s*$'
+
+
+def ids():
+    return ('RECOMMENDED_00', 'MISRA04_2.4', 'MISRA12_DIR_4.4', 'MISRA08_2-7-2', 'CPP_C000', 'A2-7-2', 'MISRA23_DIR_4.4', 'MISRA23_5.7.2')
+
+
+def name(id):
+    return {
+        'RECOMMENDED_00': '''SciTools' Recommended Checks/\
+Commented Out Code''',
+        'MISRA04_2.4': '''Published Standards/MISRA-C 2004/\
+2.4 Sections of code should not be "commented out"''',
+        'MISRA12_DIR_4.4': '''Published Standards/MISRA C 2012/\
+Directive 4.4 Sections of code should not be "commented out"''',
+        'MISRA08_2-7-2': '''Published Standards/MISRA-C++ 2008/\
+2-7-2 Sections of code shall not be "commented out"''',
+        'CPP_C000': '''All Checks/Language Specific/C and C++/Comments/\
+Commented Out Code''',
+        'A2-7-2': '''Published Standards/AUTOSAR/\
+Sections of code shall not be "commented out"''',
+        'MISRA23_DIR_4.4': '''Published Standards/MISRA C 2023/\
+Directive 4.4 Sections of code should not be "commented out"''',
+        'MISRA23_5.7.2': '''Published Standards/MISRA C++ 2023/\
+5.7.2 Sections of code should not be "commented out"''',
+        }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_2-7-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Comments',
+        ],
+        'MISRA04_2.4': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: advisory',
+            'Comments',
+        ],
+        'A2-7-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Comments',
+        ],
+        'RECOMMENDED_00': [
+            'Language: C',
+            'Language: C++',
+            'Comments',
+        ],
+        'MISRA12_DIR_4.4': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Comments',
+        ],
+        'CPP_C000': [
+            'Language: C',
+            'Language: C++',
+            'Comments',
+        ],
+        'MISRA23_DIR_4.4': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Comments',
+        ],
+        'MISRA23_5.7.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Comments',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+            'RECOMMENDED_00': '''\
+<p><b>Rationale</b></p>
+<p>Ideally, comments should only be used to explain aspects of the code that
+may not be clear from the source code itself. Code that is commented-out may
+become out of date, which may lead to confusion when maintaining the code.</p>
+<p>If code is detected in multiple, back-to-back comments, only the first
+comment will be reported</p>''',
+            'MISRA04_2.4': '''\
+<p>Where it is required for sections of source code not to be compiled then
+this should be achieved by use of conditional compilation (e.g. #if or #ifdef
+constructs with a comment). Using start and end comment markers for this
+purpose is dangerous because C does not support nested comments, and any
+comments already existing in the section of code would change the effect.
+</p>''',
+            'MISRA12_DIR_4.4': '''\
+<p><b>Amplification</b></p>
+<p>This rule applies to both // and /* ... */ styles of comment.
+</p>
+<p><b>Rationale</b></p>
+<p>Where it is required for sections of source code not to be compiled then
+this should be achieved by use of conditional compilation ( e.g. #if or #ifdef
+constructs with a comment ). Using start and end comment markers for this
+purpose is dangerous because C does not support nested comments, and any
+comments already existing in the section of code would change the effect.</p>
+<p><b>See also</b></p>
+<p>Rule 3.1, Rule 3.2</p>''',
+            'MISRA08_2-7-2': '''\
+<p><b>Rationale</b></p>
+<p>Ideally, comments should only be used to explain aspects of the code that
+may not be clear from the source code itself. Code that is commented-out may
+become out of date, which may lead to confusion when maintaining the code.</p>
+<p>A  more  appropriate  method  of  recording  the  history  of  changes  in
+source  code  (e.g.  a  Source Control System) should be used instead of
+commenting-out.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">  void fn ( int32_t i )
+  {
+     // ++i;   // We want to increment
+     for ( int32_t j = 0 ; j != i ; ++j )
+     {
+     }
+  }
+</code></pre>
+<p><b>See Also</b></p>
+<p>Rule 2??
+</p>''',
+            'CPP_C000': '''\
+<p><b>Rationale</b></p>
+<p>Ideally, comments should only be used to explain aspects of the code that
+may not be clear from the source code itself. Code that is commented-out may
+become out of date, which may lead to confusion when maintaining the code.</p>
+<p>If code is detected in multiple, back-to-back comments, only the first
+comment will be reported</p>''',
+            'A2-7-2': '''\
+<p><b>Rationale</b></p>
+<p>Comments, using both C-style and C++ comments, should only be used to explain
+aspect of the source code. Code that is commented-out may become out of date,
+which may lead to confusion while maintaining the code.</p>
+<p>Additionally, C-style comment markers do not support nesting, and for this
+purpose commenting out code is dangerous, see: M2-7-1.</p>
+<p>Note that the code that is a part of a comment (e.g. for clarification of the
+usage of the function, for specifying function behavior) does not violate this
+rule. As it is not possible to determine if a commented block is a textual
+comment, a code example or a commented-out piece of code, this rule is not
+enforceable by static analysis tools.</p>
+<p><b><Example</b></p>
+<pre><code language="C++">// $Id: A2-7-2.cpp 305382 2018-01-26 06:32:15Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+void Fn1() noexcept
+{
+    std::int32_t i = 0;
+    // /*
+    //  *  ++i; /* incrementing the variable i */
+    //  */  // UndCC_Violation - C-style comments nesting is not supported,
+    //  compilation error
+    for (; i &lt; 10; ++i)
+    {
+        // ...
+    }
+}
+void Fn2() noexcept
+{
+    std::int32_t i = 0;
+    // ++i;  // Incrementing the variable i // UndCC_Violation - code should not
+    // be commented-out
+    for (; i &lt; 10; ++i)
+    {
+        // ...
+    }
+}
+void Fn3() noexcept
+{
+    std::int32_t i = 0;
+    ++i;  // Incrementing the variable i using ++i syntax // UndCC_Valid - code
+          // is not commented-out, but ++i occurs in a
+          // comment too
+    for (; i &lt; 10; ++i)
+    {
+        // ...
+    }
+}
+</code></pre>''',
+            'MISRA23_DIR_4.4': '''\
+<p><b>Amplification</b></p>
+<p>This rule applies to both // and /* ... */ styles of comment.
+</p>
+<p><b>Rationale</b></p>
+<p>Where it is required for sections of source code not to be compiled then
+this should be achieved by use of conditional compilation ( e.g. #if or #ifdef
+constructs with a comment ). Using start and end comment markers for this
+purpose is dangerous because C does not support nested comments, and any
+comments already existing in the section of code would change the effect.</p>
+<p><b>See also</b></p>
+<p>Rule 3.1, Rule 3.2</p>''',
+            'MISRA23_5.7.2': '''\
+<p><b>Amplification</b></p>
+<p>This directive applies to the use of both // and /* ... */ style comments.</p>
+
+<p><b>Rationale</b></p>
+<p>Comments should only be used to explain aspects of the source code; they should not be used to
+record the history of changes to the source code.</p>
+<p>In addition, whilst the nesting of C-style comments is not supported by the C++ Standard, it is
+supported by some compilers. This means that the commenting out of any code that contains
+comments may behave differently with different compilers (see Rule 5.7.1).</p>
+<p>This directive is generally undecidable, as it is not always possible for a tool to determine if a comment
+contains explanatory text, a code example or commented out code.</p>
+<p>Note: it is acknowledged that it may be useful to quote statements or expressions as part of a larger
+comment in order to document and explain some aspect of the program (e.g. clarifying the use of a
+function, or explaining the algorithm being implemented). Such usage is not the intended target of
+this directive.</p>
+
+<p><b>Example</b></p>
+<p>The following compliant example documents an API with the use of pseudo-code. It is assumed that
+code wrapped within the ``` markup is recognized as documentation and is not commented out
+code.</p>
+<pre><code language="C++">// You should not call lock/unlock directly, but through RAII:
+// ```
+// void f( Data & d, MyMutex & m )
+// {
+// std::scoped_lock lock { m };
+// d.doSomething();
+// } // m is automatically unlocked
+// ```
+struct MyMutex
+{
+ void lock();
+ void unlock();
+};
+</code></pre>
+
+<p>The following non-compliant example uses a comment to record code history.</p>
+<pre><code language="C++">// Bug 42 - this call used to be:
+// calculate ( z , y + 1 );
+calculate ( x , y - 1 );
+enum E
+{
+#if 0 // Non-compliant
+ E_0 // - this is considered to be commented out code
+#else
+ E_1
+#endif
+};
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 5.7.1</p>''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    flag_directive = True if check.id() == "MISRA23_5.7.2" else False
+
+    check.option().checkbox('ignoreInactive', 'Ignore Inactive Code', False)
+    check.option().checkbox('flag_directive', 'Flag the use of "#if 0"', flag_directive)
+
+    choices = [
+        'More Aggressive - may result in false positives, comments that are not really code',
+        'Less Aggressive - may result in missing instances of commented code',
+    ]
+    check.option().choice('strict', 'Aggressiveness', choices, choices[1])
+
+
+def makeOperatorRegex():
+    prefixesOps = ['++', '--']
+    woperatorsw = ['::', '.', '->', '.*', '->*']
+    _operatorsw = ['!', '*', '&']
+    _operators_ = ['+', '~', '*', '&', '/', '%', '<<', '>>', '<=>', '<',
+        '<=', '>', '>=', '==', '!=', '^', '|', '&&', '||', '?', ':', '=', '+=',
+        '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '^=', '|=']
+    regexChars = r'(\+|\*|\.|\^|\||\/|\?)'
+    exprEnd = r'[,;\)]'
+
+    pattern = []
+
+    # Minus operator, which can be a dash in a comment
+    op = '-'
+    pattern.append(rf' {op}\w+{exprEnd}')
+
+    # Operators preceded by word characters, followed by a letter/underscore
+    for op in woperatorsw:
+        op = re.sub(regexChars, r'\\\1', op)
+        pattern.append(rf'\w{op}[a-z|A-Z|_]')
+
+    # Operators preceded by a space
+    for op in _operatorsw:
+        op = re.sub(regexChars, r'\\\1', op)
+        pattern.append(rf'\S {op}\w')
+
+    # Operators surrounded by spaces
+    for op in _operators_:
+        op = re.sub(regexChars, r'\\\1', op)
+        pattern.append(rf'\S {op} \S')
+
+    # Prefix operators
+    for op in prefixesOps:
+        op = re.sub(regexChars, r'\\\1', op)
+        pattern.append(rf' {op}\w+{exprEnd}')
+
+    # Postfix operators
+    for op in prefixesOps:
+        op = re.sub(regexChars, r'\\\1', op)
+        pattern.append(rf' \w+{op}\{exprEnd}')
+
+    return '|'.join(pattern)
+
+
+OPERATOR = makeOperatorRegex()
+
+
+def nextLex(lex):
+    return lex.next(ignore_whitespace=True)
+
+
+def commentIsCode(text, strict):
+    # Search for possible code
+    preprocessors = len(re.findall(PREPROCESSOR, text, re.MULTILINE))
+    operators     = len(re.findall(OPERATOR, text))
+    statements    = len(re.findall(STATEMENT, text))
+    conditions    = len(re.findall(CONDITION, text))
+
+    # Ignore statements of ; that are after 3 words
+    fakeStatements = len(re.findall(FAKE_STATEMENT_0, text))
+    statements -= fakeStatements
+
+    # Ignore statements of ; that are after &gt
+    fakeStatements = len(re.findall(FAKE_STATEMENT_1, text))
+    statements -= fakeStatements
+
+    # Search for non-empty lines
+    # lineCount = max(len(re.findall(r'\S\n', text)), 1)
+    lineCount = max(len(re.findall(r'\S.*(\n|$)', text)), 1)
+
+    # Treat preprocessor directives and conditions as statements
+    statements += preprocessors
+    statements += conditions
+
+    # Skip unless many of the lines have statements/operators
+    codePerLine = (statements + operators) / lineCount
+    codePerLineMin = 0.5 if strict else 0.75
+    if codePerLine < codePerLineMin:
+        return False
+
+    # Skip unless many of the lines have statements
+    # Make
+    codePerLine = (statements) / lineCount
+    codePerLineMin = 0.45
+    if codePerLine < codePerLineMin:
+        return False
+
+    # Skip short comments which look like mostly words
+    smallCommentLineCount = 3
+    if not strict and lineCount <= smallCommentLineCount:
+        if re.match(PHRASE, text) or re.match(SENTENCE, text):
+            return False
+
+    return True
+
+
+def check(check, file):
+    # Options
+    ignoreInactive = check.options().lookup('ignoreInactive')
+    strict = re.match('More', check.options().lookup('strict'))
+    flag_directive = check.options().lookup('flag_directive')
+
+    # Lines that are marked as commented code
+    lines = set()
+
+    lex = file.lexer(lookup_ents=False).first()
+    while lex:
+        if flag_directive and (lex.text() == "if") and (lex.token() == "Preprocessor") and (lex.next(True).text() == "0") and (lex.next(True).token() == "Literal"):
+            check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR2)
+
+        # Skip unless the lexeme is a comment
+        if lex.token() != 'Comment':            
+            lex = nextLex(lex)                
+
+            continue
+
+        # Skip inactive code
+        if ignoreInactive and lex.inactive():
+            lex = nextLex(lex)
+            continue
+
+        # Remove outer comment symbols // or /* */
+        text = re.sub(r'(^\s*(\/\/|\/\*))|(\*\/$)', '', lex.text())
+
+        # Remove inner comment symbols: * at beginning of line
+        text = re.sub(r'(^|\n)[ \t]*\*+[ \t]+', '\n', text)
+
+        line   = lex.line_begin()
+        column = lex.column_begin()
+
+        # Violation if this line is code and the previous wasn't
+        if commentIsCode(text, strict):
+            lines.add(line)
+            if (line - 1) not in lines:
+                check.violation(file, file, line, column, ERR1)
+
+        lex = nextLex(lex)

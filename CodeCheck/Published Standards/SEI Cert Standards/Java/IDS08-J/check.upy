@@ -1,0 +1,177 @@
+ERR1 = 'Sanitize untrusted data included in a regular expression.'
+
+
+# The ID for the check
+def ids():
+    return ('IDS08-J', 'JAVA_IDS08')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'IDS08-J': 'Published Standards/SEI Cert Standards/Java/Sanitize untrusted data included in a regular expression',
+        'JAVA_IDS08': 'All Checks/Language Specific/Java/Input Validation and Data Sanitization/Sanitize untrusted data included in a regular expression',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'IDS08-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_IDS08': [
+            'Language: Java',
+            'Input Validation and Data Sanitization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Sanitize untrusted data included in a regular expression'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Sanitize untrusted data included in a regular expression</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to sanitize untrusted data included as part of a regular expression can result in the disclosure of sensitive information.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/IDS08-J.+Sanitize+untrusted+data+included+in+a+regular+expression</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.CharBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+public class LogSearch {
+    public static void FindLogEntry(String search) {
+        // Construct regex dynamically from user string
+        String regex = "(.*? +public\\[\\d+\\] +.*" + search + ".*)";
+        Pattern searchPattern = Pattern.compile(regex);
+        try (FileInputStream fis = new FileInputStream("log.txt")) {
+            FileChannel channel = fis.getChannel();
+            // Get the file's size and map it into memory
+            long size = channel.size();
+            final MappedByteBuffer mappedBuffer = channel.map(
+                    FileChannel.MapMode.READ_ONLY, 0, size);
+            Charset charset = Charset.forName("ISO-8859-15");
+            final CharsetDecoder decoder = charset.newDecoder();
+            // Read file into char buffer
+            CharBuffer log = decoder.decode(mappedBuffer);
+            Matcher logMatcher = searchPattern.matcher(log);
+            while (logMatcher.find()) {
+                String match = logMatcher.group();
+                if (!match.isEmpty()) {
+                    System.out.println(match);
+                }
+            }
+        } catch (IOException ex) {
+            System.err.println("thrown exception: " + ex.toString());
+            Throwable[] suppressed = ex.getSuppressed();
+            for (int i = 0; i &lt; suppressed.length; i++) {
+                System.err.println("suppressed exception: "
+                        + suppressed[i].toString());
+            }
+        }
+        return;
+    }
+</code></pre>
+<p><i>Developer Notes: </i>This check automatically flags any regex with a string not passed to the Pattern.quote() function. This will result in false positives when another method is used to sanitize the string.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    quoted_str = []
+    regex_str = {}
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call Nondynamic", "Static Method Public Member"):
+        if call_ref.ent().longname() == "java.util.regex.Pattern.compile":
+            call_lex = lexer.lexeme(call_ref.line(), call_ref.line())
+
+            while call_lex and call_lex.text() != ";":
+                lex_type = call_lex.ent().type() if call_lex.ent() else None
+
+                if call_lex.token() == "Identifier" and lex_type and lex_type == "String":
+                    str_ent = call_lex.ent()
+                    on_set = False
+
+                    for set_ref in str_ent.refs("Setby"):
+                        lex = lexer.lexeme(
+                            set_ref.line(), set_ref.column())
+
+                        while lex and lex.text() != ";":
+                            ent_type = lex.ent().type() if lex.ent() else None
+
+                            if lex.text() == "=" and lex.token() == "Operator":
+                                on_set = True
+                            elif on_set and lex.token() == "Identifier" and ent_type and ent_type == "String":
+                                regex_str[lex.ent().id()] = set_ref
+
+                            lex = lex.next(ignore_whitespace=True)
+
+                call_lex = call_lex.next(ignore_whitespace=True)
+
+        elif call_ref.ent().longname() == "java.util.regex.Pattern.quote":
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+
+            while lex and lex.text() != ";":
+                lex_type = lex.ent().type() if lex.ent() else None
+
+                if lex.token() == "Identifier" and lex_type and lex_type == "String":
+                    quoted_str.append(lex.ent().id())
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+    if regex_str:
+        for id, ref in regex_str.items():
+            if id not in quoted_str:
+                check.violation(ref.scope(), file, ref.line(),
+                                ref.column(), ERR1)

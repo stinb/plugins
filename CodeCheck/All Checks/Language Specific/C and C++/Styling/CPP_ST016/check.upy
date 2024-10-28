@@ -1,0 +1,114 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 1-11-2021
+
+import re
+
+# The ID for the check
+def id():
+    return 'CPP_ST016'
+
+# The short name of the check
+def name():
+    return "All Checks/Language Specific/C and C++/Styling/" +  """\
+Calls to free should have an if test around them if it is uncertain that the pointer has been properly allocated."""
+
+
+def tags(id):
+    return {
+        'CPP_ST016': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Calls to free should have an if test around them if it is uncertain that the pointer has been properly allocated."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale:</b></p>
+<p>Calls to free should have an if test around them if it is uncertain that the pointer has been properly allocated.</p>
+<p><b>Developer's Note:</b></p>
+<p>This Codecheck will flag a false positive if the free is called beneath a nested 'if' conditional.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_global():
+    return False
+
+# Options for the check
+def define_options(check):
+   return
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file): 
+
+    # pull all call references to unresolved functions from the file (these will be c lib free calls)
+    call_refs = file.filerefs("Call", "C Unresolved Function")
+
+    # pull all member function free() calls
+    unknown_mem_funcs = file.filerefs("Deref Call", "C Unknown Member Object")
+
+    # spin up lexer
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+    
+    lexeme = lexer.first()
+
+    for ref in call_refs:
+
+        if ref.ent().simplename() == "free":
+
+            # move lexeme to reference to begin parsing
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+
+            if_test_found = False
+
+            # Parse backwards through file until we reach a previous function
+            while lexeme and lexeme.text() != "}":
+
+                # if we find an if or else conditional, the call to free is tested sufficiently
+                if lexeme.token() == "Keyword" and (lexeme.text() == "if" or lexeme.text() == "else"):
+
+                    if_test_found = True
+                
+                lexeme = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+            if not if_test_found:
+                check.violation(file, file, ref.line(), ref.column(), "Violation: call to C lib function free() should be 'if' tested")
+
+
+    for mem_func in unknown_mem_funcs:
+
+        if mem_func.ent().simplename() == "free":
+
+            # move lexeme to reference to begin parsing
+            lexeme = lexer.lexeme(mem_func.line(), mem_func.column())
+
+            if_test_found = False
+
+            # Parse backwards through file until we reach a previous function
+            while lexeme and lexeme.text() != "}":
+
+                # if we find an if or else conditional, the call to free is tested sufficiently
+                if lexeme.token() == "Keyword" and (lexeme.text() == "if" or lexeme.text() == "else"):
+
+                    if_test_found = True
+                
+                lexeme = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+            if not if_test_found:
+                check.violation(file, file, mem_func.line(), mem_func.column(), "Violation: call to member function free() should be 'if' tested")
+

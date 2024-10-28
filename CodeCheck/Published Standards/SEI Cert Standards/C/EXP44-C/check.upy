@@ -1,0 +1,122 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 07-30-2021
+
+import re
+
+ERR1 = "Side effects were used"
+
+def id():
+    return 'EXP44-C'
+
+def name():
+    return "Published Standards/SEI Cert Standards/C/" +  """\
+Do not rely on side effects in operands to sizeof, _Alignof, or _Generic"""
+
+
+
+
+def tags(id):
+    return {
+        'EXP44-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Expressions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Some operators do not evaluate their operands beyond the type information
+the operands provide. When using one of these operators, do not pass an operand
+that would otherwise yield a side effect since the side effect will not be
+generated.</p>
+<p>Non-compliant</p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void func(void) {
+  int a = 14;
+  int b = sizeof(a++);
+}
+</code></pre>
+<p>Compliant</p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void func(void) {
+  int a = 14;
+  int b = sizeof(a);
+  ++a;
+}
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not re.search(r'sizeof|_Generic|_Alignof', file.contents()):
+        return
+
+    # Gather the names of the macros that use '_Generic'
+    genList = []
+    if re.search(r'_Generic', file.contents()):
+        refs = file.filerefs('Define', 'Macro')
+        for ref in refs:
+            if re.search(r'_Generic', ref.ent().type()):
+                genList.append(ref.ent().name())
+
+
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        # Check if lexeme text is 'sizeof', '_Alignof', or '_Generic'
+        if re.match(r'sizeof|_Alignof', lexeme.text()) or (lexeme.ent() and lexeme.ent().name() in genList):
+            lexeme = lexeme.next(True, True)
+            # Check for any side effects
+            if lexeme.text() == '(':
+                close = findClose(lexeme)
+                while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    if lexeme.ent():
+                        # Throw violation if there was a function called
+                        if re.search(r'function', lexeme.ent().kindname().lower()):
+                            check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                            break
+
+                    # Throw violation if a increment or decrement was used
+                    elif re.match(r'\+\+|--', lexeme.text()):
+                        check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                        break
+
+                    lexeme = lexeme.next(True, True)
+
+
+
+
+
+def findClose(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == ')' and count == 0):
+        if lexeme.text() == '(':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme.text() == ')':
+            count -= 1
+
+    return lexeme
+
+

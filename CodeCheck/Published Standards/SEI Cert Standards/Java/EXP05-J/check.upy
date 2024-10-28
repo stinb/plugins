@@ -1,0 +1,120 @@
+ERR1 = 'Do not follow a write by a subsequent write or read of the same object within an expression.'
+
+
+# The ID for the check
+def ids():
+    return ('EXP05-J', 'JAVA_EXP05')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP05-J': 'Published Standards/SEI Cert Standards/Java/Do not follow a write by a subsequent write or read of the same object within an expression',
+        'JAVA_EXP05': 'All Checks/Language Specific/Java/Expressions/Do not follow a write by a subsequent write or read of the same object within an expression',
+    }[id]
+
+
+def tags(id):
+    return {
+        'EXP05-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_EXP05': [
+            'Language: Java',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not follow a write by a subsequent write or read of the same object within an expression'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not follow a write by a subsequent write or read of the same object within an expression</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to understand the evaluation order of expressions containing side effects can result in unexpected output.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/EXP05-J.+Do+not+follow+a+write+by+a+subsequent+write+or+read+of+the+same+object+within+an+expression</i></p>
+<p><b>Exceptions</b></p>
+<p><i>EXP05-J-EX0: The increment and decrement operators (++) and (--) read a numeric variable, and then assign a new value to the variable. Although these operators read and modify a value, they are well-understood and are an exception to this rule. This exception does not apply if a value modified by an increment or decrement operator is subsequently read or written.</i></p>
+<p><i>EXP05-J-EX1: The conditional-or || and conditional-and && operators have well-understood semantics. Writes followed by subsequent writes or reads do not violate this rule if they occur in different operands of || or &&.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class BadPrecedence {
+  public static void main(String[] args) {
+    int number = 17;
+    int threshold = 10;
+    number = (number &gt; threshold ? 0 : -2)
+             + ((31 * ++number) * (number = get()));
+    // ...
+    if (number == 0) {
+      System.out.println("Access granted");
+    } else {
+      System.out.println("Denied access"); // number = -2
+    }
+  }
+
+  public static int get() {
+    int number = 0;
+    // Assign number to nonzero value if authorized, else 0
+    return number;
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for varset_ref in file.filerefs("Set", "Variable Local"):
+        lex = lexer.lexeme(varset_ref.line(), varset_ref.column())
+        on_set = False
+        is_array = False
+        array_index = None
+
+        if "[]" in varset_ref.ent().type():
+            is_array = True
+
+        while lex.text() != ";":
+            lex_ref = lex.ref() if lex.ref() else None
+
+            if is_array and array_index == None and lex.text() == "[" and lex.token() == "Punctuation":
+                array_index = lex.next().text()
+            elif lex.text() == "=" and lex.token() == "Operator":
+                on_set = True
+            elif on_set and lex_ref and lex.ent().id() == varset_ref.ent().id() and lex_ref.kind().check("Setby"):
+                if is_array:
+                    while lex.text() != "[":
+                        lex = lex.next()
+
+                    if lex.next().text() != array_index:
+                        continue
+
+                check.violation(varset_ref.ent(), file,
+                                varset_ref.line(), varset_ref.column(), ERR1)
+                break
+
+            lex = lex.next(ignore_whitespace=True,
+                           ignore_comments=True)

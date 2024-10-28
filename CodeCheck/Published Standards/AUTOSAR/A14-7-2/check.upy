@@ -1,0 +1,103 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 05-05-2022
+
+import re
+
+ERR1 = 'Violation: template specialization for "%1" declared in file "%2" but primary template declared in file "%3"'
+ERR2 = 'Violation: template specialization for "%1" shall be declared in same file as user-defined type for which the specialization is declared ("%2")'
+
+
+def ids():
+    return ('A14-7-2', 'CPP_D070')
+
+
+def name(id):
+    return {
+        'A14-7-2': 'Published Standards/AUTOSAR/Template specialization shall be declared in the same file as the primary template',
+        'CPP_D070': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Template specialization shall be declared in the same file as the primary template',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A14-7-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D070': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Template specialization shall be declared in the same file (1) as the primary template (2) as a user-defined type, for which the specialization is declared.</p>
+<p><b>Risk Assessment</b></p>
+<p>It is undefined behavior, when a compiler sees the (partial or explicit) template specialization after it already has instantiated the primary or less specialized template.
+Moreover, the case (2) allows compile-time interfaces to be extensible, as developers can safely provide custom specializations e.g. for traits classes or std::hash.</p>
+<p>For the full standard: see <i>AUTOSAR AP Release 18-10</i></p>
+<p><b>Exceptions</b></p>
+<p><i>None</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">template &lt;&gt;
+struct is_serializable&lt;std::uint16_t&gt; : std::true_type {};   //non-compliant, not declared in the same file as is_serializable class
+
+template &lt;typename T, typename = std::enable_if&lt;is_serializable&lt;T&gt;::value&gt;&gt;
+std::vector&lt;std::uint8_t&gt; serialize(const T& t)
+{
+    //only a basic stub
+    return std::vector&lt;std::uint8_t&gt;{t};
+}
+
+#include &lt;string&gt;
+int main() {
+    serialize(std::uint8_t{3});
+}
+
+</code></pre>
+<p><i>Developer Notes: </i>None</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # part 1: check that specialization declared in same file as primary template
+    for primary_template_ref in file.filerefs("Define", "C Class Type Template, C Struct Type Template, C Function Template"):
+        template = primary_template_ref.ent()
+        template_file = primary_template_ref.file().name()
+
+        for specialize_ref in template.refs("C Specializeby"):
+            specialize_file = specialize_ref.file().name()
+
+            if specialize_file != template_file:
+                check.violation(template, specialize_ref.file(), specialize_ref.line(), specialize_ref.column(), ERR1, template.name(), specialize_file, template_file)
+
+    # part 2: check that specialization is declared in same file as user-defined type for which the specialization is declared
+    for temp_arg_ref in file.filerefs("C Typed TemplateArgument"):
+        temp_arg_file = temp_arg_ref.file().name()
+
+        temp_arg = temp_arg_ref.ent()
+        temp_arg_definition_file = None
+        if temp_arg.ref("C Definein"):
+            temp_arg_definition_file = temp_arg.ref("C Definein").file().name()
+
+        if temp_arg_file != temp_arg_definition_file and temp_arg_definition_file != None:
+            check.violation(temp_arg, temp_arg_ref.file(), temp_arg_ref.line(), temp_arg_ref.column(), ERR2, temp_arg.name(), temp_arg_definition_file)
+
+
+
+
+

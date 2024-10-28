@@ -1,0 +1,111 @@
+ERR1 = 'A lambda is an operand to %1'
+
+# The ID for the check
+def ids():
+    return ('A5-1-7', 'CPP_E039')
+
+# The short name of the check
+def name(id):
+    return {
+        'A5-1-7': 'Published Standards/AUTOSAR/A lambda shall not be an operand to decltype or typeid',
+        'CPP_E039': 'All Checks/Language Specific/C and C++/Expressions/A lambda shall not be an operand to decltype or typeid'
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A5-1-7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E039': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>\"The type of the lambda-expression (which is also the type of the closure object) is a unique, unnamed non-union class type [...]” [C++14 Language Standard] [3]</p>
+<p>Each lambda expression has a different unique underlying type, and therefore the type is not to be used as a decltype or typeid argument. It is allowed to use it as a template parameter and a function argument.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A5-1-7.cpp 289815 2017-10-06 11:19:11Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 #include &lt;functional&gt;
+4 #include &lt;vector&gt;
+5 void Fn()
+6 {
+7 auto lambda1 = []() -&gt; std::int8_t { return 1; };
+8 auto lambda2 = []() -&gt; std::int8_t { return 1; };
+9
+10 if (typeid(lambda1) == typeid(lambda2)) // Non-compliant - types of lambda1
+11 // and lambda2 are different
+12 {
+13 // ...
+14 }
+15
+16 std::vector&lt;decltype(lambda1)&gt; v; // Non-compliant
+17 // v.push_back([]() { return 1; }); // Compilation error, type of pushed
+18 // lambda is different than decltype(lambda1)
+19 // using mylambda_t = decltype([](){ return 1; }); // Non-compliant -
+20 // compilation error
+21 auto lambda3 = []() { return 2; };
+22 using lambda3_t = decltype(lambda3); // Non-compliant - lambda3_t type can
+23 // not be used for lambda expression
+24 // declarations
+25 // lambda3_t lambda4 = []() { return 2; }; // Conversion error at
+26 // compile-time
+27 std::function&lt;std::int32_t()&gt; f1 = []() { return 3; };
+28 std::function&lt;std::int32_t()&gt; f2 = []() { return 3; };
+29
+30 if (typeid(f1) == typeid(f2)) // Compliant - types are equal
+31 {
+32 // ...
+33 }
+34 }
+35
+36 template &lt;typename T&gt;
+37 void Foo(T t);
+38
+39 void Bar()
+40 {
+41 Foo([]() {}); // Compliant
+42 }
+</code></pre>
+<p><b>See also</b></p>
+<p>none</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = file.lexer(False, 8, False, False)
+    for ref in file.filerefs("Use","Object", True):
+        ent = ref.ent()
+        if ent.type() == "(lambda)":
+            for useby in ent.refs("Useby"):
+                lex = lexer.lexeme(useby.line(), useby.column()).previous(ignore_whitespace=True, ignore_comments=True)
+                while lex and lex.token() not in {"Keyword", "Identifier"}:
+                    lex = lex.previous(ignore_whitespace=True, ignore_comments=True)
+                if lex.text() == 'decltype':
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1, 'decltype')
+                elif lex.text() == 'typeid':
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1, 'typeid')

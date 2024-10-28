@@ -1,0 +1,137 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-30-2021
+import re
+
+ERR1 = 'Pointer comparison was done on different arrays'
+
+def ids():
+    return ('M5-0-18', 'CPP_P043', 'MISRA12_18.3', 'MISRA08_5-0-18', 'MISRA04_17.3', 'MISRA23_18.3')
+
+def name(id):
+    return {
+        'M5-0-18': 'Published Standards/AUTOSAR/>, >=, <, <= shall not be applied to objects of pointer type, except where they point to the same array',
+        'CPP_P043': 'All Checks/Language Specific/C and C++/Pointers/>, >=, <, <= shall not be applied to objects of pointer type, except where they point to the same array',
+        'MISRA12_18.3': 'Published Standards/MISRA C 2012/18.3 The relational operators >, >=, < and <= shall not be applied to objects of pointer type except where they point into the same object',
+        'MISRA08_5-0-18': 'Published Standards/MISRA-C++ 2008/5-0-18 >, >=, <, <= shall not be applied to objects of pointer type, except where they point to the same array',
+        'MISRA04_17.3': 'Published Standards/MISRA-C 2004/17.3 >, >=, <, <= shall not be applied to objects of pointer type, except where they point to the same array',
+        'MISRA23_18.3': 'Published Standards/MISRA C 2023/18.3 The relational operators >, >=, < and <= shall not be applied to objects of pointer type except where they point into the same object',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-18': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Pointers',
+        ],
+        'MISRA12_18.3': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Pointers',
+        ],
+        'MISRA04_17.3': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Pointers',
+        ],
+        'M5-0-18': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P043': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+        'MISRA23_18.3': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Attempting to make comparisons between pointers will produce undefined
+behaviour if the two pointers do not point to the same object.</p>
+<p>Note: it is permissible to address the next element beyond the end of an
+array, but accessing this element is not allowed.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">void f1 ( )
+{
+    int32_t a1[ 10 ];
+    int32_t a2[ 10 ];
+    int32_t * p1 = a1;
+    if ( p1 &lt; a1 ) // Compliant
+    {
+    }
+    if ( p1 &lt; a2 ) // Non-compliant
+    {
+    }
+}
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    refs = file.filerefs('Use', 'Object')
+    lexer = None
+
+    for ref in refs:
+        if not re.search(r'\*', str(ref.ent().type())):
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        prevLex = lexeme.previous(True, True)
+        nextLex = lexeme.next(True, True)
+
+        # Check behind
+        if prevLex and re.match(r'>|>=|<|<=', prevLex.text()):
+            prevLex = prevLex.previous(True, True)
+            arrayName = re.sub(r'\&', '', str(ref.ent().value()))
+            arrayName = re.sub(r'\[.*\]', '', arrayName)
+            arrayName = re.sub(r'\*', '', arrayName)
+            if prevLex and prevLex.ent() and arrayName:
+                try:
+                    re.compile(arrayName)
+                except:
+                    break
+                if not re.search(arrayName, str(prevLex.ent().type())) and arrayName != prevLex.ent().name():
+                    check.violation(ref.ent(), file, prevLex.line_begin(), prevLex.column_begin(), ERR1)
+
+        # Check in front
+        if re.match(r'>|>=|<|<=', nextLex.text()):
+            nextLex = nextLex.next(True, True)
+            arrayName = re.sub(r'\&', '', str(ref.ent().value()))
+            arrayName = re.sub(r'\[.*\]', '', arrayName)
+            arrayName = re.sub(r'\*', '', arrayName)
+            if nextLex and nextLex.ent() and arrayName:
+                try:
+                    re.compile(arrayName)
+                except:
+                    break
+                if not re.search(arrayName, str(nextLex.ent().type())) and arrayName != nextLex.ent().name():
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

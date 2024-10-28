@@ -1,0 +1,135 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2021-11-01
+
+
+import re
+
+
+ERR1 = 'Name found in dependent base not referred to by qualified-id or this-> inside of class template'
+
+
+def ids():
+    return ('M14-6-1', 'CPP_A016')
+
+
+def name(id):
+    return {
+        'M14-6-1': '''\
+Published Standards/AUTOSAR/In a class template with a dependent base, any name \
+that may be found in that dependent base shall be referred to using a \
+qualified-id or this->''',
+        'CPP_A016': '''\
+All Checks/Language Specific/C and C++/Assignment Operators/In a class template with a dependent \
+base, any name that may be found in that dependent base shall be referred to \
+using a qualified-id or this->'''
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'M14-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Assignment Operators',
+        ],
+        'CPP_A016': [
+            'Language: C',
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>Using a qualified-id or prefixing the identifier with this-&gt; ensures that the
+entity chosen is consistent with developer expectations.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">typedef int32_t TYPE;
+void g ( );
+template &lt;typename T&gt;
+class B;
+template &lt;typename T&gt;
+class A : public B&lt;T&gt;
+{
+  void f1 ( )
+  {
+    TYPE t = 0;                 // Non-compliant Example 1
+    g ( );                      // Non-compliant Example 2
+  }
+  void f2 ( )
+  {
+    ::TYPE t1 = 0;              // Compliant - explicit use global TYPE
+    ::g ( );                    // Compliant - explicit use global func
+    typename B&lt;T&gt;::TYPE t2 = 0; // Compliant - explicit use base TYPE
+    this-&gt;g ( );                // Compliant - explicit use base "g"
+  }
+};
+template &lt;typename T&gt;
+class B
+{
+public:
+  typedef T TYPE;
+  void g ( );
+};
+template class A&lt;int32_t&gt;;
+</code></pre>
+
+<p>A conforming compiler will choose <code>::TYPE</code> in Example 1, and
+<code>::g</code> in Example 2.</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+
+    # All identifiers set by the class template
+    for ref in file.filerefs('Define, Call, Typed'):
+        ent = ref.ent()
+
+        # Identifier accessed in class template
+        classEnt = ref.scope().parent()
+        if classEnt and ent.kindname() == 'Typedef':
+            classEnt = classEnt.parent()
+        if classEnt and classEnt.kindname() == 'Class Template':
+
+            # Identifier is the same as in a base class template, and it's not a destructor
+            sameName = False
+            for baseRef in classEnt.refs('Base'):
+                baseEnt = baseRef.ent()
+                for member in baseEnt.ents('Define, Declare'):
+                    if ent.name() == member.name() and not re.match(r'~.*', ent.name()):
+                        sameName = True
+                        break
+                if sameName:
+                    break
+
+            # Identifier is ambiguous due to no :: or ->
+            if sameName:
+                lex = file.lexer(False).lexeme(ref.line(), ref.column())
+                if not lex:
+                    continue
+                prevLex = lex.previous(True, True)
+                if prevLex.text() not in {'::', '->'}:
+                    check.violation(ent, file, ref.line(), ref.column(), ERR1)

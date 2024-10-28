@@ -1,0 +1,237 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2021-11-15
+
+
+import re
+
+
+ERR1 = '%1 non-const %2 member returned'
+
+
+def ids():
+    return ('A9-3-1', 'CPP_F041')
+
+
+def name(id):
+    return {
+        'A9-3-1': """\
+Published Standards/AUTOSAR/Member functions shall not return non-const raw \
+pointers or references to private or protected data owned by the class""",
+        'CPP_F041': """\
+All Checks/Language Specific/C and C++/Functions/Member functions shall not \
+return non-const raw pointers or references to private or protected data owned \
+by the class"""
+    }[id]
+
+
+def tags(id):
+    return {
+        'A9-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions',
+        ],
+        'CPP_F041': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Member functions shall not return non-const raw pointers or references to
+private or protected data owned by the class.</p>
+
+<p><b>Rationale</b></p>
+<p>By implementing class interfaces with member functions the implementation
+retains more control over how the object state can be modified and helps to
+allow a class to be maintained without affecting clients. Returning a handle to
+data that is owned by the class allows for clients to modify the state of the
+object without using an interface.</p>
+
+<p>Note that this rule applies to data that are owned by the class (i.e. are
+class-data). Nonconst handles to objects that are shared between different
+classes may be returned.</p>
+
+<p>See: <code>Ownership</code>.</p>
+
+<p><b>Exception</b></p>
+<p>Classes that mimic smart pointers and containers do not violate this
+rule.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">\
+// $Id: A9-3-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+#include &lt;memory&gt;
+#include &lt;utility&gt;
+class A
+{
+public:
+    explicit A(std::int32_t number) : x(number) {}
+    // Implementation
+    std::int32_t&
+    GetX() noexcept // Non-compliant - x is a resource owned by the A class
+    {
+        return x;
+    }
+
+private:
+    std::int32_t x;
+};
+void Fn1() noexcept
+{
+    A a{10};
+    std::int32_t& number = a.GetX();
+    number = 15; // External modification of private class data
+}
+class B
+{
+public:
+    explicit B(std::shared_ptr&lt;std::int32_t&gt; ptr) : sharedptr(std::move(ptr)) {}
+    // Implementation
+    std::shared_ptr&lt;std::int32_t&gt; GetSharedPtr() const
+    noexcept // Compliant - sharedptr is a variable being shared between
+             // instances
+    {
+        return sharedptr;
+    }
+
+private:
+    std::shared_ptr&lt;std::int32_t&gt; sharedptr;
+};
+void Fn2() noexcept
+{
+    std::shared_ptr&lt;std::int32_t&gt; ptr = std::make_shared&lt;std::int32_t&gt;(10);
+    B b1{ptr};
+    B b2{ptr};
+    *ptr = 50; // External modification of ptr which shared between b1 and b2
+               // instances
+    auto shared = b1.GetSharedPtr();
+    *shared = 100; // External modification of ptr which shared between b1 and
+                   // b2 instances
+}
+class C
+{
+public:
+    explicit C(std::int32_t number)
+    : ownedptr{std::make_unique&lt;std::int32_t&gt;(number)}
+    {
+    }
+    // Implementation
+    const std::unique_ptr&lt;std::int32_t&gt;& GetOwnedPtr() const
+    noexcept // Non-compliant - only unique_ptr is const, the object that
+             // it is pointing to is modifiable
+    {
+        return ownedptr;
+    }
+    const std::int32_t& GetData() const noexcept // Compliant
+    {
+        return *ownedptr;
+    }
+
+private:
+    std::unique_ptr&lt;std::int32_t&gt; ownedptr;
+};
+void Fn3() noexcept
+{
+    C c{10};
+    const std::int32_t& data = c.GetData();
+    // data = 20; // Can not modify data, it is a const reference
+    const std::unique_ptr&lt;std::int32_t&gt;& ptr = c.GetOwnedPtr();
+    *ptr = 20; // Internal data of class C modified
+}
+</code></pre>
+
+<p><b>See also</b></p>
+<ul>
+<li>MISRA C++ 2008 [7]: Rule 9-3-2 Member functions shall not return non-const
+handles to class-data.</li>
+<li>JSF December 2005 [8]: AV Rule 112: Function return values should not
+obscure resource ownership.</li>
+</ul>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+
+    for ref in file.filerefs('Use ~Deref Return', 'Private Member, Protected Member'):
+        ent = ref.ent()
+
+        # Skip if no known type
+        returnType = ref.scope().freetext('UnderlyingType')
+        if not returnType:
+            continue
+
+        # Skip if the ent type isn't in the return type
+        entType = ent.freetext('UnderlyingType')
+        simpleReturnType = removeScopeFromType(str(returnType))
+        if ent.type() and removeScopeFromType(ent.type()) not in simpleReturnType \
+        and (not entType or removeScopeFromType(entType) not in simpleReturnType):
+            continue
+
+        # Remove CVR qualifiers
+        returnType = re.sub(r'\b(volatile|restrict)\b', '', returnType)
+
+        # Remove everything in < > and [ ]
+        newReturnType = []
+        angles = 0
+        squares = 0
+        for c in returnType:
+            if c == '<':
+                angles += 1
+            elif c == '>':
+                angles -= 1
+            elif c == '[':
+                squares += 1
+            elif c == ']':
+                squares -= 1
+            elif angles < 1 and squares < 1:
+                newReturnType.append(c)
+        returnType = ''.join(newReturnType)
+
+        # Skip if type is not a reference or pointer
+        if not isAddressOrNonSharedPointer(returnType):
+            continue
+
+        # Skip const references of objects
+        match = re.search(r'^\bconst\b(.*)&$', returnType)
+        if match and not isAddressOrNonSharedPointer(match[1]):
+            continue
+
+        # Skip pointers to const objects
+        if re.search(r'^\bconst\b.*\*$', returnType):
+            continue
+
+        # Make the violation message more specific
+        pointerOrReference = 'Reference of' if '&' in returnType else 'Pointer to'
+        privateOrProtected = 'protected' if ent.kind().check('Protected') else 'private'
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, pointerOrReference, privateOrProtected)
+
+
+def isAddressOrNonSharedPointer(s: str) -> bool:
+    return '&' in s or '*' in s or re.search(r'\b(unique|weak)_ptr\b', s)
+
+
+def removeScopeFromType(s: str) -> str:
+    return re.sub(r'(\w+::)+', '', s)

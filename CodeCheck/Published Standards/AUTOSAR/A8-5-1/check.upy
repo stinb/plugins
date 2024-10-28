@@ -1,0 +1,183 @@
+ERR1 = 'The order of initialization is incorrect'
+
+
+# The ID for the check
+def ids():
+    return ('A8-5-1', 'CPP_D075')
+
+def name(id):
+    return {
+        'A8-5-1': """\
+Published Standards/AUTOSAR/Incorrect Order of Initialization""",
+        'CPP_D075': """\
+All Checks/Language Specific/C and C++/Declarations and Definitions/Incorrect Order of Initialization"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A8-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D075': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>In an initialization list, the order of initialization shall be following: (1) virtual
+base classes in depth and left to right order of the inheritance graph, (2)
+direct base classes in left to right order of inheritance list, (3) non-static
+data members in the order they were declared in the class definition.</p>
+<p><b>Rationale</b></p>
+<p>To avoid confusion and possible use of uninitialized data members, it is recommended
+that the initialization list matches the actual initialization order.</p>
+<p>Regardless of the order of member initializers in a initialization list, the order of
+initialization is always:</p>
+<p>• Virtual base classes in depth and left to right order of the inheritance graph.</p>
+<p>• Direct non-virtual base classes in left to right order of inheritance list.</p>
+<p>• Non-static member data in order of declaration in the class definition.</p>
+<p>Note that “The order of derivation is relevant only to determine the order of default
+initialization by constructors and cleanup by destructors.” [C++14 Language Standard
+[3]]</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A8-5-1.cpp 271696 2017-03-23 09:23:09Z piotr.tanski $
+2 #include &lt;cstdint&gt;
+3 #include &lt;string&gt;
+4 class A
+5 {
+6 };
+7 class B
+8 {
+9 };
+10 class C : public virtual B, public A
+11 {
+12 public:
+13 C() : B(), A(), s() {} // Compliant
+14
+15 // C() : A(), B() { } // Non-compliant - incorrect order of initialization
+16
+17 private:
+18 std::string s;
+19 };
+20 class D
+21 {
+22 };
+23 class E
+24 {
+25 };
+26 class F : public virtual A, public B, public virtual D, public E
+27 {
+28 public:
+29 F() : A(), D(), B(), E(), number1(0), number2(0U) {} // Compliant
+30 F(F const& oth)
+31 : B(), E(), A(), D(), number1(oth.number1), number2(oth.number2)
+32 {
+33 } // Non-compliant - incorrect
+34 // order of initialization
+35
+36 private:
+37 std::int32_t number1;
+38 std::uint8_t number2;
+39 };
+</code></pre>
+<p><b>See Also</b></p>
+<p>• HIC++ v4.0 [9]:12.4.4 Write members in an initialization list in the order in which
+they are declared</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref):
+        check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+
+    for class_ref in file.filerefs("Define", "Class"):
+        virtual_base = []
+        base = []
+
+        for base_ref in sorted(class_ref.ent().refs("Base"), key=lambda _ref: _ref.column()):
+            if "Virtual" in base_ref.kindname():
+                virtual_base.append(base_ref.ent().name())
+            else:
+                base.append(base_ref.ent().name())
+
+        for func_ref in class_ref.ent().refs("Define", "Function"):
+            if func_ref.ent().name() == class_ref.ent().name():
+                init_list = []
+                punctuations = []
+                in_initialization = False
+                in_definition = True
+                identifier = None
+                lexer = func_ref.file().lexer()
+                lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+                while lex and in_definition:
+                    if lex.text() == "{" and not in_initialization:
+                        break
+                    elif lex.text() == ":" and lex.token() == "Operator":
+                        in_initialization = True
+                    elif in_initialization and lex.token() == "Identifier" and not punctuations and lex.next().text() != "::":
+                        identifier = lex.ent()
+                        init_list.append(identifier)
+                    elif in_initialization and lex.text() in {"(", "{"}:
+                        punctuations.append(lex.text())
+                    elif punctuations and lex.text() in {")", "}"}:
+                        punctuations.pop()
+
+                        if not punctuations:
+                            identifier = None
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+                    if in_initialization and not identifier and (not lex or lex.text() == "{"):
+                        in_definition = False
+
+                if len(init_list) > 1:
+                    for ind, _ent in enumerate(init_list[:-1]):
+                        next_ent = init_list[ind+1]
+
+                        if not next_ent or not _ent:
+                            break
+                        elif _ent.name() in virtual_base:
+                            if next_ent.name() in virtual_base and virtual_base.index(_ent.name()) > virtual_base.index(next_ent.name()):
+                                check_violation(func_ref)
+                                break
+                        elif _ent.name() in base:
+                            if next_ent.name() in virtual_base or (next_ent.name() in base and base.index(_ent.name()) > base.index(next_ent.name())):
+                                check_violation(func_ref)
+                                break
+                        elif next_ent.name() in virtual_base or next_ent.name() in base:
+                            check_violation(func_ref)
+                            break
+                        else:
+                            ent_def = _ent.ref("Definein")
+                            next_ent_def = next_ent.ref("Definein")
+
+                            if ent_def and next_ent_def and (ent_def.line() > next_ent_def.line() or (ent_def.line() == next_ent_def.line() and ent_def.column() > next_ent_def.column())):
+                                check_violation(func_ref)
+                                break

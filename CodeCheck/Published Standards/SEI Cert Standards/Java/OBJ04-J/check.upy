@@ -1,0 +1,169 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 9-16-22
+
+
+import re
+import Modules
+
+
+ERR1 = 'Mutable class has no copy functionality to copy each mutable variable'
+
+
+def ids():
+    return ('OBJ04-J', 'JAVA_OBJ04')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'OBJ04-J': "Published Standards/SEI Cert Standards/Java/" + "Provide mutable classes with copy functionality to safely allow passing instances to untrusted code",
+        'JAVA_OBJ04': "All Checks/Language Specific/Java/Object Orientation/" + "Provide mutable classes with copy functionality to safely allow passing instances to untrusted code",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'OBJ04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'JAVA_OBJ04': [
+            'Language: Java',
+            'Object Orientation',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Provide mutable classes with copy functionality to safely allow passing\
+ instances to untrusted code
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Creating a mutable class without providing copy functionality can result in the\
+ data of its instance becoming corrupted when the instance is passed to\
+ untrusted code.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/OBJ04-J.+Provide+mutable+classes+with+copy+functionality+to+safely+allow+passing+instances+to+untrusted+code
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+OBJ04-J-EX0: Sensitive classes should not be cloneable, per OBJ07-J. Sensitive\
+ classes must not let themselves be copied.
+</i></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class MutableClass {
+  private Date date;
+
+  public MutableClass(Date d) {
+    this.date = d;
+  }
+
+  public void setDate(Date d) {
+    this.date = d;
+  }
+
+  public Date getDate() {
+    return date;
+  }
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+The example class <code>UnmodifiableDateView</code> is actually noncompliant\
+ because only one of the mutator methods of <code>Date</code> is overridden,
+ thus making it a mutable class without copy functionality.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    immutableClass = Modules.javaImmutableClass
+    cloneable = r'implements.*\WCloneable(\W|$)'
+
+    for ref in file.filerefs('Define', 'Class Type ~Enum ~TypeVariable'):
+        ent = ref.ent()
+
+        if immutableClass(ent):
+            continue
+
+        # Get the ids of all of the class variables that are not copyable
+        notCopyable = set()
+        for var in ent.ents('Define', 'Variable'):
+            # Copyable if var is final
+            if var.kind().check('Final'):
+                continue
+
+            # Copyable if var type is immutable
+            varTypes = var.ents('Typed', '~Unknown')
+            if varTypes and immutableClass(varTypes[0]):
+                continue
+
+            notCopyable.add(var.id())
+
+        if len(notCopyable) == 0:
+            continue
+
+        # Find the methods that copy the mutable variables
+        if ent.kind().check('Final'):
+            for method in ent.ents('Define', 'Method ~Constructor ~Implicit'):
+
+                # Class implements the Cloneable interface and clone method
+                if ent.type() and re.match(cloneable, ent.type()) and method.name() == 'clone' and method.type() == 'Object':
+                    # For each variable in the clone method, mark it as copyable
+                    for var in method.ents('Use Deref Partial'):
+                        if var.id() in notCopyable:
+                            notCopyable.remove(var.id())
+
+                # Class uses another method, perhaps a get wrapper method
+                else:
+                    # Get return type of method
+                    wrapper = method.ents('Typed')[0] if method.ents('Typed') else None
+                    if not wrapper:
+                        continue
+                    # Get original type of the return type
+                    wrappedType = wrapper.ents('Extend ~Implicit')[0] if wrapper.ents('Extend ~Implicit') else None
+                    if not wrappedType:
+                        continue
+                    # Get the one variable used in the method
+                    var = method.ents('Use', 'Variable')[0] if len(method.ents('Use', 'Variable')) == 1 else None
+                    if not var:
+                        continue
+                    # Mark the variable as copyable
+                    if var.id() in notCopyable:
+                        notCopyable.remove(var.id())
+
+        if len(notCopyable) == 0:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)

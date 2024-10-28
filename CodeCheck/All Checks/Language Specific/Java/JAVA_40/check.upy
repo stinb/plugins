@@ -1,0 +1,130 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 4-11-22
+
+import re
+
+ERR1 = 'No space after comma'
+
+def ids():
+    return ('JAVA_40')
+
+def name(id):
+    return {
+        'JAVA_40': '''All Checks/Language Specific/Java/Spaces shall be placed after commas.''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_40': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Spaces shall be placed after commas.
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class Program {
+    public static void main(String[] args) {
+        System.out.println("Hello","world");
+        // System.out.println("Hello","world");
+        /* System.out.println("Hello","world"); */
+        System.out.println(',');
+        System.out.println("Hello,world");
+    }
+}
+</code></pre>
+'''
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('ignoreNewLines', 'Ignore new lines', True)
+    check.options().checkbox('ignoreComments', 'Ignore comments', True)
+    check.options().checkbox('ignoreStrings', 'Ignore strings', True)
+
+
+def positionInAnySpan(position, arrayOfSpans):
+    for span in arrayOfSpans:
+        start = span[0]
+        end = span[1]
+        if position >= start and position <= end:
+            return True
+    return False
+
+
+def check(check, file):
+    contents = file.contents()
+
+    # Get line locations
+    lineBreaks = {}
+    line = 1
+    for match in re.finditer('\n', contents):
+        start = match.span()[0]
+        lineBreaks[start] = line
+        line += 1
+
+    ignoreNewLines = check.options().lookup('ignoreNewLines')
+    ignoreComments = check.options().lookup('ignoreComments')
+    ignoreStrings = check.options().lookup('ignoreStrings')
+
+    # Get comment position spans
+    if ignoreComments:
+        commentSpans = []
+        # Line comments
+        for match in re.finditer(r'(\/)\/.*?(\n)', contents):
+            start = match.span(1)[0]
+            end = match.span(2)[0]
+            commentSpans.append((start, end))
+        # Multiline comments
+        for match in re.finditer(r'(\/)\*[\s\S]*?\*(\/)', contents):
+            start = match.span(1)[0]
+            end = match.span(2)[0]
+            commentSpans.append((start, end))
+
+    # Find string positions
+    if ignoreStrings:
+        lexer = file.lexer()
+
+    # Get violations
+    for match in re.finditer('(\n).*(,)([^ ])', contents):
+        # Get positions
+        linePosition = match.span(1)[0]
+        commaPosition = match.span(2)[0]
+        line = lineBreaks[linePosition] + 1
+        column = commaPosition - linePosition - 1
+
+        # Skip if the next character is a new line
+        if ignoreNewLines:
+            otherCharacter = match[3][0]
+            if otherCharacter == '\n':
+                continue
+
+        # Skip if the comma is in a comment
+        if ignoreComments and positionInAnySpan(commaPosition, commentSpans):
+            continue
+
+        # Skip if the comma is in a string
+        if ignoreStrings:
+            lexeme = lexer.lexeme(line, column)
+            if lexeme and lexeme.token() == 'String':
+                continue
+
+        check.violation(None, file, line, column, ERR1)

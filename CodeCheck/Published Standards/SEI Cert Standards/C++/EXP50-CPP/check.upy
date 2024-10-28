@@ -1,0 +1,215 @@
+ERR1 = 'Do not depend on the order of evaluation for side effects.'
+
+
+# The ID for the check
+def id():
+    return ('EXP50-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP50-CPP': 'Published Standards/SEI Cert Standards/C++/Do not depend on the order of evaluation for side effects',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not depend on the order of evaluation for side effects'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not depend on the order of evaluation for side effects</p>
+<p><b>Risk Assessment</b></p>
+<p>Attempting to modify an object in an unsequenced or indeterminately sequenced evaluation may cause that object to take on an unexpected value, which can lead to unexpected program behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP50-CPP.+Do+not+depend+on+the+order+of+evaluation+for+side+effects</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">// i is modified twice in the same full expression
+i = ++i + 1; 
+ 
+// i is read other than to determine the value to be stored
+a[i++] = i;  
+
+
+void f(int i, const int *b) {
+  int a = i + b[++i];
+  // ...
+}
+
+
+
+extern void func(int i, int j);
+  
+void f(int i) {
+  func(i++, i);
+}
+
+
+#include &lt;iostream&gt;
+  
+void f(int i) {
+  std::cout &lt;&lt; i++ &lt;&lt; i &lt;&lt; std::endl;
+}
+
+
+extern void c(int i, int j);
+int glob;
+  
+int a() {
+  return glob + 10;
+}
+ 
+int b() {
+  glob = 42;
+  return glob;
+}
+  
+void f() {
+  c(a(), b());
+}
+</code></pre>
+"""
+
+def tags(id):
+    return {
+        'EXP50-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object, Parameter"):
+            ref_line = {}  # key: line number, value: list of column number
+
+            for use_ref in obj_ref.ent().refs("Useby, Setby"):
+                if use_ref.line() not in ref_line:
+                    ref_line[use_ref.line()] = [use_ref.column()]
+                elif use_ref.column() not in ref_line[use_ref.line()]:
+                    ref_line[use_ref.line()].append(use_ref.column())
+
+            for modify_ref in obj_ref.ent().refs("Modifyby"):
+                if (modify_ref.line() in ref_line) and (len(ref_line[modify_ref.line()]) > 1):
+                    on_loop = False
+                    statement_ctr = 0
+                    ref_ctr = 0
+                    non_compliant = False
+                    lexes = lexer.lexemes(modify_ref.line(), modify_ref.line())
+                    on_param = 0
+                    prev_lex = None
+
+                    for lex in lexes:
+                        if lex.text() in ["for", "while"] and lex.token() == "Keyword":
+                            on_loop = True
+                            break
+                        elif lex.ent() and (lex.ent().id() == obj_ref.ent().id()):
+                            ref_ctr += 1
+                        elif lex.text() == ";":
+                            statement_ctr += 1
+
+                            if ref_ctr > 2:
+                                break
+
+                            ref_ctr = 0
+                        elif lex.text() == "(":
+                            on_param += 1
+                        elif lex.text() == ")":
+                            on_param -= 1
+
+                            if on_param == -1:
+                                prev_lex = lex
+                                on_par = 0
+
+                                while prev_lex:
+                                    if prev_lex.text() == ")":
+                                        on_par += 1
+                                    elif prev_lex.text() == "(":
+                                        on_par -= 1
+
+                                        if not on_par:
+                                            break
+
+                                    prev_lex = prev_lex.previous(
+                                        ignore_whitespace=True)
+
+                                prev_lex = prev_lex.previous(
+                                    ignore_whitespace=True)
+
+                                if prev_lex.text() in ["for", "while"]:
+                                    on_loop = True
+                                    break
+
+                    if on_loop or ((statement_ctr > 1) and (ref_ctr == 0)):
+                        continue
+
+                    check.violation(obj_ref.ent(), file,
+                                    modify_ref.line(), modify_ref.column(), ERR1)
+
+        for call_ref in func_ref.ent().refs("Call", "Function"):
+            prev_func_id = None
+            ref_obj_ids = []
+            non_compliant = False
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            param_ctr = 0
+
+            if lex and ((lex.ent() and lex.ent().kind().check("Macro")) or (lex.next() and (lex.next().text() != "("))):
+                lex = None
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and (lex.text() == ","):
+                    param_ctr += 1
+                elif (on_param == 1) and lex.ref() and (lex.token() == "Identifier") and lex.ent().kind().check("Function") and lex.ref().kind().check("Callby"):
+                    for ref in lex.ent().refs("Set, Use, Modify", "Global"):
+                        if ref.ent().id() not in ref_obj_ids:
+                            ref_obj_ids.append(ref.ent().id())
+                        elif (param_ctr > 0) and (ref.ent().id() in ref_obj_ids) and prev_func_id and (prev_func_id != lex.ent().id()):
+                            check.violation(
+                                call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                            non_compliant = True
+                            break
+
+                    prev_func_id = lex.ent().id()
+
+                if non_compliant:
+                    break
+
+                lex = lex.next(ignore_whitespace=True)

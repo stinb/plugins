@@ -1,0 +1,189 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'Operand of side-effect used more than once';
+
+# Required - Violation messages should be registred for translation
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+# Required - Return the short name of the check
+
+sub checkID { return "CPP_E023";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Expressions\\Expression uses operand of side-effect more than once";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Expressions',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Expression uses operand of side-effect more than once";}
+
+# Required - Return the long description of the check
+sub detailed_description { return <<"END_DESC"
+Assumptions:
+ 1. The side-effect operators are ++i and i++.
+ 2. Report any expression that uses a variable at least twice, with at least once being as the operand of a side-effect operator.
+ False Positives. These examples are incorrectly identified as violations.
+ The prefix operator is generally safe when used in specific cases where the order of operation is well defined:
+ 1. obj = ++obj;
+ 2. obj && ++obj;
+ 3. obj,++obj;
+END_DESC
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; 
+  return 1;
+}
+
+sub test_entity { return 1;}
+sub test_global { return 0;}
+
+sub check {
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift; 
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check("c file ~unknown ~unresolved"); 
+  
+  my $lexer = $file->lexer();
+  return unless $lexer;
+  
+  # loop through functions defined in the file
+	foreach my $ref ($file->filerefs("define","function",1)) {
+	    my $func = $ref->ent();
+	    my ($begin,$end) = getFunctionDefnLines($func);
+	    next if (!$begin);
+
+	    do_one_function($file,$func,$lexer,$begin,$end,$check);
+	}
+}
+
+
+# Check one function.
+sub do_one_function {
+    my $file = shift;
+    my $func = shift;
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+    my $check = shift;
+    
+    # find beginning of code
+    my $lexeme_pos = 0;
+    my @lexemes = $lexer->lexemes($begin,$end);
+    my $lexeme = NextLexeme(\@lexemes, \$lexeme_pos);
+   
+    while ($lexeme && $lexeme->text() ne "{") {
+      $lexeme = NextLexeme(\@lexemes, \$lexeme_pos);
+    }
+
+    # break into expressions (statements)
+    my %operands = ();
+    my %identifiers = ();
+    my $count_paren = 0;
+    while ($lexeme) {
+      my $text = $lexeme->text();
+      if ($text =~ m/\+\+|--/) {
+
+        my $prev = $lexeme->previous();
+        $operands{$prev->text()} = $prev if $prev && $prev->token() eq "Identifier";
+        my $next = $lexeme->next();
+        $operands{$next->text()} = $next if $next && $next->token() eq "Identifier";
+
+      } elsif ($lexeme->token() eq "Identifier") {
+
+        $identifiers{$text}++;
+
+      } elsif ($lexeme->token eq "Keyword" && $text =~ m/for|if|switch|while/) {
+
+        check_violation(\%operands,\%identifiers,$func,$file,$check) if ($text =~ m/while/);
+        $lexeme = NextLexeme(\@lexemes, \$lexeme_pos);
+        $count_paren = 1 if ($lexeme->text() eq "("); # should always be true
+
+      } elsif ($count_paren && $text eq "(") {
+
+        $count_paren++;
+
+      } elsif ($count_paren && $text eq ")") {
+
+        $count_paren--;
+        check_violation(\%operands,\%identifiers,$func,$file,$check) if (!$count_paren);
+
+      } elsif ($text =~ m/;/) {
+
+        check_violation(\%operands,\%identifiers,$func,$file,$check);
+
+      } elsif ($text =~ m/{/) {
+
+        check_violation(\%operands,\%identifiers,$func,$file,$check);
+
+      }
+      $lexeme = NextLexeme(\@lexemes, \$lexeme_pos);
+    }
+}
+
+sub check_violation {
+    my $operands = shift;
+    my $identifiers = shift;
+    my $func = shift;
+    my $file = shift;
+    my $check = shift;
+
+    foreach my $operand (keys %$operands) {
+      localViolation($func,$operands->{$operand},$file,$check) if ($identifiers->{$operand} > 1);
+    }
+    %$operands = ();
+    %$identifiers = ();
+}
+
+
+sub localViolation {
+    my $func = shift;
+    my $lexeme = shift;
+    my $file = shift;
+    my $check = shift;
+    
+    $check->violation($func,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1); 
+}
+
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Return the next interesting lexeme or undef when all lexemes
+# are used.
+sub NextLexeme {
+  my $lexemes = shift;
+    my $lexeme_pos = shift;
+    while (${$lexeme_pos} < $#$lexemes) {
+      my $lexeme = $lexemes->[${$lexeme_pos}++];
+    next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+    return $lexeme;
+  };
+  return undef;
+}

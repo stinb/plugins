@@ -1,0 +1,178 @@
+ERR1 = 'Do not cast pointers into more strictly aligned pointer types.'
+
+
+# The ID for the check
+def id():
+    return ('EXP36-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP36-C': 'Published Standards/SEI Cert Standards/C/Do not cast pointers into more strictly aligned pointer types',
+    }[id]
+
+
+def tags(id):
+    return {
+        'EXP36-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+
+
+def description():
+    return 'Do not cast pointers into more strictly aligned pointer types'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not cast pointers into more strictly aligned pointer types</p>
+<p><b>Risk Assessment</b></p>
+<p>Accessing a pointer or an object that is not properly aligned can cause a program to crash or give erroneous information, or it can cause slow pointer accesses (if the architecture allows misaligned accesses).</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/EXP36-C.+Do+not+cast+pointers+into+more+strictly+aligned+pointer+types</i></p>
+<p><b>Exceptions</b></p>
+<p><i>EXP36-C-EX1: Some hardware architectures have relaxed requirements with regard to pointer alignment. Using a pointer that is not properly aligned is correctly handled by the architecture, although there might be a performance penalty. On such an architecture, improper pointer alignment is permitted but remains an efficiency problem.</i></p>
+<p><i>EXP36-C-EX2: If a pointer is known to be correctly aligned to the target type, then a cast to that type is permitted. There are several cases where a pointer is known to be correctly aligned to the target type. The pointer could point to an object declared with a suitable alignment specifier. It could point to an object returned by aligned_alloc(), calloc(), malloc(), or realloc(), as per the C standard, section 7.22.3, paragraph 1  [ISO/IEC 9899:2011].</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++"># include &lt;assert.h&gt;
+
+void func(void) {
+  char c = 'x';
+  int *ip = (int *)&c; /* This can lose information */
+  char *cp = (char *)ip;
+
+  /* Will fail on some conforming implementations */
+  assert(cp == &c);
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_byte_size(data_type):
+    DATA_TYPE = {
+        "bool": 1,
+        "char": 1,
+        "short": 2,
+        "int": 4,
+        "float": 4,
+        "long": 8,
+        "double": 8
+    }
+
+    for dt in DATA_TYPE:
+        if dt in data_type:
+            return DATA_TYPE[dt]
+
+    return None
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for assign_ref in file.filerefs("Assignby Ptr", "Object"):
+        ent_type = assign_ref.ent().type()
+        scope_type = assign_ref.scope().type()
+
+        ent_size = get_byte_size(ent_type) if ent_type else None
+        scope_size = get_byte_size(scope_type) if scope_type else None
+
+        if ent_size and scope_size and (ent_size > scope_size):
+            check.violation(assign_ref.ent(), file,
+                            assign_ref.line(), assign_ref.column(), ERR1)
+
+    for func_ref in file.filerefs("Define", "Function"):
+        func_type = func_ref.ent().type()
+
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            param_type = param_ref.ent().type()
+
+            if param_type == "void *":
+                for ret_ref in param_ref.ent().refs("Return"):
+                    if param_type != func_type:
+                        for call_ref in func_ref.ent().refs("Callby"):
+                            for use_ref in call_ref.ent().refs("Use", "Parameter"):
+                                for ptr_ref in use_ref.ent().refs("Assignby Ptr"):
+                                    if ptr_ref.ent().id() == param_ref.ent().id():
+                                        ptr_type = use_ref.ent().type()
+
+                                        func_return_size = get_byte_size(
+                                            func_type) if func_type else None
+                                        ptr_size = get_byte_size(
+                                            ptr_type) if ptr_type else None
+
+                                        if func_return_size and ptr_size and (func_return_size > ptr_size):
+                                            check.violation(
+                                                use_ref.ent(), use_ref.file(), use_ref.line(), use_ref.column(), ERR1)
+
+    for call_ref in file.filerefs("Call", "Unresolved Function"):
+        if call_ref.ent().name() == "memcpy":
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            param_ctr = 0
+            fparam_type = None
+            sparam_type = None
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and (lex.text() == ","):
+                    param_ctr += 1
+                elif lex.ent() and on_param and param_ctr == 0 and lex.token() == "Identifier":
+                    fparam_type = lex.ent().type()
+                elif lex.ent() and on_param and param_ctr == 1 and lex.token() == "Identifier":
+                    sparam_type = lex.ent().type()
+
+                    if fparam_type and sparam_type and (fparam_type in sparam_type) and ("*" in sparam_type):
+                        for set_ref in lex.ent().refs("Setby"):
+                            if set_ref.scope().parent().id() != call_ref.scope().id():
+                                continue
+                            if set_ref.line() > call_ref.line():
+                                continue
+
+                            set_lex = lexer.lexeme(
+                                set_ref.line(), set_ref.column())
+
+                            while set_lex and (set_lex.text() != ";"):
+                                if set_lex.text() == "=":
+                                    if set_lex.next(ignore_whitespace=True).text() == "(":  # cast
+                                        check.violation(
+                                            call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+                                    break
+
+                                set_lex = set_lex.next(ignore_whitespace=True)
+
+                    break
+
+                lex = lex.next(ignore_whitespace=True)

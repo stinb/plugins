@@ -1,0 +1,137 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 7-30-2020
+
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => "External variable is set to a value where it is declared";
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "CPP_D074";}
+
+sub name{ return "All Checks\\Language Specific\\C and C++\\Declarations and Definitions\\" .  "An external variable shall not be set to a value where it is being declared";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Declarations and Definitions',
+  );
+}
+
+sub description { return "An external variable shall not be set to a value in the same statement in which it is being declared as an extern.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+This method is not allowed because it is discouraged in American National Standards Institute (ANSI) C and is not accepted by all compilers.
+</p>
+<p><b>Examples</b></p>
+<pre><code language="C++">extern int var1 = 0;   // INVALID
+
+extern int var2;
+var2 = 1;              // VALID
+</code></pre>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("C File ~unknown ~unresolved");
+
+
+  # Pull all global objects, return if none exist
+  my @globals = $file->filerefs('C Define', 'C Object Global', 1 );
+  return unless @globals;
+
+  # skip globals with declarein refs
+  foreach my $global ( @globals ) {
+    next if ($global->ent->ref("C Declarein"));
+
+    # look for extern keyword before flagging
+    my $globalLex = $global->lexeme();
+
+    # find the leftmost pointer character (to handle any indirection of pointer)
+    my $tempLex = $globalLex->prevUseful();
+    while ($tempLex && $tempLex->text() eq '*' ) {
+      $tempLex = $tempLex->prevUseful();
+    }
+
+    # flag externs that are set where they are declared
+    if ($globalLex->prevUseful() &&
+        $globalLex->prevUseful()->prevUseful() &&
+        $globalLex->prevUseful()->prevUseful()->text() eq "extern") {
+      my $violation = $check->violation( $global->ent, $file, $global->line, $global->column, ERR1 );
+      my $nextLex = $globalLex;
+      my $prevLex;
+      my $replace;
+      while ($nextLex && $nextLex->text ne "=") {
+        $nextLex = $nextLex->nextUseful;
+      }
+      if ($nextLex) {
+        if ($nextLex->previous->token eq "Whitespace") {
+          $prevLex = $nextLex->previous;
+          $replace = $prevLex->previous->text . $prevLex->text . $nextLex->text;
+        } else {
+          $prevLex = $nextLex;
+          $replace = $prevLex->previous->text . $prevLex->text;
+        }
+        while ($nextLex && $nextLex->text ne ";") {
+          $nextLex = $nextLex->next;
+          $replace = $replace . $nextLex->text;
+        }
+        if ($nextLex) {
+          $violation->add_fixit_hint($prevLex->line_begin, $prevLex->column_begin, $nextLex->line_begin, $nextLex->column_begin + length($nextLex->text), ";\n" . $replace);
+        }
+      }
+    }
+
+    # flag extern pointer variables that are set where they are declared
+    elsif ($tempLex->prevUseful() &&
+           $tempLex->prevUseful()->text() eq "extern") {
+      my $violation = $check->violation( $global->ent, $file, $global->line, $global->column, ERR1 );
+      my $nextLex = $globalLex;
+      my $prevLex;
+      my $replace;
+      while ($nextLex && $nextLex->text ne "=") {
+        $nextLex = $nextLex->nextUseful;
+      }
+      if ($nextLex) {
+        if ($nextLex->previous->token eq "Whitespace") {
+          $prevLex = $nextLex->previous;
+          $replace = $prevLex->previous->text . $prevLex->text . $nextLex->text;
+        } else {
+          $prevLex = $nextLex;
+          $replace = $prevLex->previous->text . $prevLex->text;
+        }
+        while ($nextLex && $nextLex->text ne ";") {
+          $nextLex = $nextLex->next;
+          $replace = $replace . $nextLex->text;
+        }
+        if ($nextLex) {
+          $violation->add_fixit_hint($prevLex->line_begin, $prevLex->column_begin, $nextLex->line_begin, $nextLex->column_begin + length($nextLex->text), ";\n" . $replace);
+        }
+      }
+    }
+
+  }
+}

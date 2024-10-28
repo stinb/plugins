@@ -1,0 +1,122 @@
+import re
+
+
+ERR1 = '''Expression statements shall not be explicit calls to constructors of
+temporary objects only'''
+
+
+# The ID for the check
+def ids():
+    return ('A6-2-2', 'CPP_C053')
+
+def name(id):
+    return {
+        'A6-2-2': """\
+Published Standards/AUTOSAR/Explicit Calls to Constructors of Temporary Objects""",
+        'CPP_C053': """\
+All Checks/Language Specific/C and C++/Constructors/Explicit Calls to Constructors of Temporary Objects"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A6-2-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Constructors',
+        ],
+        'CPP_C053': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Expression statements shall not be explicit calls to constructors of
+temporary objects only.</p>
+<p><b>Rationale</b></p>
+<p>The developer's intention might have been to define an unnamed local variable
+that would live until the end of the scope to implement the RAII pattern (Resource
+Acquisition Is Initialization). But as there are no unnamed variables in C++, it is in
+fact only creating a temporary object that gets destroyed again at the end of the full
+expression.</p>
+<p><b>Developer Note</b></p>
+This check only covers the using of unnamed lock_guards and unique_locks.
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A6-2-2.cpp 326655 2018-07-20 14:58:55Z christof.meerwald $
+
+#include &lt;cstdint&gt;
+#include &lt;fstream&gt;
+#include &lt;mutex&gt;
+
+class A
+{
+public:
+    void SetValue1(std::int32_t value)
+    {
+        std::lock_guard&lt;std::mutex&gt; {m_mtx}; // Non-compliant: temporary object
+        // Assignment to m_value is not protected by lock
+        m_value = value;
+    }
+
+    void SetValue2(std::int32_t value)
+    {
+        std::lock_guard&lt;std::mutex&gt; guard{m_mtx}; // Compliant: local variable
+        m_value = value;
+    }
+
+private:
+    mutable std::mutex m_mtx;
+    std::int32_t m_value;
+};
+
+void Print(std::string const & fname, std::string const & s)
+{
+    // Compliant: Not only constructing a temporary object
+    std::ofstream{fname}.write(s.c_str(), s.length());
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>• C++ Core Guidelines [11]: ES.84: Don't (try to) declare a local variable with no
+name</p>
+<p>• C++ Core Guidelines [11]: CP.44: Remember to name your lock_guards and
+unique_locks</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+
+    for func_ref in file.filerefs("Call, Use", "Member Function Explicit"):
+        if re.search(r"std::(__1::)?(lock_guard|unique_lock)", func_ref.ent().longname()):
+            lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+            if lex.ref() and not lex.ref().kind().check("Setby Init"):
+                check.violation(func_ref.ent(), file,
+                                func_ref.line(), func_ref.column(), ERR1)

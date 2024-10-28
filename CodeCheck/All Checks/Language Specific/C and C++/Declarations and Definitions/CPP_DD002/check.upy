@@ -1,0 +1,82 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 5-11-2021
+import re
+
+ERR1 = 'Macro %1 used global %2'
+
+def id():
+    return ('CPP_DD002')
+
+def name(id):
+    return {
+        'CPP_DD002': 'All Checks/Language Specific/C and C++/Declarations and Definitions/' +  'Globals should not be used in macros'
+    }[id]
+
+def tags(id):
+    return {
+        'CPP_DD002': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Globals should not be used in macros since their names may be hidden by
+local declarations.</p>
+<pre><code language="C++">/* example.c */
+...
+#include &lt;errors.h&gt; /* Include header file which makes err_num
+global */
+#define PRINT_ERROR printf("Error: %d\n",err_num);
+...
+void example_func (void)
+{
+int err_num = 0; /* err_num defined as a local */
+/* Call function that sets global err_num to a value */
+do_stuff();
+PRINT_ERROR; /* Macro incorrectly uses the value of the local
+variable (0) instead of the global value */
+} /* end of example_func */</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def define_options(check):
+    check.option().checkbox('fuzzy', 'Check this option if using the fuzzy parser (for this check using the fuzzy parser and this option will imporve accuracy)', False)
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    fuzzy = check.option().lookup('fuzzy')
+
+    if not fuzzy:
+        globalNames = []
+        globalRefs = file.refs('define', 'global')
+        for globalRef in globalRefs:
+            globalNames.append(globalRef.ent().name())
+
+
+
+    macros = file.refs('define', 'macro')
+
+    for macro in macros:
+        if not lexer:
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(macro.line(), macro.column())
+
+        while lexeme and lexeme.token() != 'Newline':
+            lexeme = lexeme.next()
+            # Check for globals in the macro using refs
+            if fuzzy and lexeme.ent() and re.search(r'global', lexeme.ent().kindname().lower()):
+                check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1, macro.ent().name(), lexeme.text())
+
+            # Look for if the lexeme text is in the globalNames list
+            elif not fuzzy and lexeme.token() == 'Identifier' and lexeme.text() in globalNames:
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, macro.ent().name(), lexeme.text())

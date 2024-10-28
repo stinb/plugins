@@ -1,0 +1,179 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Data member %1 not defined in constructor';
+use constant ERR2 => 'Variable %1 not defined before use';
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_V011";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Variables\\All variables shall have a defined value before they are used";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Variables',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { return "(Required) All variables shall have a defined value before they are used.";}
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+
+<p><b>Rationale</b></p>
+The intent of this rule is that all variables shall have been written to before they are read. This does
+not necessarily require initialization at declaration.
+Note that according to ISO/IEC 14882:2003 [1], variables with static storage duration are
+automatically initialized to zero by default, unless explicitly initialized. In practice, many
+embedded environments do not implement this behaviour. Static storage duration is a property
+of all variables declared with the <i>static</i> storage class specifier, or with external linkage. Variables
+with automatic storage duration are not usually automatically initialized.
+Each class constructor shall initialize all non-static members of its class.</p>
+<br>
+
+<p><b>Example</b></p><pre><code language="C++">  class C
+  {
+    public:
+      C ( ) : m_a( 10 ), m_b( 7 ) // Compliant
+      {
+      }
+      C ( int32_t a ) : m_a( a ) // Non-compliant
+      {
+      }
+      int32_t GetmB ( void )
+      {
+        return ( m_b );
+      }
+    private:
+      int32_t m_a;
+      int32_t m_b;
+  };
+  C c( 5 );
+  int main ( void )
+  {
+    if ( c.GetmB( ) &gt; 0 ) // m_b has not been initialized
+    {
+    }
+  }
+
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+This check is designed to run with the strict parser and with no errors detected by the strict parser. If both of these conditions are not true,
+this check will throw false positives. Local and Global objects that are used before initialization will be detected by the strict parser and
+given to the user in the form of a parser warning.
+</p>
+
+<p>
+If a constructor calls another function to do initialization of some members, it will be flagged as a false positive unless the configurable option is enabled.
+</p>
+
+END_DESC
+}
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+# This determines if this script is per file
+sub test_entity { return 1;}
+
+# This determines if this script is per project or per file
+sub test_global { return 0;}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'function', 'Treat data members passed to another function as set', 0 );
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check('c file');
+
+  # Pull a list of all Methods that are defined within this file
+  my @constructorsDefined = $file->filerefs( 'Define', 'Member Function' );
+  return unless @constructorsDefined;
+
+  # Loop through each method looking for the constructors
+  METH : foreach my $constructor ( @constructorsDefined ) {
+    next METH unless $constructor->ent->longname eq $constructor->ent->name . '::' . $constructor->ent->name;
+
+    # Pull all the data members
+    my @dataMembers = $constructor->ent->parent->refs( 'Define', 'Object ~Static ~TemplateParameter' );
+
+    my $start = $constructor->line;
+    my $end = $constructor->ent->ref( 'End' );
+
+    my @setReferences = $constructor->ent->refs( 'Set, Set Init' );
+    my @useReferences = $constructor->ent->refs( 'C Use' );
+
+    DAT : foreach my $data ( @dataMembers ) {
+
+      foreach my $set ( @setReferences ) {
+
+        next DAT if $set->ent->name eq $data->ent->name and $set->line >= $start and $set->line <= $end;
+
+      }
+
+      if ( $check->option->lookup( 'function' ) ) {
+        foreach my $use ( @useReferences ) {
+
+          my $lexeme = $use->lexeme;
+          next DAT if findFunctionUse( $lexeme );
+
+        }
+      }
+
+      $check->violation( $constructor->ent, $file, $constructor->line, $constructor->column, ERR1, $data->ent->name );
+
+    }
+  }
+}
+
+
+# This function takes a lexeme pointed at a use referece and determines if this use reference is passing to another function
+sub findFunctionUse {
+
+  my $lexeme = shift;
+  my $count = 1;
+  my $useFound = 0;
+
+  while( $lexeme and ! ( $count == 0 or $lexeme->text eq ';' ) ) {
+
+    $count++ if $lexeme->text eq ')';
+    $count-- if $lexeme->text eq '(';
+    $lexeme = $lexeme->prevUseful;
+
+  }
+
+  if ( $lexeme and $lexeme->ref ) {
+    $useFound = 1 if $lexeme->ref->scope->kind->check( 'C Function' );
+  }
+
+  return $useFound
+
+}

@@ -1,0 +1,207 @@
+ERR1 = 'Ensure that compound operations on shared variables are atomic.'
+
+
+# The ID for the check
+def ids():
+    return ('VNA02-J', 'JAVA_VNA02')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'VNA02-J': 'Published Standards/SEI Cert Standards/Java/Ensure that compound operations on shared variables are atomic',
+        'JAVA_VNA02': 'All Checks/Language Specific/Java/Visibility and Atomicity/Ensure that compound operations on shared variables are atomic',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'VNA02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_VNA02': [
+            'Language: Java',
+            'Visibility and Atomicity',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure that compound operations on shared variables are atomic'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure that compound operations on shared variables are atomic</p>
+<p><b>Risk Assessment</b></p>
+<p>When operations on shared variables are not atomic, unexpected results can be produced. For example, information can be disclosed inadvertently because one user can receive information about other users.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/VNA02-J.+Ensure+that+compound+operations+on+shared+variables+are+atomic</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class Flag {
+  private boolean flag = true;
+
+  public void toggle() {  // Unsafe
+    flag = !flag;
+  }
+
+  public boolean getFlag() { // Unsafe
+    return flag;
+  }
+}
+
+
+final class Flag {
+  private boolean flag = true;
+
+  public void toggle() {  // Unsafe
+    flag ^= true;  // Same as flag = !flag;
+  }
+
+  public boolean getFlag() { // Unsafe
+    return flag;
+  }
+}
+
+
+final class Flag {
+  private volatile boolean flag = true;
+
+  public void toggle() {  // Unsafe
+    flag ^= true;
+  }
+
+  public boolean getFlag() { // Safe
+    return flag;
+  }
+}
+
+
+final class Adder {
+  private int a;
+  private int b;
+
+  public int getSum() {
+    return a + b;
+  }
+
+  public void setValues(int a, int b) {
+    this.a = a;
+    this.b = b;
+  }
+}
+
+
+
+final class Adder {
+  private final AtomicInteger a = new AtomicInteger();
+  private final AtomicInteger b = new AtomicInteger();
+
+  public int getSum() {
+    return a.get() + b.get();
+  }
+
+  public void setValues(int a, int b) {
+    this.a.set(a);
+    this.b.set(b);
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i><p>1. The check assumes that a variable is shared when referred to by more than one function.</p>
+<p>2. The check will only flag the first reference of the shared variable in the function.</p>
+</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        shared_entids = {}
+
+        for var_ref in class_ref.ent().refs("Define", "Member Variable"):
+            var_type = var_ref.ent().type()
+
+            if var_type and var_type == "AtomicBoolean":
+                continue
+
+            refs_id = []
+            is_volatile = True if var_type and "volatile" in var_type else False
+
+            for ref in var_ref.ent().refs("Setby, Useby, Modifyby", "Method Member"):
+                if ref.ent().name() == class_ref.ent().name():
+                    continue
+                elif ref.ent().id() not in refs_id:
+                    refs_id.append(ref.ent().id())
+
+            if len(refs_id) > 1:
+                shared_entids[var_ref.ent().id()] = is_volatile
+
+        for method_ref in class_ref.ent().refs("Define", "Member Method"):
+            if (method_ref.ent().name() == class_ref.ent().name()):
+                continue
+
+            compliant = False
+            write_shared = []
+            read_shared = []
+            lexes = lexer.lexemes(method_ref.line(), method_ref.line())
+            flag_ref = None
+
+            for lex in lexes:
+                if lex.text() == "synchronized" and lex.token() == "Keyword":
+                    compliant = True
+                    break
+
+            if not compliant:
+                is_locked = False
+
+                for call_ref in method_ref.ent().refs("Call", "Abstract Method Default Member"):
+                    if call_ref.ent().longname() == "java.util.concurrent.locks.Lock.lock":
+                        is_locked = True
+
+                for write_ref in method_ref.ent().refs("Set, Modify", "Member Variable"):
+                    if write_ref.ent().id() not in shared_entids:
+                        continue
+                    elif is_locked:
+                        write_shared.append(True)
+                    else:
+                        flag_ref = write_ref if not flag_ref else flag_ref
+                        write_shared.append(False)
+
+                for read_ref in method_ref.ent().refs("Use", "Member Variable"):
+                    if read_ref.ent().id() not in shared_entids:
+                        continue
+                    elif is_locked or (not write_shared and shared_entids[read_ref.ent().id()]):
+                        read_shared.append(True)
+                    else:
+                        flag_ref = read_ref if not flag_ref else flag_ref
+                        read_shared.append(False)
+
+            if (write_shared and not all(write_shared)) or (read_shared and not all(read_shared)):
+                check.violation(flag_ref.ent(), file,
+                                flag_ref.line(), flag_ref.column(), ERR1)

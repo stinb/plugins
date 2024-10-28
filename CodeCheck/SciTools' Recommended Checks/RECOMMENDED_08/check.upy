@@ -1,0 +1,253 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2/3/21
+import re
+
+ERR1 = 'Fixed Value(%1) used incorrectly'
+
+# The ID for the check
+def ids():
+    return ('RECOMMENDED_08', 'CPP_V000')
+
+# The short name of the check
+def name(id):
+    return {
+            'RECOMMENDED_08': 'SciTools\' Recommended Checks/Magic Numbers', \
+            'CPP_V000': 'All Checks/Language Specific/C and C++/Variables/Magic Numbers', \
+            }[id] \
+
+
+def tags(id):
+    return {
+        'RECOMMENDED_08': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+        'CPP_V000': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+    }.get(id)
+
+# The short description of the check \
+def description(id):
+    return {
+            'RECOMMENDED_08': 'All fixed values will be defined constants',
+            'CPP_V000': 'All fixed values will be defined constants.',
+            }[id]
+
+# The long description of the check
+def detailed_description(id):
+    return {
+            'RECOMMENDED_08': """\
+<p><b>Rationale</b></p>
+<p>Using fixed values(Magic Number) in code makes it difficult to know
+why the engineer chose that number and makes it hard to adapt and extend
+the program. Magic numbers should be replaced with name constants to
+make them more usable.</p>
+<p><b>Exceptions</b></p>
+<p>Select if bitfield definitions should allow magic numbers.<br>
+Any exceptions should be in a comma delimited list of  literals that
+will not be tested. For example: 0,1,1024</p>""",
+            'CPP_V000': """\
+<p><b>Rationale</b></p>
+<p>Using fixed values(Magic Number) in code makes it difficult to know
+why the engineer chose that number and makes it hard to adapt and extend
+the program. Magic numbers should be replaced with name constants to
+make them more usable.</p>
+<p><b>Exceptions</b></p>
+<p>Select if bitfield definitions should allow magic numbers.</p>
+<p>Any exceptions should be in a comma delimited list of  literals that
+will not be tested. For example: 0,1,1024</p>""",
+            }[id]
+    return 
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.option().checkbox('bitfield', 'Allow fixed values in bitfield definitions - e.g. int d : 5', False)
+    check.option().checkbox('bitShift', 'Allow fixed values in bit shift operations - e.g foo >> 3', False)
+    check.option().checkbox('pureVirtual', 'Allow fixed values in Pure Virtual Functions - e.g virtual void theAnswer() = 42;', True)
+    check.option().checkbox('indexes', 'Allow fixed values in indexes - e.g. foo[13]', False)
+    check.option().checkbox('pragma', 'Check pragma directives for fixed values', False)
+    check.option().checkbox('multiple', 'Show multiple violations per statement', False)
+    check.option().text('exceptions','Exception List (Comma Delimited)','0,1')
+
+
+
+
+def check(check, file):
+    if not file.kind().check("c file ~unknown ~unresolved"):
+        return
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+    lexeme = lexer.first()
+
+    searchLex = None
+    textList = check.option().lookup('exceptions')
+    if textList != '':
+        textList = re.sub(r'\s', '', textList)
+        exceptions = textList.split(',')
+    else:
+        exceptions = ''
+
+    while lexeme:
+        if lexeme.inactive():
+            pass
+        elif lexeme and lexeme.token() == 'Keyword' and lexeme.text() == 'asm':
+            while lexeme.next() and lexeme.next().token() != 'Keyword' and lexeme.text() != 'endasm':
+                lexeme = lexeme.next()
+
+
+
+        elif isInitialization(lexeme) or (check.option().lookup('bitfield') and isBitField(lexeme)) or (check.option().lookup('pureVirtual') and isPureVirtual(lexeme)):
+
+            while lexeme.next() and not (lexeme.next().token() == 'Punctuation' and lexeme.next().text() == ';'):
+                lexeme = lexeme.next()
+
+
+
+        elif isMacroDeclaration(lexeme):
+            while lexeme.next() and lexeme.next().token() != 'Newline':
+                lexeme = lexeme.next()
+
+
+        # next lex if next is ']' and prev is '['
+        elif check.option().lookup('indexes') and isIndex(lexeme):
+            lexeme = lexeme.next()
+            
+
+
+        elif isEnumeratorDeclaration(lexeme):
+            while lexeme.next() and not (lexeme.next().token() == 'Punctuation' and lexeme.next().text() == "}") and not (lexeme.next().token() == 'Operator' and lexeme.next().text() == ','):
+                lexeme = lexeme.next()
+
+
+
+        elif lexeme.token() == 'Literal' and (not exceptions or not lexeme.text() in exceptions):
+            #print(f'{lexeme.text()} list:{exceptions}')
+
+            if not check.option().lookup('pragma') and isPragma(lexeme):
+                while lexeme.next() and not lexeme.next().token() == 'Newline':
+                    lexeme = lexeme.next()
+
+
+
+            elif check.option().lookup('bitShift') and isBitShift(lexeme):
+                lexeme = lexeme.next()
+
+
+            else:
+                # Get entity associated with literal
+                searchLex = lexeme
+                while searchLex and not searchLex.ent():
+                    searchLex = searchLex.previous()
+                    if searchLex and re.match(r'[;}]', searchLex.text()) and searchLex.token() == 'Punctuation':
+                        break
+
+
+            ent = None
+            if searchLex:
+                ent = searchLex.ent()
+
+            if ent and ent.type() != None and (not re.search(r'const', ent.type())):
+                check.violation(ent, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text())
+            # Only register one violation per statement when multiple is not selected
+            while not check.option().lookup('multiple') and lexeme.next() and not (lexeme.next().token() == 'Punctuation' and lexeme.next().text() == ';'):
+                lexeme = lexeme.next()
+
+
+        lexeme = lexeme.next()
+
+
+def isInitialization(lexeme):
+    t = lexeme.token()
+    r = lexeme.ref()
+    e = lexeme.ent()
+
+    if r and r.kindname() == "Init" and e.kind().check("Object"):
+        return True
+
+
+def isPureVirtual(lexeme):
+    t = lexeme.token()
+    r = lexeme.ref()
+    e = lexeme.ent()
+
+    if r and r.kind().check("declarein") and e.kind().check("Pure Virtual"):
+        return True
+
+
+def isBitField(lexeme):
+    t = lexeme.token()
+    r = lexeme.ref()
+    e = lexeme.ent()
+
+    if r and r.kind().check("definein") and e.kind().check("Object") and e.freetext("Bitfield"):
+        return True
+
+
+def isBitShift(lexeme):
+    test = False
+    prevLex = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+    nextLex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+    if prevLex.text() == '<<' or prevLex.text() == '>>' or nextLex.text() == '<<' or nextLex.text() == '>>':
+        test = True
+
+    return test
+
+
+def isMacroDeclaration(lexeme):
+    r_val = False
+    t = lexeme.token()
+    r = lexeme.ref()
+    e = lexeme.ent()
+
+    if t and r and e and t == 'Identifier' and r.kind().check("Definein, setby") and e.kind().check("Macro"):
+        r_val = True
+
+    return r_val
+
+
+def isEnumeratorDeclaration(lexeme):
+    r_val = False
+    t = lexeme.token()
+    r = lexeme.ref()
+    e = lexeme.ent()
+    
+    if t and r and e and t == 'Identifier' and r.kind().check("Definein, setby") and e.kind().check("Enumerator"):
+        r_val = True
+
+    return r_val
+
+
+def isIndex(lexeme):
+    nextLex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+    prevLex = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+    if nextLex and nextLex.token() == 'Operator' and nextLex.text() == ']' and prevLex.token() == 'Operator' and prevLex.text() == '[':
+        return True
+
+    return False
+
+
+def isPragma(lexeme):
+    while lexeme.previous() and lexeme.previous().token() != 'Newline':
+        if lexeme.token() == 'Preprocessor' and lexeme.text() == 'pragma':
+            return True
+
+        lexeme = lexeme.previous()
+
+    return False

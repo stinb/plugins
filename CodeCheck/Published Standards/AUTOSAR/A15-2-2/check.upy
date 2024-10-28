@@ -1,0 +1,287 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-18-2021
+import re
+
+ERR1 = """\
+Constructor cannot deallocate object resources"""
+
+def ids():
+    return ('A15-2-2', 'CPP_C052')
+
+def name(id):
+    return {
+        "A15-2-2": "Published Standards/AUTOSAR/If a constructor is not noexcept and the constructor cannot finish object initialization, then it shall deallocate the object's resources and it shall throw an exception", \
+        "CPP_C052": "All Checks/Language Specific/C and C++/Constructors/If a constructor is not noexcept and the constructor cannot finish object initialization, then it shall deallocate the object's resources and it shall throw an exception",
+    }[id]
+
+
+def tags(id):
+    return {
+        'A15-2-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Partially Automated',
+            'Constructors',
+        ],
+        'CPP_C052': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Leaving the constructor with invalid object state leads to undefined behavior.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1   //% $Id: A15-2-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2   #include &lt;fstream&gt;
+3   #include &lt;stdexcept&gt;
+4   class A
+5   {
+6   public:
+7     A() = default;
+8   };
+9   class C1
+10  {
+11  public:
+12    C1()
+13    noexcept(false)
+14    : a1(new A), a2(new A) // Non-compliant - if a2 memory allocation
+15    // fails, a1 will never be deallocated
+16    {
+17    }
+18    C1(A* pA1, A* pA2)
+19    noexcept : a1(pA1), a2(pA2) // Compliant - memory allocated outside of C1
+20    // constructor, and no exceptions can be thrown
+21    {
+22    }
+23
+24  private:
+25    A* a1;
+26    A* a2;
+27  };
+28  class C2
+29  {
+30  public:
+31    C2() noexcept(false) : a1(nullptr), a2(nullptr)
+32    {
+33      try
+34      {
+35        a1 = new A;
+36        a2 = new A; // If memory allocation for a2 fails, catch-block will
+37        // deallocate a1
+38      }
+39
+40      catch (std::exception& e)
+41      {
+42        throw; // Non-compliant - whenever a2 allocation throws an
+43        // exception, a1 will never be deallocated
+44      }
+45    }
+46
+47  private:
+48    A* a1;
+49    A* a2;
+50  };
+51  class C3
+52  {
+53  public:
+54    C3() noexcept(false) : a1(nullptr), a2(nullptr), file("./filename.txt")
+55    {
+56      try
+57      {
+58        a1 = new A;
+59        a2 = new A;
+60
+61        if (!file.good())
+62        {
+63          throw std::runtime_error("Could not open file.");
+64        }
+65      }
+66
+67      catch (std::exception& e)
+68      {
+69        delete a1;
+70        a1 = nullptr;
+71        delete a2;
+72        a2 = nullptr;
+73        file.close();
+74        throw; // Compliant - all resources are deallocated before the
+75        // constructor exits with an exception
+76      }
+77    }
+78
+79  private:
+80    A* a1;
+81    A* a2;
+82    std::ofstream file;
+83  };
+84  class C4
+85  {
+86  public:
+87    C4() : x(0), y(0)
+88    {
+89      // Does not need to check preconditions here - x and y initialized with
+90      // correct values
+91    }
+92    C4(std::int32_t first, std::int32_t second)
+93    noexcept(false) : x(first), y(second)
+94    {
+95      CheckPreconditions(x,
+96      y); // Compliant - if constructor failed to create a
+97      // valid object, then throw an exception
+98    }
+99    static void CheckPreconditions(std::int32_t x,
+100   std::int32_t y) noexcept(false)
+101   {
+102     if (x &lt; 0 || x &gt; 1000)
+103     {
+104       throw std::invalid_argument(
+105       "Preconditions of class C4 were not met");
+106     }
+107
+108     else if (y &lt; 0 || y &gt; 1000)
+109     {
+110       throw std::invalid_argument(
+111       "Preconditions of class C4 were not met");
+112     }
+113   }
+114
+115 private:
+116   std::int32_t x; // Acceptable range: &lt;0; 1000&gt;
+117   std::int32_t y; // Acceptable range: &lt;0; 1000&gt;
+118 };
+</code></pre>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+
+    lexer = None
+    classRefs = file.filerefs('Define', 'Class')
+
+    for classRef in classRefs:
+
+        constructorRefs = classRef.ent().refs('Define', 'Member Function')
+
+        # Check all constructors
+        for constructorRef in constructorRefs:
+            if constructorRef.ent().name() != classRef.ent().name():
+                continue
+
+            noexcept = False
+            if not lexer:
+                lexer = file.lexer()
+
+            newParam = None
+            lexeme = lexer.lexeme(constructorRef.line(), constructorRef.column())
+            # Skip if noexcept
+            while lexeme and lexeme.text() != '{':
+                if lexeme.text() == 'noexcept' and not lexeme.next(True, True).text() == '(' and not lexeme.next(True, True).next(True, True).text().lower() == 'false':
+                    noexcept = True
+                    break
+                # Keep track of the last parameter that was newed
+                if lexeme.text() == 'new':
+                    newParam = lexeme
+                lexeme = lexeme.next(True, True)
+
+            if noexcept:
+                continue
+
+            if newParam:
+                check.violation(constructorRef.ent(), file, newParam.line_begin(), newParam.column_begin(), ERR1)
+
+
+            end = constructorRef.ent().ref('End')
+            endLex = lexer.lexeme(end.line(), end.column())
+
+            curly = False
+            inTry = False
+            tryClose = None
+            needToDelete = []
+
+
+            while lexeme and endLex and not (lexeme.line_begin() == endLex.line_begin() and lexeme.column_begin() == endLex.column_begin()):
+                if lexeme.text() == '{':
+                    curly = True
+
+                if lexeme.text() == 'try':
+                    inTry = True
+                    lexeme = lexeme.next(True, True)
+                    if lexeme.text() == '{':
+                        tryClose = findClose(lexeme)
+                        inTry = True
+                    else:
+                        continue
+
+                if inTry and tryClose and lexeme.line_begin() == tryClose.line_begin() and lexeme.column_begin() and tryClose.column_begin():
+                    inTry = False
+                    tryClose = None
+
+
+                # Go through trys to see if anything was created with 'new'
+                if lexeme.text() == 'new':
+                    if inTry and tryClose:
+                        while lexeme and not (lexeme.line_begin() == tryClose.line_begin() and lexeme.column_begin() == tryClose.column_begin()):
+                            if lexeme.text() == 'new':
+                                prevLex = lexeme.previous(True, True)
+                                while prevLex and prevLex.text() != '=':
+                                    prevLex = prevLex.previous(True, True)
+                                while prevLex and not prevLex.ent() and not re.search(r';|}|{', prevLex.text()):
+                                    prevLex = prevLex.previous(True, True)
+                                if prevLex.ent():
+                                    needToDelete.append(prevLex.ent().name())
+
+                            lexeme = lexeme.next(True, True)
+                        # Look for a throw in the catch
+                        if tryClose.next(True, True).text() == 'catch':
+                            while tryClose and not tryClose.text() == '{':
+                                tryClose = tryClose.next(True, True)
+
+                            if tryClose.text() == '{':
+                                catchClose = findClose(tryClose)
+                                while tryClose and catchClose and not (tryClose.line_begin() == catchClose.line_begin() and tryClose.column_begin() == catchClose.column_begin()):
+                                    if tryClose.text() == 'delete':
+                                        tryClose = tryClose.next(True, True)
+                                        if tryClose.ent() and tryClose.ent().name() in needToDelete:
+                                            needToDelete.remove(tryClose.ent().name())
+                                            if len(needToDelete) == 0:
+                                                break
+                                    if tryClose.text() == 'throw':
+                                        check.violation(constructorRef.ent(), file, tryClose.line_begin(), tryClose.column_begin(), ERR1)
+
+                                    tryClose = tryClose.next(True, True)
+
+
+                            inTry = False
+                            tryClose = None
+
+                lexeme = lexeme.next(True, True)
+
+
+def findClose(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == '}' and count == 0):
+        if lexeme.text() == '{':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme.text() == '}':
+            count -= 1
+
+
+    return lexeme

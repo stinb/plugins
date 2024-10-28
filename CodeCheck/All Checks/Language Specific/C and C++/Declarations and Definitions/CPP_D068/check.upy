@@ -1,0 +1,221 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-22-21
+
+
+import re
+
+
+ERR1 = 'Equivalent to the implicitly defined copy constructor'
+ERR2 = 'Equivalent to the implicitly defined move constructor'
+ERR3 = 'Equivalent to the implicitly defined destructor'
+ERR4 = '%1 members are not initialized'
+
+
+def ids():
+    return ('A12-7-1', 'CPP_D068')
+
+
+def name(id):
+    return {
+        'A12-7-1': 'Published Standards/AUTOSAR/If the behavior of a user-defined special member function is identical to implicitly defined special member function, then it shall be defined =default or be left undefined.',
+        'CPP_D068': 'All Checks/Language Specific/C and C++/Declarations and Definitions/If the behavior of a user-defined special member function is identical to implicitly defined special member function, then it shall be defined =default or be left undefined.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A12-7-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D068': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+If a user-defined version of a special member function is the same as would be provided by the compiler, it will be less error prone and more maintainable to replace it with "=default" definition or leave it undefined to let the compiler define it implicitly.
+</p>
+
+<p>
+Note that this rule applies to all special member functions of a class.
+</p>
+
+<p>
+See: <code>Implicitly-Defined-Default-Constructor, Implicitly-DefinedCopy-Constructor, Implicitly-Defined-Move-Constructor,
+Implicitly-Defined-Copy-Assignment-Operator, Implicitly-DefinedMove-Assignment-Operator, Implicitly-Defined-Destructor</code>
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A12-7-1.cpp 271715 2017-03-23 10:13:51Z piotr.tanski $
+#include &lt;cstdint&gt;
+#include &lt;utility&gt;
+class A
+{
+  public:
+    A() : x(0), y(0) {} // Compliant
+    A(std::int32_t first, std::int32_t second) : x(first), y(second) {} // Compliant
+    // -
+    // anyway, such
+    // a constructor
+    // cannot be
+    // defaulted.
+    A(const A& oth)
+    : x(oth.x),
+    y(oth.y) // Non-compliant - equivalent to the implicitly
+             // defined copy constructor
+    {
+    }
+    A(A&& oth)
+    : x(std::move(oth.x)),
+    y(std::move(
+    oth.y)) // Non-compliant - equivalent to the implicitly
+            // defined move constructor
+    {
+    }
+    ~A() // Non-compliant - equivalent to the implicitly defined destructor
+    {
+    }
+
+  private:
+    std::int32_t x;
+    std::int32_t y;
+};
+class B
+{
+  public:
+    B() {} // Non-compliant - x and y are not initialized
+           // should be replaced with: B() : x{0}, y{0} {}
+    B(std::int32_t first, std::int32_t second) : x(first), y(second) {} // Compliant
+    B(const B&) =
+    default; // Compliant - equivalent to the copy constructor of class A
+    B(B&&) =
+    default; // Compliant - equivalent to the move constructor of class A
+    ~B() = default; // Compliant - equivalent to the destructor of class A
+
+  private:
+    std::int32_t x;
+    std::int32_t y;
+};
+class C
+{
+  public:
+    C() = default; // Compliant
+    C(const C&) = default; // Compliant
+    C(C&&) = default; // Compliant
+};
+class D
+{
+  public:
+    D() : ptr(nullptr) {}  // Compliant - this is not equivalent to what the
+                           // implicitly defined default constructor would do
+    D(C* p) : ptr(p) {}    // Compliant
+    D(const D&) = default; // Shallow copy will be performed, user-defined copy
+    // constructor is needed to perform deep copy on ptr variable
+    D(D&&) = default; // ptr variable will be moved, so ptr will still point to
+                      // the same object
+    ~D() = default; // ptr will not be deleted, the user-defined destructor is
+                    // needed to delete allocated memory
+
+  private:
+    C* ptr;
+};
+class E // Compliant - special member functions definitions are not needed as
+        // class E uses only implicit definitions
+{
+};
+</code></pre>
+
+<p><b>See also</b><br>
+• HIC++ v4.0 [9]: 12.5.2 Define special members =default if the behavior is equivalent.<br>
+• C++ Core Guidelines [11]: C.80: Use =default if you have to be explicit about using the default semantics.
+</p>
+
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def equal(ref1, ref2):
+    return ref1.line() == ref2.line() and ref1.column() == ref2.column()
+
+
+def emptyFunction(ent):
+    contents = ent.contents()
+
+    # Remove any comments and whitespace
+    contents = re.sub('\\/\\/.*?\\n', '\\n', contents)
+    contents = re.sub('\\/\\*.*?\\*\\/', '\\n', contents)
+    contents = re.sub('\\s', '', contents)
+
+    # If it's empty
+    if re.match(r'.*{}$', contents):
+        return True
+    return False
+
+def check(check, file):
+
+    # Public member functions
+    for funRef in file.filerefs('Define', 'Public Member Function'):
+        funEnt = funRef.ent()
+        classEnt = funEnt.parent()
+
+        # Non-default constructor or deconstructor
+        if re.match(r'^(|\~)' + classEnt.name(), funEnt.name()) and 'Class' in classEnt.kindname():
+
+            # Equivalent to the implicitly defined copy constructor
+            if funEnt.parameters() and funEnt.parameters(False) == 'const ' + funEnt.name() + ' &':
+                if emptyFunction(funEnt):
+                    check.violation(funEnt, file, funRef.line(), funRef.column(), ERR1)
+
+            # Equivalent to the implicitly defined move constructor
+            elif funEnt.parameters() and funEnt.parameters(False) == funEnt.name() + ' &&':
+                if emptyFunction(funEnt):
+                    check.violation(funEnt, file, funRef.line(), funRef.column(), ERR2)
+
+            # Equivalent to the implicitly defined destructor
+            elif funEnt.name() == '~' + classEnt.name():
+                if emptyFunction(funEnt):
+                    check.violation(funEnt, file, funRef.line(), funRef.column(), ERR3)
+
+            # Members are not initialized
+            elif funEnt.name() == classEnt.name():
+                # Count the members not initialized by the class
+                notInitByClass = 0
+                for member in classEnt.ents('Define', 'Member Object ~Const'):
+                    init = False
+                    define = member.refs('Definein')[0]
+                    for setby in member.refs('Setby Init'):
+                        if equal(define, setby):
+                            init = True
+                            break
+                    if not init:
+                        notInitByClass += 1
+
+                # See if there are members not initialized by the constructor or the class
+                initByConstructor = len(funEnt.ents('Set Init', 'Member Object ~Const'))
+                if initByConstructor < notInitByClass:
+                    notInitByEither = notInitByClass - initByConstructor
+                    check.violation(funEnt, file, funRef.line(), funRef.column(), ERR4, notInitByEither)

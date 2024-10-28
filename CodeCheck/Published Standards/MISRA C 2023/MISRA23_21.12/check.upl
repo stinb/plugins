@@ -1,0 +1,144 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'fenv.h function %2 used in file %1';
+use constant ERR2 => 'fenv.h macro %2 used in file %1';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA23_21.12";}
+
+
+sub name { return "Published Standards\\MISRA C 2023\\21.12 The standard header file <fenv.h> shall not be used";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2023',
+    'Category: Required',
+    'Libraries',
+    'Exception Handling',
+  );
+}
+
+sub description { return "21.12 The standard header file <fenv.h> shall not be used";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Amplification</b></p>
+<p>The standard header file <fenv.h> shall not be #include'd, and none of the features that are
+specified as being provided by <fenv.h> shall be used.</p>
+
+<p><b>Rationale</b></p>
+<p>In some circumstances, the values of the floating-point status flags are unspecified and attempts to
+access them may lead to undefined behaviour.</p>
+
+<p>The order in which exceptions are raised by the feraiseexcept function is unspecified and could
+therefore result in a program that has been designed for a certain order not operating correctly.</p>
+
+<p>Calling the fesetenv or feupdateenv functions with invalid arguments results in undefined behaviour.</p>
+
+<p>Calling the fesetround function should be done with care because:<p>
+
+<p>1. Setting the rounding mode may have unexpected consequences, e.g. setting the current
+rounding mode to upwards does not guarantee that the result of evaluating an expression is
+an upward approximation to the value of the expression over the reals.</p>
+
+<p>2. Several implementations of functions declared in <math.h> have been designed to support
+round-to-nearest only: if such functions are called when a different rounding mode is set, the
+results can be unpredictable.</p>
+
+<p>Note: In conforming implementations, the rounding direction mode is set to rounding to nearest at
+program start-up.</p>
+
+<p><b>Example</b></p><pre><code language="C++">  #include &lt;fenv.h&gt;
+
+  void f ( float32_t x, float32_t y )
+  {
+    float32_t z;
+
+    feclearexcept ( FE_DIVBYZERO ); /* Non-compliant */
+
+    z = x / y;
+
+    if ( fetestexcept ( FE_DIVBYZERO ) ) /* Non-compliant */
+    {
+    }
+
+    else
+    {
+  #pragma STDC FENV_ACCESS ON
+    z = x * y;
+  }
+
+  if ( z &gt; x )
+  {
+  #pragma STDC FENV_ACCESS OFF
+    if ( fetestexcept ( FE_OVERFLOW ) ) /* Non-compliant */
+    {
+    }
+   }
+  }
+</code></pre>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 1;}
+
+sub test_global { return 0;}
+
+sub define_options {
+  my $check = shift;
+  $check->option->checkbox( 'oneViolation', 'Limit one violation per file?', 0 );
+}
+
+our %seen;
+sub check {
+  my $check = shift; 
+  my $file = shift;
+  return unless $file->kind->check("c file ~unknown ~unresolved");
+ 	foreach my $libFuncs($file->filerefs("","Function")){
+ 		if($libFuncs->ent->name eq "feclearexcept" || $libFuncs->ent->name eq "fegetexceptflag" || $libFuncs->ent->name eq "feraiseexcept" || $libFuncs->ent->name eq "fesetexceptflag" || $libFuncs->ent->name eq "fetestexcept" ){
+ 			my $libUsed = includeCheck($file,$check);
+      if($libUsed){
+        $check->violation($libFuncs->ent,$file,$libFuncs->line,$libFuncs->column,ERR1,$file->name,$libFuncs->ent->name);
+      }
+    }
+ 	}
+  foreach my $libFuncs($file->filerefs("","Macro")){
+    if($libFuncs->ent->name eq "FE_INEXACT" || $libFuncs->ent->name eq "FE_DIVBYZERO" || $libFuncs->ent->name eq "FE_UNDERFLOW" || $libFuncs->ent->name eq "FE_OVERFLOW" || $libFuncs->ent->name eq "FE_INVALID" || $libFuncs->ent->name eq "FE_ALL_EXCEPT"){
+      my $libUsed = includeCheck($file,$check);
+      if($libUsed){
+        $check->violation($libFuncs->ent,$file,$libFuncs->line,$libFuncs->column,ERR2,$file->name,$libFuncs->ent->name);
+      }
+    }
+  }
+  %seen=();
+}
+
+sub includeCheck {
+  my $file = shift;
+  my $check = shift;
+  
+  if ($seen{$file->id}){
+    return 0;
+  }
+  $seen{$file->id}=1 if $check->option->lookup( 'oneViolation' );
+  if($file->name eq "fenv.h"){
+    return 1;
+  }
+  my @refs = $file->refs("include","file",1);
+  foreach my $ref (@refs){
+    return 1 if includeCheck($ref->ent, $check);
+  }
+}

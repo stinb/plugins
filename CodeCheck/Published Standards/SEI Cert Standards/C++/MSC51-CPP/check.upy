@@ -1,0 +1,183 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-08-03
+
+
+import re
+
+
+ERR1 = 'Random number generator might not be not properly seeded'
+ERR2 = 'Random number generator might be called before it is seeded'
+
+NOT_RANDOM_FUNCTION = 0
+SEED_FUNCTION       = 1
+RAND_FUNCTION       = 2
+
+generatorObjects = {'std::minstd_rand0', 'std::minstd_rand', 'std::mt19937',
+'std::mt19937_64', 'std::ranlux24_base', 'std::ranlux48_base', 'std::ranlux24',
+'std::ranlux48', 'std::knuth_b', 'std::default_random_engine'}
+
+
+def ids():
+    return ('MSC51-CPP', 'CPP_L018')
+
+
+def name(id):
+    return {
+        'MSC51-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Ensure your random number generator is properly seeded''',
+        'CPP_L018': '''All Checks/Language Specific/C and C++/Libraries/\
+Ensure your random number generator is properly seeded''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MSC51-CPP': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P18',
+            'Level: L1',
+        ],
+        'CPP_L018': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Ensure your random number generator is properly seeded</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/MSC51-CPP.+Ensure+your+random+number+generator+is+properly+seeded'>https://wiki.sei.cmu.edu/confluence/display/cplusplus/MSC51-CPP.+Ensure+your+random+number+generator+is+properly+seeded</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+#include &lt;random&gt;
+#include &lt;iostream&gt;
+
+void f() {
+  std::mt19937 engine;
+
+  for (int i = 0; i &lt; 10; ++i) {
+    std::cout &lt;&lt; engine() &lt;&lt; ", ";
+  }
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>For additional accuracy, you may need to enable Project &gt; Configure
+Project &gt; C++ &gt; Options &gt; Save macro expansion text.</p>
+
+<p>To check additional random number generators types, add the class types, such
+as <code>MyLibrary::GeneratorA MyLibrary::GeneratorB</code> in the provided
+option.</p>
+
+<p>For strictness, the only accepted seed is a simple expression: a call with
+the type <code>std::random_device</code>.</p>
+
+<p>Using <code>rand</code> from C is not allowed, since it is not guaranteed
+to be seeded. In contrast, the standard random number engine classes in C++ are
+seeded at initialization, so their generator methods are guaranteed to be
+seeded.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().text('generatorObjects', 'Additional generator object types to test (space-separated)', '')
+
+
+def check(check, file):
+    for generatorObject in check.options().lookup('generatorObjects').split():
+        generatorObjects.add(generatorObject)
+
+    for define in file.filerefs('Define', 'Object'):
+        obj = define.ent()
+
+        # Skip if not a random number generator object
+        if obj.type() not in generatorObjects:
+            continue
+
+        checkSeed(check, define)
+
+    for call in file.filerefs('Call', 'Function'):
+        function = call.ent()
+
+        # Decide if a seed method/function or rand
+        randomFunctionType = NOT_RANDOM_FUNCTION
+        if function.kind().check('Member'):
+            if function.name() == 'seed':
+                randomFunctionType = SEED_FUNCTION
+        else:
+            if function.name() == 'srand':
+                randomFunctionType = SEED_FUNCTION
+            elif function.name() == 'rand':
+                randomFunctionType = RAND_FUNCTION
+
+        if randomFunctionType == SEED_FUNCTION:
+            checkSeed(check, call)
+        elif randomFunctionType == RAND_FUNCTION:
+            checkRand(check, call)
+
+
+def checkSeed(check, ref):
+    # Skip if the function call is given a proper seed
+    if isProperlySeeded(ref):
+        return
+
+    check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+
+
+def checkRand(check, ref):
+    check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR2)
+
+
+def isProperlySeeded(ref):
+    lexer = ref.file().lexer(lookup_ents=True, expand_macros=True)
+    lex = lexer.lexeme(ref.line(), ref.column())
+
+    # False if no lexemes: "expected ent name" (
+    lex = matchText(lex, [ref.ent().name(), '('])
+    if not lex:
+        return False
+
+    # False if no lexeme: "ent with type std::random_device"
+    if not lex.ent() or lex.ent().type() != 'std::random_device':
+        return False
+
+    # False if no lexemes: ( ) )
+    lex = lex.next(True, True)
+    lex = matchText(lex, ['(', ')', ')'])
+    if not lex:
+        return False
+
+    return True
+
+
+def matchText(lex, textArray):
+    for text in textArray:
+        if not lex or lex.text() != text:
+            return None
+        lex = lex.next(True, True)
+    return lex

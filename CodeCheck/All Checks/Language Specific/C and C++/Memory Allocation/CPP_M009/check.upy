@@ -1,0 +1,86 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 07-20-2021
+
+import re
+
+ERR1 = """\
+Memory was referenced after being freed"""
+
+def ids():
+    return ('CPP_M009')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_M009':  "All Checks/Language Specific/C and C++/Memory Allocation/Memory that has been freed shall not be referenced"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_M009': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>For example, the following is not permitted:</p>
+<pre><code language="C++">curr_node = head;
+while (curr_node != NULL) {
+  free(curr_node);
+  curr_node = curr_node-&gt;next; /* Memory has already been freed */
+} /* end while */
+</code></pre>
+<p>Although referencing memory that has been freed is a programming error and
+some compilers may catch it, this is considered significant enough to be listed
+as a standard.</p>
+<p>Developer's note</p>
+<p>This check will only be able to check by line number in the same scope. If
+the memory goes out of scope and gets freed then this check will miss that.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # Skip if file does not have one of the following keywords
+    if not re.search(r'free|delete', file.contents()):
+        return
+
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    # Keep track of each violation so that each violation is only thrown once
+    seen = []
+    for fun in file.filerefs('Define', 'Function ~Unknown ~Unresolved'):
+        begin = fun.ent().ref('Begin').line()
+        end = fun.ent().ref('End').line()
+
+        for lexeme in lexer.lexemes(begin, end):
+            # Look through the lexer for any use of free or delete
+            if re.match(r'(free|delete)$', lexeme.text()):
+                lex = lexeme
+                lexeme = lexeme.next(True, True)
+                # Look for an ent
+                while lexeme and lexeme.text() != ';' and not lexeme.ent():
+                    lexeme = lexeme.next(True, True)
+
+                if lexeme and lexeme.ent():
+                    for ref in lexeme.ent().refs('~Assign'):
+                        if ref.file().longname() != file.longname() or ref.line() < begin or ref.line() > end:
+                            continue
+                        # Check compare ref lines with the lexeme
+                        if ref.line() > lexeme.line_begin() and f'{ref.line()}.{ref.column()}' not in seen:
+                            # Add the line and column to the 'seen' list
+                            seen.append(f'{ref.line()}.{ref.column()}')
+                            check.violation(ref.scope(), file, ref.line(), ref.column(), ERR1)

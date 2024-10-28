@@ -1,0 +1,192 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-04-27
+
+
+import re
+
+
+ERR1 = 'Byte ordering not corrected after receiving data'
+ERR2 = 'Byte ordering not corrected before sending data'
+
+RECEIVE_FUNCTIONS = {'recv', 'recvfrom'}
+SEND_FUNCTIONS    = {'send', 'sendto'}
+
+RE_NETWORK_TO_HOST = r'^ntoh\w+$'
+RE_HOST_TO_NETWORK = r'^hton\w+$'
+
+
+def ids():
+    return ('POS39-C')
+
+
+def name(id):
+    return {
+        'POS39-C': '''Published Standards/SEI Cert Standards/C/\
+Use the correct byte ordering when transferring data between systems''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POS39-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P18',
+            'Level: L1',
+            'Miscellaneous',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'POS39-C': '''\
+<p>
+Use the correct byte ordering when transferring data between systems
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+If the programmer is careless, this bug is likely. However, it will immediately
+break the program by printing the incorrect result and therefore should be
+caught by the programmer during the early stages of debugging and testing.
+Recognizing a value as in reversed byte ordering, however, can be difficult
+depending on the type and magnitude of the data.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/c/POS39-C.+Use+the+correct+byte+ordering+when+transferring+data+between+systems
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">/* sock is a connected TCP socket */
+
+uint32_t num;
+
+if (recv(sock, (void *)&num, sizeof(uint32_t), 0) &lt; (int)sizeof(uint32_t)) {
+  /* Handle error */
+}
+
+printf("We received %u from the network!\\n", (unsigned int)num);
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+The call order and control flow are not checked. The scope is limited to a
+function, so if a function calls a network function, then it should also call a
+byte order function.
+</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox(
+        'requireBufferArg',
+        'Require buffer/message (2nd) argument to be used in byte ordering functions',
+        True)
+
+
+def check(check, file):
+    requireBufferArg = check.options().lookup('requireBufferArg')
+
+    for call in file.filerefs('Call'):
+        caller = call.scope()
+        called = call.ent()
+
+        if called.name() in RECEIVE_FUNCTIONS:
+            if not isPatternCalledWithSecondArg(call, RE_NETWORK_TO_HOST, requireBufferArg):
+                check.violation(called, file, call.line(), call.column(), ERR1)
+
+        elif called.name() in SEND_FUNCTIONS:
+            if not isPatternCalledWithSecondArg(call, RE_HOST_TO_NETWORK, requireBufferArg):
+                check.violation(called, file, call.line(), call.column(), ERR2)
+
+
+def isPatternCalledWithSecondArg(networkCall, pattern, requireBufferArg):
+    caller = networkCall.scope()
+
+    # Get the second argument name to the network function
+    secondArgName = getSecondArgName(networkCall)
+    if not secondArgName and requireBufferArg:
+        return False
+
+    # Each call that matches the regexp
+    for byteOrderCall in caller.refs('Call'):
+        if not re.match(pattern, byteOrderCall.ent().name()):
+            continue
+
+        # Stop early if we don't have to check that the second arg is used
+        if not requireBufferArg:
+            return True
+
+        lexer = byteOrderCall.file().lexer(lookup_ents=False, expand_macros=True)
+        lex = lexer.lexeme(byteOrderCall.line(), byteOrderCall.column())
+
+        # Match (
+        lex = lex.next(True, True)
+        if not lex or lex.text() != '(':
+            return False
+
+        # Match second argument name
+        lex = lex.next(True, True)
+        if not lex or lex.text() != secondArgName:
+            return False
+
+        return True
+
+    return False
+
+
+def getSecondArgName(call):
+    lexer = call.file().lexer(lookup_ents=False, expand_macros=True)
+    lex = lexer.lexeme(call.line(), call.column())
+    lex = lex.next(True, True)
+
+    openParen = 0
+    commas = 0
+
+    while lex:
+        if lex.text() == '(':
+            openParen += 1
+
+        elif lex.text() == ')':
+            openParen -= 1
+            # Stop early if we missed the second argument
+            if openParen == 0:
+                return
+
+        elif lex.text() == ',':
+            if openParen == 1:
+                commas += 1
+                # Stop early if we missed the second argument
+                if commas > 1:
+                    return
+
+        elif lex.token() == 'Identifier':
+            # Second parameter, ignoring complicated expressions
+            if openParen == 1 and commas == 1:
+                nextLex = lex.next(True, True)
+                if nextLex and nextLex.text() == ',':
+                    return lex.text()
+
+        lex = lex.next(True, True)

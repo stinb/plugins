@@ -1,0 +1,161 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2/5/21
+import re
+
+ERR1 = 'Macro %1 is defined within a block'
+ERR2 = 'Macro %1 is undefined within a block'
+
+# The ID for the check
+def ids():
+    return ('RECOMMENDED_07', 'MISRA04_19.5', 'MISRA08_16-0-2', 'CPP_P019', 'M16-0-2')
+
+# The short name of the check
+def name(id):
+    return {
+            'RECOMMENDED_07': """\
+SciTools\' Recommended Checks/Macros shall not be #define\'d or #undef\'d within a block""",
+            'MISRA04_19.5': """\
+Published Standards/MISRA-C 2004/19.5 Macros shall not be #define\'d or #undef\'d within a block""", 
+            'MISRA08_16-0-2': """\
+Published Standards/MISRA-C++ 2008/16-0-2 Macros shall only be #define\'d or #undef\'d in the global namespace""", 
+            'CPP_P019': """\
+All Checks/Language Specific/C and C++/Preprocessor/Macros in Blocks""", 
+            'M16-0-2': """\
+Published Standards/AUTOSAR/Macros shall only be #define'd or #undef'd in the global namespace.""", 
+            }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_16-0-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'MISRA04_19.5': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Preprocessor',
+        ],
+        'M16-0-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Preprocessor',
+        ],
+        'RECOMMENDED_07': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+        'CPP_P019': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    return {
+            'RECOMMENDED_07': """\
+<p><b>Rationale</b></p>
+<p>While it is legal to place #define or #undef directives anywhere in a
+code file, placing them inside blocks is misleading as it implies a scope
+restricted to that block, which is not the case. Normally, #define and #undef
+directives will be placed near the start of a file, before the first
+function definition.</p>"""
+,
+            'MISRA04_19.5': """\
+<p>While it is legal C to place #define or #undef directives anywhere in a code
+file, placing them inside blocks is misleading as it implies a scope restricted
+to that block, which is not the case. Normally, #define directives will be
+placed near the start of a file, before the first function definition.</p>""",
+            'MISRA08_16-0-2': """\
+<p><b>Rationale</b></p>
+<p>While it is legal to place #define or #undef directives anywhere in a source
+file, placing them outside of the global namespace is misleading as their scope
+is not restricted. This may be inconsistent with developer expectations.</p>
+<p>See also Rule 16-0-3</p>
+<p><b>Example</b></p><pre><code language="C++">  #ifndef MY_HDR
+  #define MY_HDR // Compliant
+  namespace NS
+  {
+  #define FOO // Non-compliant
+  #undef FOO // Non-compliant
+  }
+  #endif
+</code></pre>""",
+            'CPP_P019': """\
+<p><b>Rationale</b></p>
+<p>Placing macros definitions inside blocks makes it appear that the definition
+has a scope of that block. Place macros definitions at the begining of the file
+to avoid confusion.</p>""",
+            'M16-0-2': """\
+<p><b>Rule</b></p>
+<p>Macros shall only be #define’d or #undef’d in the global
+namespace.</p>
+<p><b>Rationale</b></p>
+<p>While it is legal to place #define or #undef directives anywhere in a source file, placing them outside
+of the global namespace is misleading as their scope is not restricted. This may be inconsistent
+with developer expectations.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#ifndef MY_HDR
+#define MY_HDR // Compliant
+namespace NS
+{
+ #define FOO // Non-compliant
+ #undef FOO // Non-compliant
+}
+#endif
+</code></pre>
+"""
+
+            }[id]
+    
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+
+    if not file.filerefs('', 'c macro'):
+        return
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    lexemes = lexer.lexemes()
+    findEnt = ''
+    for lexeme in lexemes:
+        if not lexeme.inactive() and re.search(r'^undef$|^define$', lexeme.text().lower()) and lexeme.token() == "Preprocessor":
+            findEnt = lexeme.text()
+        elif findEnt != '' and lexeme.ref():
+            if re.search(r'define', findEnt):
+                err = ERR1
+
+            else:
+                err = ERR2
+
+            if lexeme.ref().ent().id() != file.id():
+                pass
+                check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), err, lexeme.ent().name())
+
+            findEnt = ''
+

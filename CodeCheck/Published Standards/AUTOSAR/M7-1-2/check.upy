@@ -1,0 +1,100 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-13-2021
+import re
+
+ERR1 = 'Unmodified pointer or reference parameter %1 was not declared const'
+
+def ids():
+    return ('M7-1-2', 'MISRA08_7-1-2', 'CPP_F019')
+
+def name(id):
+    return {
+        'M7-1-2': 'Published Standards/AUTOSAR/A pointer or reference parameter in a function shall be declared as pointer to const or reference to const if the corresponding object is not modified',
+        'MISRA08_7-1-2': 'Published Standards/MISRA-C++ 2008/7-1-2 A pointer or reference parameter in a function shall be declared as pointer to const or reference to const if the corresponding object is not modified',
+        'CPP_F019': 'All Checks/Language Specific/C and C++/Functions/A pointer or reference parameter in a function shall be declared as pointer to const or reference to const if the corresponding object is not modified',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_7-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Functions',
+        ],
+        'M7-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions',
+        ],
+        'CPP_F019': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+<p>This rule leads to greater precision in the definition of the function
+interface. The const qualification shall be applied to the object pointed to,
+not to the pointer, since it is the object itself that is being protected.</p>
+<p><b>Exception</b></p>
+<p>This rule does not apply if the parameter object is modified by any of the
+functions in a set of overriding functions.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">void myfunc(        int16_t *   param1,
+              const int16_t *   param2,
+                    int16_t *   param3,
+                    int16_t *   const param4)
+// param1: Addresses an object which is modified     - Compliant
+// param2: Addresses an object which is not modified - Compliant
+// param3: Addresses an object which is not modified - Non-compliant
+// param4: Addresses an object which is not modified - Non-compliant
+{
+    *param1 = *param2 + *param3 + *param4;
+    // Data at address param3 and param4 have not been changed
+}
+</code></pre>
+'''
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    parameterRefs = file.filerefs('Define', 'Parameter')
+
+    for parameterRef in parameterRefs:
+
+        # Skip if const or isn't a pointer or reference
+        if not re.search(r'\*|&', str(parameterRef.ent().type())) or re.search(r'const.*\*', str(parameterRef.ent().type())):
+            continue
+
+        # Throw violation if not set or modified
+        if not parameterRef.ent().refs('Setby, Modifyby, Deref Setby'):
+            ok = False
+            refs = parameterRef.ent().refs('Useby, Callby')
+            for ref in refs:
+                if not lexer:
+                    lexer = file.lexer()
+                lexeme = lexer.lexeme(ref.line(), ref.column())
+                if lexeme:
+                    lexeme = lexeme.next(True, True)
+                    if lexeme and (lexeme.text() == '.' or lexeme.text() == '->'):
+                        ok = True
+                        break
+            if not ok:
+                check.violation(parameterRef.ent(), file, parameterRef.line(), parameterRef.column(), ERR1, parameterRef.ent().name())

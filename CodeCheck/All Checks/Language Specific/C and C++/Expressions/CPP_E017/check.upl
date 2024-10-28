@@ -1,0 +1,237 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 9-29-14
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => "An instance of %1 is calling a copy constructor or assignment operator for its ancestor %2 ( Object Slicing )";
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_E017";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Expressions\\Code Slicing Should Not Occur";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Expressions',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return "( Required ) Code Slicing Should Not Occur.";
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Rationale</b></p>
+In object-oriented programming, a subclass typically extends its superclass by defining additional 
+member variables. If a superclass instance is assigned its value from a subclass instance, member 
+variables defined in the subclass cannot be copied, since the superclass has no place to store them. 
+This is a natural and unavoidable consequence of assignment by value from subclass objects. The 
+term object slicing is sometimes used to refer to this aspect of assignment by value to a superclass 
+instance.
+</p>
+
+<p>
+Object slicing is also used to refer to a more subtle, problematic, case in which an object 
+assignment by value appears to be to a superclass instance but is actually to a subclass instance. 
+From the perspective of object memory layout, the member variables of the source instance can be 
+thought of as having been "sliced off", leaving the corresponding member variables in the destination 
+instance unchanged. It is this partial assignment (arguably a more apt term) that often surprises 
+programmers and leads to unintended consequences.
+</p>
+
+
+<p><b>Example</b><br></p>
+
+
+<pre><code language="C++">  struct A
+  {
+    A(int a) : a_var(a) {}
+    int a_var;
+  };
+   
+  struct B : public A
+  {
+    B(int a, int b) : A(a), b_var(b) {}
+    int b_var;
+  };
+   
+  B &getB()
+  {
+    static B b(1, 2);
+    return b;
+  }
+   
+  int main()
+  {
+    // Normal assignment by value to a
+    A a(3);
+    a = getB();
+    // a.a_var == 1, b.b_var not copied to a
+   
+    B b2(3, 4);
+    A &a2 = b2;
+    // Partial assignment by value through reference to b2
+    a2 = getB();
+    // b2.a_var == 1, b2.b_var == 4!
+   
+    return 0;
+  }
+
+</code></pre>
+
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+   # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check('c file');
+
+  # Pull all the call references, return if none
+  my @callRefs = $file->filerefs( 'Call', '~Unnamed' );
+  return unless @callRefs;
+
+  # Loop through each call reference
+  CALL : foreach my $call ( @callRefs ) {
+
+    # Setup of varaibles needed to test and see if we are looking at the right entity
+    my $ok = 0;
+    my $parameters = $call->ent->parameters;
+    my $name = $call->ent->name;
+    next CALL unless $name =~ /^\w+$/ or $name eq 'operator=';
+
+    # Test to see if we are looking at a copy constructor or assignment operator
+    $ok = 1 if $parameters =~ /^(volatile\s)?(const\s)?$name\s\&(\s\w+)?$/;
+    $ok = 1 if $name eq 'operator=';
+    
+
+    # If this is an assignemnt operator, we want the parent struct
+    if ( $name eq 'operator=' ) {
+
+      $ok = 1;
+      next CALL unless $call->ent->parent;
+      $name = $call->ent->parent->name;
+
+    }
+    next CALL unless $ok;
+
+    # Get the calling entity
+    my $lexeme = $call->lexeme;
+
+    # If we are looking at call from an assignment operator, $lexeme will be pointing at an = if implicitly called and operator if explicitly called
+    if ( $lexeme->text eq '=' or $lexeme->text eq 'operator' ) {
+
+      # Move forward until we are looking at a valid entity
+      while ( ! ( $lexeme->ent or $lexeme->text eq ';' ) ) {
+        $lexeme = $lexeme->nextUseful;
+      }
+
+    }
+
+
+    # Make sure this object has a typed reference
+    my $typeRef = 0;
+    if ( $lexeme->ent ) {
+      $typeRef = $lexeme->ent->ref( 'Typed' );
+    } else {
+      $typeRef = $call->ent->ref( 'Typed' );
+    }
+    next CALL unless $typeRef;
+    
+
+    # Pull the entity for the caller
+    my $caller = $typeRef->ent;
+    next CALL unless $caller;
+
+    # check ancestry
+    my @parentsDefined = $caller->refs( 'Base' );
+    next unless @parentsDefined;
+
+    # Check each base class to make sure we aren't calling it's copy or assignment
+    foreach my $parent ( @parentsDefined ) {
+
+      my $isParent = checkAncestors( $check, $name, $parent );
+      $check->violation( $caller, $call->file, $call->line, $call->column, ERR1, $caller->name, $name ) if $isParent;
+      next CALL if $isParent;
+
+    }
+  }
+}
+
+
+# This functions is designed to walk the inheritance tree and look for a match with the calling object
+sub checkAncestors {
+
+  # Pull the name and parent from calling function
+  my $check = shift;
+  my $name = shift;
+  my $current = shift;
+
+  # Test to see if we are done proceeding recursively
+  return 1 if $name eq $current->ent->name;
+
+
+  # check ancestry
+  my @parentsDefined = $current->ent->refs( 'Base ~Unknown ~Unresolved' );
+  return 0 unless @parentsDefined;
+
+  # Loop through each parent and check recursively
+  foreach my $parent ( @parentsDefined ) {
+
+    return 1 if checkAncestors( $check, $name, $parent );
+
+  }
+
+  return 0;
+}

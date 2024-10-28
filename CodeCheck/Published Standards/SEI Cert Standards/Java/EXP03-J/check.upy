@@ -1,0 +1,142 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-1-2022
+
+import re
+import Modules
+
+DEF_NAME = "Do not use the equality operators when comparing values of boxed primitives"
+
+# The ID for the check
+def ids():
+    return ('EXP03-J', 'JAVA_EXP03')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'EXP03-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_EXP03': "All Checks/Language Specific/Java/Expressions/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'JAVA_EXP03': [
+            'Language: Java',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Do not use the equality operators when comparing values of boxed primitives.
+</p>
+<p><b>Risk Assessment</b></p>
+<p>The values of boxed primitives cannot be directly compared using the == and
+!= operators because these operators compare object references rather than
+object values. Programmers can find this behavior surprising because autoboxing
+memoizes, or caches, the values of some primitive variables. Consequently,
+reference comparisons and value comparisons produce identical results for the
+subset of values that are memoized.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/EXP03-J.+Do+not+use+the+equ\
+ality+operators+when+comparing+values+of+boxed+primitives</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">import java.util.Comparator;
+
+static Comparator&lt;Integer&gt; cmp = new Comparator&lt;Integer&gt;() {
+  public int compare(Integer i, Integer j) {
+    return i &lt; j ? -1 : (i == j ? 0 : 1);
+  }
+};
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        # Look for all '==' and '!='
+        if re.match(r'==|!=', lexeme.text()):
+            prevLex = lexeme
+            nextLex = lexeme
+            left = False
+            right = False
+
+            # Check before operator
+            while prevLex and not re.match(r',|{|}|\(|;|\|\||\&\&|\?|\:', prevLex.text()):
+                if prevLex.text() == ')':
+                    prevLex = Modules.findOpen(prevLex)
+                    if not prevLex:
+                        break
+
+                if isBoxedPrimitive(prevLex):
+                    left = True
+                    vEnt = prevLex
+                    break
+
+                prevLex = prevLex.previous(True, True)
+
+
+            # Check after operator
+            while nextLex and not re.match(r',|{|}|\(|;|\|\||\&\&|\?|\:', nextLex.text()):
+                if nextLex.text() == '(':
+                    nextLex = Modules.findClose(nextLex)
+                    if not nextLex:
+                        break
+
+                if isBoxedPrimitive(nextLex):
+                    right = True
+                    break
+                nextLex = nextLex.next(True, True)
+
+
+            if left and right:
+                check.violation(vEnt.ent(), file, vEnt.line_begin(), vEnt.column_begin(), DEF_NAME)
+
+
+# Check if ent is a boxed primitive
+def isBoxedPrimitive(lexeme):
+    if not lexeme or not lexeme.ent():
+        return False
+
+    nextLex = lexeme.next(True, True)
+    if nextLex and nextLex.text() == '.':
+        nextLex = nextLex.next(True, True)
+        if nextLex and nextLex.ent() and nextLex.ent().type() != None and str(nextLex.ent().type()) != 'E':
+            return False
+    boxedPrimitives = {"Boolean", "Byte", "Character", "Short", "Integer", "Long", "Float", "Double"}
+
+    for bp in boxedPrimitives:
+        if re.search(bp, str(lexeme.ent().type())):
+            return True
+

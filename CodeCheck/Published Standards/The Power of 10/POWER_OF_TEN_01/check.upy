@@ -1,0 +1,261 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-06-07
+
+
+import re
+
+from Modules import searchContents
+
+
+ERR1 = 'Function uses goto statement'
+ERR2 = 'Standard header file setjmp.h included'
+ERR3 = 'Function is directly recursive'
+ERR4 = 'Function is indirectly recursive'
+
+
+def ids():
+    return ('POWER_OF_TEN_01', 'CPP_CF006')
+
+
+def name(id):
+    return {
+        'POWER_OF_TEN_01': '''Published Standards/The Power of 10/\
+1 Simple Control Flow''',
+        'CPP_CF006': '''All Checks/Language Specific/C and C++/Control Flow/\
+Simple Control Flow''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POWER_OF_TEN_01': [
+            'Language: C',
+            'Language: C++',
+            'Standard: The Power of Ten',
+            'Control Flow'
+        ],
+        'CPP_CF006': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow'
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'POWER_OF_TEN_01': '''\
+<p>Restrict all code to very simple control flow constructs - do not use
+<code>goto</code> statements, <code>setjmp</code> or <code>longjmp</code>
+constructs, or direct or indirect recursion.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Simpler control flow translates into stronger capabilities for analysis and
+often results in improved code clarity. Banishing recursion is perhaps the
+biggest surprise here. Avoiding recursion results in having an acyclic function
+call graph, which code analyzers can exploit to prove limits on stack use and
+boundedness of executions. Note that this rule does not require that all
+functions have a single point of return, although this often also simplifies
+control flow. In some cases, though, an early error return is the simpler
+solution.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">#include &lt;setjmp.h&gt; // Violation
+
+
+void fn_goto()
+{
+label:
+  goto label; // Violation
+}
+
+
+void direct_recursion()
+{
+  direct_recursion(); // Violation
+}
+
+
+void indirect_recursion_0();
+void indirect_recursion_1();
+void indirect_recursion_2();
+
+void indirect_recursion_0()
+{
+  indirect_recursion_1(); // Violation
+}
+
+void indirect_recursion_1()
+{
+  indirect_recursion_2(); // Violation
+}
+
+void indirect_recursion_2()
+{
+  indirect_recursion_0(); // Violation
+}
+
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+
+<p>The <code>goto</code> statements
+in inactive code are handled by Rule 8 because the <code>#if</code> directive is
+not allowed. Recursion by function pointers is covered by Rule 9 because
+function pointers are not allowed.</p>
+''',
+        'CPP_CF006': '''\
+<p>Restrict all code to very simple control flow constructs - do not use
+<code>goto</code> statements, <code>setjmp</code> or <code>longjmp</code>
+constructs, or direct or indirect recursion.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Simpler control flow translates into stronger capabilities for analysis and
+often results in improved code clarity. Banishing recursion is perhaps the
+biggest surprise here. Avoiding recursion results in having an acyclic function
+call graph, which code analyzers can exploit to prove limits on stack use and
+boundedness of executions. Note that this rule does not require that all
+functions have a single point of return, although this often also simplifies
+control flow. In some cases, though, an early error return is the simpler
+solution.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">#include &lt;setjmp.h&gt; // Violation
+
+
+void fn_goto()
+{
+label:
+  goto label; // Violation
+}
+
+
+void direct_recursion()
+{
+  direct_recursion(); // Violation
+}
+
+
+void indirect_recursion_0();
+void indirect_recursion_1();
+void indirect_recursion_2();
+
+void indirect_recursion_0()
+{
+  indirect_recursion_1(); // Violation
+}
+
+void indirect_recursion_1()
+{
+  indirect_recursion_2(); // Violation
+}
+
+void indirect_recursion_2()
+{
+  indirect_recursion_0(); // Violation
+}
+
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+
+<p>This rule originates from The Power of 10. The <code>goto</code> statements
+in inactive code are handled by Rule 8 because the <code>#if</code> directive is
+not allowed. Recursion by function pointers is covered by Rule 9 because
+function pointers are not allowed.</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().integer('limit', 'For finding recursion: recursion depth limit (lower numbers will increase speed, 0 for infinity)', 0)
+
+
+def check(check, file):
+    checkGoto(check, file)
+    checkJump(check, file)
+    checkRecursion(check, file)
+
+
+def checkGoto(check, file):
+    for ref in file.filerefs('Define', 'Function', True):
+        ent = ref.ent()
+
+        # Skip if no cfg
+        cfg = ent.control_flow_graph()
+        if not cfg:
+            continue
+
+        # Violation for goto node
+        for node in cfg.nodes():
+            if node.kind() != 'goto':
+                continue
+            check.violation(ent, file, node.line_begin(), node.column_begin(), ERR1)
+
+
+def checkJump(check, file):
+    for ref in file.filerefs('Include', 'File', True):
+        ent = ref.ent()
+
+        # Violation for including setjmp.h
+        if ent.name() == 'setjmp.h':
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+
+
+def checkRecursion(check, file):
+    limit = check.options().lookup('limit')
+    if limit == 0:
+        limit = float('inf')
+
+    for ref in file.filerefs('Define', 'Function', True):
+        ent = ref.ent()
+        depth = 0
+        firstTime = True
+        seen = set()
+        originalEnt = ent
+
+        discoverRecursion(check, ent, depth, firstTime, seen, originalEnt, limit)
+
+
+def discoverRecursion(check, ent, depth, firstTime, seen, originalEnt, limit):
+    depth += 1
+
+    for callRef in ent.refs('Call', 'Function', True):
+        callee = callRef.ent()
+
+        # Skip if callee already seen
+        if callee in seen:
+            continue
+        seen.add(callee)
+
+        # Violation and stop if original function reached
+        if callee == originalEnt:
+            if firstTime:
+                check.violation(originalEnt, callRef.file(), callRef.line(), callRef.column(), ERR3)
+            else:
+                check.violation(originalEnt, callRef.file(), callRef.line(), callRef.column(), ERR4)
+            return
+
+        # Stop if depth limit reached
+        if depth >= limit:
+            return
+
+        discoverRecursion(check, callee, depth, False, seen, originalEnt, limit)
+        depth -= 1

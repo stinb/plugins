@@ -1,0 +1,277 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-05-23
+
+
+import re
+
+from understand import Check, Ent, Ref
+
+
+ERR1 = 'Pointer is not dereferenced, but implementation of %1 is visible'
+
+TYPE_KINDS = 'Class Type, Struct Type, Union Type'
+
+
+def ids():
+    return ('MISRA12_DIR_4.8', 'MISRA23_DIR_4.8', 'CPP_P001')
+
+
+def name(id):
+    return {
+        'MISRA12_DIR_4.8': '''Published Standards/MISRA C 2012/\
+Directive 4.8 If a pointer to a structure or union is never dereferenced \
+within a translation unit, then the implementation of the object should be \
+hidden''',
+        'MISRA23_DIR_4.8': '''Published Standards/MISRA C 2012/\
+Directive 4.8 If a pointer to a structure or union is never dereferenced \
+within a translation unit, then the implementation of the object should be \
+hidden''',
+        'CPP_P001': '''All Checks/Language Specific/C and C++/Pointers/\
+Hide Implementation of Pointers Not Dereferenced''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_DIR_4.8': [
+            'Pointers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+        ],
+        'MISRA23_DIR_4.8': [
+            'Pointers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+        ],
+        'CPP_P001': [
+            'Pointers',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    if id == 'MISRA12_DIR_4.8':
+        return '''\
+<p><b>Title</b></p>
+<p>If a pointer to a structure or union is never dereferenced within a
+translation unit, then the implementation of the object should be hidden.</p>
+
+<p><b>Amplification</b></p>
+<p>The implementation of an object should be hidden by means of a pointer to an
+incomplete type.</p>
+
+<p><b>Rationale</b></p>
+<p>If a pointer to a structure or union is never dereferenced, then the
+implementation details of the object are not needed and its contents should be
+protected from unintentional changes.</p>
+
+<p>Hiding the implementation details creates an <i>opaque</i> type which may be
+referenced via a pointer but whose contents may not be accessed.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+/* Opaque.h */
+# ifndef OPAQUE_H
+#define OPAQUE_H
+typedef struct OpaqueType *pOpaqueType;
+#endif
+
+/* Opaque.c */
+#include "Opaque.h"
+struct OpaqueType
+{
+  /* Object implementation */
+};
+
+/* UseOpaque.c */
+#include "Opaque.h"
+void f ( void )
+{
+  pOpaqueType pObject;
+  pObject = GetObject ( ); /* Get a handle to an OpaqueType object */
+  UseObject ( pObject );   /* Use it... */
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>If a file uses a type and doesn't dereference any pointers of that type, they
+will still be allowed. Examples of these usages are data member objects, member
+functions (methods), and getting the size of the type.</p>
+<p>Certain libraries expose the type implementation and don't users a choice to
+make them opaque. You may ignore these types with the provided option.</p>
+'''
+    else:
+        return '''\
+<p><b>Title</b></p>
+<p>If a pointer to a structure or union is never dereferenced within a
+translation unit, then the implementation of the object should be hidden.</p>
+
+<p><b>Amplification</b></p>
+<p>The implementation of an object should be hidden by means of a pointer to an
+incomplete type. This directive only applies if all the pointers to a particular
+structure or union in a translation unit are never dereferenced.</p>
+
+<p><b>Rationale</b></p>
+<p>If a pointer to a structure or union is never dereferenced, then the
+implementation details of the object are not needed and its contents should be
+protected from unintentional changes.</p>
+
+<p>Hiding the implementation details creates an opaque type which may be
+referenced via a pointer but whose contents may not be accessed.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+/* Opaque.h */
+# ifndef OPAQUE_H
+#define OPAQUE_H
+typedef struct OpaqueType *pOpaqueType;
+#endif
+
+/* Opaque.c */
+#include "Opaque.h"
+struct OpaqueType
+{
+  /* Object implementation */
+};
+
+/* UseOpaque.c */
+#include "Opaque.h"
+void f ( void )
+{
+  pOpaqueType pObject;
+  pObject = GetObject ( ); /* Get a handle to an OpaqueType object */
+  UseObject ( pObject );   /* Use it... */
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>If a file uses a type and doesn't dereference any pointers of that type, they
+will still be allowed. Examples of these usages are data member objects, member
+functions (methods), and getting the size of the type.</p>
+<p>Certain libraries expose the type implementation and don't users a choice to
+make them opaque. You may ignore these types with the provided option.</p>
+'''
+
+
+def test_entity(file: Ent):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language: str):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().text('allowedTypes', 'Allowed class/struct/union types (space-separated long names)', '')
+
+
+def check(check: Check, file: Ent):
+    allowedTypes = set(check.options().lookup('allowedTypes').split())
+
+    definedTypes: set[Ent] = getDefinedTypes(file)
+
+    typeCache = dict()
+    declareTypeRefs: list[Ref] = []
+    definitionUsedTypes: set[Ent] = set()
+
+    # Go through the ents depended on
+    for includedFile, refs in file.depends().items():
+        for ref in refs:
+            refKind = ref.kind()
+
+            # Declared object/parameter of type
+            if refKind.check('Typed'):
+                # Skip if not an object/parameter
+                if not ref.scope().kind().check('Object, Parameter'):
+                    continue
+                # Skip if not a class/struct/union
+                typeEnt = getUnderlyingTypeEnt(ref.ent(), typeCache)
+                if not typeEnt.kind().check(TYPE_KINDS):
+                    continue
+                # Skip if the type longname is allowed by the whitelist
+                if typeEnt.longname() in allowedTypes:
+                    continue
+                # Skip if the type implementation isn't defined
+                if typeEnt not in definedTypes:
+                    continue
+
+                declareTypeRefs.append(ref)
+
+            # Used the type implementation
+            elif refKind.check('~Typed ~Include'):
+                # Skip if not a class/struct/union
+                typeEnt = ref.ent().parent()
+                if not typeEnt or not typeEnt.kind().check(TYPE_KINDS):
+                    continue
+
+                definitionUsedTypes.add(typeEnt)
+
+    # Go through the typed refs again now that definitionUsedTypes is done
+    for ref in declareTypeRefs:
+        typeEnt = getUnderlyingTypeEnt(ref.ent(), typeCache)
+        pointerEnt = ref.scope()
+
+        # Skip if the definition was used
+        if typeEnt in definitionUsedTypes:
+            continue
+
+        # Get the declaration/definition to get a better column
+        for otherRef in pointerEnt.refs('Declarein, Definein'):
+            if otherRef.file() == ref.file() and otherRef.line() == ref.line():
+                ref = otherRef
+                break
+
+        check.violation(pointerEnt, ref.file(), ref.line(), ref.column(), ERR1, typeEnt)
+
+
+# Get defined types from the file and included files
+def getDefinedTypes(file: Ent) -> set[Ent]:
+    definedTypes = set()
+
+    filesToVisit = [file]
+    discoveredFiles = set()
+
+    while filesToVisit:
+        currentFile = filesToVisit.pop()
+        # Add other included files to the stack and set
+        for otherFile in currentFile.ents('Include'):
+            if otherFile not in discoveredFiles:
+                filesToVisit.append(otherFile)
+                discoveredFiles.add(otherFile)
+        # Get defined types in current file
+        for ent in currentFile.ents('Define', TYPE_KINDS):
+            definedTypes.add(ent)
+
+    return definedTypes
+
+
+# Go through the typed ents until the underlying type is found
+def getUnderlyingTypeEnt(ent: Ent, typeCache: dict[Ent, Ent]):
+    if ent in typeCache:
+        return typeCache[ent]
+
+    originalEnt = ent
+    seen = set()
+
+    while ent and ent not in seen:
+        types = ent.ents('Typed')
+        if len(types) != 1:
+            break
+        ent = types[0]
+        seen.add(ent)
+
+    typeCache[originalEnt] = ent
+    return ent

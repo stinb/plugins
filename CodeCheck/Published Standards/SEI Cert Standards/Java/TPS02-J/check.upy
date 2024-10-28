@@ -1,0 +1,150 @@
+ERR1 = 'Ensure that tasks submitted to a thread pool are interruptible.'
+
+
+# The ID for the check
+def ids():
+    return ('TPS02-J', 'JAVA_TPS02')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'TPS02-J': 'Published Standards/SEI Cert Standards/Java/Ensure that tasks submitted to a thread pool are interruptible',
+        'JAVA_TPS02': 'All Checks/Language Specific/Java/Thread Pools/Ensure that tasks submitted to a thread pool are interruptible',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'TPS02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_TPS02': [
+            'Language: Java',
+            'Thread Pools',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure that tasks submitted to a thread pool are interruptible'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure that tasks submitted to a thread pool are interruptible</p>
+<p><b>Risk Assessment</b></p>
+<p>Submitting tasks that are uninterruptible may prevent a thread pool from shutting down and consequently may cause DoS.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TPS02-J.+Ensure+that+tasks+submitted+to+a+thread+pool+are+interruptible</i></p>
+<p><b>Exceptions</b></p>
+<p><i>TPS02-J-EX0: Short-running tasks that execute without blocking are exempt from this rule.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class SocketReader implements Runnable { // Thread-safe class
+  private final Socket socket;
+  private final BufferedReader in;
+  private final Object lock = new Object();
+
+  public SocketReader(String host, int port) throws IOException {
+    this.socket = new Socket(host, port);
+    this.in = new BufferedReader(
+        new InputStreamReader(this.socket.getInputStream())
+    );
+  }
+
+  // Only one thread can use the socket at a particular time
+  @Override public void run() {
+    try {
+      synchronized (lock) {
+        readData();
+      }
+    } catch (IOException ie) {
+      // Forward to handler
+    }
+  }
+
+  public void readData() throws IOException {
+    String string;
+    try {
+      while ((string = in.readLine()) != null) {
+        // Blocks until end of stream (null)
+      }
+    } finally {
+      shutdown();
+    }
+  }
+
+  public void shutdown() throws IOException {
+    socket.close();
+  }
+}
+
+public final class PoolService {
+  private final ExecutorService pool;
+
+  public PoolService(int poolSize) {
+    pool = Executors.newFixedThreadPool(poolSize);
+  }
+
+  public void doSomething() throws InterruptedException, IOException {
+    pool.submit(new SocketReader("somehost", 8080));
+    // ...
+    List&lt;Runnable&gt; awaitingTasks = pool.shutdownNow();
+  }
+
+  public static void main(String[] args)
+                          throws InterruptedException, IOException {
+    PoolService service = new PoolService(5);
+    service.doSomething();
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for method_ref in file.filerefs("Define", "Method"):
+        for call_ref in method_ref.ent().refs("Call", "Abstract Method Member"):
+            if call_ref.ent().name() == "submit":
+                compliant = False
+                lexes = lexer.lexemes(call_ref.line(), call_ref.line())
+
+                for lex in lexes:
+                    if lex.token() == "Identifier" and lex.ent().kind().check("Class"):
+                        for cmethod_ref in lex.ent().refs("Define", "Method Member"):
+                            if cmethod_ref.ent().name() == "run":
+                                for calln_ref in cmethod_ref.ent().refs("Call Nondynamic", "Static Public Method Member"):
+                                    if calln_ref.ent().longname() == "java.lang.Thread.interrupted":
+                                        compliant = True
+                                        break
+
+                        break
+
+                if not compliant:
+                    check.violation(call_ref.ent(), file,
+                                    call_ref.line(), call_ref.column(), ERR1)

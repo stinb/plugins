@@ -1,0 +1,231 @@
+# This script is designed to run with Understand - CodeCheck
+# 7-21-21
+
+import re
+
+ERR1 = 'Enumeration underlying base type not explicitly defined'
+
+# The ID for the check
+def ids():
+    return ('A7-2-2', 'CPP_T028', 'MISRA23_10.2.1')
+
+# The short name of the check
+def name(id):
+    return {
+        'A7-2-2': 'Published Standards/AUTOSAR/Enumeration underlying base type shall be explicitly defined',
+        'CPP_T028': 'All Checks/Language Specific/C and C++/Types/Enumeration underlying base type shall be explicitly defined',
+        'MISRA23_10.2.1': 'Published Standards/MISRA C++ 2023/10.2.1 An enumeration shall be defined with an explicit underlying type',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A7-2-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T028': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+        'MISRA23_10.2.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_10.2.1':
+        return '''
+<p><b>Amplification</b></p>
+<p>The underlying type of an enum is explicit when its declaration has an enum-base.</p>
+<p>Additionally, an explicit or implicit enumerator value shall not be the result of a narrowing conversion.</p>
+<p>Note: the C++ Standard states that any program that violates this additional requirement is ill-formed.
+However, it is known that some compilers do not issue a diagnostic.</p>
+
+<p><b>Rationale</b></p>
+<p>When an enum is defined without an enum-base:</p>
+<p>● If the enum is unscoped, the underlying type is implementation-defined, with the only restriction
+being that the type must be able to represent the enumeration values; or</p>
+<p>● If the enum is scoped, it will implicitly have an underlying type of int.</p>
+<p>In both cases, using an explicit underlying type ensures that this type is obvious to the user, reducing
+the risk of an operation on enumerators leading to unwanted integer overflows.</p>
+
+<p><b>Exception</b></p>
+<p>The underlying type does not have to be specified when:</p>
+<p>1. All of the enumerators in an enumeration use their default values — these enumerators are
+typically used as symbolic values, meaning the underlying type is not important (Rule 10.2.3
+restricts which operations are permitted for such types); or </p>
+<p>2. An enumeration is declared in an extern "C" block — i.e. the enumeration is intended to be
+used with C code.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">enum class Enum1 : int8_t // Compliant
+{
+ E0 = 1,
+ E1 = 2,
+ E2 = 4
+};
+enum class Enum2 // Non-compliant - no explicit underlying type
+{
+ E0 = 0,
+ E1,
+ E2
+};
+</code></pre>
+<p>The following example will be reported as ill-formed by a conforming compiler.</p>
+<pre><code language="C++">enum class Enum3 : uint8_t // Non-compliant - cannot represent value for E2
+{ // Implicit value is the result of wrapping
+ E0,
+ E1 = 255,
+ E2
+};
+enum class Enum4 // Compliant by exception #1
+{
+ E0,
+ E1,
+ E2
+};
+extern "C"
+{
+ enum Enum5 // Compliant by exception #2
+ {
+ E7_0 = 0,
+ E7_1,
+ E7_2
+ };
+}
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 10.2.3</p>    
+        '''
+
+    return '''
+<p><b>Rationale</b></p>
+
+<p>The enumeration underlying type is implementation-defined, with the only restriction that the type must be able to represent the enumeration values. Although scoped enum will implicitly define an underlying type of int, the underlying base type of enumeration should always be explicitly defined with a type that will be large enough to store all enumerators.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A7-2-2.cpp 271715 2017-03-23 10:13:51Z piotr.tanski $
+#include &lt;cstdint&gt;
+enum class E1 // Non-compliant
+{
+    E10,
+    E11,
+    E12
+};
+enum class E2 : std::uint8_t // Compliant
+{
+    E20,
+    E21,
+    E22
+};
+enum E3 // Non-compliant
+{
+    E30,
+    E31,
+    E32
+};
+enum E4 : std::uint8_t // Compliant - violating another rule
+{
+    E40,
+    E41,
+    E42
+};
+enum class E5 : std::uint8_t // Non-compliant - will not compile
+{
+    E50 = 255,
+    // E5_1, // E5_1 = 256 which is outside of range of underlying type
+    // std::uint8_t
+    // - compilation error
+    // E5_2 // E5_2 = 257 which is outside of range of underlying type
+    // std::uint8_t
+    // - compilation error
+};
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+HIC++ v4.0 [9]: 7.2.1 Use an explicit enumeration base and ensure that it is large enough to store all enumerators
+</p>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    ignoreDefaultEnums = True if check.id() == 'MISRA23_10.2.1' else False
+    ignoreExtern = True if check.id() == 'MISRA23_10.2.1' else False
+
+    check.options().checkbox('ignoreDefaultEnums', 'Ignore enumerations with enumerators using their default values', ignoreDefaultEnums)
+    check.options().checkbox('ignoreExtern', 'Ignore enumerations declared in an extern "C" block', ignoreExtern)
+
+def check(check, file):
+    for ref in file.filerefs("","~Unknown Enum", True):
+        pattern = re.compile(r"[enum]{1}.*%s\s*[:]{1}.*\s*\{"%ref.ent())
+        
+        if not pattern.findall(ref.ent().contents()):
+            if check.options().lookup('ignoreExtern') and 'extern "C"' in file.contents():
+                lex = file.lexer(True, 8, False, False).first()
+                on_extern = False
+                extern_body = 0
+                extern_lines = set()
+
+                while lex:
+                    if lex.text() == "extern" and lex.next(True).text() == '"C"':
+                        on_extern = True
+                    elif on_extern and lex.text() == "{":
+                        extern_body += 1
+                    elif on_extern and lex.text() == "}":
+                        extern_body -= 1
+
+                        if not extern_body:
+                            on_extern = False
+
+                    if on_extern:
+                        extern_lines.add(lex.line_begin())
+
+                    lex = lex.next(True, True)
+
+                if ref.line() in extern_lines:
+                    continue
+                    
+            if check.options().lookup('ignoreDefaultEnums'):
+                etor_def_vals = True
+
+                for etor_ref in ref.ent().refs("Define", "Enumerator"):                
+                    etor_initval = etor_ref.ent().freetext("InitText")
+
+                    if etor_initval:
+                        etor_def_vals = False
+                        break
+
+                if etor_def_vals:
+                    continue
+        
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

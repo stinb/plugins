@@ -1,0 +1,190 @@
+# Calls to COTS library functions that might throw an exception must be enclosed in a try block.
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => 'Non try block call';
+use constant {
+          ENFORCE => "",
+          OPT1THROWANY => "Enforce the strict assumption that a function without any throw specification can throw any exception",
+          OPT2NOTHROW => "Assume the function does not throw any exceptions",
+};
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_L000";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Libraries\\Calls to COTS library functions that might throw an exception must be enclosed in a try block.";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Libraries',
+  );
+}
+
+sub description {
+	return "Calls to COTS library functions that might throw an exception must be enclosed in a try block.";
+}
+
+sub detailed_description {
+	return "Calls to COTS (Commercial Off The Shelf) library functions that might throw an exception, must be enclosed in a try block.
+  Assumption:
+ 1. Assume functions we don\'t know about but are called don\'t
+ throw exceptions. Furthermore, assume there are no overloaded
+ operators that throw exceptions, since we don\'t pickup
+ references to overloaded operators.
+ ";
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; 
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+#
+# OPTIONS
+#
+
+sub define_options{
+  my $check = shift;  
+  my @choices = [OPT1THROWANY,OPT2NOTHROW];
+  $check->option->radio_vert("Strict",ENFORCE,@choices,OPT1THROWANY);
+}  
+
+# loop through db files
+sub check {
+    my $check = shift; 
+    my $file = shift; 
+    return unless $file->kind->check("c file ~unresolved ~unknown"); 
+
+    my $lexer = $file->lexer();
+    return unless $lexer;
+    do_lexer($lexer,$file,$check);
+}
+
+
+# run through the entire lexer.
+sub do_lexer {
+    my $lexer = shift;
+    my $file = shift;
+    my $check = shift;
+
+    my $lexeme = $lexer->first();
+
+    
+    while ($lexeme) {
+      #Yield to GUI interupts
+      $check->yield();
+      return if $check->is_abort();
+    
+	my $text = $lexeme->text();
+	if ($text eq "try") {
+	    $lexeme = parse_try($file,$lexeme,$check);
+	} elsif ($text eq "{") {
+	    $lexeme = parse_begin($file,$lexeme,$check,0);
+	} else {
+	    $lexeme = $lexeme->next();
+	}
+    }
+}
+
+
+# parse, starting with lexeme at 'try'.
+sub parse_try {
+    my $file = shift;
+    my $lexeme = shift;
+    my $check = shift;
+  
+    $lexeme = $lexeme->next();	# skip 'try'
+    while ($lexeme) {
+	return parse_begin($file,$lexeme,$check,1) if $lexeme->text() eq "{";
+	$lexeme = $lexeme->next();
+    }
+    return $lexeme;
+}
+
+
+# parse, starting with lexeme at '{'.
+sub parse_begin {
+    my $file = shift;
+    my $lexeme = shift;
+    my $check = shift;
+    my $in_try = shift;
+    
+    $lexeme = $lexeme->next(); # skip {
+    while ($lexeme) {
+	my $text = $lexeme->text();
+	if ($text eq "try") {
+	    $lexeme = parse_try($file,$lexeme,$check);
+	} elsif ($text eq "{") {
+	    $lexeme = parse_begin($file,$lexeme,$check,$in_try);
+	} elsif ($text eq "}") {
+	    return $lexeme->next();
+	} else {
+	    if (!$in_try) {
+		my $ref = $lexeme->ref();
+		check_call($file,$lexeme,$ref,$check) if ($ref && $ref->kind()->check("c callby"))
+	    }
+	    $lexeme = $lexeme->next();
+	}
+    }
+    return $lexeme;
+}
+
+
+# check if call reference is a localViolation
+sub check_call {
+    my $file = shift;
+    my $lexeme = shift;
+    my $ref = shift;
+    my $check = shift;
+    
+    my $strictThrowAll=$check->option->lookup("Strict");
+# Option to enforce the strict assumption that
+# a function without any throw specification can throw
+# any exception.
+# Or assume the function does not throw
+# any exceptions.
+    
+    my $ent = $ref->scope();
+
+    # filter out functions that are guaranteed do not throw
+    my $freetext = $ent->freetext("AllowExceptions");
+    return if defined $freetext && $freetext eq "";
+
+    # the function specifies it does allow throws
+    localViolation($file,$lexeme,$check) and return if $freetext;
+
+    # the makes no claim about throws
+    if ($strictThrowAll eq OPT1THROWANY){
+      localViolation($file,$lexeme,$check) and return if !defined $freetext;
+    }
+   
+}
+
+
+sub localViolation {
+    my $file = shift;
+    my $lexeme = shift;
+    my $check = shift;
+    
+    my $ent = 0;
+    $ent = $lexeme->ent if $lexeme->ent;
+    $check->violation($ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1);
+}

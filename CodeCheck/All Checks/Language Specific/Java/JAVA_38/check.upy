@@ -1,0 +1,157 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 5-18-2022
+import re
+#from Modules import findClose
+
+ERR1 = 'Terminating brace is not on its own line'
+ERR2 = 'Terminating brace is not indented the same as initiating keyword'
+
+def ids():
+    return ('JAVA_38')
+
+def name(id):
+    return {
+        'JAVA_38': '''All Checks/Language Specific/Java/\
+ For the control structures the terminating brace shall appear on a \
+ separate line at the same indentation as the initiating keyword. \
+''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_38': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """ 
+<p>Title or clarified title</p>
+<p>For the control structures, while, switch, for, if, and do/while statements,
+the terminating brace shall appear on a separate line at the same indentation as
+the initiating keyword.</p>
+<p><b>Non-compliant Example</b></p>
+<pre><code language="Java">if (true) {
+   } // UNDCC_Violation
+if (false) { } // UNDCC_Violation</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    if not file.lexer():
+        return
+
+
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        # Look for control structures
+        if re.match(r'while|switch|for|if|do|else', lexeme.text()):
+            indent = 0
+            prevLex = lexeme
+            # Find indent before control stucture
+            indent = lexeme.column_begin()
+
+                
+            # If its a for loop, go to the beginning of the block by looking at
+            # the parenthesis
+            if lexeme.text() == 'for':
+                lexeme = lexeme.next(True, True)
+                if lexeme.text() == '(':
+                    lexeme = findClose(lexeme)
+
+            if lexeme.text() == 'else':
+                tempLex = lexeme.previous(True, True)
+                if tempLex and tempLex.line_begin() == lexeme.line_begin():
+                    indent = tempLex.column_begin()
+            # Find the opening curly brace of block
+            while lexeme and not re.search(r'{|;', lexeme.text()):
+                lexeme = lexeme.next(True, True)
+            if lexeme and lexeme.text() == '{':
+                # Find and check if the rule is followed at the closing curly brace of the block
+                close = findClose(lexeme)
+                if close:
+                    closeIndent = 0
+                    prevLex = close
+                    closeIndent = close.column_begin()
+                    while prevLex and prevLex.token() != 'Newline' and prevLex.token() != 'Whitespace':
+                        prevLex = prevLex.previous()
+                    ws = None
+                    if prevLex and prevLex.token() == 'Whitespace':
+                        ws = prevLex
+
+                    ownLineL = True
+                    ownLineR = True
+                    prevLex = close.previous(True, True)
+                    nextLex = close.next(True, True)
+                    # Check if closing curly brace is on its own line
+                    if prevLex and prevLex.line_begin() == close.line_begin():
+                        ownLineL = False
+                    if nextLex and nextLex.line_begin() == close.line_begin():
+                        ownLineR = False
+
+
+                    if closeIndent != indent and ownLineL and ownLineR:
+                        violation = check.violation(file, file, close.line_begin(), close.column_begin(), ERR2)
+                        if ws and ws.token() == 'Whitespace' and len(ws.text()) > (closeIndent - indent):
+                            violation.add_fixit_hint(ws.line_begin(), ws.column_begin(), ws.line_begin(), ws.column_begin() + len(ws.text()), ' ' * (len(ws.text()) - (closeIndent - indent)))
+                        elif ws and (len(ws.text()) > (closeIndent - indent)):
+                            violation.add_fixit_hint(close.line_begin(), close.column_begin(), close.line_begin(), close.column_begin(), ' ' * indent)
+
+
+
+                    elif not ownLineL:
+                        violation = check.violation(file, file, close.line_begin(), close.column_begin(), ERR1)
+                        if ws:
+                            ws = close.previous()
+                        if ws and ws.token() == 'Whitespace':
+                            violation.add_fixit_hint(ws.line_begin(), ws.column_begin(), ws.line_begin(), ws.column_begin() + len(ws.text()), '\n' + (' ' * indent))
+                        else:
+                            violation.add_fixit_hint(close.line_begin(), close.column_begin(), close.line_begin(), close.column_begin(), '\n' + (' ' * indent))
+
+
+                    elif not ownLineR:
+                        violation = check.violation(file, file, close.line_begin(), close.column_begin(), ERR1)
+                        if ws:
+                            ws = close.next()
+                        if ws and ws.token() == 'Whitespace':
+                            violation.add_fixit_hint(ws.line_begin(), ws.column_begin(), ws.line_begin(), ws.column_begin() + len(ws.text()), '\n' + (' ' * indent))
+                        else:
+                            violation.add_fixit_hint(ws.line_begin(), ws.column_begin(), ws.line_begin(), ws.column_begin(), '\n' + (' ' * indent))
+
+
+
+# Find corresponding closing curly brace or parenthesis of given opening curly
+# brace or parenthesis
+def findClose(lexeme):
+    count = 0
+    open = lexeme.text()
+    if lexeme.text() == '{':
+        close = '}'
+    elif lexeme.text() == '(':
+        close = ')'
+    else:
+        return None
+
+
+    while lexeme and not (lexeme.text() == close and count == 0):
+        if lexeme.text() == open:
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme.text() == close:
+            count -= 1
+
+    return lexeme

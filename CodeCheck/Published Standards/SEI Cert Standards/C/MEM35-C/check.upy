@@ -1,0 +1,176 @@
+ERR1 = 'Allocate sufficient memory for an object.'
+
+
+# The ID for the check
+def id():
+    return ('MEM35-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MEM35-C': 'Published Standards/SEI Cert Standards/C/Allocate sufficient memory for an object',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MEM35-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Allocate sufficient memory for an object'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Allocate sufficient memory for an object</p>
+<p><b>Risk Assessment</b></p>
+<p>Providing invalid size arguments to memory allocation functions can lead to buffer overflows and the execution of arbitrary code with the permissions of the vulnerable process.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/MEM35-C.+Allocate+sufficient+memory+for+an+object</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdlib.h&gt;
+#include &lt;time.h&gt;
+
+struct tm *make_tm(int year, int mon, int day, int hour,
+                   int min, int sec) {
+  struct tm *tmb;
+  tmb = (struct tm *)malloc(sizeof(tmb));
+  if (tmb == NULL) {
+    return NULL;
+  }
+  *tmb = (struct tm) {
+    .tm_sec = sec, .tm_min = min, .tm_hour = hour,
+    .tm_mday = day, .tm_mon = mon, .tm_year = year
+  };
+  return tmb;
+}
+
+
+#include &lt;stdint.h&gt;
+#include &lt;stdlib.h&gt;
+
+void function(size_t len) {
+  long *p;
+  if (len == 0 || len &gt; SIZE_MAX / sizeof(long)) {
+    /* Handle overflow */
+  }
+  p = (long *)malloc(len * sizeof(int));
+  if (p == NULL) {
+    /* Handle error */
+  }
+  free(p);
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref, ent):
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Call", "Unresolved Function"):
+        if func_ref.ent().name() in {"malloc", "calloc", "realloc", "aligned_alloc"}:
+            lex = lexer.lexeme(func_ref.line(), func_ref.column())
+            next_lex = lex.next(ignore_whitespace=True)
+            prev_lex = lex.previous(ignore_whitespace=True)
+            on_param = 0
+            on_size = False
+            an_object = False
+            size_alloted = ""
+            ent_assigned = None
+            ent_type = ""
+            param_count = 0
+
+            while next_lex:
+                if next_lex.text() == "(" and next_lex.token() == "Punctuation":
+                    on_param += 1
+                elif next_lex.text() == ")" and next_lex.token() == "Punctuation":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param == 1 and next_lex.text() == ",":
+                    param_count += 1
+                elif next_lex.text() == "sizeof" and next_lex.token() == "Keyword":
+                    if func_ref.ent().name() in {"calloc", "realloc", "aligned_alloc"} and param_count == 0:
+                        pass
+                    else:
+                        on_size = True
+                elif on_size:
+                    if next_lex.token() == "Identifier" and next_lex.ent() and next_lex.ent().type():
+                        size_alloted += next_lex.ent().type()
+                    elif next_lex.text():
+                        size_alloted += next_lex.text()
+
+                next_lex = next_lex.next(ignore_comments=True)
+
+            while prev_lex and (prev_lex.line_begin() == func_ref.line()):
+                if prev_lex.text() == "=" and prev_lex.token() == "Operator":
+                    prev_lex = prev_lex.previous(ignore_whitespace=True)
+
+                    if prev_lex.token() == "Identifier" and prev_lex.ent():
+                        ent_assigned = prev_lex.ent()
+                        ent, type = get_ent_type(ent_assigned)
+
+                        if not type and ent.kind().check("Struct, Class"):
+                            an_object = True
+
+                        ent_type = ent_assigned.type()
+
+                prev_lex = prev_lex.previous(ignore_comments=True)
+
+            if size_alloted and ent_type:
+                if an_object:
+                    if f"*{ent_type}" != size_alloted:
+                        check_violation(func_ref, ent_assigned)
+                elif not ((ent_type in size_alloted) or (size_alloted in ent_type)):
+                    check_violation(func_ref, ent_assigned)
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()

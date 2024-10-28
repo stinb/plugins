@@ -1,0 +1,335 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-12-08
+
+
+import re
+from Modules import findClose, lexemeBefore, refBetweenNodes
+
+
+ERR1 = 'Blocking in synchronized method'
+ERR2 = 'Blocking in synchronized block'
+
+STANDARD_BLOCKING_METHODS = {
+    # java.io interfaces
+    'java.io.DataInput.readFully',
+    'java.io.ObjectInput.read',
+    'java.io.ObjectOutput.write',
+    'java.io.ObjectStreamConstants.write',
+
+    # java.io classes
+    'java.io.BufferedInputStream.read',
+    'java.io.BufferedReader.read',
+    'java.io.Console.format',
+    'java.io.Console.printf',
+    'java.io.Console.readLine',
+    'java.io.Console.readPassword',
+    'java.io.DataInputStream.read',
+    'java.io.DataInputStream.readFully',
+    'java.io.FileInputStream.read',
+    'java.io.FilterInputStream.read',
+    'java.io.InputStream.read',
+    'java.io.LineNumberInputStream.read',
+    'java.io.ObjectInputStream.ObjectInputStream',
+    'java.io.ObjectInputStream.read',
+    'java.io.ObjectInputStream.readFully',
+    'java.io.ObjectOutputStream.write',
+    'java.io.ObjectOutputStream.writeObject', # LCK09-J special case
+    'java.io.PipedInputStream.receive',
+    'java.io.PipedInputStream.read',
+    'java.io.PipedOutputStream.write',
+    'java.io.PipedReader.read',
+    'java.io.PipedWriter.write',
+    'java.io.PushbackInpuptStream.read',
+    'java.io.PushbackReader.skip',
+    'java.io.RandomAccessFile.read',
+    'java.io.RandomAccessFile.readFully',
+    'java.io.RandomAccessFile.readBoolean',
+    'java.io.RandomAccessFile.readByte',
+    'java.io.RandomAccessFile.readUnsignedByte',
+    'java.io.RandomAccessFile.readShort',
+    'java.io.RandomAccessFile.readUnsignedShort',
+    'java.io.RandomAccessFile.readChar',
+    'java.io.RandomAccessFile.readInt',
+    'java.io.RandomAccessFile.readLong',
+    'java.io.RandomAccessFile.readFloat',
+    'java.io.RandomAccessFile.readDouble',
+    'java.io.RandomAccessFile.readLine',
+    'java.io.RandomAccessFile.readUTF',
+    'java.io.Reader.read',
+    'java.io.Reader.skip',
+    'java.io.SequenceInputStream.read',
+
+    # java.lang classes
+    'java.lang.Thread.join',
+    'java.lang.Thread.sleep',
+    'java.lang.Thread.suspend',
+
+    # java.net classes
+    'java.net.DatagramSocket.receive',
+    'java.net.InetAddress.receive',
+    'java.net.ServerSocket.accept',
+    'java.net.SocketImpl.connect',
+    'java.net.URL.equals',
+    'java.net.URL.hashCode',
+
+    # java.util classes
+    'java.util.concurrent.ArrayBlockingDeque.offer',
+    'java.util.concurrent.ArrayBlockingDeque.offerFirst',
+    'java.util.concurrent.ArrayBlockingDeque.offerLast',
+    'java.util.concurrent.ArrayBlockingDeque.poll',
+    'java.util.concurrent.ArrayBlockingDeque.pollFirst',
+    'java.util.concurrent.ArrayBlockingDeque.pollLast',
+    'java.util.concurrent.ArrayBlockingDeque.put',
+    'java.util.concurrent.ArrayBlockingDeque.putFirst',
+    'java.util.concurrent.ArrayBlockingDeque.putLast',
+    'java.util.concurrent.ArrayBlockingDeque.take',
+    'java.util.concurrent.ArrayBlockingDeque.takeFirst',
+    'java.util.concurrent.ArrayBlockingDeque.takeLast',
+    'java.util.concurrent.ArrayBlockingQueue.offer',
+    'java.util.concurrent.ArrayBlockingQueue.poll',
+    'java.util.concurrent.ArrayBlockingQueue.put',
+    'java.util.concurrent.ArrayBlockingQueue.take',
+    'java.util.concurrent.DelayQueue.poll',
+    'java.util.concurrent.DelayQueue.take',
+    'java.util.concurrent.LinkedBlockingDeque.offer',
+    'java.util.concurrent.LinkedBlockingDeque.offerFirst',
+    'java.util.concurrent.LinkedBlockingDeque.offerLast',
+    'java.util.concurrent.LinkedBlockingDeque.poll',
+    'java.util.concurrent.LinkedBlockingDeque.pollFirst',
+    'java.util.concurrent.LinkedBlockingDeque.pollLast',
+    'java.util.concurrent.LinkedBlockingDeque.put',
+    'java.util.concurrent.LinkedBlockingDeque.putFirst',
+    'java.util.concurrent.LinkedBlockingDeque.putLast',
+    'java.util.concurrent.LinkedBlockingDeque.take',
+    'java.util.concurrent.LinkedBlockingDeque.takeFirst',
+    'java.util.concurrent.LinkedBlockingDeque.takeLast',
+    'java.util.concurrent.LinkedBlockingQueue.offer',
+    'java.util.concurrent.LinkedBlockingQueue.poll',
+    'java.util.concurrent.LinkedBlockingQueue.put',
+    'java.util.concurrent.LinkedBlockingQueue.take',
+    'java.util.concurrent.LinkedTransferQueue.poll',
+    'java.util.concurrent.LinkedTransferQueue.take',
+    'java.util.concurrent.LinkedTransferQueue.transfer',
+    'java.util.concurrent.PriorityBlockingQueue.poll',
+    'java.util.concurrent.PriorityBlockingQueue.take',
+    'java.util.concurrent.SynchronousQueue.offer',
+    'java.util.concurrent.SynchronousQueue.poll',
+    'java.util.concurrent.SynchronousQueue.put',
+    'java.util.concurrent.SynchronousQueue.take',
+
+    # javax.swing classes
+    'javax.swing.SwingUtilities.invokeAndWait',
+}
+
+blockingMethods = dict()
+
+
+def ids():
+    return ('LCK09-J', 'JAVA_LCK09')
+
+
+def name(id):
+    return {
+        'LCK09-J': '''Published Standards/SEI Cert Standards/Java/\
+Do not perform operations that can block while holding a lock''',
+        'JAVA_LCK09': '''All Checks/Language Specific/Java/Locking/\
+Do not perform operations that can block while holding a lock''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'LCK09-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_LCK09': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''
+<p>
+Do not perform operations that can block while holding a lock
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Blocking or lengthy operations performed within synchronized regions could
+result in a deadlocked or unresponsive system.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/LCK09-J.+Do+not+perform+operations+that+can+block+while+holding+a+lock
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+LCK09-J-EX0: Classes that provide an appropriate termination mechanism to
+callers are permitted to violate this rule (see THI04-J. Ensure that threads
+performing blocking operations can be terminated).
+</i></p>
+<p><i>
+LCK09-J-EX1: Methods that require multiple locks may hold several locks while
+waiting for the remaining locks to become available. This constitutes a valid
+exception, although the programmer must follow other applicable rules,
+especially LCK07-J. Avoid deadlock by requesting and releasing locks in the same
+order to avoid deadlock.
+</i></p>
+
+<p><b>Noncompliant Code Example (Deferring a Thread)</b></p>
+<pre><code language="Java">public synchronized void doSomething(long time)
+                         throws InterruptedException {
+  // ...
+  Thread.sleep(time);
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Network I/O)</b></p>
+<pre><code language="Java">// Class Page is defined separately.
+// It stores and returns the Page name via getName()
+Page[] pageBuff = new Page[MAX_PAGE_SIZE];
+
+public synchronized boolean sendPage(Socket socket, String pageName)
+                                     throws IOException {
+  // Get the output stream to write the Page to
+  ObjectOutputStream out
+      = new ObjectOutputStream(socket.getOutputStream());
+
+  // Find the Page requested by the client
+  // (this operation requires synchronization)
+  Page targetPage = null;
+  for (Page p : pageBuff) {
+    if (p.getName().compareTo(pageName) == 0) {
+      targetPage = p;
+    }
+  }
+
+  // Requested Page does not exist
+  if (targetPage == null) {
+    return false;
+  }
+
+  // Send the Page to the client
+  // (does not require any synchronization)
+  out.writeObject(targetPage);
+
+  out.flush();
+  out.close();
+  return true;
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Blocking methods are determined by a specific set of methods from the standard
+library. These methods are checked for recursively.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+def getOnlyCode(contents):
+    # Remove // comments
+    contents = re.sub(r'\/\/.*?\n', '', contents)
+    # Remove /* comments */
+    contents = re.sub(r'\/\*[\s\S]*?\*\/', '', contents)
+    # Remove "strings"
+    return re.sub(r'\"[\s\S]*?\"', '', contents)
+
+
+def isBlockingMethod(method, visited):
+    # Base case: already known/visited
+    if method in visited:
+        return blockingMethods[method] if method in blockingMethods else False
+    visited.add(method)
+
+    # Base case: method is blocking
+    if method.longname() in STANDARD_BLOCKING_METHODS:
+        blockingMethods[method] = True
+        return True
+
+    # Recursion: method calls a blocking method
+    for calledMethod in method.ents('Call', 'Method',):
+        if isBlockingMethod(calledMethod, visited):
+            blockingMethods[method] = True
+            return True
+
+    blockingMethods[method] = False
+    return False
+
+
+def isSynchronizedBlock(ref, synchronizedBlocks):
+    # Get all synchronized blocks
+    if not synchronizedBlocks:
+        scope = ref.scope()
+        define = scope.ref('Definein')
+        end = scope.ref('End')
+        synchronizedSeen = False
+        line, column = end.line(), end.column()
+        lex = ref.file().lexer(False).lexeme(define.line(), define.column())
+        while lex and lexemeBefore(lex, line, column):
+            if lex.text() == 'synchronized':
+                synchronizedSeen = True
+            elif lex.text() == '{' and synchronizedSeen:
+                opening = lex
+                lex = findClose(lex)
+                synchronizedBlocks.append((opening, lex))
+                synchronizedSeen = False
+            if lex:
+                lex = lex.next(True, True)
+
+    for (opening, closing) in synchronizedBlocks:
+        if refBetweenNodes(opening, ref, closing):
+            return True
+
+    return False
+
+
+def isSynchronizedMethod(method):
+    signature = re.match(r'([\w\W]*?){', method.contents())
+    return True if signature and re.search(r'\Wsynchronized\W', signature.group(1)) else False
+
+
+def check(check, file):
+    # Skip unless the file has the synchronized keyword
+    if not re.search(r'\Wsynchronized\W', getOnlyCode(file.contents())):
+        return
+
+    synchronizedBlocks = [] # [ (lexeme, lexeme), ... ]
+
+    for call in file.filerefs('Call', 'Method'):
+        method = call.ent()
+
+        # Skip unless the method blocks
+        if not isBlockingMethod(method, set()):
+            continue
+
+        # Violation if the call is synchronized
+        if isSynchronizedMethod(call.scope()):
+            check.violation(method, file, call.line(), call.column(), ERR1)
+        elif isSynchronizedBlock(call, synchronizedBlocks):
+            check.violation(method, file, call.line(), call.column(), ERR2)

@@ -1,0 +1,109 @@
+ERR1 = 'Prevent deserialization of untrusted data.'
+
+
+# The ID for the check
+def ids():
+    return ('SER12-J', 'JAVA_SER12')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'SER12-J': 'Published Standards/SEI Cert Standards/Java/Prevent deserialization of untrusted data',
+        'JAVA_SER12': 'All Checks/Language Specific/Java/Serialization/Prevent deserialization of untrusted data',
+    }[id]
+
+
+def tags(id):
+    return {
+        'SER12-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P9',
+            'Level: L2',
+        ],
+        'JAVA_SER12': [
+            'Language: Java',
+            'Serialization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Prevent deserialization of untrusted data'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Prevent deserialization of untrusted data</p>
+<p><b>Risk Assessment</b></p>
+<p>Whether a violation of this rule is exploitable depends on what classes are on the JVM's classpath.  (Note that this is a property of the execution environment, not of the code being audited.) In the worst case, it could lead to remote execution of arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/SER12-J.+Prevent+deserialization+of+untrusted+data</i></p>
+<p><b>Exceptions</b></p>
+<p><i>SER12-EX0: Serialized data from a trusted input source does not require sanitization, provided that the code clearly documents that it relies on the input source being trustworthy.  For example, if a library is being audited, a routine of that library may have a documented precondition that its callers pre-sanitize any passed-in serialized data or confirm the input source as trustworthy.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">import java.io.*;
+
+class DeserializeExample {
+  public static Object deserialize(byte[] buffer) throws IOException, ClassNotFoundException {
+    Object ret = null;
+    try (ByteArrayInputStream bais = new ByteArrayInputStream(buffer)) {
+      try (ObjectInputStream ois = new ObjectInputStream(bais)) {
+        ret = ois.readObject();
+      }
+    }
+    return ret;
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check cannot detect whether a data is trusted or not. Therefore, it automatically flags a deserialized data that does not override the resolveClass method.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    for meth_ref in file.filerefs("Call Nondynamic", "Final Public Method Member"):
+        if meth_ref.ent().name() == "readObject":
+            lex = lexer.lexeme(meth_ref.line(), meth_ref.column())
+            get_obj = False
+            compliant = False
+
+            while lex:
+                if lex.text() == ".":
+                    get_obj = True
+                elif get_obj:
+                    type_ref = lex.ent().ref("Typed")
+                    type_lib = type_ref.ent().library()
+
+                    if type_lib and type_lib == "Standard":
+                        break
+
+                    for ref in type_ref.ent().refs("Define", "Method"):
+                        if ref.ent().name() == "resolveClass":
+                            compliant = True
+
+                    break
+
+                lex = lex.previous()
+
+            if not compliant:
+                check.violation(lex.ent(), file, meth_ref.line(),
+                                meth_ref.column(), ERR1)

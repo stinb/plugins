@@ -1,0 +1,164 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-08-01
+
+
+import re
+
+from understand import Lexeme
+
+
+ERR1 = 'Throw type "%1" is inconsistent with "%2"'
+
+
+def ids():
+    return ('MISRA08_15-4-1', 'CPP_E010')
+
+
+def name(id):
+    return {
+        'MISRA08_15-4-1': '''Published Standards/MISRA-C++ 2008/\
+15-4-1 Inconsistent Exception-Specification''',
+        'CPP_E010': '''All Checks/Language Specific/C and C++/Exception Handling/\
+Inconsistent Exception-Specification''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_15-4-1': [
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Exception Handling',
+            'Functions',
+            'Declarations and Definitions',
+        ],
+        'CPP_E010': [
+            'Language: C++',
+            'Exception Handling',
+            'Functions',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+<p>If a function is declared with an <i>exception-specification</i>, then all
+declarations of the same function (in other translation units) shall be declared
+with the same set of <i>type-ids</i>.</p>
+
+<p><b>Rationale</b></p>
+<p>It is <i>undefined behaviour</i> if a function has different
+<i>exception-specifications</i> in different translation units.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">\
+// Translation unit A
+void foo( ) throw ( const char_t * )
+{
+  throw "Hello World!";
+}
+</code></pre>
+<pre><code language="C++">\
+// Translation unit B
+// foo declared in this translation unit with a different exception
+// specification
+extern void foo ( ) throw ( int32_t ); // Non-compliant -
+                                       // different specifier
+void b ( ) throw ( int32_t )
+{
+  foo ( ); // The behaviour here is undefined.
+}
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.file_type() == 'C++'
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Declare, Define', 'Function'):
+        ent = ref.ent()
+
+        # Skip if no exception-specification
+        if not ent.freetext('AllowExceptions'):
+            continue
+
+        # Skip if it's the only declaration/definition
+        other_ref = None
+        for possible_other_ref in ent.refs('Declarein, Definein'):
+            if different_ref_locations(possible_other_ref, ref):
+                other_ref = possible_other_ref
+                break
+        if not other_ref:
+            continue
+
+        # Skip if either throw type wasn't found
+        lex, throw_type = get_throw_type(ref)
+        if not lex or not throw_type:
+            continue
+        _, other_throw_type = get_throw_type(other_ref)
+        if not other_throw_type:
+            continue
+
+        # Skip if the types match
+        if throw_type == other_throw_type:
+            continue
+
+        check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1, throw_type, other_throw_type)
+
+
+# Whether the refs are in different locations
+def different_ref_locations(ref_a, ref_b) -> bool:
+    return ref_a.line() != ref_b.line() or ref_a.column() != ref_b.column() \
+    or ref_a.file() != ref_b.file()
+
+
+# Use the lexer to get the exception-specification of the ref
+def get_throw_type(ref) -> (Lexeme|None, str):
+    result_strings = []
+
+    lexer = ref.file().lexer(lookup_ents=False, expand_macros=True)
+    lex = lexer.lexeme(ref.line(), ref.column())
+
+    # Go right until `throw` and remember it
+    result_lex = None
+    while lex:
+        if lex.text() == 'throw':
+            result_lex = lex
+            break
+        lex = lex.next(True, True)
+
+    # Match `(` or fail
+    if lex:
+        lex = lex.next(True, True)
+        if lex.text() == '(':
+            lex = lex.next(True, True)
+        else:
+            lex = None
+
+    # Match until `)` and remember the strings
+    while lex:
+        if lex.text() == ')':
+            break
+        text = None
+        result_strings.append(lex.text())
+        lex = lex.next(True, True)
+
+    result_str = ' '.join(result_strings)
+    result_str = re.sub(r'\b(constexpr|const|volatile)\b', '', result_str)
+    result_str = re.sub(r'\s+', ' ', result_str).strip()
+
+    return result_lex, result_str

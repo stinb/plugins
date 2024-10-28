@@ -1,0 +1,165 @@
+ERR1 = 'Do not speculatively lock a non-recursive mutex that is already owned by the calling thread.'
+
+
+# The ID for the check
+def id():
+    return ('CON56-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON56-CPP': 'Published Standards/SEI Cert Standards/C++/Do not speculatively lock a non-recursive mutex that is already owned by the calling thread',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not speculatively lock a non-recursive mutex that is already owned by the calling thread'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not speculatively lock a non-recursive mutex that is already owned by the calling thread</p>
+<p><b>Risk Assessment</b></p>
+<p>Speculatively locking a non-recursive mutex in a recursive manner is undefined behavior that can lead to deadlock.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/CON56-CPP.+Do+not+speculatively+lock+a+non-recursive+mutex+that+is+already+owned+by+the+calling+thread</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+# include &lt;mutex&gt;
+# include &lt;thread&gt;
+
+std::mutex m;
+
+void do_thread_safe_work();
+
+void do_work() {
+  while (!m.try_lock()) {
+    // The lock is not owned yet, do other work while waiting.
+    do_thread_safe_work();
+  }
+  try {
+
+    // The mutex is now locked; perform work on shared resources.
+    // ...
+
+  // Release the mutex.
+  catch (...) {
+    m.unlock();
+    throw;
+  }
+  m.unlock();
+}
+
+void start_func() {
+  std::lock_guard&lt;std::mutex&gt; lock(m);
+  do_work();
+}
+
+int main() {
+  std::thread t(start_func);
+
+  do_work();
+
+  t.join();
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'CON56-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: High',
+            'Priority: P1',
+            'Level: L3',
+            'Threads',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        owned_nr_mutex = []  # locked non-recursive mutex ent id
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda x: x.line()):
+            if (call_ref.ent().name() == "thread") and call_ref.ent().kind().check("Unresolved Public Member Function Explicit Template"):
+                lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                if lex.next().text() != "(":
+                    continue
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.ent() and lex.ent().kind().check("Function"):
+                        for in_ref in sorted(lex.ent().refs("Call", "Function"), key=lambda x: x.line()):
+                            if (in_ref.ent().name() in ["lock_guard", "scoped_lock"]) and in_ref.ent().kind().check("Unresolved Public Member Function Explicit"):
+                                inlex = in_ref.file().lexer().lexeme(
+                                    in_ref.line(), in_ref.column())
+                                on_param = 0
+
+                                if inlex.next().text() != "(":
+                                    continue
+
+                                while inlex:
+                                    if inlex.text() == "(":
+                                        on_param += 1
+                                    elif inlex.text() == ")":
+                                        on_param -= 1
+
+                                        if not on_param:
+                                            break
+                                    elif (on_param == 1) and inlex.ent() and inlex.ent().type() and (inlex.ent().type() in ["std::mutex", "std::timed_mutex", "std::shared_timed_mutex", "mutex", "timed_mutex", "shared_timed_mutex"]):
+                                        owned_nr_mutex.append(inlex.ent().id())
+
+                                    inlex = inlex.next(ignore_whitespace=True)
+                            elif owned_nr_mutex and (in_ref.ent().name() in ["try_lock", "try_lock_for", "try_lock_until", "try_lock_shared_for", "try_lock_shared_until"]):
+                                inlex = in_ref.file().lexer().lexeme(
+                                    in_ref.line(), in_ref.column())
+                                inlex = inlex.previous()
+
+                                if inlex.text() != ".":
+                                    continue
+                                elif inlex.previous().ent() and (inlex.previous().ent().id() in owned_nr_mutex):
+                                    check.violation(
+                                        in_ref.ent(), in_ref.file(), in_ref.line(), in_ref.column(), ERR1)
+                            elif owned_nr_mutex:
+                                for _ref in sorted(in_ref.ent().refs("Call", "Function"), key=lambda x: x.line()):
+                                    if _ref.ent().name() in ["try_lock", "try_lock_for", "try_lock_until", "try_lock_shared_for", "try_lock_shared_until"]:
+                                        inlex = _ref.file().lexer().lexeme(
+                                            _ref.line(), _ref.column())
+                                        inlex = inlex.previous()
+
+                                        if inlex.text() != ".":
+                                            continue
+                                        elif inlex.previous().ent() and (inlex.previous().ent().id() in owned_nr_mutex):
+                                            check.violation(
+                                                in_ref.ent(), in_ref.file(), in_ref.line(), in_ref.column(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True)

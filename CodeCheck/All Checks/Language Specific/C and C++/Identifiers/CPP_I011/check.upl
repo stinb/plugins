@@ -1,0 +1,88 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'More than %1 characters are significant';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_I011";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Identifiers\\Identifier name significance";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Identifiers',
+  );
+}
+
+sub description { return "(Global)Identifiers (internal and external) should not have a significance of more than 31 characters.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Some systems limit the number of characters that are significant in an identifier, this rule tests that no two identifiers differ only after 31 places (or the selected limit).</p>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 0;}
+
+sub test_global { return 1;}
+
+sub define_options{
+  my $check = shift;
+  $check->option->integer("significantChars","Signficant Characters",31);
+}
+
+
+sub check {
+  my $check = shift; 
+  my $significantChars = $check->option->lookup("significantChars");
+  my @ents = $check->db->ents("c ~file");
+  my @longEnts;
+  my @fileObjs = $check->get_files;
+  my @files = ();
+  foreach my $f(@fileObjs) {
+    push(@files, $f->longname);
+  }
+  
+  foreach (@ents){
+    push @longEnts,$_ if length($_->simplename) > $significantChars;
+  }
+  
+  my $prev;
+  my $prevReported;
+  foreach my $ent (sort {$a->simplename cmp $b->simplename;} @longEnts){
+    next if $ent->kind->check( 'Inactive' );
+    my $beginning = substr($ent->simplename,0,$significantChars);
+    my $prevBegin = substr($prev->simplename,0,$significantChars) if $prev;
+    if ($prevBegin eq $beginning && $prev->simplename ne $ent->simplename){
+      reportEnt(\@files, $ent, $check);
+      reportEnt(\@files, $prev, $check) unless $prevReported;
+      $prevReported = 1;
+    }else{
+      $prev = $ent;
+      $prevReported = 0;
+    }
+  }
+}
+
+sub reportEnt{
+  my @files = @{$_[0]};
+  my $ent = $_[1];
+  my $check = $_[2];
+  my $ref = $ent->ref("define, declare","c");
+  $ref = $ent->ref unless $ref;
+  $check->violation($ent,$ref->file,$ref->line,$ref->column,ERR1,$check->option->lookup("significantChars")) if index(join(',', @files), $ref->file->longname) != -1;
+}

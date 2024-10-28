@@ -1,0 +1,251 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-08-02
+
+
+import re
+
+from Modules import findClose
+
+
+ERR1 = 'Deallocation function not overloaded here'
+ERR2 = 'Allocation function not overloaded here'
+
+
+def ids():
+    return ('DCL54-CPP', 'CPP_DD015')
+
+
+def name(id):
+    return {
+        'DCL54-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Overload allocation and deallocation functions as a pair in the same scope''',
+        'CPP_DD015': '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+Overload allocation and deallocation functions as a pair in the same scope''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'DCL54-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P6',
+            'Level: L2',
+            'Declarations and Definitions',
+        ],
+        'CPP_DD015': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Overload allocation and deallocation functions as a pair in the same scope
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Mismatched usage of <code>new</code> and <code>delete</code> could lead to a
+denial-of-service attack.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/DCL54-CPP.+Overload+allocation+and+deallocation+functions+as+a+pair+in+the+same+scope'>https://wiki.sei.cmu.edu/confluence/display/cplusplus/DCL54-CPP.+Overload+allocation+and+deallocation+functions+as+a+pair+in+the+same+scope</a></p>
+
+<p><b>Exceptions</b></p>
+<p>DCL54-CPP-EX1: A placement deallocation function may be elided for a
+corresponding placement allocation function, but only if the object placement
+allocation and object construction are guaranteed to be
+<code>noexcept(true)</code>. Because placement deallocation functions are
+automatically invoked when the object initialization terminates by throwing an
+exception, it is safe to elide the placement deallocation function when
+exceptions cannot be thrown. For instance, some vendors implement compiler flags
+disabling exception support (such as -fno-cxx-exceptions in Clang and /EHs-c- in
+Microsoft Visual Studio), which has implementation-defined behavior when an
+exception is thrown but generally results in program termination similar to
+calling <code>abort()</code>.</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+#include &lt;Windows.h&gt;
+#include &lt;new&gt;
+
+void *operator new(std::size_t size) noexcept(false) {
+  static HANDLE h = ::HeapCreate(0, 0, 0); // Private, expandable heap.
+  if (h) {
+    return ::HeapAlloc(h, 0, size);
+  }
+  throw std::bad_alloc();
+}
+
+// No corresponding global delete operator defined.
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Define', 'Function'):
+        ent = ref.ent()
+
+        # Allocation function
+        if re.match(r'^operator new(\[\])?$', ent.name()):
+
+            # Skip if deallocation is overloaded
+            correspondingFnName = re.sub(r'new', 'delete', ent.name())
+            if correspondingFnOverloaded(ent, correspondingFnName):
+                continue
+
+            # Skip for the exception with placement allocation functions
+            if isPlacementFn(ent) and isNoExcept(ref) and ctorsAreNoExcept(ent):
+                continue
+
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+        # Deallocation function
+        elif re.match(r'^operator delete(\[\])?$', ent.name()):
+
+            # Skip if allocation is overloaded
+            correspondingFnName = re.sub(r'delete', 'new', ent.name())
+            if correspondingFnOverloaded(ent, correspondingFnName):
+                continue
+
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+
+
+def correspondingFnOverloaded(ent, correspondingFnName):
+    # False if no parent
+    parent = ent.parent()
+    if not parent:
+        return False
+
+    # True if corresponding function is found
+    for ref in parent.refs('Define', 'Function', True):
+        sibling = ref.ent()
+        if sibling.name() == correspondingFnName:
+            return True
+
+    return False
+
+
+def isPlacementFn(ent):
+    parent = ent.parent()
+    params = ent.ents('Define', 'Parameter')
+    paramLength = len(params)
+
+    # False if no parent or no parameters
+    if not parent or not params:
+        return False
+
+    # Global allocation functions
+    if parent.kind().check('~Type'):
+        # False for replaceable allocation functions
+        if paramLength == 1 and paramTypesMatch(params, ['size_t']):
+            return False
+        if paramLength == 2 and paramTypesMatch(params, ['size_t', 'algin_val_t']):
+            return False
+        # False for replaceable non-throwing allocation functions
+        if paramLength == 2 and paramTypesMatch(params, ['size_t', 'const nothrow_t &']):
+            return False
+        if paramLength == 3 and paramTypesMatch(params, ['size_t', 'align_val_t', 'const nothrow_t &']):
+            return False
+        # True otherwise:
+            # non-allocating placement allocation functions
+            # user-defined placement allocation functions
+        return True
+    # Class-specific allocation functions
+    else:
+        # False for class-specific allocation functions
+        if paramLength == 1 and paramTypesMatch(params, ['size_t']):
+            return False
+        if paramLength == 2 and paramTypesMatch(params, ['size_t', 'algin_val_t']):
+            return False
+        # True otherwise:
+            # class-specific placement allocation functions
+        return True
+
+
+def paramTypesMatch(params, expectedTypes):
+    # False if not enough parameters
+    if len(expectedTypes) < len(params):
+        return False
+
+    # False if any parameter is the wrong type
+    for i, expectedType in enumerate(expectedTypes):
+        if params[i].type() != expectedType:
+            return False
+
+    return True
+
+
+def isNoExcept(ref):
+    # False if no lexeme: similar to ent name
+    lex = ref.file().lexer(False).lexeme(ref.line(), ref.column())
+    if not lex or lex.text() not in ref.ent().name():
+        return False
+
+    # False if no lexemes: ... ( ... )
+    while lex and lex.text() != '(':
+        lex = lex.next(True, True)
+    lex = findClose(lex)
+    if not lex:
+        return False
+
+    # False if no lexeme: ... noexcept ... {
+    while lex and lex.text() not in {'noexcept', '{'}:
+        lex = lex.next(True, True)
+    if not lex or lex.text() != 'noexcept':
+        return False
+
+    # False if no lexeme
+    lex = lex.next(True, True)
+    if not lex:
+        return False
+    # True if lexeme is not: (
+    if lex.text() != '(':
+        return True
+
+    # False if no lexeme: true
+    lex = lex.next(True, True)
+    if not lex or lex.text() != 'true':
+        return False
+
+    # False if no lexeme: )
+    lex = lex.next(True, True)
+    if not lex or lex.text() != ')':
+        return False
+
+    return True
+
+
+def ctorsAreNoExcept(ent):
+    # False if no parent
+    parent = ent.parent()
+    if not parent:
+        return False
+
+    # False if any constructor is not noexcept
+    for ref in parent.refs('Define', 'Function', True):
+        sibling = ref.ent()
+        if not isNoExcept(ref):
+            return False
+
+    return True

@@ -1,0 +1,260 @@
+ERR1 = 'Do not perform assignments in selection statements.'
+RELATIONAL_OPS = {"<", ">", "==", "!=", "<=", ">="}
+
+
+# The ID for the check
+def id():
+    return ('EXP45-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP45-C': 'Published Standards/SEI Cert Standards/C/Do not perform assignments in selection statements',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP45-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not perform assignments in selection statements'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not perform assignments in selection statements</p>
+<p><b>Risk Assessment</b></p>
+<p>Errors of omission can result in unintended program flow.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/EXP45-C.+Do+not+perform+assignments+in+selection+statements</i></p>
+<p><b>Exceptions</b></p>
+<p><i>EXP45-C-EX1: Assignment can be used where the result of the assignment is itself an operand to a comparison expression or relational expression.</i></p>
+<p><i>EXP45-C-EX2: Assignment can be used where the expression consists of a single primary expression.</i></p>
+<p><i>EXP45-C-EX3: Assignment can be used in a function argument or array index.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">if (a = b) {
+  /* ... */
+}
+
+
+do { /* ... */ } while (foo(), x = y);
+
+
+do { /* ... */ } while (x = y, p = q);
+
+
+while (ch = '\\t' || ch == ' ' || ch == '\\n') {
+  /* ... */
+}
+
+
+while ('\\t' = ch || ' ' == ch || '\\n' == ch) {
+  /* ... */
+}
+
+
+if ((v = w) && flag) { /* ... */ }
+</code></pre>
+<p><i>Developer Notes: </i>This check only covers the 'if', 'while', 'do ... while' and 'for' statements.
+This check is not implemented for '?:', '&&' and '||' statements due to the abundance of false positives.
+The cause of this limitation is that the operands of these statements are not enclosed in parentheses,
+making it difficult to examine accurately.
+</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def next_lex(_lex):
+    return _lex.next(ignore_whitespace=True, ignore_comments=True)
+
+
+# def has_assignment(lex):
+#     lex_first_op = lex.previous(ignore_whitespace=True)
+
+#     if lex_first_op.text() == ")":
+#         on_statement = 1
+
+#         while on_statement:
+#             lex_first_op = lex_first_op.previous(ignore_whitespace=True)
+
+#             if lex_first_op.text() == "(":
+#                 on_statement -= 1
+#             elif lex_first_op.text() == ")":
+#                 on_statement += 1
+#             elif (on_statement == 1) and (lex_first_op.text() == "=") and (lex_first_op.token() == "Operator"):
+#                 return True, lex
+
+#     lex = next_lex(lex)  # second op
+
+#     if lex.text() == "(":
+#         on_statement = 1
+
+#         while on_statement:
+#             lex = next_lex(lex)
+
+#             if lex.text() == ")":
+#                 on_statement -= 1
+#             elif lex.text() == "(":
+#                 on_statement += 1
+#             elif (on_statement == 1) and (lex.text() == "=") and (lex.token() == "Operator"):
+#                 return True, lex
+
+#     return False, lex
+
+
+def check(check, file):
+    def check_violation(lex):
+        check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+    on_array = False
+
+    while lex:
+        if lex.text() == "if" and (lex.token() == "Keyword"):
+            has_relational = False
+            on_array = False
+            on_statement = 0
+            if_lex = lex
+            ops = []
+
+            while lex:
+                if lex.token() == "Operator":
+                    if lex.text() in RELATIONAL_OPS:
+                        has_relational = True
+                    if lex.text() not in {",", "&", ".", "->"}:
+                        ops.append(lex.text())
+                if lex.text() == "(":
+                    on_statement += 1
+                elif lex.text() == ")":
+                    on_statement -= 1
+
+                    if not on_statement:
+                        break
+                elif lex.text() == "[":
+                    on_array = True
+                elif lex.text() == "]":
+                    on_array = False
+                elif not on_array and (on_statement == 1) and (lex.text() == "=") and (lex.token() == "Operator"):
+                    check_violation(lex)
+                # elif lex.text() in {"&&", "||"} and (lex.token() == "Operator"):
+                #     non_compliant, lex = has_assignment(lex)
+
+                #     if non_compliant:
+                #         check_violation(lex)
+                #         break
+
+                lex = next_lex(lex)
+
+            if len(ops) > 1 and "=" in ops and not has_relational:
+                check_violation(if_lex)
+        elif lex.text() == "while" and (lex.token() == "Keyword"):
+            while_lex = lex
+            on_statement = 0
+            ops = 0
+            has_assignment = False
+            on_array = False
+
+            while lex:
+                if lex.text() == "(":
+                    on_statement += 1
+                elif lex.text() == ")":
+                    on_statement -= 1
+
+                    if not on_statement:
+                        break
+                elif lex.text() == "[":
+                    on_array = True
+                elif lex.text() == "]":
+                    on_array = False
+                elif lex.text() == ",":
+                    ops += 1
+                elif not on_array and ops > 0 and (on_statement == 1) and (lex.text() == "=") and (lex.token() == "Operator"):
+                    check_violation(lex)
+                elif not on_array and (lex.text() == "=") and (on_statement == 1) and (lex.token() == "Operator"):
+                    has_assignment = True
+                # elif not on_do and (on_statement == 1) and (lex.text() == "=") and (lex.token() == "Operator"):
+                #     check_violation(lex)
+                # elif on_second_op and (on_statement == 1) and (lex.text() == "=") and (lex.token() == "Operator"):
+                #     check_violation(lex)
+
+                lex = next_lex(lex)
+
+            if has_assignment and ops == 0:
+                check_violation(while_lex)
+        elif lex.text() == "for" and (lex.token() == "Keyword"):
+            op = 0
+            on_statement = 0
+            on_array = False
+
+            while lex:
+                if lex.text() == "(":
+                    on_statement += 1
+                elif lex.text() == ")":
+                    on_statement -= 1
+
+                    if not on_statement:
+                        break
+                elif lex.text() == "[":
+                    on_array = True
+                elif lex.text() == "]":
+                    on_array = False
+                elif on_statement and lex.text() == ";":
+                    op += 1
+                elif not on_array and (op == 1) and (on_statement == 1) and (lex.text() == "=") and (lex.token() == "Operator"):
+                    check_violation(lex)
+
+                lex = next_lex(lex)
+        # elif lex.text() in {"&&", "||"} and (lex.token() == "Operator"):
+        #     non_compliant, lex = has_assignment(lex)
+
+        #     if non_compliant:
+        #         check_violation(lex)
+        # elif lex.text() == "?" and (lex.token() == "Operator"):
+        #     line = lex.line_begin()
+
+        #     while lex.text() != ":":
+        #         if (lex.text() == "=") and (lex.token() == "Operator"):
+        #             check_violation(lex)
+
+        #         lex = next_lex(lex)
+
+        #     while (lex.line_begin() == line) and lex.text() != ";":
+        #         if (lex.text() == "=") and (lex.token() == "Operator"):
+        #             check_violation(lex)
+
+        #         lex = next_lex(lex)
+
+        lex = next_lex(lex)

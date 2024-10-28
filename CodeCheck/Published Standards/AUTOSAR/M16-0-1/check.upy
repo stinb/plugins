@@ -1,0 +1,129 @@
+ERR1 = '#include directive should only be preceeded by other preprocessor directives or comments'
+
+
+# The ID for the check
+def ids():
+    return ('M16-0-1', 'CPP_PR040')
+
+def name(id):
+    return {
+        'M16-0-1': """\
+Published Standards/AUTOSAR/#include Directives Not Grouped Together""",
+        'CPP_PR040': """\
+All Checks/Language Specific/C and C++/Preprocessor/#include Directives Not \
+Grouped Together"""
+
+    }[id]
+
+
+
+
+
+
+def tags(id):
+    return {
+        'M16-0-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Preprocessor',
+        ],
+        'CPP_PR040': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>#include directives in a file shall only be preceded by
+other preprocessor directives or comments.</p>
+<p><b>Rationale</b></p>
+<p>To aid code readability, all the #include directives in a particular code file should be grouped
+together near the head of the file. The only items which may precede a #include in a file are other
+preprocessor directives or comments.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include &lt;f1.h&gt; // Compliant
+int32_t i;
+#include &lt;f2.h&gt; // Non-compliant
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(_lex):
+        check.violation(None, file, _lex.line_begin(),
+                        _lex.column_begin(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() == "include" and lex.token() == "Preprocessor":
+            lex_prev = lexer.lexeme(lex.line_begin() - 1, 1)
+            lex_next = lexer.lexeme(lex.line_end() + 1, 1)
+            end_preprocessor = False
+
+            while lex_prev and lex_prev.token() in {"Whitespace", "Comment", "Newline"}:
+                lex_prev = lexer.lexeme(lex_prev.line_begin() - 1, 1)
+
+            while lex_next and lex_next.token() in {"Whitespace", "Comment", "Newline"}:
+                lex_next = lexer.lexeme(lex_next.line_end() + 1, 1)
+
+            while lex_prev:
+                prev_line = lex_prev.line_begin()
+
+                if lex_prev.token() != "Preprocessor":
+                    check_violation(lex_prev)
+
+                lex_prev = lexer.lexeme(lex_prev.line_begin() - 1, 1)
+
+                if lex_prev and lex_prev.line_begin() == prev_line:
+                    while lex_prev.line_begin() == prev_line:
+                        lex_prev = lex_prev.previous(
+                            ignore_whitespace=True, ignore_comments=True)
+                    lex_prev = lexer.lexeme(lex_prev.line_begin(), 1)
+
+                while lex_prev and lex_prev.token() in {"Whitespace", "Comment", "Newline"}:
+                    lex_prev = lexer.lexeme(lex_prev.line_begin() - 1, 1)
+
+            while lex_next:
+                if lex_next.token() == "Preprocessor" and lex_next.text() == '#':
+                    lex_next = lex_next.next(True, True)
+                    if not lex_next:
+                        break
+                if lex_next.token() != "Preprocessor":
+                    end_preprocessor = True
+                elif lex_next.text() == "include" and lex_next.token() == "Preprocessor" and end_preprocessor:
+                    check_violation(lex_next)
+
+                lex_next = lexer.lexeme(lex_next.line_end() + 1, 1)
+
+                while lex_next and lex_next.token() in {"Whitespace", "Comment", "Newline"}:
+                    lex_next = lexer.lexeme(lex_next.line_end() + 1, 1)
+
+            break
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)

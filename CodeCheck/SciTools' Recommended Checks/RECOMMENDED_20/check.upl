@@ -1,0 +1,440 @@
+#
+# Find lines of code that have been duplicated across your code base.
+#
+
+#This script is designed to run with Understand as an Interactive Report
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => "Duplicate code found in file: %1 line: %2";
+use constant ERR2 => "Duplicate code";
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "RECOMMENDED_20";}
+# Required - Return the short name of the Report, slashes (/) will be used to create directories in the menu
+sub name { return "SciTools' Recommended Checks\\Duplicate Code";}
+
+sub tags {
+  return (
+    'Language: Ada',
+    'Language: C',
+    'Language: C++',
+    'Language: C#',
+    'Language: Fortran',
+    'Language: Java',
+    'Language: Jovial',
+    'Language: Python',
+    'Language: Pascal',
+    'Language: VHDL',
+    'Language: Web',
+    'Control Flow'
+  );
+}
+
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Rationale</b></p>
+<p>Duplicate code can not only increase the size of the project, but it also makes it more difficult to fix or update as all instances of the code would need to be updated, which can be time-consuming and error-prone.</p>
+END_DESC
+}
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return 1;
+}
+
+# This determines if this script is per file
+sub test_entity {
+  return 0;
+}
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 1;
+}
+
+our %lexers;
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->integer("minline","Minimum # lines to match",6);
+  $check->option->integer("minchar","Minimum # characters to match",20);
+  $check->option->checkbox("ignoreWhitespace","Ignore Whitespace",1);
+  $check->option->checkbox("ignoreComments","Ignore Comments",1);
+  $check->option->checkbox("ignorePreprocessor","Ignore Preprocessor",1);
+}
+
+
+# Required - This is where the check is actually run
+sub check {
+  my $check = shift;
+  my @matches = createInitialMatches($check);
+  @matches = removeDuplicates($check,@matches);
+
+  my $dupLines = 0;
+  foreach my $match (@matches){
+    for(my $i=0;$i<$match->getLocCount;$i++) {
+      my $lastFile;
+      my $lastLine;
+      if ($i > 0) {
+        ($lastFile, $lastLine) = $match->getLoc($i-1);
+      } elsif ($i == 0 and $match->getLocCount > 1) {
+        ($lastFile, $lastLine) = $match->getLoc($match->getLocCount - 1);
+      }
+
+      my ($file, $line) = $match->getLoc($i);
+      if ($lastLine) {
+      $check->violation($file,$file,$line,0,ERR1,$lastFile->longname,$lastLine);
+      } else {
+        $check->violation($file,$file,$line,0,ERR2);
+      }
+
+    }
+  }
+   
+}
+
+#*************************************
+#Read through each file with a lexer and store a hash for each chunk of text based off the minimums
+#Return an array of match objects with locations, but incomplete text
+sub createInitialMatches{
+  my ($check) = @_;
+  my %initialMatches;
+  my $currentLine;
+  my $minline = $check->option->lookup("minline");
+  my $minchar = $check->option->lookup("minchar");
+  my @files = sort{$a->longname cmp $b->longname} $check->get_files;
+  foreach my $file(@files) {
+    my $lexer = $file->lexer(0);
+    return unless $lexer;
+    $lexers{$file->id}=$lexer;
+    my $lex = $lexer->first();
+    my @lines;
+    my $linenum;
+    while ($lex){
+      $linenum = $lex->line_begin;
+      if (validToken($lex,$check)){
+        $lines[$lex->line_begin].=$lex->text;
+      }
+      $lex=nextToken($lex,$check);
+    }
+    $currentLine += $file->metric("CountLine");
+    foreach (@lines){$_ =~ s/^\s*|\s*$//g;}
+    
+    for(my $i=0;$i<$#lines-($minline);$i++){
+      my $line = $lines[$i];
+      my $oldLine = $line;
+      for (my $j=1;$j<$minline;$j++){
+        $line.= $lines[$i+$j]
+      }
+      next unless $line;
+      $line =~ s/^\s*|\s*$//g;
+      $oldLine =~ s/^\s*|\s*$//g;
+      if (length($oldLine)>= $minchar){
+        $initialMatches{$line} = new Match($line, $minline) unless $initialMatches{$line};
+        $initialMatches{$line}->addLoc($file, $i);
+      }
+    }                                 
+  }
+  my @tempArray;
+  foreach(values %initialMatches){
+    next unless $_->getLocCount > 1 && $_->addLexemes();
+    $_->fillUp($check);
+    push @tempArray, $_ ;
+  }  
+   
+  
+  return @tempArray;
+  
+  
+}
+
+sub removeDuplicates{
+  my ($check, @matches) = @_;
+  my %dupList;
+  my @finalList;
+  my $minline = $check->option->lookup("minline");
+  my $minchar = $check->option->lookup("minchar");
+  my $counter = 0;
+  
+  # Cycle through each match object and create a list of visited locations
+  # If a location has already been reported in a specific match add
+  foreach my $match (sort{$a->getNumLines <=> $b->getNumLines or
+                  $a->getLocCount <=> $b->getLocCount or
+                  $a->getText cmp $b->getText
+                } @matches){
+  
+    
+    
+    my $i = 0;
+    LOC:while($i<$match->getLocCount){
+      next LOC if $match->removeDuplicateLocations(\%dupList,$i);
+      my ($file,$line) = $match->getLoc($i);
+      for (my $j=0;$j<$match->getNumLines();$j++){
+        $dupList{$file->id}{$line+$j}=1;
+      }
+      $i++;
+    }
+    push @finalList, $match if ($match->getLocCount()>1);
+  }
+  
+  return @finalList;
+}
+
+sub findClose{
+  my $lex = $_;
+  my $count = 0;
+  return unless $lex;
+  my $open = $lex->text;
+  my $close;
+  if ($lex->text eq '{') {
+    $close = '}';
+  } elsif ($lex->text eq '(') {
+    $close = ')';
+  } else {
+    return;
+  }
+
+  while ($lex && !($lex->text eq $close && $count == 0)) {
+    if ($lex->text eq $open) {
+      $count++;
+    }
+    $lex = $lex->next;
+    if ($lex && $lex->text eq $close) {
+      $count--;
+    }
+  }
+  return $lex;
+}
+ 
+
+sub nextToken{
+  my($lex,$check) = @_;
+  my $ignoreWhitespace = $check->option->lookup("ignoreWhitespace");
+  my $ignoreComments = $check->option->lookup("ignoreComments");
+  my $ignorePreprocessor = $check->option->lookup("ignorePreprocessor");
+  my $skip;
+  $lex = $lex->next;
+  while ($lex){
+    $skip = 0;
+    next if $lex->token eq "Comment" && $ignoreComments;
+    next if $lex->token =~ /Whitespace|Newline/ && $ignoreWhitespace;
+    if ($lex->token eq "Preprocessor" && $ignorePreprocessor) {
+      my $curLine = $lex->line_begin;
+      $skip = 1;
+      while ($lex && $lex->line_begin == $curLine) {
+        if ($lex->text eq "(" || $lex->text eq "{") {
+          $lex = findClose($lex);
+          $curLine = $lex->line_begin if $lex
+        } else {
+          $lex = $lex->next;
+        }
+      }
+    }
+    return $lex;
+  }continue{
+    $lex = $lex->next unless $skip;
+  }
+  return;
+}
+
+sub validToken{
+  my($lex,$check) = @_;
+  my $ignoreWhitespace = $check->option->lookup("ignoreWhitespace");
+  my $ignoreComments = $check->option->lookup("ignoreComments");
+  my $ignorePreprocessor = $check->option->lookup("ignorePreprocessor");
+  return 0 if $lex->token eq "Comment" && $ignoreComments;
+  return 0 if $lex->token =~ /Whitespace|Newline/ && $ignoreWhitespace;
+  return 0 if $lex->token eq "Preprocessor" && $ignorePreprocessor;
+  return 1 if $lex;
+}
+
+package Match;
+sub new{
+  my ($class,$text, $numLines) = @_;
+  my $self = bless { 
+    _fileList => [],
+    _lineList => [],
+    _lexList => [],
+    locCount => 0,
+    text => $text,
+    numLines => $numLines,
+    }, $class;
+  return $self;
+}
+
+sub addLoc{
+  my ($self, $fileEnt, $line) = @_;
+  push @{$self->{_fileList}},$fileEnt;
+  push @{$self->{_lineList}}, $line;
+  $self->{locCount}++;
+}
+
+sub addLexemes{
+  my ($self) = @_;
+  for (my $i=0; $i < $self->{locCount};$i++){
+    my $lexer = @{$self->{_fileList}}[$i]->lexer();
+    return unless $lexer;
+    my $lexeme = $lexer->lexeme(@{$self->{_lineList}}[$i],0);
+    return unless $lexeme;
+    push @{$self->{_lexList}},$lexeme;
+  }
+  return 1;
+}
+
+sub getLoc{
+  my ($self, $i) = @_;
+  return if  $i >= $self->{locCount};
+  return (@{$self->{_fileList}}[$i],@{$self->{_lineList}}[$i]);
+}
+
+sub getLex{
+  my ($self, $i) = @_;
+  return if  $i >= $self->{locCount};
+  my $lex =  @{$self->{_lexList}}[$i];
+  return $lex;
+}
+
+sub getLocCount{
+  my ($self) = @_;
+  return $self->{locCount};
+}
+
+sub getText{
+  my ($self) = @_;
+  return $self->{text};
+}
+
+sub getNumLines{
+  my ($self) = @_;
+  return $self->{numLines};
+}
+
+
+
+
+#Fill the match to the end of the matching locations
+sub fillUp{
+  my($self,$check) = @_;
+  my $ignoreWhitespace = $check->option->lookup("ignoreWhitespace");
+  my $ignoreComments = $check->option->lookup("ignoreComments");
+  my $ignorePreprocessor = $check->option->lookup("ignorePreprocessor");
+  my @lexArray; #used to keep track of the current location in each location
+  my @endArray; #keep track of the last matching lexeme in each location
+  
+  @lexArray = @{$self->{_lexList}};
+  my $textmatched = 1;
+    STEP:while ($textmatched){
+      for (my $i =0;$i < @lexArray; $i++){
+        my $lex = $lexArray[$i];
+        $endArray[$i]=$lex;
+
+        #Goto the next code lexeme
+        $lex=nextToken($lex,$check);
+        $lexArray[$i]=$lex;
+      }
+      map {$textmatched=0 if ! $_ || !$lexArray[0] || $_->text() ne $lexArray[0]->text();} @lexArray;
+    }
+    #At this point endArray is on the last matching lexeme in each file location, @lexArray is undef
+    
+    #Get the actual text from the first file
+    my $lex =  @{$self->{_lexList}}[0];
+    my $text;
+    while ($lex && ! ($lex->line_begin eq $endArray[0]->line_begin 
+                && $lex->column_begin eq $endArray[0]->column_begin)){
+      $text .= $lex->text unless ($lex->token eq "Comment" && $ignoreComments) || ($lex->token eq "Preprocessor" && $ignorePreprocessor);
+      if ($lex->token eq "Preprocessor" && $ignorePreprocessor) {
+        my $curLine = $lex->line_begin;
+        while ($lex && $lex->line_begin == $curLine) {
+          if ($lex->text eq "(" || $lex->text eq "{") {
+            $lex = findClose($lex,$check);
+            $curLine = $lex->line_begin if $lex
+          } else {
+            $lex = $lex->next;
+          }
+        }
+      } else {
+        $lex=$lex->next;
+      }
+    }
+    my $lines =  ($endArray[0]->line_end - @{$self->{_lineList}}[0]) + 1;
+    $self->{text} = $text;
+    $self->{numLines} = $lines;
+}
+
+# Given a list of already reported locations and a specific location for this match object
+# remove that location from the match object if it has already been reported
+sub removeDuplicateLocations{
+  my ($self,$hash, $i) = @_;
+  my %dupList = %{$hash};
+  my @victims;
+  return unless $dupList{@{$self->{_fileList}}[$i]->id}{@{$self->{_lineList}}[$i]};
+  splice @{$self->{_fileList}}, $i,1;
+  splice @{$self->{_lineList}}, $i,1;
+  $self->{locCount}--;
+  return 1;
+}
+
+
+sub nextToken{
+  my($lex,$check) = @_;
+  my $ignoreWhitespace = $check->option->lookup("ignoreWhitespace");
+  my $ignoreComments = $check->option->lookup("ignoreComments");
+  my $ignorePreprocessor = $check->option->lookup("ignorePreprocessor");
+  my $skip;
+  $lex = $lex->next;
+  while ($lex){
+    $skip = 0;
+    next if $lex->token eq "Comment" && $ignoreComments;
+    next if $lex->token =~ /Whitespace|Newline/ && $ignoreWhitespace;
+    if ($lex->token eq "Preprocessor" && $ignorePreprocessor) {
+      my $curLine = $lex->line_begin;
+      $skip = 1;
+      while ($lex && $lex->line_begin == $curLine) {
+          if ($lex->text eq "(" || $lex->text eq "{") {
+            $lex = findClose($lex,$check);
+            $curLine = $lex->line_begin if $lex
+          } else {
+            $lex = $lex->next;
+          }
+      }
+    }
+    return $lex;
+  }continue{
+    $lex = $lex->next unless $skip;
+  }
+  return;
+}
+
+sub findClose{
+  my($lex,$check) = @_;
+  my $count = 0;
+  return unless $lex;
+  my $open = $lex->text;
+  my $close;
+  if ($lex->text eq '{') {
+    $close = '}';
+  } elsif ($lex->text eq '(') {
+    $close = ')';
+  } else {
+    return;
+  }
+
+  while ($lex && !($lex->text eq $close && $count == 0)) {
+    if ($lex->text eq $open) {
+      $count++;
+    }
+    $lex = $lex->next;
+    if ($lex && $lex->text eq $close) {
+      $count--;
+    }
+  }
+  return $lex;
+}
+1;

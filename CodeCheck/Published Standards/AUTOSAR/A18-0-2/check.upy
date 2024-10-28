@@ -1,0 +1,149 @@
+import re
+
+
+ERR1 = 'Function will return an undefined behavior when a string cannot be converted to a number'
+ERR2 = 'Formatted input stream function is not checked for errors'
+
+
+STR_TO_NUM_FUNCTIONS = {"atoi", "atol", "atoll", "atof", "strtod",
+                        "strtof", "strtol", "strtold", "strtoll", "strtoul", "strtoull"}
+
+
+def ids():
+    return ('A18-0-2', 'CPP_T052')
+
+
+def name(id):
+    return {
+        'A18-0-2': """\
+Published Standards/AUTOSAR/The error state of a conversion from string to a numeric value shall be checked""",
+        'CPP_T052': """\
+All Checks/Language Specific/C and C++/Types/String-to-Number Conversion Handling"""
+    }[id]
+
+
+def tags(id):
+    return {
+        'A18-0-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T052': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>The error state of a conversion from string to a numeric value shall be
+checked.</p>
+<p><b>Rationale</b></p>
+<p>Error conditions of a string-to-number conversion must be detected and properly
+handled. Such errors can happen when an input string:
+<br>• does not contain a number;</br>
+<br>• contains a number, but it is out of range;</br>
+<br>• contains additional data after a number.</br></p>
+<p>Some functions for string-to-number conversion from the C Standard library have
+undefined behavior when a string cannot be converted to a number, e.g. atoi(). Since
+the C++11 Language Standard, new numeric conversion functions are available (see:
+std::stoi(), std::stol(), std::stoll() [16]). These guarantee defined behavior.</p>
+<p>Moreover, errors shall be checked also for formatted input stream functions (e.g.
+istream::operator&gt;&gt;()), by using basic_ios::fail().</p>
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A18-0-2.cpp 312092 2018-03-16 15:47:01Z jan.babst $
+#include &lt;cstdint&gt;
+#include &lt;cstdlib&gt;
+#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+std::int32_t F1(const char* str) noexcept
+{
+    return atoi(str); // Non-compliant - undefined behavior if str can not
+                      // be converted
+}
+std::int32_t F2(std::string const& str) noexcept(false)
+{
+    return std::stoi(str); // Compliant - throws a std::invalid_argument
+                           // exception if str can not be converted
+}
+
+std::uint16_t ReadFromStdin1() // non-compliant
+{
+    std::uint16_t a;
+    std::cin &gt;&gt; a; // no error detection
+    return a;
+}
+
+std::uint16_t ReadFromStdin2() // compliant
+{
+    std::uint16_t a;
+
+    std::cin.clear(); // clear all flags
+    std::cin &gt;&gt; a;
+    if (std::cin.fail())
+    {
+        throw std::runtime_error{"unable to read an integer"};
+    }
+    std::cin.clear(); // clear all flags for subsequent operations
+    return a;
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>• MISRA C++ 2008 [7]: 18-0-2: The library functions atof, atoi and atol from library
+&lt;cstdlib&gt; shall not be used.</p>
+<p>• SEI CERT C++ Coding Standard [10]: ERR34-C: Detect errors when converting
+a string to a number</p>
+<p>• SEI CERT C++ Coding Standard [10]: ERR62-CPP: Detect errors when
+converting a string to a number</p>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref_ent, ref, error_message):
+        check.violation(ref_ent, file, ref.line(),
+                        ref.column(), error_message)
+
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Call", "Function"):
+        if func_ref.ent().name() in STR_TO_NUM_FUNCTIONS:
+            check_violation(func_ref.ent(), func_ref, ERR1)
+        elif re.match(r"((std::(__1::)?)?basic_istream::operator>>$)|(std::(__1::)?basic_istream::operator>>$)", func_ref.ent().longname()):
+
+            compliant = False
+            lex = lexer.lexeme(func_ref.line() + 1, 0)
+
+            while lex and lex.text() != ";":
+                if lex.token() == "Identifier" and lex.ent() and re.match(r"((std::(__1::)?)?ios_base::fail$)|((std::(__1::)?ios_base::fail$)|(std::basic_ios::fail$))", lex.ent().longname()):
+                    compliant = True
+                    break
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if not compliant:
+                define_ref = func_ref.scope().ref("Definein")
+                check_violation(func_ref.scope(), define_ref, ERR2)

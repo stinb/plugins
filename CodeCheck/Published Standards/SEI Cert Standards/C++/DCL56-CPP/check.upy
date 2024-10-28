@@ -1,0 +1,208 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-08-03
+
+
+import re
+
+
+ERR1 = 'Initializer has direct recursion with function: %1'
+ERR2 = 'Initializer has indirect recursion with function: %1'
+ERR3 = 'Initializer relies on initialization in another file with object: %1'
+
+NO_PROBLEM         = 0
+DIRECT_RECURSION   = 1
+INDIRECT_RECURSION = 2
+RELIANT_ORDER      = 3
+
+recursionCache = dict()
+
+
+def ids():
+    return ('DCL56-CPP', 'CPP_DD017')
+
+
+def name(id):
+    return {
+        'DCL56-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Avoid cycles during initialization of static objects''',
+        'CPP_DD017': '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+Avoid cycles during initialization of static objects''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'DCL56-CPP': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'CPP_DD017': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Avoid cycles during initialization of static objects</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Recursively reentering a function during the initialization of one of its
+static objects can result in an attacker being able to cause a crash or denial
+of service. Indeterminately ordered dynamic initialization can lead to undefined
+behavior due to accessing an uninitialized object.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/DCL56-CPP.+Avoid+cycles+during+initialization+of+static+objects'>https://wiki.sei.cmu.edu/confluence/display/cplusplus/DCL56-CPP.+Avoid+cycles+during+initialization+of+static+objects</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+#include &lt;stdexcept&gt;
+
+int fact(int i) noexcept(false) {
+  if (i &lt; 0) {
+    // Negative factorials are undefined.
+    throw std::domain_error("i must be &gt;= 0");
+  }
+
+  static const int cache[] = {
+    fact(0), fact(1), fact(2), fact(3), fact(4), fact(5),
+    fact(6), fact(7), fact(8), fact(9), fact(10), fact(11),
+    fact(12), fact(13), fact(14), fact(15), fact(16)
+  };
+
+  if (i &lt; (sizeof(cache) / sizeof(int))) {
+    return cache[i];
+  }
+
+  return i &gt; 0 ? i * fact(i - 1) : 1;
+}
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+
+    for define in file.filerefs('Define', 'Static Object, Global Object'):
+        obj = define.ent()
+
+        # Skip if no lexeme: object name
+        lexer = lexer or file.lexer(True)
+        lex = lexer.lexeme(define.line(), define.column())
+        if not lex or lex.text() != obj.name():
+            continue
+
+        # Skip if no lexeme: ... =
+        while lex and lex.text() not in {'=', ';'}:
+            lex = lex.next(True, True)
+        if not lex or lex.text() != '=':
+            continue
+
+        # Find a recursive call in the initializer
+        recursion = NO_PROBLEM
+        while lex and lex.text() != ';':
+            ref = lex.ref()
+            ent = lex.ent()
+            problem = ent and findProblem(ref, ent, file)
+            if problem:
+                name = ent.name()
+                break
+            lex = lex.next(True, True)
+
+        # Violation for any type of problem
+        if not problem:
+            continue
+        elif problem == DIRECT_RECURSION:
+            check.violation(obj, file, define.line(), define.column(), ERR1, name)
+        elif problem == INDIRECT_RECURSION:
+            check.violation(obj, file, define.line(), define.column(), ERR2, name)
+        elif problem == RELIANT_ORDER:
+            check.violation(obj, file, define.line(), define.column(), ERR3, name)
+
+
+def findProblem(ref, ent, file):
+    return findReliantOrder(ent, file) or findRecursion(ref, ent)
+
+
+def findReliantOrder(ent, file):
+    # No problem if not a global object
+    if not ent.kind().check('Global Object'):
+        return NO_PROBLEM
+
+    # No problem if defined in same file as declaration
+    defineIn = ent.ref('Definein')
+    if defineIn and defineIn.file() == file:
+        return NO_PROBLEM
+
+    # No problem if declared in a function, otherwise it's reliant
+    for ref in ent.refs('Declarein'):
+        if ref.file() == file:
+            if ref.ent().kind().check('Function'):
+                return NO_PROBLEM
+            else:
+                return RELIANT_ORDER
+
+    return NO_PROBLEM
+
+
+def findRecursion(ref, ent):
+    # No problem if not a call
+    if not ref.kind().check('Callby'):
+        return NO_PROBLEM
+
+    # No problem if not a function
+    if not ent.kind().check('Function'):
+        return NO_PROBLEM
+
+    # See if the function is recursive
+    if ent not in recursionCache:
+        recursionCache[ent] = findRecursionHelper(ent, True, set(), ent)
+    return recursionCache[ent]
+
+
+def findRecursionHelper(ent, firstTime, seen, originalEnt):
+    for callRef in ent.refs('Call', 'Function', True):
+        callee = callRef.ent()
+
+        # Skip if callee already seen
+        if callee in seen:
+            continue
+        seen.add(callee)
+
+        # Stop if original function reached
+        if callee == originalEnt:
+            if firstTime:
+                return DIRECT_RECURSION
+            else:
+                return INDIRECT_RECURSION
+
+        # Go deeper and stop if recursion discovered
+        recursion = findRecursionHelper(callee, False, seen, originalEnt)
+        if recursion:
+            return recursion
+
+    return NO_PROBLEM

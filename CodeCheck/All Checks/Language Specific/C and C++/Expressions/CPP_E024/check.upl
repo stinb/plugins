@@ -1,0 +1,225 @@
+# Check for signed operands to modulus or division operator.
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+# Violation messages should use constants and can have additonal parameters 
+# indicated with %1, %2, %3 etc. like printf does
+use constant ERR1 => 'Signed operand %1 is used with modulus or division operator';
+use constant ERR2 => 'Signed operand %1 is used with modulus or division operator';
+use constant ERR3 => 'Signed operand is used with modulus or division operator';
+our @lexemes=();
+our $lexeme_pos=0;
+# Required - Violation messages should be registred for translation
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+# Required - Return the short name of the check
+
+sub checkID { return "CPP_E024";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Expressions\\Signed operands to modulus or division operator";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Expressions',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Signed operands should not be used with modulus or division operators";}
+
+# Required - Return the long description of the check
+sub detailed_description { return <<"END_DESC"
+Limitations:
+ 1. Only handles simple expression a/b or a%b, not complex expressions
+ like a/(b) or a/(t)b or a/b-&gt;c.
+ 2. Only checks floats and doubles as the base type.
+END_DESC
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; 
+  #return 1;
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+sub define_options {
+  my $check = shift;
+  $check->option->checkbox('includeTyped', 'Include typedefs (disabling this will increase the speed of the check)', 1);
+
+  
+}
+
+sub check {
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift; 
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check("c file ~unknown ~unresolved"); 
+
+  my $lexer = $file->lexer();
+  return unless $lexer;
+  # loop through functions defined in the file
+	foreach my $ref ($file->filerefs("define","function",1)) {
+	    my $func = $ref->ent();
+	    my ($begin,$end) = getFunctionDefnLines($func);
+	    next if (!$begin);
+      do_one_function($check,$file,$func,$lexer,$begin,$end);
+  }
+  @lexemes=();
+  $lexeme_pos=0;
+}
+
+# check one function.
+sub do_one_function {
+    my $check = shift;
+    my $file = shift;
+    my $func = shift;
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+
+    my $typedefs = $check->option->lookup('includeTyped');
+    # setup lexemes
+    setupLexemes($lexer,$begin,$end);
+    my $lexeme = nextLexeme();
+
+    my $seen_signed = 0;   # if previous token was signed id or literal
+    my $seen_divide = 0;   # if previous token was '/' or '%'
+    my $seen_paren = 0;    # if previous token was ')'
+    while ($lexeme) {
+      #Yield to GUI interupts
+      $check->yield();
+      return if $check->is_abort();
+    
+    
+	my $text = $lexeme->text();
+	if ($text =~ m/[\/%]/) {
+	    if ($seen_signed) {
+		localViolation($check,$func,$lexeme,$file);
+		$seen_signed = 0;
+	    } else {
+		$seen_divide = 1;
+	    }
+	    $seen_paren = 0;
+	} elsif (checkSigned($lexeme, $typedefs) && !$seen_paren) {
+	    if ($seen_divide) {
+		localViolation($check,$func,$lexeme,$file);
+		$seen_divide = 0;
+	    } else {
+		$seen_signed = 1;
+	    }
+	    $seen_paren = 0;
+	} elsif ($text eq ")") {
+	    $seen_signed = 0;
+	    $seen_divide = 0;
+	    $seen_paren = 1;
+	} else {
+	    $seen_signed = 0;
+	    $seen_divide = 0;
+	    $seen_paren = 0;
+	}
+
+	$lexeme = nextLexeme();
+    }
+}
+
+
+# return true if the lexeme is either a signed literal or
+# an entity of signed type.
+sub checkSigned {
+    # TBD
+    my $lexeme = shift;
+    my $typedefs = shift;
+    if ($lexeme->token() eq "Literal") {
+      my $text = $lexeme->text();
+      return 1 if $text =~ m/^-/;
+      return 0 if $text =~ m/^0[xXbB]/;
+      return 1 if $text =~ m/[.eE]/;
+    } elsif ($typedefs) {
+      my $ent = $lexeme->ent() or return 0;
+      my $type_ref = $ent->ref("typed");
+      my %seen; #Avoid recursive typing
+      while ($type_ref && ! $seen{$type_ref->ent->id}) {
+          $seen{$type_ref->ent->id}=1;
+          $ent = $type_ref->ent();
+          $type_ref = $ent->ref("typed");
+      }
+      return 1 if $typedefs and $ent->type() =~ m/float|double/;
+    }
+    return 0;
+}
+
+
+# Print violation and return true.
+sub localViolation {
+    my $check = shift;
+    my $func = shift;
+    my $lexeme = shift;
+    my $file = shift;
+    if ($lexeme && $lexeme->ent){
+      $check->violation($lexeme->ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1,$lexeme->ent->name);
+    }
+    elsif ($lexeme->previous && $lexeme->previous->ent){
+      $check->violation($lexeme->previous->ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR2,$lexeme->previous->ent->name);
+    }
+    else{
+      $check->violation($func,$file,$lexeme->line_begin,$lexeme->column_begin,ERR3);
+    }
+    return 1;
+}
+
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Setup the global lexemes array once per function, to use
+# the nextLexeme() sub.
+
+sub setupLexemes {
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+    @lexemes = $lexer->lexemes($begin,$end);
+    $lexeme_pos = 0;
+}
+
+
+# Return the next interesting lexeme or undef when all lexemes
+# are used.
+sub nextLexeme {
+    while ($lexeme_pos < $#lexemes) {
+      my $lexeme = $lexemes[$lexeme_pos++];
+      next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+      return $lexeme;
+    }
+    return undef;
+}

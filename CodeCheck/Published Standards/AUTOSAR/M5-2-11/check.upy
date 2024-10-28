@@ -1,0 +1,151 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 9-17-21
+
+import re
+
+ERR1 = ', operator overloaded'
+ERR2 = '&& operator overloaded'
+ERR3 = '|| operator overloaded'
+
+def ids():
+    return ('M5-2-11', 'MISRA08_5-2-11', 'CPP_D019', 'MISRA23_16.5.1')
+
+def name(id):
+    return {
+        'M5-2-11': 'Published Standards/AUTOSAR/The comma operator, && operator and the || operator shall not be overloaded',
+        'MISRA08_5-2-11': 'Published Standards/MISRA-C++ 2008/5-2-11 The comma operator, && operator and the || operator shall not be overloaded',
+        'CPP_D019': 'All Checks/Language Specific/C and C++/Declarations and Definitions/The comma operator, && operator and the || operator shall not be overloaded',
+        'MISRA23_16.5.1': 'Published Standards/MISRA C++ 2023/16.5.1 The logical AND and logical OR operators shall not be overloaded',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-2-11': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M5-2-11': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D019': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_16.5.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description(id):
+    if id == 'MISRA23_16.5.1':
+        return '''
+<p><b>Rationale</b></p>
+<p>Logical AND and logical OR operators are transformed into function calls. Whilst the overloaded
+operators obey the rules for syntax and evaluation order defined within the C++ Standard, both
+operands will always be evaluated. As it may be unclear if a particular use of a logical operator results
+in a call to an overloaded operator, a developer may incorrectly believe that short-circuit evaluation
+will occur.</p>
+
+<p>Note: the order of evaluation of the operands was unspecified when using overload operators in
+versions of C++ prior to C++17.</p>
+
+<p><b>Example</b></p>
+<p>In the following example, instantiation of the template function f with AutomatedCar results in the
+built-in operator&& being used, with AutomatedCar::increaseSpeed only being called if
+AutomatedCar::isOvertaking returns true.</p>
+
+<p>If f is instantiated with Car, the overload of operator&& is used. As this does not have shortcircuit behaviour, Car::increaseSpeed is always called, irrespective of the value returned by
+Car::isOvertaking.</p>
+
+<pre><code language="C++">class FuzzyBool {};
+class Car
+{
+public:
+ FuzzyBool isOvertaking();
+ bool increaseSpeed();
+};
+class AutomatedCar
+{
+public:
+ bool isOvertaking();
+ bool increaseSpeed();
+};
+bool operator&&( FuzzyBool fb, bool b ); // Non-compliant
+template&lt; class Vehicle &gt;
+void f( Vehicle & v )
+{
+ if ( v.isOvertaking() && v.increaseSpeed() )
+ {
+ }
+}
+</code></pre>        
+        '''
+
+    return '''\
+<p><b>Rationale</b></p>
+<p>Overloaded versions of the comma and logical conjunction operators have the semantics of
+function calls whose sequence point and ordering semantics are different from those of the builtin versions. It may not be clear at the point of use that these operators are overloaded, and so
+developers may be unaware which semantics apply.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include "util.h"
+class A
+{
+public:
+    UtilType getValue ( );
+    UtilType setValue ( UtilType const & );
+};
+void f1 ( A & a1, A & a2 )
+{
+    a1.getValue ( ) && a2.setValue ( 0 ); // Short circuiting may occur
+}
+bool operator && ( UtilType const &, UtilType const & ); // Non-compliant
+void f2 ( A & a1, A & a2 )
+{
+    a1.getValue ( ) && a2.setValue ( 0 ); // Both operands evaluated
+}
+</code></pre>
+<p>If the type returned by getValue and setValue has an overloaded operator &&, then both getValue
+and setValue will be evaluated.</p>
+<p><b>See also</b></p>
+<p>ISO/IEC 14882:2003 [1] §5.14, §5.15, §5.18</p>'''
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    comma = False if (check.id() == 'MISRA23_16.5.1') else True
+    check.option().checkbox('comma', 'Flag the comma operator', comma)
+
+def check(check, file):
+    for ref in file.filerefs('Declare', ''):
+        ent = ref.ent()
+        name = ent.name()
+        if (name == 'operator,') and check.option().lookup('comma'):
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+        elif name == 'operator&&':
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+        elif name == 'operator||':
+            check.violation(ent, file, ref.line(), ref.column(), ERR3)

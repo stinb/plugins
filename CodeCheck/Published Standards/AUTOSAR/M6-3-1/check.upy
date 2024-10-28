@@ -1,0 +1,152 @@
+# This script is designed to run with Understand - CodeCheck
+# 1-6-22
+
+
+import re
+
+
+ERR1 = 'Loop or switch statement not enclosed in curly braces { }'
+
+
+def ids():
+    return ('M6-3-1', 'MISRA08_6-3-1', 'CPP_C013', 'MISRA04_14.8')
+
+
+def name(id):
+    return {
+        'M6-3-1': 'Published Standards/AUTOSAR/The statement forming the body of a switch, while, do ... while or for statement shall be a compound statement',
+        'MISRA08_6-3-1': 'Published Standards/MISRA-C++ 2008/6-3-1 The statement forming the body of a switch, while, do ... while or for statement shall be a compound statement',
+        'CPP_C013': 'All Checks/Language Specific/C and C++/Control Flow/The statement forming the body of a switch, while, do ... while or for statement shall be a compound statement',
+        'MISRA04_14.8': 'Published Standards/MISRA-C 2004/14.8 The statement forming the body of a switch, while, do ... while or for statement shall be a compound statement',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA04_14.8': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Control Flow',
+        ],
+        'M6-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C013': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+If the bodies of these statements are not compound statements, then errors can occur if a developer fails to add the required braces when attempting to change a single statement body to a multistatement body.
+</p>
+
+<p>
+Requiring that the body of a switch statement or a while, do ... while or for loop shall be a compound statement (enclosed within braces) ensures that these errors cannot arise.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">for ( i = 0; i &lt; N_ELEMENTS; ++i )
+{                   // Compliant
+  buffer [ i ] = 0; // Even a single statement must
+                    // be in braces
+}
+
+for ( i = 0; i &lt; N_ELEMENTS; ++i ); // Non-compliant
+                                    // Accidental single null statement
+{
+  buffer [ i ] = 0;
+}
+
+while ( new_data_available ) // Non-compliant
+  process_data ( );          // Incorrectly not enclosed in braces
+  service_watchdog ( );      // Added later but, despite the appearance
+                             // (from the indent) it is actually not
+                             // part of the body of the while statement,
+                             // and is executed only after the loop has
+                             // terminated
+</code></pre>
+
+<p>
+Note that this example assumes a particular style for the layout of compound statements and their enclosing braces. This style is not mandated, but a style should be defined within the style guide for the project.
+</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def condition_block(lex):
+    while lex and not (lex.text() == '(' and lex.token() == 'Punctuation'):
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    if lex and lex.next(True,True):
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    else:
+        return
+    open = 1
+    while open != 0:
+        if lex.token() == 'Punctuation' and lex.text() == '(':
+            open += 1
+        elif lex.token() == 'Punctuation' and lex.text() == ')':
+            open -= 1
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+    return lex
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() in ['switch','while','for','do'] and lex.token() == 'Keyword':
+            line, col = lex.line_begin(), lex.column_begin()
+
+            is_while = False
+            if lex.text() == 'while':
+                is_while = True
+
+            if lex.text() != 'do':
+                # do statement doesnt have condition block - skip
+                lex = condition_block(lex)
+            else:
+                lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+
+            # exception on while block in a do .. while statement
+            if is_while and lex.text() == ';':
+                break
+
+            if lex and (lex.text() != '{'):
+                check.violation(None, file, line, col, ERR1)
+        else:
+            lex = lex.next(ignore_whitespace=True,ignore_comments=True)

@@ -1,0 +1,106 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8-25-2021
+import re
+
+ERR1 = 'Pointer %1 is already owned'
+
+def ids():
+    return ('A20-8-1', 'CPP_P038')
+
+def name(id):
+    return {
+        'A20-8-1': """\
+Published Standards/AUTOSAR/An already-owned pointer value shall not be stored \
+in an unrelated smart pointer""",
+        'CPP_P038': """\
+All Checks/Language Specific/C and C++/Pointers/An already-owned pointer value \
+shall not be stored in an unrelated smart pointer"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A20-8-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P038': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Smart pointers (e.g. std::shared_ptr) that allow to manage the same underlying pointer
+value using multiple smart pointer objects, shall be created in a way that creates a
+relationship between two smart pointer objects (e.g. via copy assignment). Unrelated
+smart pointer objects with a pointer value that is owned by another smart pointer object
+shall not be created.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">1 // $Id: A20-8-1.cpp 305588 2018-01-29 11:07:35Z michal.szczepankiewicz $
+2
+3 #include &lt;memory&gt;
+4
+5 void Foo()
+6 {
+7 uint32_t *i = new uint32_t{5};
+8 std::shared_ptr&lt;uint32_t&gt; p1(i);
+9 std::shared_ptr&lt;uint32_t&gt; p2(i); // non-compliant
+10 }
+11
+12 void Bar()
+13 {
+14 std::shared_ptr&lt;uint32_t&gt; p1 = std::make_shared&lt;uint32_t&gt;(5);
+15 std::shared_ptr&lt;uint32_t&gt; p2(p1); //compliant
+16 }
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    refs = file.filerefs('Define', 'Object')
+    lexer = None
+
+    for ref in refs:
+        # Skip if not a pointer
+        if not re.search(r'\*|ptr', str(ref.ent().type())):
+            continue
+
+        # Gather and go through assign refs
+        assignRefs = ref.ent().refs('Assignby Ptr, Assignby Ref')
+
+        used = False
+        for assignRef in assignRefs:
+            if not lexer:
+                lexer = file.lexer(lookup_ents=False)
+
+            lexeme = lexer.lexeme(assignRef.line(), assignRef.column())
+            # If used for a second time by a smart pointer then throw violation
+            if used:
+                while lexeme and not re.search(r'=|;|}|{', lexeme.text()):
+                    if re.match(r'unique_ptr|shared_ptr|weak_ptr', lexeme.text()):
+                        check.violation(assignRef.ent(), file, assignRef.line(), assignRef.column(), ERR1, ref.ent().name())
+                        break
+                    lexeme = lexeme.previous(True, True)
+
+
+            # check if used by a smart pointer
+            while lexeme and not used and not re.search(r'=|;|}|{', lexeme.text()):
+                if re.match(r'unique_ptr|shared_ptr|weak_ptr', lexeme.text()):
+                    used = True
+
+                lexeme = lexeme.previous(True, True)

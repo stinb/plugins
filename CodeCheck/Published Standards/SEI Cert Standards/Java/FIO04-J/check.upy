@@ -1,0 +1,283 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-7-22
+
+
+import re
+from Modules import lexemeBefore, refBetweenNodes
+
+
+ERR1 = 'Resource not released'
+
+
+resourceMethods = {'FileInputStream', 'FileOutputStream', 'getConnection'}
+resourceClasses = {'FileInputStream', 'FileOutputStream', 'Connection'}
+
+
+# The ID for the check
+def ids():
+    return ('FIO04-J', 'JAVA_FIO04')
+
+
+def name():
+    return '''Published Standards/SEI Cert Standards/Java/\
+Release resources when they are no longer needed \
+    '''
+def name(id):
+    return {
+        'FIO04-J': "Published Standards/SEI Cert Standards/Java/Release resources when they are no longer needed",
+        'JAVA_FIO04': "All Checks/Language Specific/Java/Input Output/Release resources when they are no longer needed",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'FIO04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_FIO04': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Release resources when they are no longer needed
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to explicitly release nonmemory system resources when they are no longer needed can result in resource exhaustion.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/FIO04-J.+Release+resources+when+they+are+no+longer+needed
+</i>
+</p>
+
+<p><b>Noncompliant Code Example (File Handle)</b></p>
+<pre><code language="Java">public int processFile(String fileName)
+                       throws IOException, FileNotFoundException {
+  FileInputStream stream = new FileInputStream(fileName);
+  BufferedReader bufRead =
+      new BufferedReader(new InputStreamReader(stream));
+  String line;
+  while ((line = bufRead.readLine()) != null) {
+    sendLine(line);
+  }
+  return 1;
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (SQL Connection)</b></p>
+<pre><code language="Java">public void getResults(String sqlQuery) {
+  try {
+    Connection conn = getConnection();
+    Statement stmt = conn.createStatement();
+    ResultSet rs = stmt.executeQuery(sqlQuery);
+    processResults(rs);
+    stmt.close(); conn.close();
+  } catch (SQLException e) { /* Forward to handler */ }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">Statement stmt = null;
+ResultSet rs = null;
+Connection conn = getConnection();
+try {
+  stmt = conn.createStatement();
+  rs = stmt.executeQuery(sqlQuery);
+  processResults(rs);
+} catch(SQLException e) {
+  // Forward to handler
+} finally {
+  rs.close();
+  stmt.close(); conn.close();
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">Statement stmt = null;
+ResultSet rs = null;
+Connection conn = getConnection();
+try {
+  stmt = conn.createStatement();
+  rs = stmt.executeQuery(sqlQuery);
+  processResults(rs);
+} catch (SQLException e) {
+  // Forward to handler
+} finally {
+  if (rs != null) {
+    rs.close();
+  }
+  if (stmt != null) {
+    stmt.close();
+  } if (conn !=null) {
+       conn.close();
+    }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+def assigned(ref):
+    lexer = ref.file().lexer(False)
+    lex = lexer.lexeme(ref.line(), ref.column())
+
+    # Match either
+        # "=" and return True
+        # "new" and continue
+    lex = lex.previous(True, True)
+    if not lex:
+        return False
+    if lex.text() == '=':
+        return True
+    if lex.text() != 'new':
+        return False
+
+    # Match "=" and return True
+    lex = lex.previous(True, True)
+    if lex and lex.text() == '=':
+        return True
+
+    return False
+
+
+def refInTryWithResources(ref):
+    method = ref.scope()
+
+    cfg = method.control_flow_graph()
+    if not cfg:
+        return False
+
+    # See if the ref is between try and {
+    node1 = None
+    for node2 in cfg.nodes():
+        if node1 and node1.kind() == 'try' and node2.kind() == 'passive':
+            if refBetweenNodes(node1, ref, node2):
+                return True
+        node1 = node2
+
+    return False
+
+
+def derefClose(lex):
+    texts = ('.', 'close', '(', ')', ';')
+
+    for text in texts:
+        lex = lex.next(True, True)
+        if not lex or lex.text() != text:
+            return None
+
+    return lex
+
+
+def firstSemicolonInCFGNode(lexer, node):
+    # Get position tuples of the begin and end of the node
+    begin = node
+    if not begin:
+        return
+    begin = (begin.line_begin(), begin.column_begin())
+    end = node.end_node()
+    if not end:
+        return
+    
+    end = (end.line_begin(), end.column_begin())
+    lex = lexer.lexeme(begin[0], begin[1])
+    while lex and end and lexemeBefore(lex, end[0], end[1]):
+        if lex.text() == ';':
+            pos = f'{lex.line_begin()}:{lex.column_begin()}'
+            return pos
+        lex = lex.next(True, True)
+
+
+def resourceClosed(define):
+    resource = define.ent()
+    method   = define.scope()
+
+    cfg = method.control_flow_graph()
+    if not cfg:
+        return False
+
+    # Get a set of semicolon positions where close is called on the resource
+    closes = set()
+    for deref in resource.refs('Deref Partial'):
+        lexer = define.file().lexer(False)
+        lex = lexer.lexeme(deref.line(), deref.column())
+        semicolonLex = derefClose(lex)
+        if derefClose(lex):
+            pos = f'{semicolonLex.line_begin()}:{semicolonLex.column_begin()}'
+            closes.add(pos)
+
+    # See if the variable is closed first in a finally block
+    for node in cfg.nodes():
+        if node and node.kind() == 'try-finally':
+            lexer = define.file().lexer(False)
+            pos = firstSemicolonInCFGNode(lexer, node)
+            if pos in closes:
+                return True
+
+    return False
+
+
+def check(check, file):
+    # Resources not assigned to variables
+    for ref in file.filerefs('Call', 'Method'):
+        ent = ref.ent()
+
+        # Skip variables except resources
+        if ent.name() not in resourceMethods:
+            continue
+
+        # Skip if resource is released with a try-with-resources statement
+        if refInTryWithResources(ref):
+            continue
+
+        # Skip if the resource is assigned
+        if assigned(ref):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+    # Resources assigned to variables
+    for ref in file.filerefs('Define', 'Variable'):
+        ent = ref.ent()
+
+        # Skip variables except resources
+        if ent.type() not in resourceClasses:
+            continue
+
+        # Skip if resource is released with a try-with-resources statement
+        if refInTryWithResources(ref):
+            continue
+
+        # Skip if resource is released with the close method
+        if resourceClosed(ref):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)

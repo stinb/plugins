@@ -1,0 +1,173 @@
+ERR1 = 'Avoid race conditions while checking for the existence of a symbolic link.'
+
+
+# The ID for the check
+def id():
+    return ('POS35-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'POS35-C': 'Published Standards/SEI Cert Standards/C/Avoid race conditions while checking for the existence of a symbolic link',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'POS35-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Avoid race conditions while checking for the existence of a symbolic link'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Avoid race conditions while checking for the existence of a symbolic link</p>
+<p><b>Risk Assessment</b></p>
+<p>TOCTOU race condition vulnerabilities can be exploited to gain elevated privileges.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/POS35-C.+Avoid+race+conditions+while+checking+for+the+existence+of+a+symbolic+link</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">char *filename = /* file name */;
+char *userbuf = /* user data */;
+unsigned int userlen = /* length of userbuf string */;
+
+struct stat lstat_info;
+int fd;
+/* ... */
+if (lstat(filename, &lstat_info) == -1) {
+  /* Handle error */
+}
+
+if (!S_ISLNK(lstat_info.st_mode)) {
+   fd = open(filename, O_RDWR);
+   if (fd == -1) {
+       /* Handle error */
+   }
+}
+if (write(fd, userbuf, userlen) &lt; userlen) {
+  /* Handle error */
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        checked_symlink = []
+        opened_symlink = {}  # key: ent id, value: open ref
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Unresolved Function"), key=lambda x: x.line()):
+            if call_ref.ent().name() == "lstat":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                param_ctr = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and (lex.text() == ","):
+                        param_ctr += 1
+                    elif on_param and (lex.token() == "Identifier") and lex.ent():
+                        checked_symlink.append(lex.ent().id())
+
+                    lex = lex.next(ignore_whitespace=True)
+            elif call_ref.ent().name() == "open":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                param_ctr = 0
+                file = None
+                get_fd = False
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and (lex.text() == ","):
+                        param_ctr += 1
+                    elif on_param and (lex.token() == "Identifier") and lex.ent() and (lex.ent().id() in checked_symlink):
+                        get_fd = True
+                    elif on_param and (lex.text() == "O_NOFOLLOW") and (lex.token() == "Identifier"):
+                        get_fd = False
+
+                    lex = lex.next(ignore_whitespace=True)
+
+                if get_fd:
+                    fd_lex = lexer.lexeme(
+                        call_ref.line(), call_ref.column())
+                    on_set = False
+
+                    while fd_lex.line_begin() == call_ref.line():
+                        if fd_lex.text() == "=" and fd_lex.token() == "Operator":
+                            on_set = True
+                        elif on_set:
+                            if fd_lex.ent() and fd_lex.token() == "Identifier":
+                                opened_symlink[fd_lex.ent(
+                                ).id()] = call_ref
+                            break
+
+                        fd_lex = fd_lex.previous(
+                            ignore_whitespace=True)
+            elif call_ref.ent().name() == "fstat":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and (lex.token() == "Identifier") and lex.ent() and (lex.ent().id() in opened_symlink):
+                        opened_symlink.pop(lex.ent().id())
+
+                    lex = lex.next(ignore_whitespace=True)
+
+        if opened_symlink:
+            for ref in opened_symlink.values():
+                check.violation(ref.ent(), ref.file(), ref.line(),
+                                ref.column(), ERR1)

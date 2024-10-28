@@ -1,0 +1,132 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 02-23-2023
+import re
+ERR1 = "Narrow and wide string literal concatenated together."
+
+def ids():
+    return ('MISRA08_2-13-5', 'CPP_D021', 'MISRA23_5.13.7')
+
+def name(id):
+    return {
+            'MISRA08_2-13-5': 'Published Standards/MISRA-C++ 2008/2-13-5 Narrow and wide string literals shall not be concatenated',
+            'CPP_D021': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Narrow and wide string literals shall not be concatenated',
+            'MISRA23_5.13.7': 'Published Standards/MISRA C++ 2023/5.13.7 String literals with different encoding prefixes shall not be concatenated',
+            }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_2-13-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'CPP_D021': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_5.13.7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description(id):
+    if id == 'MISRA23_5.13.7':
+        return '''
+<p><b>Amplification</b></p>
+<p>The encoding prefixes are:</p>
+<p>● L — wide string literal;</p>
+<p>● u8 — UTF-8 string literal;</p>
+<p>● u — char16_t string literal;</p>
+<p>● U — char32_t string literal.</p>
+<p>For the purposes of this rule, an empty encoding-prefix is considered to be different to a non-empty
+encoding-prefix, even when they have the same meaning.</p>
+<p>Note: the R prefix is not an encoding-prefix.</p>
+
+<p><b>Rationale</b></p>
+<p>Concatenation of string literals with different encoding prefixes is either ill-formed or conditionally-supported with implementation-defined behaviour.
+The behaviour related to the concatenation of string literals with and without encoding prefixes has changed as the C++ Standard has evolved.
+Concatenations of these forms are not permitted to ensure that the behaviour is as expected, especially in the presence of legacy code.</p>
+<p>When concatenating a string literal with a prefix with one having no prefix, the behaviour is as if both
+have the same encoding prefix. For example, the concatenation u8"" "\\u00fc" is equivalent to
+u8"\\u00fc" (0xc3 0xbc — for some character set) and not "\\u00fc" (0xfc), which may not meet
+developer expectations. This rule is therefore stricter than the C++ Standard, and considers an empty
+encoding-prefix to be different to a non-empty encoding-prefix.</p>
+<p>Note: concatenation of string literals with different encoding prefixes is likely to become ill-formed in a
+future version of the C++ Standard.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">const char * s0 = "Hello" "World"; // Compliant
+const wchar_t * s1 = L"Hello" L"World"; // Compliant
+const wchar_t * s2 = "Hello" L"World"; // Non-compliant
+const wchar_t * s3 = u"Hello" L"World"; // Non-compliant - may not compile
+ // u8"Hello" L"World"; // Ill-formed
+const char * s4 = u8R"#(Hello)#" u8"World"; // Compliant
+const char * s5 = u8R"#(Hello)#" "World"; // Non-compliant</code></pre>
+        '''
+
+    return """\
+<p><b>Rationale</b></p>
+<p>Concatenation of wide and narrow string literals leads to undefined behaviour.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">  char n_array[] = "Hello" "World"; // Compliant
+  wchar_t w_array[] = L"Hello" L"World"; // Compliant
+  wchar_t mixed[] = "Hello" L"World"; // Non-compliant
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+
+    # Look for wchar_t set refs
+    refs = file.filerefs("Set")
+    for ref in refs:
+        utype = ref.ent().freetext('UnderlyingType')
+
+        if utype and not re.search(r'\b(char|wchar_t|char8_t|char16_t|char32_t)\b', utype):
+            continue
+
+        # Initialize bools
+        wide = False
+        utf8 = False
+        narrow = False
+
+        # Set up lexer
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        # Look for a string that starts with 'L' and one that doesn't
+        while lexeme and lexeme.text() != ';':
+            if lexeme.token() == "String":
+                lex_prev = lexeme.previous()
+
+                if re.match(r"L", lexeme.text()):
+                    wide = True
+                elif re.match(r"u8", lexeme.text()) or (lex_prev.token() == "Identifier" and re.match(r"u8", lex_prev.text())):
+                    utf8 = True
+                else:
+                    narrow = True
+
+            lexeme = lexeme.next(True, True)
+
+        if (wide or utf8) and narrow:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

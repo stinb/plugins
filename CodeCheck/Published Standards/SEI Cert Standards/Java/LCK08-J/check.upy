@@ -1,0 +1,206 @@
+ERR1 = 'Method fails to release the lock when an exception occurs.'
+ERR2 = 'Ensure actively held locks are released on exceptional conditions.'
+
+
+# The ID for the check
+def ids():
+    return ('LCK08-J', 'JAVA_LCK08')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'LCK08-J': 'Published Standards/SEI Cert Standards/Java/Ensure actively held locks are released on exceptional conditions',
+        'JAVA_LCK08': 'All Checks/Language Specific/Java/Locking/Ensure actively held locks are released on exceptional conditions',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'LCK08-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P9',
+            'Level: L2',
+        ],
+        'JAVA_LCK08': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure actively held locks are released on exceptional conditions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure actively held locks are released on exceptional conditions</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to release locks on exceptional conditions could lead to thread starvation and deadlock.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/LCK08-J.+Ensure+actively+held+locks+are+released+on+exceptional+conditions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class Client {
+  private final Lock lock = new ReentrantLock();
+
+  public void doSomething(File file) {
+    InputStream in = null;
+    try {
+      in = new FileInputStream(file);
+      lock.lock();
+
+      // Perform operations on the open file
+
+      lock.unlock();
+    } catch (FileNotFoundException x) {
+      // Handle exception
+    } finally {
+      if (in != null) {
+        try {
+          in.close();
+        } catch (IOException x) {
+          // Handle exception
+        }
+      }
+    }
+  }
+}
+
+
+public final class Client {
+  private final Lock lock = new ReentrantLock();
+
+  public void doSomething(File file) {
+    InputStream in = null;
+    try {
+      in = new FileInputStream(file);
+      lock.lock();
+      // Perform operations on the open file
+    } catch (FileNotFoundException fnf) {
+      // Forward to handler
+    } finally {
+      lock.unlock();
+      if (in != null) {
+        try {
+          in.close();
+        } catch (IOException e) {
+          // Forward to handler
+        }
+      }
+    }
+  }
+}
+
+
+
+final class DateHandler {
+
+  private final Date date = new Date();
+
+  private final Lock lock = new ReentrantLock();
+
+  // str could be null
+  public void doSomething(String str) {
+    lock.lock();
+    String dateString = date.toString();
+    if (str.equals(dateString)) {
+      // ...
+    }
+    // ...
+
+    lock.unlock();
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        for var_ref in class_ref.ent().refs("Define", "Member Variable"):
+            var_val = var_ref.ent().freetext("InitText")
+            var_type = var_ref.ent().type()
+
+            if (var_val and "ReentrantLock" in var_val) or (var_type and var_type == "ReentrantLock"):
+                for use_ref in var_ref.ent().refs("Useby Deref Partial", "Method Member"):
+                    lex = lexer.lexeme(use_ref.line(), use_ref.column())
+
+                    while lex:
+                        if lex.text() == "." and lex.token() == "Punctuation":
+                            lex = lex.next()
+
+                            if lex.text() == "lock" and lex.token() == "Identifier":
+                                method_ent = use_ref.ent()
+                                method_cfg = method_ent.control_flow_graph()
+                                try_lines = []
+                                finally_lines = []
+                                compliant = False
+
+                                for node in method_cfg.nodes():
+                                    if node.kind() == "try":
+                                        get_line_nodes(node, try_lines)
+                                    elif node.kind() == "try-finally":
+                                        get_line_nodes(
+                                            node, finally_lines)
+
+                                if try_lines and lex.line_begin() in try_lines:
+                                    check.violation(
+                                        use_ref.scope(), file, use_ref.line(), use_ref.column(), ERR1)
+                                    break
+
+                                for ref in use_ref.ent().refs("Use Deref Partial", "Variable Member"):
+                                    lex_ref = lexer.lexeme(
+                                        ref.line(), ref.column())
+
+                                    while lex_ref:
+                                        if lex_ref.text() == "." and lex_ref.token() == "Punctuation":
+                                            lex_ref = lex_ref.next()
+
+                                            if lex_ref.text() == "unlock" and lex_ref.token() == "Identifier" and lex_ref.line_begin() in finally_lines:
+                                                compliant = True
+                                                break
+
+                                        lex_ref = lex_ref.next()
+
+                                if not compliant:
+                                    check.violation(
+                                        ref.ent(), file, ref.line(), ref.column(), ERR2)
+
+                            break
+
+                        lex = lex.next()
+
+
+def get_line_nodes(node, lines):
+    start_line = node.line_begin()
+    node_end = node.end_node()
+
+    while node_end and (start_line <= node_end.line_end()):
+        lines.append(start_line)
+        start_line += 1

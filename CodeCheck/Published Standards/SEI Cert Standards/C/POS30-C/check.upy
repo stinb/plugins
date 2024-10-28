@@ -1,0 +1,141 @@
+import re
+ERR1 = 'Use the readlink() function properly.'
+
+
+# The ID for the check
+def id():
+    return ('POS30-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'POS30-C': 'Published Standards/SEI Cert Standards/C/Use the readlink() function properly',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'POS30-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Use the readlink() function properly'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Use the readlink() function properly</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to properly null-terminate the result of readlink() can result in abnormal program termination and buffer-overflow vulnerabilities.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/POS30-C.+Use+the+readlink%28%29+function+properly</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">char buf[1024];
+ssize_t len = readlink("/usr/bin/perl", buf, sizeof(buf));
+buf[len] = '\\0';
+
+
+
+long symlink_max;
+size_t bufsize;
+char *buf;
+ssize_t len;
+
+errno = 0;
+symlink_max = pathconf("/usr/bin/", _PC_SYMLINK_MAX);
+if (symlink_max == -1) {
+  if (errno != 0) {
+    /* handle error condition */
+  }
+  bufsize = 10000;
+}
+else {
+  bufsize = symlink_max+1;
+}
+
+buf = (char *)malloc(bufsize);
+if (buf == NULL) {
+  /* handle error condition */
+}
+
+len = readlink("/usr/bin/perl", buf, bufsize);
+buf[len] = '\\0';
+</code></pre>
+<p><i>Developer Notes: </i>This check automatically flags the readlink() function if the third parameter passed is not on the following format: sizeof([second parameter])-1.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == "readlink":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                param_ctr = 0
+                buffer_ent = None
+                size_of = False
+                size_of_buffer = False
+                third_param = ""
+                value = False
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and (lex.text() == ","):
+                        param_ctr += 1
+                    elif (param_ctr == 1) and (lex.token() == "Identifier") and lex.ent():
+                        buffer_ent = lex.ent()
+                    elif (param_ctr == 2):
+                        third_param += lex.text()
+
+                        if (lex.text() == "sizeof") and (lex.token() == "Keyword"):
+                            size_of = True
+                        elif size_of and (lex.token() == "Identifier") and (lex.ent().id() == buffer_ent.id()):
+                            size_of_buffer = True
+                            size_of = False
+
+                        elif lex.ent() and re.search(rf"sizeof\s*\(\s*{buffer_ent.name()}\s*\)\s*-\s*1", str(lex.ent().value())):
+                            value = True
+
+                    lex = lex.next(ignore_whitespace=True)
+
+                if not (size_of_buffer and (third_param == f"sizeof{buffer_ent.name()}-1")) and not value:
+                    check.violation(call_ref.ent(), file,
+                                    call_ref.line(), call_ref.column(), ERR1)

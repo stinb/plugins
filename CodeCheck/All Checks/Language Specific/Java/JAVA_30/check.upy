@@ -1,0 +1,116 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 4-11-22
+
+
+import re
+
+
+ERR1 = 'Whitespace before %1'
+
+
+def id():
+    return ('JAVA_30')
+
+
+def name(id):
+    return {'JAVA_30' : 'All Checks/Language Specific/Java/White space before a comma or semicolon shall not be used.'}[id]
+
+
+
+def tags(id):
+    return {
+        'JAVA_30': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+White space before a comma or semicolon shall not be used.
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class Program {
+    public static void main(String[] args) {
+        System.out.println('Hello' , 'world');
+        System.out.println('Hello world') ;
+        // System.out.println('Hello' , 'world');
+        /* System.out.println('Hello world') ; */
+    }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('ignoreComments', 'Ignore comments', False)
+
+
+def check(check, file):
+    contents = file.contents()
+
+    # Get line locations
+    lineBreaks = {}
+    line = 1
+    for match in re.finditer('\n', contents):
+        start = match.span()[0]
+        lineBreaks[start] = line
+        line += 1
+
+    # Get comment locations
+    ignoreComments = check.options().lookup('ignoreComments')
+    if ignoreComments:
+        commentLocations = []
+        for match in re.finditer(r'(\/)\/.*?(\n)', contents):
+            start = match.span(1)[0]
+            end = match.span(2)[0]
+            commentLocations.append((start, end))
+        for match in re.finditer(r'(\/)\*[\s\S]*?\*(\/)', contents):
+            start = match.span(1)[0]
+            end = match.span(2)[0]
+            commentLocations.append((start, end))
+
+    # Get violations
+    for match in re.finditer(r'(\n).*(\s)([,;])', contents):
+        # Get positions
+        linePosition = match.span(1)[0]
+        whitespacePosition = match.span(2)[0]
+        line = lineBreaks[linePosition] + 1
+        column = whitespacePosition - linePosition
+
+        # Get character
+        commaOrSemicolon = match[3]
+        if commaOrSemicolon == ',':
+            commaOrSemicolon = 'comma'
+        else:
+            commaOrSemicolon = 'semicolon'
+
+        # Skip if it's in a comment
+        if ignoreComments:
+            comment = False
+            for commentLocation in commentLocations:
+                start = commentLocation[0]
+                end = commentLocation[1]
+                if whitespacePosition >= start and whitespacePosition <= end:
+                    comment = True
+                    break
+            if comment:
+                continue
+
+        check.violation(None, file, line, column, ERR1, commaOrSemicolon)

@@ -1,0 +1,223 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 10-15-21
+
+
+import re
+
+
+ERR1 = 'Exception raised either before start-up or after termination of main in file %1'
+
+
+def ids():
+    return ('M15-3-1', 'MISRA08_15-3-1', 'CPP_E008')
+
+
+def name(id):
+    return {
+        'M15-3-1': 'Published Standards/AUTOSAR/Exceptions shall be raised only after start-up and before termination of the program',
+        'MISRA08_15-3-1': 'Published Standards/MISRA-C++ 2008/15-3-1 Exceptions shall be raised only after start-up and before termination of the program',
+        'CPP_E008': 'All Checks/Language Specific/C and C++/Exception Handling/Exceptions shall be raised only after start-up and before termination of the program',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_15-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Exception Handling',
+        ],
+        'M15-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Exception Handling',
+        ],
+        'CPP_E008': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+def description():
+    return 'Exceptions shall be raised only after start-up and before termination of the program.'
+
+
+def detailed_description():
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>
+Throwing an exception during start-up or termination results in the program being terminated in
+an <i>implementation-defined</i> manner.
+</p>
+
+<p>
+Before the program starts executing the body of <i>main</i>, it is in a start-up phase, constructing and
+initializing static objects. Similarly, after <i>main</i> has returned, it is in a termination phase where
+static objects are being destroyed. If an exception is thrown in either of these phases it leads to the
+program being terminated in an <i>implementation-defined</i> manner. Specifically from Section 15.3(13)
+of ISO/IEC 14882:2003 [1], if <i>main</i> is implemented as a <i>function-try-block</i>, exceptions raised
+during start-up and close down are not caught by the <i>catch</i> block(s) of <i>main</i>.
+</p>
+
+<p>
+This is in effect a special case of Rule 15-3-4, as there is nowhere a handler can be placed to catch
+exceptions thrown during start-up or termination.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">class C
+{
+public:
+    C ( )
+    {
+        throw ( 0 ); // Non-compliant - thrown before main starts
+    }
+    ~C ( )
+    {
+        throw ( 0 ); // Non-compliant - thrown after main exits
+    }
+};
+C c; // An exception thrown in C's constructor or destructor will
+     // cause the program to terminate, and will not be caught by
+     // the handler in main
+int main( ... )
+{
+    try
+    {
+        // program code
+        return 0;
+    }
+    // The following catch-all exception handler can only
+    // catch exceptions thrown in the above program code
+    catch ( ... )
+    {
+        // Handle exception
+        return 0;
+    }
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 15-3-3, Rule 15-3-4, Rule 15-5-1, Rule 15-5-3
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    # Create a list of all functions and classes are defined
+    functionsDefined = file.filerefs('define', 'function, class')
+    if not functionsDefined:
+        return
+
+    # Pull all global or static member objects
+    funcrefs = file.filerefs('define', 'global object, static member object')
+    if not funcrefs:
+        return
+
+    # Initialize the two lists needed to track the call stack linked to the potentially violating functions
+    badFuncs = []
+    badId = []
+
+    # Loop through each function and object looking for the throw command
+    for function in functionsDefined:
+
+        # Check the text of each function for the throw keyword.
+        if re.search(r'throw', function.ent().contents()):
+
+            # We have found a throw command; Initialize and check the lexer
+            firstLexer = file.lexer(False, 8, False, False)
+            if not firstLexer:
+                return
+
+            # Set the first lexeme and counters need to check entire function or object
+            counter = 1
+            first = False
+            firstLexeme = firstLexer.lexeme(function.line(), function.column())
+
+            # While we are still inside the current definition
+            while counter != 0:
+
+                if first and firstLexeme.text() == '{':
+                    counter += 1
+                elif first and firstLexeme.text() == '}':
+                    counter -= 1
+                if not first and firstLexeme.text() == '{':
+                    first = True
+
+                # Check if the throw command is active, if so, push the ref and id onto our lists
+                if firstLexeme.text() == 'throw' and not firstLexeme.inactive():
+
+                    badFuncs.append(function)
+                    badId.append(function.ent().id())
+
+                firstLexeme = firstLexeme.next()
+
+    # Check each function and object with a throw command for all references that call them
+    for call in badFuncs:
+        callstack = call.ent().refs('callby, typedby')
+
+        # For each function the calls or types one of black listed fucntions or objects, we need to add them to the list for checking
+        for additional in callstack:
+            id = additional.ent().id()
+            # Avoid duplication
+            if id not in badId:
+
+                badFuncs.append(additional)
+                badId.append(id)
+
+    # Error possible, time to start the checks. Loop through all static and global reference
+    for ref in funcrefs:
+
+        # Initialize and check the lexer
+        lexer = file.lexer(True, 8, False, False)
+        if not lexer:
+            return
+
+        # Set the first lexeme
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        # Start pulling lexemes from the start of the line to find location of reference
+        while lexeme and lexeme.text() != ';':
+
+            # As we pull lexemes from the lexer, we check if any of them match something in our black list
+            badCall = None
+            if lexeme.ent():
+                badCall = lexeme.ent().id()
+            if not badCall:
+                lexeme = lexeme.next()
+                continue
+
+            # Anything that is setby is exempt from our requirements unless it is set by one of our black list objects
+            if lexeme.ent().ref('setby') and badCall not in badId:
+                lexeme = lexeme.next()
+                continue
+            if badCall in badId:
+                check.violation(ref.ent(), ref.file(), lexeme.line_begin(), lexeme.column_begin(), ERR1, ref.file().name())
+
+            lexeme = lexeme.next()

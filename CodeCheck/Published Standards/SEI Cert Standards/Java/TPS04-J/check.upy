@@ -1,0 +1,185 @@
+import re
+
+
+ERR1 = 'Ensure ThreadLocal variables are reinitialized when using thread pools.'
+
+
+# The ID for the check
+def ids():
+    return ('TPS04-J', 'JAVA_TPS04')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'TPS04-J': 'Published Standards/SEI Cert Standards/Java/Ensure ThreadLocal variables are reinitialized when using thread pools',
+        'JAVA_TPS04': 'All Checks/Language Specific/Java/Thread Pools/Ensure ThreadLocal variables are reinitialized when using thread pools',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'TPS04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_TPS04': [
+            'Language: Java',
+            'Thread Pools',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure ThreadLocal variables are reinitialized when using thread pools'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure ThreadLocal variables are reinitialized when using thread pools</p>
+<p><b>Risk Assessment</b></p>
+<p>Objects using ThreadLocal data and executed by different tasks in a thread pool without reinitialization might be in an unexpected state when reused.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TPS04-J.+Ensure+ThreadLocal+variables+are+reinitialized+when+using+thread+pools</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public enum Day {
+  MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY;
+}
+
+public final class Diary {
+  private static final ThreadLocal&lt;Day&gt; days =
+      new ThreadLocal&lt;Day&gt;() {
+    // Initialize to Monday
+    protected Day initialValue() {
+      return Day.MONDAY;
+    }
+  };
+
+  private static Day currentDay() {
+    return days.get();
+  }
+
+  public static void setDay(Day newDay) {
+    days.set(newDay);
+  }
+
+  // Performs some thread-specific task
+  public void threadSpecificTask() {
+    // Do task ...
+  }
+}
+
+public final class DiaryPool {
+  final int numOfThreads = 2; // Maximum number of threads allowed in pool
+  final Executor exec;
+  final Diary diary;
+
+  DiaryPool() {
+    exec = (Executor) Executors.newFixedThreadPool(numOfThreads);
+    diary = new Diary();
+  }
+
+  public void doSomething1() {
+    exec.execute(new Runnable() {
+        @Override public void run() {
+          diary.setDay(Day.FRIDAY);
+          diary.threadSpecificTask();
+        }
+    });
+  }
+
+  public void doSomething2() {
+    exec.execute(new Runnable() {
+        @Override public void run() {
+          diary.threadSpecificTask();
+       }
+    });
+  }
+
+  public static void main(String[] args) {
+    DiaryPool dp = new DiaryPool();
+    dp.doSomething1(); // Thread 1, requires current day as Friday
+    dp.doSomething2(); // Thread 2, requires current day as Monday
+    dp.doSomething2(); // Thread 3, requires current day as Monday
+  }
+}
+
+
+public final class DiaryPool {
+  final int numOfthreads = 3;
+  // ...
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        for mem_ref in class_ref.ent().refs("Define", "Member Variable"):
+            mem_type = mem_ref.ent().type()
+
+            if mem_type and "ThreadLocal" in mem_type:
+                set_threadrefs = {}  # key: ent id, value: ref
+                remove_threadrefs = []  # ent id
+                reset_threadrefs = []  # ent id
+                set_before_exec = False
+
+                for use_ref in mem_ref.ent().refs("Useby Deref Partial"):
+                    lexer = use_ref.file().lexer(True, 8, False, False)
+                    lex = lexer.lexeme(use_ref.line(), use_ref.column())
+                    get_method = False
+
+                    while lex:
+                        if lex.text() == "." and lex.token() == "Punctuation":
+                            get_method = True
+                        elif get_method:
+                            if lex.text() == "set":
+                                for call_ref in use_ref.ent().refs("Callby Nondynamic", "Method Member"):
+                                    if call_ref.ent().name() == "beforeExecute":
+                                        set_before_exec = True
+                                        break
+                                    elif call_ref.ent().name() in {"run", "call"}:
+                                        if call_ref.ent().id() not in set_threadrefs:
+                                            set_threadrefs[call_ref.ent(
+                                            ).id()] = call_ref
+                                        else:
+                                            reset_threadrefs.append(
+                                                call_ref.ent().id())
+                            elif lex.text() == "remove":
+                                for call_ref in use_ref.ent().refs("Callby Nondynamic", "Method Member"):
+                                    if call_ref.ent().name() in {"run", "call"}:
+                                        remove_threadrefs.append(
+                                            call_ref.ent().id())
+
+                            break
+
+                        lex = lex.next(ignore_whitespace=True)
+
+                if set_before_exec:
+                    continue
+
+                for set_ref in set_threadrefs:
+                    if (set_ref in reset_threadrefs) or (set_ref in remove_threadrefs):
+                        continue
+                    else:
+                        check.violation(set_threadrefs[set_ref].scope(), set_threadrefs[set_ref].file(
+                        ), set_threadrefs[set_ref].line(), set_threadrefs[set_ref].column(), ERR1)

@@ -1,0 +1,122 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 5-02-2022
+import re
+
+ERR1 = 'Case label was not indented on level'
+
+
+def id():
+    return 'JAVA_33'
+
+def name():
+    return """\
+All Checks/Language Specific/Java/Statements under case labels shall be indented one level."""
+
+
+def tags(id):
+    return {
+        'JAVA_33': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """ 
+<p>Title or clarified title</p>
+<p>Statements under case labels shall be indented one level.</p>
+<p><b>Non-compliant Example</b></p>
+<pre><code language="Java">switch (num) {
+case 1:
+  break;
+}
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+<p>This check relies on that it (where the switch statement starts) is indented
+correctly.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_language(language):
+    return language == 'Java'
+
+def define_options(check):
+    check.option().integer('level', 'How many spaces or tabs should a level be', 4)
+
+def check(check, file):
+    if not file.lexer():
+        return
+
+    level = check.option().lookup('level')
+
+    lexer = file.lexer()
+    lexeme = lexer.first()
+
+    while lexeme:
+        same = True
+        if lexeme.text() == 'switch':
+            # Get indent of switch statement
+            indent = 0
+            prevLex = lexeme
+            while prevLex and prevLex.token() != 'Newline':
+                prevLex = prevLex.previous()
+            if prevLex:
+                prevLex = prevLex.next()
+                if prevLex and prevLex.token() == 'Whitespace':
+                    indent = len(prevLex.text())
+
+                else:
+                    indent = 0
+
+            # Find bounds of switch statement
+            same = False
+            while lexeme and lexeme.text() != '{':
+                lexeme = lexeme.next(True, True)
+
+            close = findClose(lexeme)
+
+            # Find case labels and check if their indent is correct
+            while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() != close.column_begin()):
+                if lexeme.text() == 'case':
+                    prevLex = lexeme
+                    while prevLex and prevLex.token() != 'Newline':
+                        prevLex = prevLex.previous()
+                    if prevLex:
+                        prevLex = prevLex.next()
+                        if prevLex and prevLex.token() == 'Whitespace':
+                            if len(prevLex.text()) - indent != level:
+                                violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                                violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), prevLex.line_begin(), prevLex.column_begin() + len(prevLex.text()), ' ' * (indent + level))
+
+                        elif prevLex:
+                            violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                            violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), prevLex.line_begin(), prevLex.column_begin(), ' ' * (indent + level))
+                            
+
+
+
+                lexeme = lexeme.next()
+
+        if same:
+            lexeme = lexeme.next(True, True)
+
+
+def findClose(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == '}' and count == 0):
+        if lexeme.text() == '{':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme.text() == '}':
+            count -= 1
+
+    return lexeme

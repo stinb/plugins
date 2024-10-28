@@ -1,0 +1,131 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-01-15
+
+
+import re
+
+
+ERR1 = 'Mutex of another POSIX thread may be destroyed'
+
+
+def ids():
+    return ('POS48-C', 'CPP_L020')
+
+
+def name(id):
+    return {
+        'POS48-C': '''Published Standards/SEI Cert Standards/C/\
+Do not unlock or destroy another POSIX thread's mutex''',
+        'CPP_L020': '''All Checks/Language Specific/C and C++/Libraries/\
+Do not unlock or destroy another POSIX thread's mutex''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POS48-C': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'CPP_L020': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Do not unlock or destroy another POSIX thread's mutex</p>
+
+<p><b>Risk Assessment</b></p>
+<p>The risks of ignoring mutex ownership are similar to the risk of not using
+mutexes at all, which can result in a violation of data integrity.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/c/POS48-C.+Do+not+unlock+or+destroy+another+POSIX+thread%27s+mutex'>
+https://wiki.sei.cmu.edu/confluence/display/c/POS48-C.+Do+not+unlock+or+destroy+another+POSIX+thread%27s+mutex</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+pthread_mutex_t theLock;
+int data;
+
+int cleanupAndFinish(void) {
+int result;
+if ((result = pthread_mutex_destroy(&theLock)) != 0) {
+    /* Handle error */
+}
+data++;
+return data;
+}
+
+void worker(int value) {
+if ((result = pthread_mutex_lock(&theLock)) != 0) {
+    /* Handle error */
+}
+data += value;
+if ((result = pthread_mutex_unlock(&theLock)) != 0) {
+    /* Handle error */
+}
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>Before calling <code>pthread_mutex_destroy</code>, a function must call
+any of the user-defined wait functions.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().text('waitFunctions', 'Join/wait functions (space-separated)', '')
+
+
+def check(check, file):
+    waitFunctions = set(check.options().lookup('waitFunctions').split())
+
+    for define in file.filerefs('Define', 'Function', True):
+        caller = define.ent()
+
+        waited = False
+
+        for call in caller.refs('Call', 'Function'):
+            callee = call.ent()
+
+            # Skip if any user-defined wait function was already called
+            if waited:
+                continue
+
+            # Skip if it's a wait function and remember this
+            calleeName = callee.name()
+            if calleeName in waitFunctions:
+                waited = True
+                continue
+
+            # Skip if it's not a thread-destroying function
+            if calleeName != 'pthread_mutex_destroy':
+                continue
+
+            check.violation(callee, call.file(), call.line(), call.column(), ERR1)

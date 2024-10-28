@@ -1,0 +1,76 @@
+#This script is designed to run with Understand - CodeCheck
+use base qw(Understand::Codecheck);
+use strict;
+
+
+use constant ERR1 => 'Violation: invalid escape sequence \'\\%1\' in: %2';
+
+sub register_tr_text {
+	my $check = shift;
+	$check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA04_4.1";}
+
+
+sub name { return "Published Standards\\MISRA-C 2004\\4.1 Only those escape sequences that are defined in the ISO C standard shall be used";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2004',
+    'Category: required',
+    'Expressions',
+  );
+}
+
+sub description { '4.1 (Required) Only escape sequences defined in the ISO C standard shall be used.' }
+
+sub detailed_description { <<'END_DESC'
+Only "simple-escape-sequences" in ISO/IEC 9899:1990 [3-6] Section 6.1.3.4 and \0 are permitted escape sequences.
+All "hexadecimal-escape-sequences" are prohibited.
+The "octal-escape-sequences" other than \0 are also prohibited under Rule 7.1.
+END_DESC
+}
+
+sub test_language {
+	my $language = shift;
+	return $language eq 'C++';
+}
+
+sub test_entity { 1 }
+
+sub test_global { 0 }
+
+sub define_options { }
+
+
+sub check {
+	my $check = shift;
+	my $file = shift;
+	return unless $file->kind->check('c file');
+	
+	my $lexer = $file->lexer(0);
+	my @lexemes = $lexer->lexemes if $lexer;
+	
+	foreach my $lexeme (@lexemes){
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+    
+		next unless $lexeme->token eq 'String';
+		my $content = $lexeme->text;
+		next unless $content =~ m! ^ ['"] !sx;
+		while ($content =~ m! \G [^\\]* \\ (x[0-9a-fA-F]{1,2} | [0-7]{2,3} | .) !sxg) {
+			my $escape = $1;
+			
+			next if $escape =~ m! ^ (?: a | b | f | n | r | t | v | ' | " | \? | \\ | 0 ) $ !sx;
+			next if $lexeme->prevUseful->token eq 'Preprocessor' and $lexeme->prevUseful->text eq 'include';
+			
+			$check->violation(0, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1, $escape, $content);
+		}
+	}
+	
+	return;
+}

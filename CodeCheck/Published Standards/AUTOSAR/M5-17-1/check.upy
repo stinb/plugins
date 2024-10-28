@@ -1,0 +1,145 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn, Adapted by Jordan Colbeth
+# 02-10-2022
+
+import re
+
+ERR1 = """\
+Overloaded operator %1 did not have an expected outcome"""
+
+def ids():
+    return ('M5-17-1', 'CPP_A014')
+
+def name(id):
+    return {
+        'M5-17-1': """\
+Published Standards/AUTOSAR/The semantic equivalence between a binary operator \
+and its assignment operator form shall be preserved""",
+        'CPP_A014': """\
+All Checks/Language Specific/C and C++/Assignment Operators/The semantic \
+equivalence between a binary operator and its assignment operator form shall be \
+preserved"""
+    }[id]
+
+
+def tags(id):
+    return {
+        'M5-17-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Assignment Operators',
+        ],
+        'CPP_A014': [
+            'Language: C',
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>For example, the
+expected outcome of a += b is a = a + b. Changing the
+expected outcome of standardized operators promotes
+confusion and decreases code maintainability.</p>"""
+
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    refs = file.filerefs('Define', 'Member Function')
+    lexer = None
+
+    for ref in refs:
+        ok = True
+        # Skip if it isn't a overloaded operator
+        if not re.search(r'operator', ref.ent().name()):
+            continue
+
+        # Strip the word operator from the name
+        operator = re.sub(r'operator', '', ref.ent().name())
+
+        #print(operator, ": ", len(operator))
+
+        # Check if overloading a operator like +=
+        if re.search(r'=', operator) and len(operator) == 2:
+            first = operator[0]
+            last = operator[1]
+
+            if not lexer:
+                lexer = file.lexer()
+
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            end = ref.ent().ref('End')
+
+            ok = False
+            f = False
+            l = False
+
+            while lexeme and not (lexeme.line_begin() >= end.line() and lexeme.column_begin() >= end.column()):
+                # Mark ok if the operator was found in the method
+                if lexeme.text() == operator:
+                    ok = True
+                    break
+
+                # Keep track if the first and second/last part of the operator was found
+                if lexeme.text() == first:
+                    f = True
+                if lexeme.text() == last:
+                    l = True
+
+                # If both parts of the operator is found mark ok
+                if f and l:
+                    ok = True
+                    break
+
+                lexeme = lexeme.next(True, True)
+
+
+        # Go and look if the whole operator name (without the operator keyword) is found in the method
+        else:
+            lexer = file.lexer()
+
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            end = ref.ent().ref('End')
+
+            ok = False
+
+            while lexeme and end and not (lexeme.line_begin() >= end.line()):
+
+                if lexeme.text() == operator and lexeme.previous(True, True).text() != 'operator':
+                    ok = True
+                    break
+
+                # Check through each char in the operator string
+                elif lexeme.text() == operator[0]:
+                    temp = lexeme
+                    while temp:
+                        for s in operator:
+                            if s == temp.text():
+                                ok = True
+                            else:
+                                ok = False
+                                break
+
+                        temp = temp.next(True, True)
+
+
+
+                if ok:
+                    break
+
+                lexeme = lexeme.next(True, True)
+
+
+
+        if not ok:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())

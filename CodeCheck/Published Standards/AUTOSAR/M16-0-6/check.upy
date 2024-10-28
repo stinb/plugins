@@ -1,0 +1,136 @@
+import re
+
+DEF_NAME = "In the definition of a function-like macro, each instance of a parameter shall be enclosed in parentheses, unless it is used as the operand of # or ##"
+
+# The ID for the check 
+def ids():
+    return ('M16-0-6', 'CPP_PR038')
+
+# The short name of the check
+def name(id):
+    return {
+        'M16-0-6': """\
+Published Standards/AUTOSAR/In the definition of a function-like macro, each \
+instance of a parameter shall be enclosed in parentheses, unless it is used as \
+the operand of # or ##""",
+        'CPP_PR038': """\
+All Checks/Language Specific/C and C++/Preprocessor/In the definition of a \
+function-like macro, each instance of a parameter shall be enclosed in \
+parentheses, unless it is used as the operand of # or ##"""
+
+    }[id]
+
+
+
+
+
+
+def tags(id):
+    return {
+        'M16-0-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Preprocessor',
+        ],
+        'CPP_PR038': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+  return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>If parentheses are not used, then the operator precedence may not give the desired results when the preprocessor substitutes the macro into the code.</p>
+<p>Within a definition of a function-like macro, the arguments shall be enclosed in parentheses.</p>
+<p><b>Example</b></p>
+<p>Define an abs function using:</p>
+<pre><code language="C++">#define abs(x) (((x) &gt;= 0) ? (x) : -(x)) // Compliant
+</code></pre>
+<p>and not:</p>
+<pre><code language="C++">#define abs(x) ((x &gt;= 0) ? x : -x) // Non-compliant
+</code></pre>
+<p>Consider what happens if the second, incorrect, definition is substituted into the expression:</p>
+<pre><code language="C++">z = abs( a - b );
+</code></pre>
+<p>giving:</p>
+<pre><code language="C++">z = ((a - b &gt;= 0) ? a - b : -a – b);
+</code></pre>
+<p>The sub-expression -a - b is equivalent to (-a)-b rather than -(a-b) as intended. Putting all the parameters in parentheses in the macro definition avoids this problem.</p>
+<pre><code language="C++">#define subs(x) a ## x // Compliant
+</code></pre>
+"""
+
+# Tests the type of file
+def test_entity(file):
+  return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+def test_global():
+  return False
+
+def test_language(language):
+  return language == 'C++'
+
+def check_ent(left, right):
+  if left and right and (left.text() == "#" or right.text() == "#" or left.text() == "##" or right.text() == "##"):
+    return True
+  elif left and right and (left.text() in ["->","."] or right.text() in ["->","."]):
+    return True
+  else:
+    while left and left.text() != "(":
+      if left.text() not in ["*","&"]:
+        break
+      left = left.previous(ignore_whitespace=True, ignore_comments=True)
+    while right and right.text() != ")":
+      if right.text() != "*":
+        break
+      right = right.next(ignore_whitespace=True, ignore_comments=True)
+    return (left.text() == "(" and right.text() == ")") or (left.text() == "[" and right.text() == "]")
+
+def validate_macro(lex_start, ent, check, file):
+  params = []
+  collect_param = False
+  stop = False
+  # moves lex to the macro function definition start
+  while lex_start and lex_start.text() != ")":
+    if lex_start.text() == "(":
+      collect_param = True
+    if lex_start.token() == "Identifier" and collect_param:
+      # get all the parameter/s
+      params.append(lex_start.text())
+    lex_start = lex_start.next(ignore_whitespace=True, ignore_comments=True)
+  lex_start = lex_start.next(ignore_whitespace=True, ignore_comments=True)  
+  # macro function definition start
+  while lex_start:
+    # flag the checks if nextline is still part of the macro def
+    if lex_start.token() == "Preprocessor":
+      stop = False
+    elif lex_start.token() == "Newline" and not stop:
+      break
+    
+    # identifier validation
+    if lex_start.token() == "Identifier" and lex_start.text() in params and lex_start.previous(ignore_whitespace=True, ignore_comments=True) and lex_start.next(ignore_whitespace=True, ignore_comments=True):
+      if not check_ent(lex_start.previous(ignore_whitespace=True, ignore_comments=True), \
+                  lex_start.next(ignore_whitespace=True, ignore_comments=True)):
+        check.violation(ent, file, lex_start.line_begin(), lex_start.column_begin(), DEF_NAME)
+        break # if no need to check other identifier once flagged as violation
+    lex_start = lex_start.next()
+
+def check(check, file):
+  lexer = file.lexer(True, 8, False, False)
+  for ref in file.filerefs("Define", "Macro", True):
+    lex = lexer.lexeme(ref.line(), ref.column())
+    if ref.ent().parameters():
+      validate_macro(lex, ref.ent(), check, file)

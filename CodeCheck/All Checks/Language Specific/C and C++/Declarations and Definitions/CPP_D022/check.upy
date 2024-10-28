@@ -1,0 +1,178 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 1/12/15
+# Rewritten by Robby Bennett
+# 2/8/23
+# Ian Reed merged MISRA04_8.10 into this script and eliminated CPP_D025 because once bugs are fixed they all report the same lines and violations, just with different wording.
+# October 2023
+
+import re
+from Modules import buildTranslationUnit
+
+ERR1 = '%1 has external linkage but is only used in the translation unit built from %2, so the static keyword should be used.'
+
+REF_KINDS = 'Declare, Define'
+ENT_KINDS = 'Function ~Unresolved ~Unknown ~Static ~Macro ~Template, Object Global ~Static ~Unresolved ~Unknown'
+
+# (not preceded by an asterisk) const
+CONST_REGEX = r'($|[^\*])\bconst\b'
+
+violationsSeen = set()
+
+def ids():
+    return ('MISRA12_8.7', 'CPP_D022', 'MISRA04_8.10', 'MISRA23_8.7')
+
+def name(id):
+    return {
+        'MISRA12_8.7': '''Published Standards/MISRA C 2012/8.7 Functions and objects should not be defined with external linkage if they are referenced in only one translation unit''',
+        'CPP_D022': '''All Checks/Language Specific/C and C++/Declarations and Definitions/Functions and objects should not be defined with external linkage if they are referenced in only one translation unit''',
+        'MISRA04_8.10': 'Published Standards/MISRA-C 2004/8.10 prefer internal linkage over external whenever possible',
+        'MISRA23_8.7': '''Published Standards/MISRA C 2023/8.7 Functions and objects should not be defined with external linkage if they are referenced in only one translation unit''',
+        }[id]
+
+def tags(id):
+    return {
+        'MISRA12_8.7': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+        'CPP_D022': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA04_8.10': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_8.7': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+Restricting the visibility of an object by giving it internal linkage with the <i>static</i> keyword, or no
+linkage reduces the chance that it might be accessed inadvertently. Similarly,
+reducing the visibility of a function by giving it internal linkage with the <i>static</i> keyword reduces the
+chance of it being called inadvertently.
+</p>
+
+<p>
+Compliance with this rule also avoids any possibility of confusion between an
+identifier and an identical identifier in another translation unit or a library.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">/* file.h */
+extern void ext_fn1 ( void ); /* Compliant */
+extern void ext_fn2 ( void ); /* Non-compliant */
+
+/* file1.c */
+#include "file.h"
+void ext_fn1 ( void ) /* Compliant - defined in this translation unit,
+ but used externally */
+{
+ /* Function definition */
+}
+void ext_fn2 ( void ) /* Non-compliant - defined and used only
+ in this translation unit */
+{
+ /* Function definition */
+}
+void fn_file1 ( void )
+{
+ ext_fn2( );
+}
+
+/* file2.c */
+#include "file.h"
+void fn_file2 ( void )
+{
+ ext_fn1( );
+}
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+This check works with both the strict and fuzzy parser. While using the strict
+parser; however, it is important to note that this check will not function
+properly if errors are reported.
+</p>
+
+<p><b>Check Limitations</b></p>
+
+<p>
+This check cannot detect if a function is contained within an anonymous
+namespace. These cases will throw a false positive.
+</p>
+'''
+
+def test_entity(file):
+    return file.kind().check('Code File')
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.options().checkbox('ignoreConst', 'Ignore constants defined in headers', False)
+
+def check(check, file):
+    ignoreConst = check.options().lookup('ignoreConst')
+
+    # Go through all files for this translation unit
+    translationUnit = set()
+    buildTranslationUnit(file, translationUnit)
+    for include in translationUnit:
+
+        # Pull all the unique define and declare references present in this
+        # file and loop through each one
+        for ref in include.filerefs(REF_KINDS, ENT_KINDS, True):
+            ent = ref.ent()
+
+            # Option: Skip const
+            if ignoreConst and re.match(CONST_REGEX, ent.type()):
+                continue
+
+            # Skip if this entity does not exist in the global scope
+            parent = ent.parent()
+            if not parent or not parent.kind().check('C File'):
+                continue
+
+            # Skip main
+            if ent.name() == 'main':
+                continue
+
+            # This is a special case for functions that should be declared
+            # static but are friends with a class (C++ Compatibility)
+            if ent.ref('C Friendby'):
+                continue
+
+            # Skip if one ref is outside of this translation unit
+            outside = False
+            for otherRef in ent.refs():
+                if otherRef.file() not in translationUnit:
+                    outside = True
+                    break
+            if outside:
+                continue
+
+            # Skip if already seen
+            if ent in violationsSeen:
+                continue
+            violationsSeen.add(ent)
+
+            # report the error at the definition site, not any random declare site.
+            ref = ent.ref("definein")
+            check.violation(ent, ref.file(), ref.line(), ref.column(), ERR1, ent.name(), file.name())

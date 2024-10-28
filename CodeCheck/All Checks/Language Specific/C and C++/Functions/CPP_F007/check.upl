@@ -1,0 +1,102 @@
+# Functions must not return objects by value.
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => 'Function returns object by value';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_F007";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Functions\\Functions must not return objects by value.";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Functions',
+  );
+}
+
+sub description{
+	return "Functions must not return objects by value.";
+}
+
+sub detailed_description{
+	return 'Functions must not return objects by value.
+Report all functions that return objects of user-defined type by value.
+ Assumptions:
+ 1. only class, struct and union types are flagged.
+ 2. return by pointer or reference is okay.
+ ';
+}
+
+sub test_language {
+	my $language = shift;
+	return $language =~ /C\+\+/;
+  #return 1;
+}
+
+sub test_entity {
+	return 1;
+}
+
+sub test_global {
+	return 0;
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check('c file');
+	my @refs = $file->filerefs("define","function ~unresolved ~unknown",1);
+	my @ents = map{$_->ent;}@refs;
+	
+	#check each function
+	foreach my $function (@refs) {
+		next if !checkClassType($function->ent);
+    if (!checkPointerOrReferenceType($function->ent)) {
+			my ($begin,$end,$file) = getFunctionDefnLines($function->ent);
+			$check->violation($function->ent,$file,$function->ent->ref->line,$function->ent->ref->column,ERR1);
+    }
+  }
+}
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Return true if entity type is a pointer or reference type.
+sub checkPointerOrReferenceType {
+    my $ent = shift;
+    return 0 if !$ent;
+    return 1 if $ent->type() =~ m/[*&\[]/;
+    my $type_ent = $ent->ents("typed","typedef");
+    return 0 if !$type_ent;
+    return checkPointerOrReferenceType($type_ent);
+}
+
+
+# Return true if entity type is a class type.
+sub checkClassType {
+    my $ent = shift or return 0;
+    my $type_ent = $ent->ents("typed") or return 0;
+    return 0 if $ent->type ne $type_ent->longname;
+    return 0 if $type_ent == $ent; # hack for parse problem before b273
+    return checkClassType($type_ent) if $type_ent->kind()->check("typedef");
+    return $type_ent->kind()->check("class,struct,union");
+}

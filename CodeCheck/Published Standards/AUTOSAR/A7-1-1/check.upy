@@ -1,0 +1,136 @@
+import re
+
+
+# This script is designed to run with Understand - CodeCheck
+# 8-9-21
+
+
+ERR1 = 'Immutable data should be declared as constexpr or const'
+
+# The ID for the check
+def ids():
+    return ('A7-1-1', 'CPP_D046')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A7-1-1': 'Published Standards/AUTOSAR/Constexpr or const specifiers shall be used for immutable data declaration',
+        'CPP_D046': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Constexpr or const specifiers shall be used for immutable data declaration',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A7-1-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D046': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+
+<p>
+If data is declared to be const or constexpr then its value can not be changed by mistake. Also, such declaration can offer the compiler optimization opportunities.
+</p>
+
+<p>
+Note that the constexpr specifier in an object declaration implies const as well.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">//% $Id: A7-1-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+#include &lt;limits&gt;
+void Fn()
+{
+    const std::int16_t x1 = 5;        // Compliant
+    constexpr std::int16_t x2 = 5;    // Compliant
+    std::int16_t x3 =
+        5;    // Non-compliant - x3 is not modified but not declared as
+              // constant (const or constexpr)
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• C++ Core Guidelines [11]: ES.25: Declare objects const or constexpr unless you want to modify its value later on.
+</p>
+
+<p>
+• C++ Core Guidelines [11]: Con.1: By default, make objects immutable.
+</p>
+
+<p>
+• C++ Core Guidelines [11]: Con.4: Use const to define objects with values that do not change after construction.
+</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    for obj_ref in file.filerefs("Define", "Object, Parameter"):
+        compliant = False
+        value = obj_ref.ent().value()
+        type_ref = obj_ref.ent().ref("Typed")
+        modify_ref = obj_ref.ent().ref(
+            "Modifyby, Deref Setby, Assignby, Useby, Setby ~Init, Callby, Assign Ptr")
+        if not obj_ref.ent().type():
+            continue
+
+        if type_ref and type_ref.ent().kind().check("Class, Struct"):
+            continue
+
+        # ignore for auto loops (directory_iterator)
+        if obj_ref.ent().name() and re.search("^__(range|begin|end)", obj_ref.ent().name()):
+            continue
+
+        # if we have a parameter, ignore whether an initial value is set
+        if ((obj_ref.ent().kindname() == "Parameter") and not modify_ref):
+
+            if 'const' in obj_ref.ent().type():
+                compliant = True
+
+            if not compliant:
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)
+
+        if value and not modify_ref:
+
+            if 'const' in obj_ref.ent().type():
+                compliant = True
+
+            if not compliant:
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)

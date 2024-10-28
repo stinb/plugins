@@ -1,0 +1,123 @@
+import re
+
+
+ERR1 = 'String is not normalized before validating.'
+
+
+# The ID for the check
+def ids():
+    return ('IDS01-J', 'JAVA_IDS01')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'IDS01-J': 'Published Standards/SEI Cert Standards/Java/Normalize strings before validating them',
+        'JAVA_IDS01': 'All Checks/Language Specific/Java/Input Validation and Data Sanitization/Normalize strings before validating them',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'IDS01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+        ],
+        'JAVA_IDS01': [
+            'Language: Java',
+            'Input Validation and Data Sanitization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Normalize strings before validating them'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Normalize strings before validating them</p>
+<p><b>Risk Assessment</b></p>
+<p>Validating input before normalization affords attackers the opportunity to bypass filters and other security mechanisms. It can result in the execution of arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/IDS01-J.+Normalize+strings+before+validating+them</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">// String s may be user controllable
+// \\uFE64 is normalized to &lt; and \\uFE65 is normalized to &gt; using the NFKC normalization form
+String s = "\\uFE64" + "script" + "\\uFE65";
+
+// Validate
+Pattern pattern = Pattern.compile("[&lt;&gt;]"); // Check for angle brackets
+Matcher matcher = pattern.matcher(s);
+if (matcher.find()) {
+  // Found black listed tag
+  throw new IllegalStateException();
+} else {
+  // ...
+}
+
+// Normalize
+s = Normalizer.normalize(s, Form.NFKC);
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not (lexer and re.search(r"pattern.matcher", file.contents())):
+        return
+
+    for matcher_ref in file.filerefs("Java Call Nondynamic", "Java Method Public Member"):
+        if matcher_ref.ent().longname() == "java.util.regex.Pattern.matcher":
+            matcher_string = None
+            lex = lexer.lexeme(matcher_ref.line(),
+                               matcher_ref.column())
+
+            while lex and lex.text() != ";":
+                if lex.ent() and lex.ent().type() == "String":
+                    matcher_string = lex.ent()
+                    break
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if matcher_string:
+                compliant = False
+
+                for normalize_ref in matcher_ref.scope().refs("Java Call Nondynamic", "Java Method Public Member"):
+                    if normalize_ref.ent().longname() == "java.text.Normalizer.normalize":
+                        normalize_string = None
+                        lex = lexer.lexeme(
+                            normalize_ref.line(), normalize_ref.column())
+
+                        while lex and lex.text() != ";":
+                            if lex.ent() and lex.ent().type() == "String" and not lex.ent().kind().check("Static Method"):
+                                normalize_string = lex.ent()
+                                break
+                            lex = lex.next(
+                                ignore_whitespace=True, ignore_comments=True)
+
+                        if matcher_string.id() == normalize_string.id() and normalize_ref.line() < matcher_ref.line():
+                            compliant = True
+
+                        if not compliant:
+                            check.violation(
+                                matcher_string, file, matcher_ref.line(), matcher_ref.column(), ERR1)

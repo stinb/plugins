@@ -1,0 +1,228 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9/24/24
+
+import re
+import Modules
+
+ERR1 = 'The value of the expression was assigned to a wider essential type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_10.6', 'MISRA23_10.6', 'CPP_E077')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_10.6': 'Published Standards/MISRA C 2012/' + """\
+10.6 The value of a composite expression shall not be assigned to an object with
+wider essential type""",
+        'MISRA23_10.6': 'Published Standards/MISRA C 2023/' + """\
+10.6 The value of a composite expression shall not be assigned to an object with
+wider essential type""",
+        'CPP_E077': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+The value of a composite expression shall not be assigned to an object with
+wider essential type""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_10.6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_10.6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E077': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p></p>
+<p><b>Amplification</b></p>
+<p>This rule covers the assigning operations described in Rule 10.3.</p>
+<p><b>Rationale</b></p>
+<p>The rationale is described in the introduction on composite operators and expressions (see Section8.10.3).</p>
+<p><b>Example</b></p>
+<p>The following are compliant</p>
+<pre><code language="C++">u16c = u16a + u16b; /* Same essential type */
+u32a = ( uint32_t ) u16a + u16b; /* Cast causes addition in uint32_t */</pre></code>
+<p>The following are non-compliant</p>
+<pre><code language="C++">u32a = u16a + u16b; /* Implicit conversion on assignment */
+use_uint32 ( u16a + u16b ); /* Implicit conversion of fn argument */</pre></code>
+"""
+    return {
+        'MISRA12_10.6': desc,
+        'MISRA23_10.6': desc,
+        'CPP_E077': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # List of types to check
+    types = r'int|short|long|float|double'
+    lexer = None
+    # Go through each object ref
+    refs = file.filerefs("Define", "Object")
+    for ref in refs:
+        found = False
+        # Skip if not in types
+        if not re.search(types, str(ref.ent().type())):
+            continue
+
+        # Grab size of type and skip if not found
+        size0 = re.sub(r'\[\d*\]', '', str(ref.ent().type()))
+        size0 = re.sub(r'[^\d]', '', size0)
+        if size0 == '':
+            continue
+        # Go through each set
+        setRefs = ref.ent().refs('Setby')
+        for setRef in setRefs:
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+            size1 = None
+                
+            lexeme = lexer.lexeme(setRef.line(), setRef.column())
+            # Looking for the '=' sign
+            while lexeme and not re.match(r';|=|{|}', lexeme.text()):
+                lexeme = lexeme.next(True, True)
+
+            if lexeme and lexeme.text() == '=':
+                ok = True
+                while lexeme and not re.match(r';|{|}', lexeme.text()):
+                    # Find C style casts and skip if found
+                    if re.search(types, lexeme.text()) and re.search(r'\d', lexeme.text()):
+                        if lexeme.ent() and lexeme.ent().kind().check('Typedef Type') or lexeme.token() == 'Identifier':
+                            size1 = re.sub(r'\[\d*\]', '', lexeme.text())
+                            size1 = re.sub(r'[^\d]', '', size1)
+                            if size1 == '':
+                                break
+                            if size1 < size0:
+                                ok = False
+                                break
+                            else:
+                                break
+                    # Find ents that have a smaller size than the defined ref
+                    elif lexeme.ent() and re.search(types, str(lexeme.ent().type())):
+                        size1 = re.sub(r'\[\d*\]', '', str(lexeme.ent().type()))
+                        size1 = re.sub(r'[^\d]', '', size1)
+                        if size1 == '':
+                            break
+                        if size1 < size0:
+                            ok = False
+                            break
+
+                    lexeme = lexeme.next(True, True)
+
+                if not ok:
+                    check.violation(setRef.scope(), setRef.file(), setRef.line(), setRef.column(), ERR1)
+                    continue
+
+    refs = file.filerefs("Define", "Function")
+    for ref in refs:
+        parameters = ref.ent().parameters()
+        if not re.search(types, parameters):
+            continue
+
+        # Get parameters of function
+        parameters = re.sub(r'\[\d*\]', '', parameters)
+        parameters = parameters.split(',')
+        callRefs = ref.ent().refs('Callby')
+        # Check each call
+        for callRef in callRefs:
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+
+            ok = True
+            lexeme = lexer.lexeme(callRef.line(), callRef.column())
+            while lexeme and not re.search(r'\(|;', lexeme.text()):
+                lexeme = lexeme.next(True, True)
+
+            if lexeme and lexeme.text() == '(':
+                close = Modules.findClose(lexeme)
+                lexeme = lexeme.next(True, True)
+                count = 0
+                parameter = parameters[count]
+                # Grab size of type and skip if not found
+                size0 = re.sub(r'\[\d*\]', '', parameter)
+                size0 = re.sub(r'[^\d]', '', size0)
+                while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    if size0 == '':
+                        pass
+                    elif lexeme.text() == ',':
+                        count += 1
+                        parameter = parameters[count]
+                        # Filter size out of type and skip if not found
+                        size0 = re.sub(r'\[\d*\]', '', parameter)
+                        size0 = re.sub(r'\s.*', '', size0)
+                        size0 = re.sub(r'[^\d]', '', size0)
+                    elif lexeme.text() == '(':
+                        nextLex = lexeme.next(True, True)
+                        # Check for C style casts
+                        if nextLex and re.search(types, nextLex.text()) and re.search(r'\d', nextLex.text()):
+                            if nextLex.ent() and nextLex.ent().kind().check('Typedef Type') or nextLex.token() == 'Identifier':
+                                size1 = re.sub(r'\[\d*\]', '', nextLex.text())
+                                size1 = re.sub(r'[^\d]', '', size1)
+                                if size1 != '' and size1 < size0:
+                                    ok = False
+                                    break
+
+
+                        lexeme = Modules.findClose(lexeme)
+                        if lexeme:
+                            lexeme = lexeme.next(True, True)
+                        while lexeme and not re.match(r'\)|;|,', lexeme.text()):
+                            if lexeme.text() == '(':
+                                lexeme = Modules.findClose(lexeme)
+                            if lexeme:
+                                lexeme = lexeme.next(True)
+
+                        continue
+                    # Find ents that have a smaller size than the parameter expects
+                    elif lexeme.ent() and re.search(types, str(lexeme.ent().type())):
+                        size1 = re.sub(r'\[\d*\]', '', str(lexeme.ent().type()))
+                        size1 = re.sub(r'[^\d]', '', size1)
+                        if size1 == '':
+                            break
+                        if size1 < size0:
+                            ok = False
+                            break
+                    lexeme = lexeme.next(True, True)
+
+                if not ok:
+                    check.violation(callRef.scope(), callRef.file(), callRef.line(), callRef.column(), ERR1)
+                    continue
+
+

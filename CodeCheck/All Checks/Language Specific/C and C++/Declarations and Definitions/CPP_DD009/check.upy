@@ -1,0 +1,102 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 06-10-2021
+
+import re
+
+ERR1 = 'Assignment operator %1 does not check for self-assignment'
+
+def id():
+    return 'CPP_DD009'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Declarations and Definitions/Assignment \
+operators should check for self-assignment"""
+
+
+def tags(id):
+    return {
+        'CPP_DD009': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Assignment operators should check for self-assignment.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refList = {}
+
+    # Gather named refs of classes
+    refs = file.filerefs('Name', 'Class')
+    for ref in refs:
+        # Gather all Typedby refs looking for operator overloads
+        refs1 = ref.ent().refs('Typedby', 'Member Function', True)
+        for ref1 in refs1:
+            if not re.search(r'operator', ref1.ent().name().lower()):
+                continue
+
+            # Check if the current ent is in the refList
+            if ref1.ent().longname() not in refList.keys():
+                refList[ref1.ent().longname()] = ref1
+            elif refList[ref1.ent().longname()] == False:
+                continue
+
+            # Gather and go through use refs
+            refs2 = ref1.ent().refs('Use, Addr Use', 'Parameter')
+            for ref2 in refs2:
+                if not lexer:
+                    lexer = file.lexer()
+
+                lexeme = lexer.lexeme(ref2.line(), ref2.column())
+                prevLex = lexeme
+
+                # Check for a comparison operator, 'this' keyword, and an if statement
+                compare = False
+                this = False
+                ifStatement = False
+                while prevLex and not re.match(r';|{|}', prevLex.text()):
+                    if re.match(r'==|!=', prevLex.text()):
+                        compare = True
+
+                    if prevLex.text() == 'this':
+                        this = True
+
+                    if prevLex.text() == 'if':
+                        ifStatement = True
+
+                    prevLex = prevLex.previous(ignore_whitespace=True, ignore_comments=True)
+
+                # Check forward for a comparison operator and/or a 'this' keyword
+                if ifStatement and not (compare or this):
+                    nextLex = lexeme
+                    while nextLex and not re.match(r';|{|}', nextLex.text()):
+                        if re.match(r'==|!=', nextLex.text()):
+                            compare = True
+
+                        if nextLex.text() == 'this':
+                            this = True
+
+                        nextLex = nextLex.next(ignore_comments=True, ignore_whitespace=True)
+
+
+                if ifStatement and compare and this:
+                    refList[ref1.ent().longname()] = False
+
+    # Go through all of the refs that were added to the refList
+    for key in refList.keys():
+        if refList[key] != False:
+            check.violation(refList[key].ent(), file, refList[key].line(), refList[key].column(), ERR1, refList[key].ent().longname())
+            

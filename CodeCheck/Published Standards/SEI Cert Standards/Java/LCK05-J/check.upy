@@ -1,0 +1,104 @@
+ERR1 = 'Synchronize access to static fields that can be modified by untrusted code.'
+
+
+# The ID for the check
+def ids():
+    return ('LCK05-J', 'JAVA_LCK05')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'LCK05-J': 'Published Standards/SEI Cert Standards/Java/Synchronize access to static fields that can be modified by untrusted code',
+        'JAVA_LCK05': 'All Checks/Language Specific/Java/Locking/Synchronize access to static fields that can be modified by untrusted code',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'LCK05-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_LCK05': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Synchronize access to static fields that can be modified by untrusted code'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Synchronize access to static fields that can be modified by untrusted code</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to internally synchronize access to static fields that can be modified by untrusted code risks incorrect synchronization because the author of the untrusted code can inadvertently or maliciously ignore the synchronization policy.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/LCK05-J.+Synchronize+access+to+static+fields+that+can+be+modified+by+untrusted+code</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">/* This class is not thread-safe */
+public final class CountHits {
+  private static int counter;
+
+  public void incrementCounter() {
+    counter++;
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class Type"):
+        for static_ref in class_ref.ent().refs("Define", "Static Member Variable"):
+            for mod_ref in static_ref.ent().refs("Modifyby", "Method"):
+                lex = lexer.lexeme(mod_ref.line(), mod_ref.column())
+                scope_bracket = 0
+                compliant = False
+
+                while lex:
+                    if lex.text() == "{":
+                        scope_bracket += 1
+                    elif lex.text() == "}":
+                        scope_bracket -= 1
+                    elif lex.text() == "synchronized" and lex.token() == "Keyword" and ((scope_bracket % 2) != 0):
+                        compliant = True
+                        break
+                    elif lex.text() == mod_ref.ent().name() and lex.ref() and lex.ref().kind().check("Definein"):
+                        break
+
+                    lex = lex.previous(
+                        ignore_whitespace=True, ignore_comments=True)
+
+                if not compliant:
+                    check.violation(mod_ref.scope(), file,
+                                    mod_ref.line(), mod_ref.column(), ERR1)

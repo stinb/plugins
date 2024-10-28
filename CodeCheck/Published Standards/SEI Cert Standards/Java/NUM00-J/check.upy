@@ -1,0 +1,346 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 7-12-22
+
+
+import re
+from Modules import typeOfCast
+from Modules import javaLiteralNumberType
+from Modules import javaLiteralToNumber
+from Modules import javaValueOfLexeme
+from Modules import javaTypeOfLexeme
+
+
+ERR1 = 'Possible integer overflow with operator %1'
+ERR2 = 'Possible integer overflow with method'
+ERR3 = 'Integer overflow with operator %1'
+ERR4 = 'Integer overflow with method'
+
+
+def ids():
+    return ('NUM00-J', 'JAVA_NUM00')
+
+
+def name(id):
+    return {
+        'NUM00-J': 'Published Standards/SEI Cert Standards/Java/Detect or prevent integer overflow',
+        'JAVA_NUM00': 'All Checks/Language Specific/Java/Numeric Types and Operations/Detect or prevent integer overflow',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'NUM00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_NUM00': [
+            'Language: Java',
+            'Numeric Types and Operations',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Detect or prevent integer overflow
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to perform appropriate range checking can lead to integer overflows,\
+ which can cause unexpected program control flow or unanticipated program\
+ behavior.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/NUM00-J.+Detect+or+prevent+integer+overflow
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+NUM00-J-EX0: Depending on circumstances, integer overflow could be benign. For example, many algorithms for computing hash codes use modular arithmetic, intentionally allowing overflow to occur. Such benign uses must be carefully documented.
+</i></p>
+
+<p><i>
+NUM00-J-EX1: Prevention of integer overflow is unnecessary for numeric fields that undergo bitwise operations and not arithmetic operations (see NUM01-J. Do not perform bitwise and arithmetic operations on the same data for more information).
+</i></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public static int multAccum(int oldAcc, int newVal, int scale) {
+  // May result in overflow
+  return oldAcc + (newVal * scale);
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>AtomicInteger</code>)</b></p>
+<pre><code language="Java">class InventoryManager {
+  private final AtomicInteger itemsInInventory = new AtomicInteger(100);
+
+  //...
+  public final void nextItem() {
+    itemsInInventory.getAndIncrement();
+  }
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+This check does not use an abstract syntax tree, so it has a limitation - it\
+ doesn't evaluate complicated expressions. Additionally, it doesn't check the\
+ output range of methods.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('checkUnknownValues', 'Check possible overflow from identifiers with unknown values', True)
+    check.options().checkbox('checkMethods', 'Check possible overflow from concurrency methods', True)
+
+
+def rangeOfSigned(bits):
+    return (1 << bits) // -2, (1 << bits) // 2 - 1
+
+
+def rangeOfUnsigned(bits):
+    return 0, (1 << bits) - 1
+
+
+POSSIBLE_OVERFLOW = r'\+|-|\*|\/|abs|addAndGet|incrementAndGet|decrementAndGet|getAndAdd|getAndIncrement|getAndDecrement|add|increment|decrement|sum|sumThenReset'
+OVERFLOW_METHODS = {'addAndGet', 'incrementAndGet', 'decrementAndGet', 'getAndAdd', 'getAndIncrement', 'getAndDecrement', 'add', 'increment', 'decrement', 'sum', 'sumThenReset'}
+OVERFLOW_OPERATORS = {
+    '+':  lambda x,y: x+y,
+    '+=': lambda x,y: x+y,
+    '-':  lambda x,y: x-y,
+    '-=': lambda x,y: x-y,
+    '*':  lambda x,y: x*y,
+    '*=': lambda x,y: x*y,
+    '/':  lambda x,y: x/y,
+    '/=': lambda x,y: x/y,
+    '++': lambda x:   x+1,
+    '--': lambda x:   x-1,
+}
+INTEGER_RANGES = {
+    'char':  rangeOfUnsigned(16),
+    'byte':  rangeOfSigned(8),
+    'short': rangeOfSigned(16),
+    'int':   rangeOfSigned(32),
+    'long':  rangeOfSigned(64),
+}
+
+
+def minType(x, y):
+    xMin = INTEGER_RANGES[x][0] if x in INTEGER_RANGES else None
+    yMin = INTEGER_RANGES[y][0] if y in INTEGER_RANGES else None
+    if xMin == None:
+        return yMin
+    if yMin == None:
+        return xMin
+    return min(xMin, yMin)
+
+
+def maxType(x, y):
+    xMax = INTEGER_RANGES[x][1] if x in INTEGER_RANGES else None
+    yMax = INTEGER_RANGES[y][1] if y in INTEGER_RANGES else None
+    if xMax == None:
+        return yMax
+    if yMax == None:
+        return xMax
+    return max(xMax, yMax)
+
+
+def getFirstParameterIfInt(lex):
+    # Match (
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '(':
+        return
+
+    # Consume until match of int identifier or )
+    while lex and lex.text() != ')':
+        # Ent
+        if lex.ent() and lex.ent().type() in INTEGER_RANGES:
+            return lex
+        # Literal
+        if lex.token() == 'Literal' and javaLiteralNumberType(lex.text()) in INTEGER_RANGES:
+            return lex
+
+        lex = lex.next(True, True)
+
+
+def identifierChecked(lexer, ent):
+    checked = False
+    for ref in ent.refs('Useby'):
+        lex = lexer.lexeme(ref.line(), ref.column())
+        while lex and lex.text() not in {';', '{', '}'}:
+            if lex.text() == 'if':
+                return True
+            lex = lex.previous(True, True)
+    return False
+
+
+def isNegative(lex):
+    lex = lex.previous(True, True)
+    if lex.text() == '-':
+        return True
+
+
+def lexAfterCast(lex):
+    # Match (
+    first = lex
+    if not lex or lex.text() != '(':
+        return first
+
+    # Match integer keyword
+    lex = lex.next(True, True)
+    if not lex or lex.text() not in INTEGER_RANGES:
+        return first
+
+    # Match )
+    lex = lex.next(True, True)
+    if not lex or lex.text() != ')':
+        return first
+
+    # Match anything
+    lex = lex.next(True, True)
+    if not lex:
+        return first
+
+    return lex
+
+
+def check(check, file):
+    if not re.search(POSSIBLE_OVERFLOW, file.contents()):
+        return
+
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+
+    for lex in lexemes:
+        # Skip if the text isn't an operflow operator or 'abs'
+        text = lex.text()
+        ent = lex.ent()
+
+        # Operation through opereators
+        if text in OVERFLOW_OPERATORS:
+            # Get the operands
+            lLex, rLex = lex.previous(True, True), lex.next(True, True)
+            rLex = lexAfterCast(rLex)
+
+            # Get the values
+            lValue, rValue = javaValueOfLexeme(lLex), javaValueOfLexeme(rLex)
+
+            # Get the types
+            lType = javaTypeOfLexeme(lLex)
+            rType = javaTypeOfLexeme(rLex)
+            lCast = typeOfCast(lLex)
+            rCast = typeOfCast(rLex)
+
+            # Special case for a negation
+            if text == '-' and (lValue == None and not lLex.ent()) and (rValue != None or rLex.ent()):
+                # Value of identifier is unknown and isn't checked
+                if rValue == None and rLex.ent() and not identifierChecked(lexer, rLex.ent()):
+                    if not check.options().lookup('checkUnknownValues'):
+                        continue
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1, text)
+                    continue
+                # Value of literal or identifier is known
+                elif rValue != None:
+                    # Negation
+                    rValue *= -1
+                    # Double negation
+                    if lLex.text() == '-':
+                        rValue *= -1
+                    # Get the bounds of the result
+                    rType = javaTypeOfLexeme(rLex)
+                    maximum = maxType(rType, 'byte')
+                    if maximum == None:
+                        continue
+                    # Overflow if the result is beyond the bound
+                    overflow = rValue > maximum
+                    if not overflow:
+                        continue
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR3, text)
+                    continue
+
+            # Skip if both values are upcast
+            oldMax = maxType(lType, rType)
+            newMax = maxType(lCast, rCast)
+            if newMax != None and oldMax != None and newMax > oldMax:
+                continue
+
+            # Value of left and/or right operand is unkown
+            if lValue == None or rValue == None:
+                if not check.options().lookup('checkUnknownValues'):
+                    continue
+                # Value of identifier is unknown and isn't checked
+                if lLex.ent() and not identifierChecked(lexer, lLex.ent()):
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1, text)
+                elif rLex.ent() and not identifierChecked(lexer, rLex.ent()):
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1, text)
+                continue
+
+            # Value of literal or identifier is known
+            if isNegative(lLex):
+                lValue *= -1
+            result = OVERFLOW_OPERATORS[text](lValue, rValue)
+            # Get the bounds of the result
+            minimum = minType(lType, rType)
+            if minimum == None:
+                continue
+            maximum = maxType(lType, rType)
+            if maximum == None:
+                continue
+            # Overflow if the result is beyond the bound
+            overflow = result < minimum or result > maximum
+            if not overflow:
+                continue
+            check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR3, text)
+
+        # Operation through absolute value
+        elif ent and ent.longname() == 'java.lang.Math.abs':
+            param = getFirstParameterIfInt(lex)
+            if not param:
+                continue
+            value = javaValueOfLexeme(param)
+            # Value of literal or identifier is known
+            if value != None:
+                # See if it's negative
+                if isNegative(param):
+                    value *= -1
+                # Get type
+                paramType = javaTypeOfLexeme(param)
+                # Overflow if the value is the minimum
+                overflow = paramType in INTEGER_RANGES and value == INTEGER_RANGES[paramType][0]
+                if not overflow:
+                    continue
+                check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR4)
+            # Value of identifier is unknown and isn't checked
+            elif param.ent() and not identifierChecked(lexer, param.ent()):
+                check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR2)
+
+        # Operation through concurrency utility method
+        elif text in OVERFLOW_METHODS and ent and re.match(r'java\.util\.concurrent\.', ent.longname()):
+            if not check.options().lookup('checkMethods'):
+                continue
+            check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR2)

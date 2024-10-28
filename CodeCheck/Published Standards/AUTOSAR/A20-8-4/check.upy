@@ -1,0 +1,106 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-26-2021
+import re
+
+ERR1 = "use std::unique_ptr instead of std::shared_ptr"
+
+def ids():
+    return ('A20-8-4', 'CPP_P007')
+
+def name(id):
+    return {
+        'A20-8-4': """\
+Published Standards/AUTOSAR/A std::unique_ptr shall be used over std::shared_ptr \
+if ownership sharing is not required""",
+        'CPP_P007': """\
+All Checks/Language Specific/C and C++/Pointers/A std::unique_ptr shall be used \
+over std::shared_ptr if ownership sharing is not required"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A20-8-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P007': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>std::unique_ptr is more predictable in terms of its destruction, as it happens at the end
+of the scope unless ownership transfer occurred. It also has lower overhead than a
+std::shared_ptr, as it does not keep internal reference counting.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  // $Id: A20-8-4.cpp 308507 2018-02-21 13:23:57Z michal.szczepankiewicz $
+2
+3  #include &lt;memory&gt;
+4  #include &lt;cstdint&gt;
+5  #include &lt;thread&gt;
+6
+7  struct A
+8  {
+9    A(std::uint8_t xx, std::uint8_t yy) : x(xx), y(yy) {}
+10   std::uint8_t x;
+11   std::uint8_t y;
+12 };
+13
+14 void Func()
+15 {
+16   auto spA = std::make_shared&lt;A&gt;(3,5);
+17   //non-compliant, shared_ptr used only locally
+18   //without copying it
+19 }
+20
+21 void Foo(std::unique_ptr&lt;A&gt; obj) { }
+22 void Bar(std::shared_ptr&lt;A&gt; obj) { }
+23
+24 int main(void)
+25 {
+26   std::shared_ptr&lt;A&gt; spA = std::make_shared&lt;A&gt;(3,5);
+27   std::unique_ptr&lt;A&gt; upA = std::make_unique&lt;A&gt;(4,6);
+28
+29   //compliant, object accesses in parallel
+30   std::thread th1{&Bar, spA};
+31   std::thread th2{&Bar, spA};
+32   std::thread th3{&Bar, spA};
+33
+34   //compliant, object accesses only by 1 thread
+35   std::thread th4{&Foo, std::move(upA)};
+36
+37   th1.join();
+38   th2.join();
+39   th3.join();
+40   th4.join();
+41
+42   return 0;
+43 }
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    refs = file.filerefs('Define', 'Object')
+    for ref in refs:
+        if not re.search(r'make_shared', str(ref.ent().value())):
+            continue
+
+        if not ref.ent().refs('Assignby'):
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

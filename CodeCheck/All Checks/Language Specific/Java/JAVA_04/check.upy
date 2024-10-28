@@ -1,0 +1,102 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 08/03/2022
+
+import re
+
+ERR1 = 'Method defined but not called: '
+
+DEF_NAME = "Defined methods shall be called at least once."
+
+# The ID for the check
+def ids():
+    return ('JAVA_04')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'JAVA_04': "All Checks\\Language Specific\\Java\\" + DEF_NAME,
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_04': [
+            'Language: Java',
+            'Functions',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """ 
+<p><b>Rationale</b></p>
+Functions or procedures that are not called may be symptomatic of a serious problem, such as missing paths.</p>
+
+<p><i>Developer Notes:</i> There are many exceptions to the rule such as abstract methods, getters, setters, etc. Most can be modified in the options.</i></p>"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox('over', "Skip overrides", True)
+    check.option().text('exceptions','Exception List (Comma Delimited)','finalize,get,set,test,init,main')
+    check.option().text('annoexceptions','Annotation Exception List (Comma Delimited)','Deprecated,Override,Test')
+
+def check(check, file):
+    overrides = check.option().lookup('over')
+
+    textList = check.option().lookup('exceptions')
+    textList = re.sub(r'\s', '', textList)
+    exc = textList.split(',')
+    exceptions = [x.lower() for x in exc]
+
+    textList = check.option().lookup('annoexceptions')
+    textList = re.sub(r'\s', '', textList)
+    annotation = textList.split(',')
+
+    for mRef in file.filerefs("Define", "Method ~Abstract ~Constructor ~Implicit", True):
+        if not isUsed(mRef, exceptions, overrides, annotation, check):
+            pm(ERR1 + mRef.ent().name(), check, mRef.ent(), file, mRef.line(), mRef.column())
+
+def isUsed(ref, e, o, a, check = None):
+    if not ref.ent():
+        return True
+
+    if "Lambda" in ref.ent().kindname():
+        return True
+
+    for s in e:
+        if s in ref.ent().name().lower():
+            return True
+
+    if len(ref.ent().refs("Override")) > 0 and o:
+        return True
+
+    if len(ref.ent().refs("Overriddenby")) > 0 and o:
+        return True
+
+    anno = ref.ent().refs("Annotation")
+    for an in anno:
+        if an.ent() and an.ent().name() in a:
+            #speical
+            return True
+
+    if len(ref.ent().refs("Callby")) > 0:
+        return True
+
+    return False
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

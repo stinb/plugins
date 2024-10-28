@@ -1,0 +1,165 @@
+ERR1 = "For-range-initializer contains more than one function call"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_9.5.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_9.5.2': 'Published Standards/MISRA C++ 2023/9.5.2 A for-range-initializer shall contain at most one function call'
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_9.5.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_9.5.2': """
+<p><b>Amplification</b></p>
+<p>The for-range-initializer occurs within the range-based for statement:</p>
+<p>for ( for-range-declaration : for-range-initializer ) statement</p>
+<p>For the purposes of this rule, the following are also considered to be function calls:</p>
+<p>● Any expression creating an object of class type; and</p>
+<p>● Any use of an overloaded operator.</p>
+
+<p><b>Rationale</b></p>
+<p>Compliance with this rule will avoid the undefined behaviour related to object lifetime violations when
+the for-range-initializer of a range-based for statement creates a temporary object.</p>
+<p>The range-based for statement is de9ned within the C++ Standard as being equivalent to:</p>
+<pre><code language="C++">{
+ auto && __range = for-range-initializer;
+ auto __begin = begin-expr; // Uses __range
+ auto __end = end-expr;
+ for ( ; __begin != __end; ++__begin)
+ {
+ for-range-declaration = *__begin;
+ statement
+ }
+}</code></pre>
+<p>Even though lifetime extension through __range will extend the lifetime of the outermost temporary
+object of the for-range-initializer, it will not extend the lifetime of an intermediate temporary. The rules
+for temporary lifetime extension are subtle and it is easy to accidentally trigger undefined behaviour
+by accessing a temporary object after its lifetime has ended (see Rule 6.8.1).</p>
+<p>Creating a temporary object containing a range requires a function call, and only a second call can
+result in creating a reference to or into it. Therefore, allowing no more than one function call eliminates
+the risk in a way that is decidable at the expense of prohibiting some non-problematic cases. Defining a
+variable holding the value of the desired for-range-initializer and using that variable will always be
+compliant with this rule.</p>
+<p>Note: these lifetime issues with range-for statements have been resolved from C++23.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">extern std::vector &lt; std::string &gt; make();
+void f()
+{
+ for ( char c: make().at( 0 ) ) // Non-compliant - two function calls
+ {
+ }
+}
+void g()
+{
+ auto range = make().at( 0 ); // Note that auto && would dangle
+ for ( char c: range ) // Compliant - no call when using named range
+ {
+ }
+}
+void h()
+{
+ for ( auto s: make() ) // Compliant - single function call
+ {
+ }
+}</code></pre>
+
+<p>The following shows an example that has no undefined behaviour, but which includes non-compliant
+cases as a consequence of preferring a decidable check:</p>
+<pre><code language="C++">std::vector &lt; std::string &gt; make( std::string_view );
+void bar( std::string s )
+{
+ for ( auto e : make( s ) ) // Non-compliant - call to 'make' and an
+ { // implicit conversion to std::string_view
+ }
+ auto r = make( s );
+ for ( auto e : r ) // Compliant version of the above
+ {
+ }</code></pre>
+
+<p><b>Developer's Note</b></p>
+<p>Some violations may not be flagged by this check, as implicit function calls and the use of overloaded operators in a for-range-initializer cannot be counted due to limitations.</p>
+
+<p><b>See also</b></p>
+<p>Rule 6.8.1</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if "for" not in file.contents():
+        return
+    
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+
+    while lex:
+        if (lex.text() == "for") and (lex.token() == "Keyword"):
+            for_init = False
+            ternary_op = False
+            on_for = 1            
+            call = 0
+            
+            while on_for:
+                if lex.text() == "(":
+                    on_for += 1
+                elif lex.text() == ")":
+                    on_for -= 1
+
+                    if on_for == 1:
+                        break
+                elif not for_init and (on_for == 2) and (lex.text() == "?") and (lex.token() == "Operator"):
+                    ternary_op = True
+                elif not ternary_op and (on_for == 2) and (lex.text() == ":") and (lex.token() == "Operator"):
+                    for_init = True
+                elif for_init and lex.ent():
+                    for call_ref in lex.ent().refs("Callby"):
+                        if (call_ref.line() == lex.line_begin()) and (call_ref.column() == lex.column_begin()):
+                            call += 1
+                            break
+                
+                if call > 1:
+                    check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                    break
+
+                lex = lex.next(True, True)
+
+        lex = lex.next(True, True)
+        
+               
+
+                

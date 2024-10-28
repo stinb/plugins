@@ -1,0 +1,232 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 3-30-22
+
+
+import re
+from math import e, log, sin, sqrt
+
+
+ERR1 = 'Function maintainability metric %1 is below %2'
+
+
+def id():
+    return 'METRIC_13'
+
+
+def name():
+    return 'All Checks/Metrics/Maintainability Index'
+
+
+
+def tags(id):
+    return {
+        'METRIC_13': [
+        'Language: Ada',
+        'Language: C',
+        'Language: C++',
+        'Language: C#',
+        'Language: Fortran',
+        'Language: Java',
+        'Language: Jovial',
+        'Language: Python',
+        'Language: Pascal',
+        'Language: VHDL',
+        'Language: Web',
+        'Metrics',
+    ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+Calculates an index value between 0 and 100 for functions and methods. This number represents the relative ease of maintaining the code. A high value means better maintainability.
+</p>
+
+<p>
+See https://docs.microsoft.com/en-us/visualstudio/code-quality/code-metrics-values?view=vs-2022
+</p>
+
+<p><b>Calculation</b></p>
+
+<p>
+Program Vocabulary = Distinct Operators + Distinct Operands
+</p>
+
+<p>
+Program Length = Total Operators + Total Operands
+</p>
+
+<p>
+Halstead Volume = Program Length * log2(Program Vocabulary)
+</p>
+
+<p>
+Halstead Volume: https://en.wikipedia.org/wiki/Halstead_complexity_measures
+</p>
+
+<p>
+Cyclomatic Complexity: https://support.scitools.com/support/solutions/articles/70000582297-understanding-mccabe-cyclomatic-complexity
+</p>
+
+<p>
+Maintainability Index = MAX(0,(171 - 5.2 * ln(Halstead Volume) - 0.23 * (Cyclomatic Complexity) - 16.2 * ln(Lines of Code))*100 / 171)
+</p>
+
+<p>
+Maintainability Index: https://docs.microsoft.com/en-us/visualstudio/code-quality/code-metrics-maintainability-index-range-and-meaning?view=vs-2022
+</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language in {'Ada', 'C++', 'Java'}
+
+
+def define_options(check):
+    check.options().integer('minimum', 'Minimum allowed maintainability metric', 20)
+
+
+def log2(x):
+    if x <= 0:
+        x = 1
+    return log(x, 2)
+
+
+def ln(x):
+    if x <= 0:
+        x = 1
+    return log(x, e)
+
+
+# Return array of functions in a file
+def getFuncs(file, lexer):
+    language = file.language()
+    funcs = []
+
+    refKind = None
+    entKind = None
+    if language == 'Ada':
+        refKind = 'declarein body'
+        entKind = 'function, procedure'
+    elif language == 'Java':
+        refKind = 'definein'
+        entKind = 'method'
+    elif language == 'C++':
+        refKind = 'definein'
+        entKind = 'function'
+    else:
+        return
+
+    for lexeme in lexer.lexemes():
+        ref = lexeme.ref()
+        if ref:
+            ent = lexeme.ent()
+        if ref and ent and ref.kind().check(refKind) and ent.kind().check(entKind):
+            funcs.append(ent)
+
+    return funcs
+
+
+# Return declaration ref (based on language) or 0 if unknown
+def getDeclRef(ent):
+    language = ent.language()
+
+    if language == 'Ada':
+        decl = ent.refs('declarein body', '', True)
+    elif language in {'C++', 'Java'}:
+        decl = ent.refs('definein', '', True)
+        if not decl:
+            decl = ent.refs("declarein", '', True)
+
+    if decl:
+        return decl[0]
+
+
+# Scan the code in the specified range of lines and return the 4 basic operator/operand metrics
+def scanEntity(lexer, startLine, endLine):
+    distinctOperators = 0
+    distinctOperands = 0
+    totalOperators = 0
+    totalOperands = 0
+
+    distinctOperatorSet = set()
+    distinctOperandSet = set()
+
+    for lexeme in lexer.lexemes(startLine, endLine):
+        if lexeme.token() in {'Operator', 'Keyword', 'Punctuation'}:
+            if lexeme.text() not in {')', '}', ']'}:
+                distinctOperatorSet.add(lexeme.text())
+                totalOperators += 1
+        elif lexeme.token() in {'Identifier', 'Literal', 'String'}:
+            distinctOperandSet.add(lexeme.text())
+            totalOperands += 1
+
+    distinctOperators = len(distinctOperatorSet)
+    distinctOperands = len(distinctOperandSet)
+
+    return distinctOperators, distinctOperands, totalOperators, totalOperands
+
+
+def check(check, file):
+    # Skip standard library functions
+    if file.library() == 'Standard':
+        return
+
+    fileMetric = {}
+    lexer = file.lexer()
+    if not lexer:
+        return
+    lexeme = lexer.first()
+
+    funcs = getFuncs(file, lexer)
+
+    fileFuncCount = 0
+    fileLineCount = 0
+    fileComplexitySum = 0
+
+    for func in funcs:
+        startRef = getDeclRef(func)
+        endRef = func.refs('end', '', True)
+        if endRef:
+            endRef = endRef[0]
+
+        if not startRef or not endRef:
+            continue
+
+        # Calculate Halstead volume
+        startLine, endLine = startRef.line(), endRef.line()
+        distinctOperators, distinctOperands, totalOperators, totalOperands = scanEntity(lexer, startLine, endLine)
+        programVocabulary = distinctOperators + distinctOperands
+        programLength = totalOperators + totalOperands
+        halsteadVolume = programLength * log2(programVocabulary)
+
+        # Get built-in dependency metrics
+        cyclomaticComplexity = func.metric(['CyclomaticStrict'])['CyclomaticStrict']
+        linesOfCode = func.metric(['CountLine'])['CountLine']
+
+        # Skip entities that don't have metrics
+        if not linesOfCode:
+            continue
+
+        # Calculate maintainability index
+        index = max(0, (171 - 5.2 * ln(halsteadVolume) - 0.23 * cyclomaticComplexity - 16.2 * ln(linesOfCode)) * 100 / 171)
+
+        # Violate if the function maintainability metric is too low
+        index = round(index)
+        minimum = round(check.options().lookup('minimum'))
+        if index < minimum:
+            ent = func
+            ref = startRef
+
+            check.violation(ent, ref.file(), ref.line(), ref.column(), ERR1, index, minimum)

@@ -1,0 +1,217 @@
+ERR1 = 'Only nullptr literal shall be used as the null-pointer-constant'
+ERR2 = 'The macro NULL shall not be used'
+
+
+# The ID for the check
+def ids():
+    return ('A4-10-1', 'CPP_P040', 'MISRA23_7.11.1')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A4-10-1': 'Published Standards/AUTOSAR/Only nullptr literal shall be used as the null-pointer-constant',
+        'CPP_P040': 'All Checks/Language Specific/C and C++/Pointers/Only nullptr literal shall be used as the null-pointer-constant',
+        'MISRA23_7.11.1': 'Published Standards/MISRA C++ 2023/7.11.1 nullptr shall be the only form of the null-pointer-constant',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A4-10-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P040': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+        'MISRA23_7.11.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_7.11.1':
+        return '''
+<p><b>Amplification</b></p>
+
+<p>Using any integral literal representing zero, including the literal 0 or the macro NULL, to represent the
+null-pointer-constant is a violation of this rule.</p>
+<p>In addition, the macro NULL shall not be used in any other context.</p>
+
+<p><b>Rationale</b></p>
+<p>The C++ Standard defines the object nullptr as the null-pointer-constant.</p>
+<p>The literal 0 can also be used to represent a null-pointer-constant. However, 0 has type int, and its use
+can lead to unexpected overload resolution. Note that the macro NULL expands to 0.</p>
+<p>Note: some library functions provide overloads for std::nullptr_t so that they can be selected
+during overload resolution at compile-time, avoiding the need for a run-time check against nullptr.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1( int32_t * );
+void f2()
+{
+ f1( nullptr ); // Compliant
+ f1( 0 ); // Non-compliant - 0 used as the null pointer constant
+}
+</code></pre>
+
+<p>The following example shows the selection of an integer overload when NULL (which has a value of 0)
+is used instead of nullptr: </p>
+
+<pre><code language="C++">void f3( int32_t );
+void f3( int32_t * );
+void f4()
+{
+ f3( NULL ); // Non-compliant - calls the int32_t overload
+ f3( nullptr ); // Compliant - calls the int32_t * overload
+}
+</code></pre>
+
+<p>The following example shows non-compliant uses of NULL, where it is not used as the null-pointerconstant:</p>
+
+<pre><code language="C++">#define MYNULL NULL // Non-compliant
+void f5()
+{
+ int32_t one = NULL + 1; // Non-compliant - NULL used as an integer
+ throw NULL; // Non-compliant - caught by catch ( int )
+}
+
+</code></pre>
+
+        '''
+
+    return """
+<p><b>Rule</b></p>
+<p>Only nullptr literal shall be used as the null-pointer-constant.</p>
+<p><b>Rationale</b></p>
+<p>In C++, the literal NULL is both the null-pointer-constant and an integer type. To meet
+developer expectations, only nullptr pointer literal shall be used as the null-pointer-constant.</p>
+<p>Note that, nullptr pointer literal allows parameters forwarding via a template function.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">//% $Id: A4-10-1.cpp 298086 2017-11-24 11:13:27Z michal.szczepankiewicz $
+#include &lt;cstddef&gt;
+#include &lt;cstdint&gt;
+
+void F1(std::int32_t);
+void F2(std::int32_t*);
+void F3()
+{
+    F1(0);    // Compliant
+    F1(NULL); // Non-compliant - NULL used as an integer,
+    // compilable
+    // f1(nullptr); // Non-compliant - nullptr used as an integer
+    // compilation error
+    F2(0);       // Non-compliant - 0 used as the null pointer constant
+    F2(NULL);    // Non-compliant - NULL used as the null pointer constant
+    F2(nullptr); // Compliant
+}
+void F4(std::int32_t*);
+template &lt;class F, class A&gt;
+void F5(F f, A a)
+{
+    F4(a);
+}
+void F6()
+{
+    // f5(f4, NULL); // Non-compliant - function f4(std::int32_t) not declared
+    F5(F4, nullptr); // Compliant
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>• HIC++ v4.0 [9]: 2.5.3 Use nullptr for the null pointer constant</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('flagAllNull', 'Flag all the uses of macro NULL', False)
+
+
+def check(check, file):
+    flagged_lines = []
+
+    for func_ref in file.filerefs("Declare", "Function"):
+        func_params = []
+
+        for param_ref in func_ref.ent().refs("", "Parameter"):
+            utype = param_ref.ent().freetext("UnderlyingType")
+
+            if utype and ("int" in utype):
+                func_params.append(utype)
+            else:
+                func_params.append(False)
+
+        if any(func_params):
+            for call_ref in func_ref.ent().refs("Callby"):
+                lexer = call_ref.file().lexer()
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                in_param = 0
+                call_params = []
+                param = ""
+
+                if lex.ent() and lex.ent().kind().check("Macro"):
+                    continue
+
+                while lex and lex.text() != ";":
+                    if lex.text() == "(" and lex.token() == "Punctuation":
+                        in_param += 1
+                    elif lex.text() == ")" and lex.token() == "Punctuation":
+                        in_param -= 1
+
+                        if not in_param:
+                            call_params.append(param)
+                            break
+                    elif in_param and lex.text() != ",":
+                        param += lex.text()
+                    elif in_param and lex.text() == ",":
+                        call_params.append(param)
+                        param = ""
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+                for ind, param in enumerate(call_params):
+                    func_type = False
+                    # Normal argument
+                    if ind < len(func_params):
+                        func_type = func_params[ind]
+                    # Variadic argument (any type)
+                    else:
+                        func_type = "*"
+
+                    if func_type and (("*" in func_type and param in {"0", "NULL"}) or (param == "NULL")):
+                        check.violation(call_ref.scope(), call_ref.file(), call_ref.line(), call_ref.column(), ERR1)
+
+                        if call_ref.file().id() == file.id():                                
+                            flagged_lines.append(call_ref.line())
+
+    if check.options().lookup('flagAllNull'):
+        for macro_ref in file.filerefs("", "Macro"):
+            if (macro_ref.ent().name() == "NULL") and macro_ref.line() not in flagged_lines:
+                check.violation(macro_ref.ent(), file, macro_ref.line(), macro_ref.column(), ERR2)

@@ -1,0 +1,293 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-11-22
+
+
+import re
+from Modules import refBetweenNodes
+
+
+ERR1 = 'Non-throwing function should have noexcept specification'
+
+FUNCTION_KIND = '~Implicit Function'
+
+
+throwingFunctions = dict() # { ent: boolean, ... }
+triedFunctions    = dict() # { ent: boolean, ... }
+
+ignoredExtensions = set()
+
+
+def ids():
+    return ('A15-4-4', 'CPP_EH005')
+
+
+def name(id):
+    return {
+        'A15-4-4': '''Published Standards/AUTOSAR/\
+A declaration of non-throwing function shall contain noexcept specification''',
+        'CPP_EH005': '''All Checks/Language Specific/C and C++/Exception Handling/\
+A declaration of non-throwing function shall contain noexcept specification''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A15-4-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Exception Handling',
+        ],
+        'CPP_EH005': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+<p>
+Noexcept specification is a method for a programmer to inform the compiler
+whether or not a function should throw exceptions. The compiler can use this
+information to enable certain optimizations on non-throwing functions as well
+as enable the noexcept operator, which can check at compile time if a particular
+expression is declared to throw any exceptions.
+</p>
+<p>
+Noexcept specification is also a method to inform other programmers that a
+function does not throw any exceptions.
+</p>
+<p>
+A non-throwing function needs to declare noexcept specifier. A function that may
+or may not throw exceptions depending on a template argument, needs to
+explicitly specify its behavior using noexcept(&lt;condition&gt;) specifier.
+</p>
+<p>
+Note that it is assumed that a function which does not contain explicit noexcept
+specification throws exceptions, similarly to functions that declare
+noexcept(false) specifier.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">//% $Id: A15-4-4.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;iostream&gt;
+#include &lt;stdexcept&gt;
+void F1(); // Compliant - f1, without noexcept specification, declares to throw
+           // exceptions implicitly
+void F2() noexcept;        // Compliant - f2 does not throw exceptions
+void F3() noexcept(true);  // Compliant - f3 does not throw exceptions
+void F4() noexcept(false); // Compliant - f4 declares to throw exceptions
+void F5() noexcept         // Compliant - f5 does not throw exceptions
+{
+    try
+    {
+        F1(); // Exception handling needed, f1 has no noexcept specification
+    }
+
+    catch (std::exception& e)
+    {
+        // Handle exceptions
+    }
+
+    F2(); // Exception handling not needed, f2 is noexcept
+    F3(); // Exception handling not needed, f3 is noexcept(true)
+
+    try
+    {
+        F4(); // Exception handling needed, f4 is noexcept(false)
+    }
+
+    catch (std::exception& e)
+    {
+        // Handle exceptions
+    }
+}
+template &lt;class T&gt;
+void F6() noexcept(noexcept(T())); // Compliant - function f6() may be
+                                   // noexcept(true) or noexcept(false)
+                                   // depending on constructor of class T
+template &lt;class T&gt;
+class A
+{
+    public:
+        A() noexcept(noexcept(T())) // Compliant - constructor of class A may be
+        // noexcept(true) or noexcept(false) depending on
+        // constructor of class T
+        {
+        }
+};
+class C1
+{
+    public:
+        C1()
+            noexcept(
+                    true) // Compliant - constructor of class C1 does not throw exceptions
+            {
+            }
+        // ...
+};
+class C2
+{
+    public:
+        C2() // Compliant - constructor of class C2 throws exceptions
+        {
+        }
+        // ...
+};
+void F7() noexcept // Compliant - f7 does not throw exceptions
+{
+    std::cout &lt;&lt; noexcept(A&lt;C1&gt;()) &lt;&lt; '\\n'; // prints '1' - constructor of
+                                            // A&lt;C1&gt; class is noexcept(true)
+                                            // because constructor of C1 class
+                                            // is declared to be noexcept(true)
+    std::cout &lt;&lt; noexcept(A&lt;C2&gt;()) &lt;&lt; '\\n'; // prints '0' - constructor of
+                                            // A&lt;C2&gt; class is noexcept(false)
+                                            // because constructor of C2 class
+                                            // has no noexcept specifier
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+In the above example, the following functions are treated as if they implicitly
+throw exceptions.
+<ul>
+<li>Functions which are called in try blocks (<code>F1</code>)</li>
+<li>Constructors (<code>C2</code>)</li>
+</ul>
+If these kinds of functions are treating as throwing functions, then there may
+be false negatives.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('tryIsThrow', 'Called in try = implicit throw', False)
+    check.options().checkbox('ctorIsThrow', 'Constructor = implicit throw', False)
+    check.options().checkbox('dtorIsThrow', 'Destructor = implicit throw', False)
+    check.options().text('ignoredExtensions', 'Ignored file extensions (space-separated, dots not neccessary)', '.c')
+
+
+def functionThrows(function):
+    # Base case: already checked
+    if function in throwingFunctions:
+        return throwingFunctions[function]
+    throwingFunctions[function] = False
+
+    # Skip if function definition directly throws
+    contents = function.contents()
+    contents = re.sub(r'\/\/.*?\n','\n', contents)
+    contents = re.sub(r'\/\*[\s\S]*?\*\/','\n', contents)
+    if re.search(r'\Wthrow\W', contents):
+        throwingFunctions[function] = True
+        return True
+
+    # Skip if function definition indirectly throws
+    for call in function.refs('Call', FUNCTION_KIND):
+        if functionThrows(call.ent()):
+            throwingFunctions[function] = True
+            return True
+
+    return False
+
+
+def refInTry(function, ref):
+    cfg = function.control_flow_graph()
+    if not cfg:
+        return False
+
+    # Get try & catch nodes
+    for tryNode in cfg.nodes():
+        if tryNode.kind() != 'try':
+            continue
+        for catchNode in tryNode.children():
+            if catchNode.kind() != 'try-catch':
+                continue
+
+            # See if the ref is between them
+            if refBetweenNodes(tryNode, ref, catchNode):
+                return True
+
+    return False
+
+
+def functionTried(function):
+    if function in triedFunctions:
+        return triedFunctions[function]
+    triedFunctions[function] = False
+
+    for call in function.refs('Callby', 'Function'):
+        if refInTry(call.ent(), call):
+            triedFunctions[function] = True
+            return True
+
+    return False
+
+
+def checkFunctionDeclaration(check, dec, tryIsThrow, ctorIsThrow, dtorIsThrow):
+    function = dec.ent()
+
+    # Skip if function throws directly or indirectly
+    if functionThrows(function):
+        return
+
+    # Skip if this function is a constructor
+    if ctorIsThrow and function.kind().check('Member'):
+        parent = function.parent()
+        if parent and function.name() == parent.name():
+            return
+
+    # Skip if this function is a destructor
+    if dtorIsThrow and function.kind().check('Member'):
+        parent = function.parent()
+        if parent and function.name() == '~' + parent.name():
+            return
+
+    # Skip if this function is called in a try statement
+    if tryIsThrow and functionTried(function):
+        return
+
+    # Skip if this declaration prototype has noexcept specification
+    lex = dec.file().lexer(False).lexeme(dec.line(), dec.column())
+    while lex and lex.text() not in {';', '{'}:
+        if lex.text() == 'noexcept':
+            return
+        lex = lex.next(True, True)
+
+    check.violation(function, dec.file(), dec.line(), dec.column(), ERR1)
+
+
+def check(check, file):
+    # Options
+    tryIsThrow  = check.options().lookup('tryIsThrow')
+    ctorIsThrow = check.options().lookup('ctorIsThrow')
+    dtorIsThrow = check.options().lookup('dtorIsThrow')
+    if not ignoredExtensions:
+        for ext in check.options().lookup('ignoredExtensions').split(' '):
+            ignoredExtensions.add(ext)
+
+    # Ignore files with certain extensions
+    ext = re.match(r'.*(\..*)', file.name())
+    if ext and ext[1] in ignoredExtensions:
+        return
+
+    for ref in file.filerefs('Declare, Define', FUNCTION_KIND):
+        checkFunctionDeclaration(check, ref, tryIsThrow, ctorIsThrow, dtorIsThrow)

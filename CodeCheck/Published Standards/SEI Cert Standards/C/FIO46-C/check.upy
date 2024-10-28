@@ -1,0 +1,170 @@
+import re
+
+
+ERR1 = 'Do not access a closed file.'
+
+
+# The ID for the check
+def id():
+    return ('FIO46-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO46-C': 'Published Standards/SEI Cert Standards/C/Do not access a closed file',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO46-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not access a closed file'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not access a closed file</p>
+<p><b>Risk Assessment</b></p>
+<p>Using the value of a pointer to a FILE object after the associated file is closed is undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO46-C.+Do+not+access+a+closed+file</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+int close_stdout(void) {
+  if (fclose(stdout) == EOF) {
+    return -1;
+  }
+
+  printf("stdout successfully closed.\n");
+  return 0;
+}
+</code></pre>
+<p><i>Developer Notes: </i>The check might flag some false positive violations when a file is accessed after fclose is called, \
+even if it\'s in a different a scope (e.g if-else scope).</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref):
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        FILE_STREAMS = {"stdout": False,
+                        "stderr": False,
+                        "stdin": False}  # True if closed
+        STDOUT_FUNCS = "put.*|.*printf.*"
+        STDIN_FUNCS = "get.*|.*scanf.*"
+        INPUT_STREAM = {"fgets", "ungetc"}
+        OUTPUT_STREAM = {"fputc", "putc", "fputs"}
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Unresolved Function"), key=lambda x: x.line()):
+
+            if call_ref.ent().longname() == "fclose":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(" and lex.token() == "Punctuation":
+                        on_param += 1
+                    elif lex.text() == ")" and lex.token() == "Punctuation":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif lex.text() in FILE_STREAMS and lex.token() == "Identifier":
+                        FILE_STREAMS[lex.text()] = True
+                    elif lex.ent() and lex.ent().type() == "FILE *":
+                        for use_ref in lex.ent().refs("Useby"):
+                            if (use_ref.ent().id() == func_ref.ent().id()) and (use_ref.line() > lex.line_begin()):
+                                lex = lexer.lexeme(
+                                    use_ref.line(), use_ref.column())
+                                on_param = 1
+
+                                while on_param:
+                                    if lex.text() == "(":
+                                        on_param -= 1
+                                    elif lex.text() == ")":
+                                        on_param += 1
+
+                                    lex = lex.previous(
+                                        ignore_whitespace=True, ignore_comments=True)
+
+                                if lex.text() == "fclose" and lex.token() == "Identifier":
+                                    continue
+
+                                check_violation(use_ref)
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+            elif call_ref.ent().longname() in INPUT_STREAM:
+                if file_stream_closed(lexer, call_ref, FILE_STREAMS, "stdin"):
+                    check_violation(call_ref)
+            elif call_ref.ent().longname() in OUTPUT_STREAM:
+                if file_stream_closed(lexer, call_ref, FILE_STREAMS, "stdout"):
+                    check_violation(call_ref)
+            elif re.search(STDOUT_FUNCS, call_ref.ent().longname()):
+                if FILE_STREAMS["stdout"]:
+                    check_violation(call_ref)
+            elif call_ref.ent().longname() == "perror":
+                if FILE_STREAMS["stderr"]:
+                    check_violation(call_ref)
+            elif re.search(STDIN_FUNCS, call_ref.ent().longname()):
+                if FILE_STREAMS["stdin"]:
+                    check_violation(call_ref)
+
+
+def file_stream_closed(lexer, call_ref, FILE_STREAMS, stream_type):
+    lex = lexer.lexeme(call_ref.line(), call_ref.column())
+    on_param = 0
+
+    while lex and lex.line_begin() == call_ref.line():
+        if lex.text() == "(" and lex.token() == "Punctuation":
+            on_param += 1
+        elif lex.text() == ")" and lex.token() == "Punctuation":
+            on_param -= 1
+
+            if not on_param:
+                break
+        elif on_param and lex.text() == stream_type and lex.token() == "Identifier":
+            return FILE_STREAMS[stream_type]
+
+        lex = lex.next(ignore_whitespace=True,
+                       ignore_comments=True)
+
+    return False

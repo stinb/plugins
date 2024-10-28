@@ -1,0 +1,164 @@
+import re
+
+ERR1 = 'Loop-control-variable of non-bool type modifified in statement'
+
+# The ID for the check
+def ids():
+    return ('M6-5-6', 'MISRA08_6-5-6', 'CPP_C040')
+
+# The short name of the check
+def name(id):
+    return {
+        'M6-5-6': 'Published Standards/AUTOSAR/A loop-control-variable other than the loop-counter which is modified in statement shall have type bool',
+        'MISRA08_6-5-6': 'Published Standards/MISRA-C++ 2008/6-5-6 A loop-control-variable other than the loop-counter which is modified in statement shall have type bool',
+        'CPP_C040': 'All Checks/Language Specific/C and C++/Control Flow/A loop-control-variable other than the loop-counter which is modified in statement shall have type bool',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-5-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'M6-5-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C040': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p><i>loop-control-variables</i> are typically used to terminate a for loop early. The code is easier to understand if this is done with the use of Boolean values (flags).</p>
+<p><b>Example</b></p>
+<pre><code language="C++">for ( x = 0; ( x &lt; 10 ) && ( u8a != 3U ); ++x )    // Non-compliant
+{
+    uint8_a = fn ( );
+}
+for ( x = 0; ( x &lt; 10 ) && flag; ++x )             // Compliant
+{
+    u8a = fn ( );
+    flag = u8a != 3U;
+}
+</code></pre>
+"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# User-defined functions
+def validate_operand(lex, ctr_ent):
+    # go left
+    return_value = None
+    resume = False
+    temp_lex = lex
+
+    while temp_lex and not temp_lex.text() in ["for"]:
+        # if right operand
+        if not resume:
+            if temp_lex.text() in ["&&","||"] and temp_lex.token() == "Operator":
+                # left operand indicator - skip
+                break
+            elif temp_lex.text() in ["<",">","<=",">=","==","!="] and temp_lex.token() == "Operator":
+                # right operand confirmation
+                resume = True
+        else:
+            if temp_lex.ent() and temp_lex.token() == "Identifier":
+                if not temp_lex.ent() == ctr_ent:
+                    return_value = False
+                else:
+                    # entity and same with loop-counter ent
+                    return_value = True
+                break
+        temp_lex = temp_lex.previous(ignore_whitespace=True,ignore_comments=True)
+
+    # go right
+    temp_lex = lex
+    resume = False
+    if return_value == None:
+        while temp_lex and not temp_lex.text() in [";","{"]:
+            # if left operand
+            if not resume:
+                if temp_lex.text() in ["&&","||"] and temp_lex.token() == "Operator":
+                    # right operand indicator - skip
+                    break
+                elif temp_lex.text() in ["<",">","<=",">=","==","!=","&"] and temp_lex.token() == "Operator":
+                    # left operand confirmation
+                    resume = True
+            else:
+                if temp_lex.ent() and temp_lex.token() == "Identifier":
+                    if not temp_lex.ent() == ctr_ent:
+                        return_value = False
+                    else:
+                        # entity and same with loop-counter ent
+                        return_value = True
+                    break
+            temp_lex = temp_lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    # return False, if return_value is still None
+    return False if return_value == None else True
+
+
+def validate_loop(lex, isfor, check, file):
+    ctr_ent = None
+    temp_lex = lex
+
+    # block that gets the actual counter entity
+    while temp_lex and not temp_lex.text() in [";","{"]:
+        if temp_lex.ent() and temp_lex.ent().kind().check("~Unresolved Object") and temp_lex.ent().refs("Modifyby"):
+            if ctr_ent == None:
+                ctr_ent = temp_lex.ent()
+        temp_lex = temp_lex.next(ignore_whitespace=True,ignore_comments=True)
+
+    if ctr_ent != None :
+
+        if isfor:
+            temp_lex.text() == ";" and (temp_lex := temp_lex.next(ignore_whitespace=True,ignore_comments=True))
+        else:
+            temp_lex = lex
+
+        # traverse the whole condition block and validate
+        while temp_lex and not temp_lex.text() in [";","{"]:
+            if temp_lex.ent() and temp_lex.ent().kind().check("~Unresolved Object") and temp_lex.token() == "Identifier":
+                # A loop-control-variable other than the loop-counter
+                # which is modified in statement shall have type bool.
+                if not ctr_ent == temp_lex.ent() and not re.search(r"bool", str(temp_lex.ent().type())):
+                    # if entity is needed to be checked
+                    if not validate_operand(temp_lex, ctr_ent) and ctr_ent != None:
+                        check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+                        break
+            temp_lex = temp_lex.next(ignore_whitespace=True,ignore_comments=True)
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+    while lex:
+        if (lex.text() == "for") and lex.token() == "Keyword":
+            validate_loop(lex, lex.text() == "for", check, file)
+        lex = lex.next(ignore_whitespace=True,ignore_comments=True)

@@ -1,0 +1,123 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8-24-2021
+import re
+
+ERR1 = 'std::make_shared was not used to construct std::shared_ptr %1'
+
+def ids():
+    return ('A20-8-6', 'CPP_P035')
+
+def name(id):
+    return {
+        'A20-8-6': """\
+Published Standards/AUTOSAR/std::make_shared shall be used to construct objects \
+owned by std::shared_ptr""",
+        'CPP_P035': """\
+All Checks/Language Specific/C and C++/Pointers/std::make_shared shall be used \
+to construct objects owned by std::shared_ptr"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A20-8-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P035': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>std::shared_ptr manages two entities: a control block (for meta data such as
+reference counter or type-erased deleter) and an allocated object. Using
+std::make_shared typically performs a single heap allocation (as it is
+recommended by the Standard) for both control block and allocated object.
+std::make_shared function also provides object allocation without explicit call
+of new function, see A18-5-2. It also ensures exception safety and prevents from
+memory leaks caused by unspecified-evaluationorder expressions.</p>
+<p><b>Exception</b></p>
+<p>It is allowed to use explicit new function call to create an instance of
+std::shared_ptr, if it requires a custom deleter. It is also allowed to
+construct objects owned by std::shared_ptr using std::allocate_shared.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A20-8-6.cpp 308507 2018-02-21 13:23:57Z michal.szczepankiewicz $
+2 #include &lt;memory&gt;
+3 #include &lt;cstdint&gt;
+4 #include &lt;functional&gt;
+5
+6 struct A
+7 {
+8 A() { throw std::runtime_error("example"); }
+9 A(std::uint8_t xx, std::uint8_t yy) : x(xx), y(yy) {}
+10 std::uint8_t x;
+11 std::uint8_t y;
+12 };
+13
+14 void Foo(std::shared_ptr&lt;A&gt; a, std::shared_ptr&lt;A&gt; b) { }
+15
+16 int main(void)
+17 {
+18 //compliant
+19 std::shared_ptr&lt;A&gt; upA = std::make_shared&lt;A&gt;(4,6);
+20 //non-compliant
+21 std::shared_ptr&lt;A&gt; upA2 = std::shared_ptr&lt;A&gt;(new A(5,7));
+22
+23 //non-compliant, potential memory leak, as A class constructor throws
+24 Foo(std::shared_ptr&lt;A&gt;(new A()), std::shared_ptr&lt;A&gt;(new A()));
+25 //non-compliant, potential memory leak, as A class constructor throws
+26 Foo(std::make_shared&lt;A&gt;(4,6), std::shared_ptr&lt;A&gt;(new A()));
+27 //compliant, no memory leaks
+28 Foo(std::make_shared&lt;A&gt;(4,6), std::make_shared&lt;A&gt;(4,6));
+29
+30 //compliant by exception
+31 std::shared_ptr&lt;A&gt; ptr(new A(4,5), [](A* b) { delete b; } );
+32
+33 return 0;
+34 }
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    refs = file.filerefs('Define', 'Object')
+
+    for ref in refs:
+        if re.match('__', ref.ent().name()):
+            continue
+        # Skip if not a shared_ptr
+        if not re.search(r'shared_ptr', str(ref.ent().freetext('UnderlyingType'))):
+            continue
+
+        # Skip if the value isn't' known
+        if not ref.ent().value():
+            continue
+
+        # Skip if reference
+        if re.search(r'&', ref.ent().freetext('UnderlyingType')):
+            continue
+
+        # Skip if the exception is found
+        if re.search(r'^new', ref.ent().value()) and re.search(r'delete', ref.ent().value()):
+            continue
+
+        # Throw violation if it isn't created with the make_shared keyword
+        if not re.search(r'make_shared', ref.ent().value()):
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())

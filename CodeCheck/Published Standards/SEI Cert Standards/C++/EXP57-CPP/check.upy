@@ -1,0 +1,236 @@
+import re
+
+
+ERR1 = 'Do not delete pointers to incomplete classes.'
+ERR2 = 'Do not cast pointers to incomplete classes.'
+
+
+# The ID for the check
+def ids():
+    return ('EXP57-CPP', 'MISRA23_21.6.5')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP57-CPP': 'Published Standards/SEI Cert Standards/C++/Do not cast or delete pointers to incomplete classes',
+        'MISRA23_21.6.5': 'Published Standards/MISRA C++ 2023/21.6.5 A pointer to an incomplete class type shall not be deleted',
+    }[id]
+
+
+def description(id):
+    return {
+        'EXP57-CPP': "Do not cast or delete pointers to incomplete classes",
+        'MISRA23_21.6.5': "A pointer to an incomplete class type shall not be deleted",
+    }[id]
+
+  
+def detailed_description(id):
+    return {
+        'EXP57-CPP': '''
+<p>Do not cast or delete pointers to incomplete classes</p>
+<p><b>Risk Assessment</b></p>
+<p>Casting pointers or references to incomplete classes can result in bad addresses. Deleting a pointer to an incomplete class results in undefined behavior if the class has a nontrivial destructor. Doing so can cause program termination, a runtime signal, or resource leaks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP57-CPP.+Do+not+cast+or+delete+pointers+to+incomplete+classes</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">class Handle {
+  class Body *impl;  // Declaration of a pointer to an incomplete class
+public:
+  ~Handle() { delete impl; } // Deletion of pointer to an incomplete class
+  // ...
+};
+
+
+// File1.h
+class B {
+protected:
+  double d;
+public:
+  B() : d(1.0) {}
+};
+  
+// File2.h
+void g(class D *);
+class B *get_d(); // Returns a pointer to a D object
+ 
+// File1.cpp
+#include "File1.h"
+#include "File2.h"
+ 
+void f() {
+  B *v = get_d();
+  g(reinterpret_cast&lt;class D *&gt;(v));
+}
+  
+// File2.cpp
+#include "File2.h"
+#include "File1.h"
+#include &lt;iostream&gt;
+ 
+class Hah {
+protected:
+  short s;
+public:
+  Hah() : s(12) {}
+};
+ 
+class D : public Hah, public B {
+  float f;
+public:
+  D() : Hah(), B(), f(1.2f) {}
+  void do_something() { std::cout &lt;&lt; "f: " &lt;&lt; f &lt;&lt; ", d: " &lt;&lt; d &lt;&lt; ", s: " &lt;&lt; s &lt;&lt; std::endl; }
+};
+ 
+void g(D *d) {
+  d-&gt;do_something();
+}
+ 
+B *get_d() {
+  return new D;
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check automatically flags the use of reinterpret_cast to a pointer class type.</p>''',
+        'MISRA23_21.6.5': '''
+<p><b>Rationale</b></p>
+<p>An incomplete class type is a forward declared class type for which the compiler has not yet seen
+a complete definition.</p>
+<p>Deleting a pointer to an incomplete class type results in undefined behaviour when the complete
+class type has a non-trivial destructor or a deallocation function.</p>
+<p>This rule prohibits deletion of a pointer to an incomplete class type even when it is a trivially destructible
+class without a deallocation function. This restriction defends against a non-trivial destructor or a
+deallocation function being added during development.</p>
+
+<p><b>Example</b></p>
+<p>The following examples violate Rule 21.6.2.</p>
+<pre><code language="C++">class Bad
+{
+ class Impl;
+ Impl * pImpl;
+public:
+ ~Bad()
+ {
+ delete pImpl; // Non-compliant - at the point of deletion, pImpl points
+ // to an object of incomplete class type.
+ }
+};
+// Header file
+class Good
+{
+ class Impl;
+ Impl * pImpl;
+public:
+ ~Good();
+};
+// Implementation file
+class Good::Impl
+{
+};
+// Good::Impl is a complete type now
+Good::~Good()
+{
+ delete pImpl; // Compliant - at the point of deletion, pImpl points to
+ // a complete class type.
+}
+
+</code></pre>
+''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'EXP57-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Pointers',
+        ],
+        'MISRA23_21.6.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Pointers',
+        ],
+    }.get(id)
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+def define_options(check):
+    cast = False if (check.id() == 'MISRA23_21.6.5') else True
+    check.option().checkbox('cast', 'Flag Casts', cast)
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object"):
+        obj_type = obj_ref.ent().type()
+        obj_ent, _ = get_ent_type(obj_ref.ent())
+        und_type = obj_ent.kind().longname()
+
+        if obj_type and und_type and ("*" in obj_type) and re.search(r"Class|Struct|Union", und_type):
+            type_ref = obj_ref.ent().ref("Typed")
+
+            if type_ref and not type_ref.ent().ref("Definein"):
+                for use_ref in obj_ref.ent().refs("Useby"):
+                    lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+
+                    while lex.token() != "Whitespace":
+                        lex = lex.previous()
+
+                    if lex.previous().text() == "delete":
+                        check.violation(use_ref.ent(), use_ref.file(
+                        ), use_ref.line(), use_ref.column(), ERR1)
+
+    if not check.option().lookup('cast'):
+        return
+
+    for cast_ref in file.filerefs("Cast Use", "Class, Struct, Union"):
+        lex = file.lexer().lexeme(cast_ref.line(), cast_ref.column())
+        prev_lex = lex
+        check_cast = False
+
+        while prev_lex:
+            if (prev_lex.token() == "Keyword") and ("cast" in prev_lex.text()):
+                if prev_lex.text() == "reinterpret_cast":
+                    check_cast = True
+
+                break
+
+            prev_lex = prev_lex.previous()
+
+        if not check_cast:
+            continue
+
+        if lex.next(ignore_whitespace=True).text() == "*":
+            check.violation(cast_ref.ent(), file,
+                            cast_ref.line(), cast_ref.column(), ERR2)
+
+        lex = lex.next(ignore_whitespace=True)
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()

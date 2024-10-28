@@ -1,0 +1,3 @@
+// possibleToIncludeMultipleTranslationsWithoutViolatingOneDefinition.cpp
+#include "possibleToIncludeMultipleTranslationsWithoutViolatingOneDefinition.h"
+//

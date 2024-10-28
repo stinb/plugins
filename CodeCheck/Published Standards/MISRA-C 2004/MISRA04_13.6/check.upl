@@ -1,0 +1,207 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Loop counter modified within loop statement';
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA04_13.6";}
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA-C 2004\\13.6 Numeric variables being used within a for loop for iteration counting shall not be modified in the body of the loop";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2004',
+    'Category: required',
+    'Variables',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { return "13.6 (Required) Numeric variables being used within a for loop for iteration counting shall not be modified in the body of the loop.";}
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Loop counters shall not be modified in the body of the loop. However other loop control variables
+representing logical values may be modified in the loop, for example a flag to indicate that
+something has been completed, which is then tested in the <i>for</i> statement.</p>
+<br>
+<p><b>Example</b></p><pre><code language="C++">  flag = 1;
+  for ( i = 0; (i &lt; 5) && (flag == 1); i++ )
+  {
+    /* ... */
+    flag = 0; /* Compliant - allows early termination of loop */
+    i = i + 3; /* Not compliant - altering the loop counter */
+  }
+</code></pre>
+
+END_DESC
+
+}
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+# This determines if this script is per file
+sub test_entity { return 1;}
+
+# This determines if this script is per project or per file
+sub test_global { return 0;}
+
+# Any defined options go here
+sub define_options{
+}
+
+
+# Use this function for throwing errors
+sub throwError {
+  my $check = shift;
+  my $ent = shift;
+  my $file = shift;
+  my $line = shift;
+  my $column = shift;
+  my $error = shift;
+  $check->violation($ent,$file,$line,$column,$error);
+}
+
+# This is the actual test being performed on the user's code
+sub check {
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file");
+
+  # Pull a list of all functions that are defined within this file
+  my @functionsDefined = $file->filerefs("Define", "Function");
+  return unless @functionsDefined;
+
+  # loop through all defined functions
+  foreach my $function(@functionsDefined) {
+
+    # Pull text of function
+    my $text = $function->ent->contents;
+    # Remove any // style comments
+    $text =~ s/\/\/.*?\n/\n/g;
+    # Remove any /* */ style comments
+    $text =~ s/\/\*.*?\*\//\n/gs;
+    # check if a for loop exists
+    next unless $text =~/for\s*\(/;
+
+    # Spin up lexer and find for loop
+    my $lexeme = $function->lexeme();
+
+    # Check entire function
+    my $end = $function->ent->ref('end')->line;
+    while ( $lexeme and $lexeme->line_begin < $end ) {
+
+      #$check->violation($function->ent, $file, $lexeme->line_begin, $lexeme->column_begin, $lexeme->text );
+
+      if ( $lexeme->token eq 'Keyword' and $lexeme->text eq 'for') {
+
+        # Move into for loop structure
+        $lexeme = $lexeme->nextUseful();
+        $lexeme = $lexeme->nextUseful();
+
+        # Check the first parameter to the for loop
+        my @init;
+        while ( $lexeme->text ne ';' ) {
+          push ( @init, $lexeme->text ) if $lexeme->token eq 'Identifier' and $lexeme->nextUseful->text eq '=';
+          $lexeme = $lexeme->next;
+        }
+
+        # Check the second parameter to the for loop
+        $lexeme = $lexeme->nextUseful;
+        while ( $lexeme->text ne ';' ) {
+          $lexeme = $lexeme->next;
+        }
+
+        # Check the third parameter to the for loop
+        while ($lexeme and $lexeme->text ne ')' ) {
+          $lexeme = $lexeme->nextUseful;
+        }
+        next unless $lexeme;
+
+        # Need to search body of for loop to ensure counter is not changed
+        # Creating a duplicate lexeme because this section will ignore nested for loops and we still want to check those with the original lexeme
+        my $bodyLexeme = $lexeme;
+        my $loopBody = '';
+
+        # There is no for loop block
+        if ( $bodyLexeme->nextUseful->text ne '{' ) {
+
+          while ( $bodyLexeme->text ne ';' ) {
+
+            $loopBody .= $bodyLexeme->text;
+            $bodyLexeme = $bodyLexeme->next;
+
+          }
+
+        # There is a standard loop block
+        } else {
+
+          while ( $bodyLexeme->text ne '{' ) {
+            $bodyLexeme = $bodyLexeme->nextUseful;
+          }
+          $bodyLexeme = $bodyLexeme->nextUseful;
+
+          my $count = 1;
+
+          while ( $count > 0 ) {
+            $count++ if $bodyLexeme->text eq '{';
+            $count-- if $bodyLexeme->text eq '}';
+
+            $loopBody .= $bodyLexeme->text;
+            $bodyLexeme = $bodyLexeme->next;
+          }
+
+
+          # Check each identifier within init for proper usage
+          foreach my $term( @init ) {
+
+            my $flag = 0;
+            $flag = 1 if $loopBody =~ /(\(|,)\s*&$term\s*(\)|,)/;
+            $flag = 1 if $loopBody =~ /(\(|,)\s*\*$term\s*(\)|,)/;
+            $flag = 1 if $loopBody =~ /[^A-Za-z_]$term\s*=[^=]/;
+
+            throwError($check, $function->ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1) if $flag == 1;
+
+          }
+        }
+
+      } else {
+        $lexeme = $lexeme->nextUseful;
+      }
+
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,185 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-12-05
+
+
+import re
+
+
+DEF_NAME = 'The memory allocation and deallocation functions of &lt;stdlib.h&gt; shall not be used'
+
+ERR1 = 'Memory allocation function of stdlib used'
+ERR2 = 'Memory deallocation function of stdlib used'
+
+ALLOCATION_FUNCTIONS = ['calloc', 'malloc', 'realloc']
+
+
+visitedFiles = set() # { fileEnt, ... }
+filesThatIncludeStdlib = dict() # { fileEnt: bool, ... }
+
+
+def ids():
+    return ('MISRA12_21.3', 'MISRA23_21.3')
+
+
+def name(id):
+    return {
+        'MISRA12_21.3': f'Published Standards/MISRA C 2012/21.3 {DEF_NAME}',
+        'MISRA23_21.3': f'Published Standards/MISRA C 2023/21.3 {DEF_NAME}',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_21.3': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Memory Allocation',
+        ],
+        'MISRA23_21.3': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    if id == 'MISRA23_21.3':
+        return '''
+<p><b>Amplification</b></p>
+The identifiers <i>calloc</i>, <i>malloc</i>, <i>realloc</i>, <i>aligned_alloc</i> and <i>free</i>
+shall not be used and no macro with one of these names shall be expanded.
+</p>
+
+<p><b>Rationale</b></p>
+Use of dynamic memory allocation and deallocation routines provided by The
+Standard Library can lead to undefined behaviour, for example:
+</p>
+
+<p>
+<ul>
+<li>
+Memory that was not dynamically allocated is subsequently freed;
+</li>
+<li>
+A pointer to freed memory is used in any way;
+</li>
+<li>
+Accessing allocated memory before storing a value into it.
+</li>
+</ul>
+</p>
+
+<p>
+Note: this rule is a specific instance of Dir 4.12.
+</p>
+
+<p><b>See also</b></p>
+Dir 4.12, Rule 18.7, Rule 22.1, Rule 22.2
+</p>
+        '''
+
+    return '''\
+<p><b>Amplification</b></p>
+The identifiers <i>calloc</i>, <i>malloc</i>, <i>realloc</i> and <i>free</i>
+shall not be used and no macro with one of these names shall be expanded.
+</p>
+
+<p><b>Rationale</b></p>
+Use of dynamic memory allocation and deallocation routines provided by The
+Standard Library can lead to undefined behaviour, for example:
+</p>
+
+<p>
+<ul>
+<li>
+Memory that was not dynamically allocated is subsequently freed;
+</li>
+<li>
+A pointer to freed memory is used in any way;
+</li>
+<li>
+Accessing allocated memory before storing a value into it.
+</li>
+</ul>
+</p>
+
+<p>
+Note: this rule is a specific instance of Dir 4.12.
+</p>
+
+<p><b>See also</b></p>
+Dir 4.12, Rule 18.7, Rule 22.1, Rule 22.2
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    aa = True if (check.id() == 'MISRA23_21.3') else False
+    check.options().checkbox('oneViolation', 'Limit one violation per file?', True)
+    check.option().checkbox('aa', 'Include aligned_alloc', aa)
+
+
+def fileIncludesStdlib(file):
+    # Base case: already visited
+    if file in visitedFiles:
+        # Base case: Check cache
+        if file in filesThatIncludeStdlib:
+            return filesThatIncludeStdlib[file]
+        # Base case: prevent circular recursion
+        return False
+    visitedFiles.add(file)
+
+    # Base case: directly included
+    for included in file.ents('Include'):
+        if included.name() in {'stdlib.h', 'cstdlib'}:
+            filesThatIncludeStdlib[file] = True
+            return True
+
+    # Recursion: indirectly included
+    for included in file.ents('Include'):
+        if fileIncludesStdlib(included):
+            filesThatIncludeStdlib[file] = True
+            return True
+
+    # Not included
+    filesThatIncludeStdlib[file] = False
+    return False
+
+
+def check(check, file):
+    oneViolation = check.options().lookup('oneViolation')
+
+    if check.option().lookup('aa'):
+        ALLOCATION_FUNCTIONS.append('aligned_alloc')
+
+    # Skip if stdlib isn't included
+    if not fileIncludesStdlib(file):
+        return
+
+    # Violation for each stdlib allocate/deallocate call
+    for ref in file.filerefs('Call', 'Function'):
+        ent = ref.ent()
+        if ent.name() in ALLOCATION_FUNCTIONS:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+            if oneViolation:
+                break
+        elif ent.name() == 'free':
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+            if oneViolation:
+                break

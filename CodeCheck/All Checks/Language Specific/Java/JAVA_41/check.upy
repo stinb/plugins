@@ -1,0 +1,117 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6-2-2022
+
+import re
+import Modules
+
+ERR1 = 'Method name should be prepended with the word "to"'
+
+def ids():
+    return ('JAVA_41')
+
+def name(id):
+    return {
+        'JAVA_41': '''All Checks/Language Specific/Java/\
+Any method that returns the object converted to another type shall be \
+prepended with the word "to" (e.g., c.toString()). \
+        ''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_41': [
+            'Language: Java',
+            'Functions',
+        ],
+
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Any method that returns the object converted to another type shall be
+prepended with the word "to" (e.g., c.toString()).</p>
+<p><b>Developer Notes: </b></p>
+<p>Selecting "Anywhere" won't be able to tell if "to" is its own word or part
+of another word</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_language(language):
+    return language == 'Java'
+
+def define_options(check):
+    check.option().choice('to', 'Select where to look for the word "to" in the method name:', ['Beginning','Anywhere'], 'Beginning')
+
+
+def check(check, file):
+    lexer = None
+    classRefs = file.filerefs('Define', 'Class')
+
+    to = check.option().lookup('to')
+
+
+    for classRef in classRefs:
+        refs = classRef.ent().refs('Define', 'Method')
+        for ref in refs:
+
+            # Skip if 'to' is in the method name
+            if to == 'Beginning':
+                if re.match(r'to', ref.ent().name().lower()):
+                    continue
+            if to == 'Anywhere':
+                if re.search(r'to', ref.ent().name().lower()):
+                    continue
+
+            type = ref.ent().type()
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            while lexeme and lexeme.text() != '{':
+                lexeme = lexeme.next(True, True)
+            if lexeme:
+                close = Modules.findClose(lexeme)
+
+            exit = False
+            while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                # Check variables by return
+                if lexeme.text() == 'return':
+                    while lexeme and lexeme.text() != ';':
+                        if lexeme.ent():
+                            if lexeme.ent().type() != type:
+                                # Throw violation if variable returned doesn't equal the method return type
+                                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                                exit = True
+                                break
+                            objRefs = lexeme.ent().refs('Setby')
+                            for objRef in objRefs:
+                                tempLex = lexer.lexeme(objRef.line(), objRef.column())
+                                while tempLex and tempLex.text() != ';':
+                                    # Throw violation if variable casted a type
+                                    if tempLex.ent() and tempLex.ent().type() != type:
+                                        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                                        exit = True
+                                        break
+
+
+                                    tempLex = tempLex.next(True, True)
+
+                                if exit:
+                                    break
+
+                            if exit:
+                                break
+
+                        lexeme = lexeme.next(True, True)
+
+                    if exit:
+                        break
+
+                lexeme = lexeme.next(True, True)

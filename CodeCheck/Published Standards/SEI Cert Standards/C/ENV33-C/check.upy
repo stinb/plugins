@@ -1,0 +1,176 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 2/22/2022
+
+ERR1 = 'Do not call system() or other similar functions.'
+
+DEF_NAME = "Do not call system()"
+
+DONT_CALLS = {"system", "_wsystem", "popen", "_popen"}
+
+# The ID for the check
+def id():
+    return 'ENV33-C'
+
+# Required - Return the short name of the check
+def name():
+    return "Published Standards/SEI Cert Standards/C/" +  DEF_NAME
+
+def tags(id):
+    return {
+        'ENV33-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Functions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not call system() or other similar function</p>
+<p><b>Risk Assessment</b></p>
+<p>If the command string passed to system(), popen(), or other function that invokes a command processor is not fully sanitized, the risk of exploitation is high. In the worst case scenario, an attacker can execute arbitrary system commands on the compromised machine with the privileges of the vulnerable process.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/pages/viewpage.action?pageId=87152177</i></p>
+<p><b>Exceptions</b></p>
+<p><i>ID-EX1: </i>It is permissible to call system() with a null pointer argument to determine the presence of a command processor for the system.</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;string.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;stdio.h&gt;
+
+enum { BUFFERSIZE = 512 };
+
+void func(const char *input) {
+  char cmdbuf[BUFFERSIZE];
+  int len_wanted = snprintf(cmdbuf, BUFFERSIZE,
+                            "any_cmd '%s'", input);
+  if (len_wanted &gt= BUFFERSIZE) {
+    /* Handle error */
+  } else if (len_wanted &lt 0) {
+    /* Handle error */
+  } else if (system(cmdbuf) == -1) {
+    /* Handle error */
+  }
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# Options for the check
+def define_options(check):
+    pass
+
+def check(check, file):
+    #simple case
+    for ref in file.filerefs("Call", "Unresolved Function"):
+        if ref.ent() and ref.ent().name() in DONT_CALLS:
+            if not is_nltrp(ref):#nlptr is an exception
+                pm(ERR1, check, ref.ent(), file, ref.line(), ref.column())
+
+    #special ptr assignment case
+    for ref in file.filerefs("Call", "Object"):
+        if r_check(ref, DONT_CALLS, check):
+            pm(ERR1, check, ref.ent(), file, ref.line(), ref.column())
+
+# keep global list of seen ents
+seen = []
+
+#recursivly check to see base
+def r_check(ref, badValue, check):
+    if ref.ent() and ref.ent().value() is not None:
+        if ref.ent().id() not in seen:
+            seen.append(ref.ent().id())
+
+            #see if match
+            if ref.ent().value().replace("*", "").replace("&", "") in badValue:
+                return True
+            #check child refs
+            for r in ref.ent().refs("Assign FunctionPtr"):
+                if r_check(r, badValue, check):
+                    return True
+    return False
+
+
+#checks to see if the first argument is null ptr
+def is_nltrp(ref):
+    par = get_params(ref)
+    if len(par) > 0 and par[0][1].ent() and par[0][1].ent().value() == "((void *)0)":
+        return True
+    return False
+
+#gets the arguments of call
+def get_params(ref):
+
+    par = []
+    lexer = ref.file().lexer()
+
+    if lexer is None:
+        return par
+
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if lexeme is None:
+        return par
+
+    currentType = ""
+    pCount = 0
+    lCount = 0
+    previousLex = lexeme
+
+    while True:
+        previousLex = lexeme
+        lexeme = lexeme.next(True, True)
+        if lexeme is None:
+            break
+
+        if lexeme.text() == "(":
+            pCount += 1
+            if pCount == 1:
+                continue
+
+        if lexeme.text() == ")":
+            pCount -= 1
+            if pCount == 0:
+                break
+
+        if lexeme.text() == "<":
+            lCount += 1
+
+        if lexeme.text() == ">":
+            lCount -= 1
+
+        if pCount == 0:
+            break
+
+        if lexeme.text() == "," and pCount == 1 and lCount == 0:
+            par.append((currentType, previousLex))
+            currentType = ""
+            continue
+
+        if currentType == "":
+            currentType += lexeme.text()
+        else:
+            currentType += " " + lexeme.text()
+
+    if not currentType == "":
+        par.append((currentType, previousLex))
+    return par
+
+
+def pm(s, check, ent = None, file = None, line=-1, col=-1):
+    check.violation(ent, file, line, col, str(s))

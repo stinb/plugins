@@ -1,0 +1,114 @@
+import re
+
+ERR1 = 'User-defined conversion operator is not defined as explicit'
+
+
+# The ID for the check
+def ids():
+    return ('A13-5-2', 'CPP_T048')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A13-5-2': 'Published Standards/AUTOSAR/All user-defined conversion operators shall be defined explicit',
+        'CPP_T048': 'All Checks/Language Specific/C and C++/Types/All user-defined conversion operators shall be defined explicit',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A13-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types'
+        ],
+        'CPP_T048': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p>Without explicit keyword, a single user defined conversion can be invoked in a standard
+conversion sequence, which can lead to accidental errors.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A13-5-2.cpp 303121 2018-01-09 09:03:52Z michal.szczepankiewicz $
+2 class A
+3 {
+4 public:
+5 explicit A(double d) : d(d) {}
+6 explicit operator double() const { return d; } // Compliant
+7 private:
+8 double d;
+9 };
+10
+11 int main(void)
+12 {
+13 A a{3.1415926535897932384626433832795028841971693993751058209749445923078};
+14
+15 double tmp1{a};
+16 // float tmp2{a}; //compilation error instead of warning, prevents from data
+17 // precision loss
+18
+19 return 0;
+20 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• HIC++ v4.0 [9]: 12.1.1: Do not declare implicit user defined conversions.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"operator", file.contents()):
+        return
+
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    for ref in file.filerefs("Define", "Function"):
+        if "operator" in ref.ent().name():
+            explicit = False
+
+            for lex in lexer.lexemes(ref.line(), ref.line()):
+                if lex.text() == "operator" and lex.token() == "Keyword":
+                    next_lex = lex.next(ignore_whitespace=True)
+
+                    if next_lex.token() in {"Keyword", "Identifier"}:
+                        prev_lex = lex.previous(ignore_whitespace=True)
+
+                        while(prev_lex.line_begin() == lex.line_begin()):
+                            if prev_lex.text() == "explicit" and prev_lex.token() == "Keyword":
+                                explicit = True
+                                break
+                            prev_lex = prev_lex.previous(ignore_whitespace=True)
+
+                        if not explicit:
+                            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+                    break

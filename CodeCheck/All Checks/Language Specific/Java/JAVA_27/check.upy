@@ -1,0 +1,363 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 6/02/2022
+
+import re
+
+ERR1 = 'A wrapped line should be indented one increment further than its originating line, off by: '
+ERR2 = 'A wrapped line should be indented further than its originating line, current: '
+
+DEF_NAME = "A wrapped line shall be indented one increment further than its originating line."
+
+FLOW_STATEMENTS = [" if(", " else(", " switch(", " do(", " while(", " for(", " if ", " else ", " switch ", " do ", " while ", " for "]
+
+END_CHAR = [";", "{", "}", ")"]
+
+NO_START_CHAR = []
+
+NO_END_CHAR = []
+
+# The ID for the check
+def id():
+    return ('JAVA_27')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'JAVA_27': "All Checks/Language Specific/Java/" + DEF_NAME,
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_27': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """ 
+<p>A wrapped line shall be indented one increment further than its originating line.</p>
+<p><b>Risk Assessment</b></p>
+<p>Clearly indenting wrapped lines helps with clarity.</p>
+<p><b>Compliant Code Example</b></p>
+<pre><code language="Java">if (textArea.getSelectionStart() &lt; textLength
+        + l.getMessage().length()
+        && textArea.getSelectionEnd() &gt;
+            textLength)
+</code></pre>
+<p><i>Developer Notes: </i> Setting the <i>Increment</i> option to 0 will accept any increment greater than zero. \
+<i>This continues to increment every wrapped line</i> option will determine if you need to step another increment if \
+the line is wrapped again, the csv options below determine which characters are exceptions.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().integer("inc", "Increment", 0)
+    check.option().integer("finc", "Fixit hint increment ", 2)
+    check.option().checkbox("incE", "Continue to increment every wrapped line", True)
+    check.option().text("dsc", "Don't require increment on start char(csv):", ".,+,&&,||,?,:")
+    check.option().text("dec", "Don't require increment on end char(csv / c=,):", "c,;")
+    check.option().checkbox("swi", "Check switch statements", False)
+
+def check(check, file):
+    inc = check.option().lookup("inc")
+    finc = check.option().lookup("finc")
+    incE = check.option().lookup("incE")
+    swi = check.option().lookup("swi")
+    dsc = check.option().lookup("dsc")
+    dec = check.option().lookup("dec")
+    global NO_START_CHAR
+    global NO_END_CHAR
+    NO_START_CHAR = dsc.split(",")
+    NO_END_CHAR = dec.split(",")
+    NO_START_CHAR = list(map(lambda x: x.replace('c', ','), NO_START_CHAR))
+    NO_END_CHAR = list(map(lambda x: x.replace('c', ','), NO_END_CHAR))
+    contents = file.contents()
+    #pm(dec.split(","), check)
+    #pm(contents , check, file, file)
+    # we don't want comments so remove them, but we need original line #
+    lines = splitRemoveCommentsKeepLineNum(contents, check, file)
+
+    wrapping = -1
+    pCount = -1
+
+    incCount = 0
+    for i in range(len(lines)):
+        l = lines[i]
+        line = re.sub(r' ','', l[1])
+        
+        n = None
+        if len(lines) > i + 1:
+            n = lines[i+1][1]
+        wrap = isStartOfWrap(l[1], n, pCount, swi, check)
+        #pm(str(isStartOfWrap(l[1], n, pCount, swi, check))+ " " + str(wrapping) + " " + str(incCount) + " " + l[1]  , check, file, file)
+        
+        # we are currently wrapping and wrong distance
+        incMul = max(incCount, 1)
+        if wrap != -2:
+            if inc == 0:
+                if wrapping != -1 and wrapping  >= getLineStartDistance(l[1]):
+                    #pm(ERR2 + str(getLineStartDistance(l[1]) - (wrapping )), check, None, file, l[0], -1)
+                    violation = pm(ERR2 + str(getLineStartDistance(l[1]) - (wrapping )), check, None, file, l[0], -1)
+                    violation.add_fixit_hint(l[0], 1, l[0], 1, (finc - (getLineStartDistance(l[1]) - wrapping)) * " " )
+            else:   
+                if wrapping != -1 and wrapping + (inc * incMul) != getLineStartDistance(l[1]):
+                    violation = pm(ERR1 + str(getLineStartDistance(l[1]) - (wrapping + (inc * incMul))), check, None, file, l[0], -1)
+                    violation.add_fixit_hint(l[0], 1, l[0], 1, -(getLineStartDistance(l[1]) - (wrapping + (inc * incMul))) * " " )
+        
+        # new wrap
+        newWrap = False
+        if wrap > -1 and wrap < 1000 and wrapping == -1 and inc != 0:
+            wrapping = getLineStartDistance(l[1])
+            newWrap = True
+        
+        # inc wrap
+        if wrap > -1 and incE:    
+            incre = True             
+            for c in NO_END_CHAR:
+                if len(line) > len(c):
+                    if line[-len(c):] == c:
+                        incre = False
+            for c in NO_START_CHAR:
+                if n:
+                    nLine = re.sub(r' ','', n)
+                    if len(nLine) > len(c):
+                        if nLine[0:len(c)] == c:
+                            incre = False
+            if incre or ( newWrap and wrap > 0):
+                incCount += 1
+                # inc amount doesn't matter
+                if inc == 0 and wrap > -1 and wrap < 1000:
+                    wrapping = getLineStartDistance(l[1])
+        
+        # reset wrap
+        if wrap == -1 or wrap > 1000:
+            wrapping = -1
+            if incE:
+                incCount = 0
+        
+        # sepical cases
+        if wrap > 0:
+            pCount = wrap
+        else:
+            pCount = -1
+        
+# determines if this is the start of a wrapping line
+# -2 = blank, -1 = normal, 0 = wrapping, 1+ special case for, 1000 + speical case swtich
+def isStartOfWrap(line, next, inFlowP = -1, switch = False, check = None):
+    oLine = re.sub(r'\"[\s\S]*?\"','', line)
+    oLine = re.sub(r'\'[\s\S]*?\'','', oLine)
+    line = re.sub(r' ','', line)
+    if len(line) > 0:
+        last = line[-1]
+
+        if inFlowP != -1: #special case stuff
+            # Remove strings
+            line = re.sub(r'\"[\s\S]*?\"','', line)
+            line = re.sub(r'\'[\s\S]*?\'','', line)
+            if not switch and inFlowP > 1000:
+                final = ""
+                pCount = inFlowP - 1000
+                for c in line:
+                    if c == "{":
+                        pCount += 1
+                    if c == "}":
+                        pCount -= 1
+                    if pCount < 1 and c != "}":
+                        final += c
+                
+                if pCount > 0:
+                    return pCount + 1000
+                else:
+                    # normal line, max it because its not a blank line
+                    return  max( isStartOfWrap(final, next, -1, switch, check), -1)
+            else:
+                final = ""
+                pCount = inFlowP
+                for c in line:
+                    if c == "(":
+                        pCount += 1
+                    if c == ")":
+                        pCount -= 1
+                    if pCount < 1 and c != ")":
+                        final += c
+                
+                if pCount > 0:
+                    return pCount
+                else:
+                    # normal line, max it because its not a blank line
+                    return max( isStartOfWrap(final, next, -1, switch, check), -1)
+
+        else: #normal
+
+            # it is not a flow statement
+            flow = False
+            # check for a control flow, which means we not overlowing
+            for f in FLOW_STATEMENTS:
+                if f in oLine:
+
+                    fixed = ""
+                    pCount = 0
+
+                    # special case
+                    if "switch" not in f:
+                        # Remove strings
+                        line = re.sub(r'\"[\s\S]*?\"','', line)
+                        line = re.sub(r'\'[\s\S]*?\'','', line)
+                        for c in line:
+                            if c == "(":
+                                pCount += 1
+                            if c == ")":
+                                pCount -= 1
+                            if not (pCount > 0 and c == ";"):
+                                fixed += c
+
+                        #this means we are in a for statement still
+                        if pCount > 0:
+                            return pCount
+                        else:
+                            line = fixed
+                    
+                    # special case
+                    if "switch" in f and not switch:
+                        for c in line:
+                            if c == "{":
+                                pCount += 1
+                            if c == "}":
+                                pCount -= 1
+
+                        #this means we are in a switch statement
+                        if pCount > 0:
+                            return 1000 + pCount
+                        else:
+                            line = fixed
+
+                    # check for double statement
+                    doubleStatement = line.split(";")
+
+                    # if its in the last statement
+                    if f in doubleStatement[-1]:
+                        flow = True
+            
+            #check for fun {
+            if next and len(next.strip()) > 0:
+                if next.strip()[0] == "{" or next.strip()[0] == "}":
+                    flow = True
+            else: #therei is nothing on next line
+                flow = True
+
+            # could be list of items
+            nows = line.replace(" ", "")
+            if len(nows) > 1:
+                if  nows[-2:] == "={":
+                    return 0
+
+            # if line doesn't end with a end char then we flowing
+            if not flow and last not in END_CHAR:
+                return 0
+
+            # normal line
+            return -1
+    # blank
+    return -2
+
+
+# gets the distance of whitespace to first code
+def getLineStartDistance(line):
+    count = 0
+    normalChar = False
+    for c in line:
+        if not normalChar:
+            if c == " ":
+                count +=1
+            else:
+                normalChar = True  
+    return count      
+
+# gets useful lines of the file with ine numbers
+def splitRemoveCommentsKeepLineNum(contents, check, file):
+    lexer = file.lexer()
+
+    lexeme = lexer.first()
+    if lexeme.token() == "Comment":
+        lexeme = lexeme.next(False, True)
+
+    line = 1
+    splitContents = []
+    contents = ""
+    while lexeme:
+        if lexeme.text() == "@":
+            lexeme = lexeme.next(False, True)
+            isAnno = lexeme.text() != " "
+            while True:
+                if isAnno:
+                    lexeme = lexeme.next(False, True)
+                    isAnno = isAnno = lexeme.text() != " "
+                    if lexeme.text() == "(":
+                        lexeme = findClose(lexeme)
+                        lexeme = lexeme.next(False, True)
+                else:
+                    break
+
+        if lexeme.text() == "\n":
+            if contents.replace(" ", "") != "":
+
+                splitContents.append([lexeme.line_begin(), contents])
+
+            line += 1
+            contents = ""
+            lexeme = lexeme.next(False, True)
+            continue
+
+        contents += lexeme.text()
+        lexeme = lexeme.next(False, True)
+
+    return splitContents
+
+# Find corresponding closing curly brace or parenthesis of given opening curly
+# brace or parenthesis
+def findClose(lexeme, getAll = False, keepWhite = False):
+    all = []
+    count = 0
+    open = lexeme.text()
+    if lexeme.text() == '{':
+        close = '}'
+    elif lexeme.text() == '(':
+        close = ')'
+    else:
+        return None
+
+    while lexeme and not (lexeme.text() == close and count == 0):
+        if getAll and count > 0:
+            all.append(lexeme)
+
+        if lexeme.text() == open:
+            count += 1
+
+        lexeme = lexeme.next(not keepWhite, not keepWhite)
+
+        if lexeme.text() == close:
+            count -= 1
+
+    if getAll:
+        return all
+    return lexeme
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    return check.violation(ent, file, line, col, str(s))

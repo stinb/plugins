@@ -1,0 +1,150 @@
+# Pointer initialization must use 0, not NULL.
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => 'Pointer initialization must use 0, not NULL';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_P002";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Pointers\\Pointer initialization must use 0, not NULL.";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Pointers',
+  );
+}
+
+sub description {
+	return "Pointer initialization must use 0, not NULL.";
+}
+
+sub detailed_description {
+	return 'Pointer initialization must use 0, not NULL.
+	Assumptions:
+ 1. if init value is a number, it must be 0.
+ 2. if init value is an identifier, it must not be NULL.
+ 3. assume variables checked are local/global objects & static members.
+ ';
+}
+
+sub test_language {
+	my $language = shift;
+	return $language =~ /C\+\+/;
+  #return 1;
+}
+
+sub test_entity {
+	return 1;
+}
+
+sub test_global {
+	return 0;
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file ~unresolved ~unknown");
+  
+  # create lexer once for file
+	my $lexer = undef;
+
+	# loop through variables defined in the file
+	foreach my $ref ($file->filerefs("define","object ~member ~unknown ~unresolved, private object static member ~unresolved")) {
+      #Yield to GUI interupts
+      $check->yield();
+      return if $check->is_abort();
+    
+	    my $var = $ref->ent();
+	    next if (!checkPointerType($var));
+	    my ($begin) = getVarDefn($var);
+	    next if (!$begin);
+
+	    $lexer = $file->lexer() if (!$lexer);
+      return unless $lexer;
+	    do_one_variable($file,$var,$lexer,$begin,$check);
+	}
+ 
+}
+
+##########################################
+
+
+# check one variable
+sub do_one_variable {
+    my $file = shift;
+    my $var = shift;
+    my $lexer = shift;
+    my $begin = shift;
+    my $check = shift;
+
+    ### We already know that we test this in do_all_variables(). However,
+    ### if this function is called from a more general loop,
+    ### the entity needs to be tested.
+    #return if !checkPointerType($var);
+
+    # get lexeme at beginnig of line where variable is defined
+    my $lexeme = $lexer->lexeme($begin,0);
+
+    # search for first lexeme with the expected var name
+    my $name = $var->name();
+    while ($lexeme && $lexeme->text ne $name) {
+      #Yield to GUI interupts
+      $check->yield();
+      return undef if $check->is_abort();
+      
+			$lexeme = nextLexeme($lexeme) or return;
+    }
+
+    # next lexeme must be '='
+    $lexeme = nextLexeme($lexeme) or return;
+    return if ($lexeme->text() ne "=");
+
+    # violation if next lexeme is 'NULL' or is a number other than 0
+    $lexeme = nextLexeme($lexeme) or return;
+    my $text = $lexeme->text();
+    if ($text eq "NULL" || ($text =~ m/^[0-9]/ && $text ne "0")) {
+			$check->violation($var,$file,$var->ref->line,$var->ref->column,ERR1);
+    }
+}
+
+# Return true if entity type is a pointer type.
+sub checkPointerType {
+    my $ent = shift;
+    return 0 if !$ent;
+    return 1 if $ent->type() =~ m/[*\[]/;
+    my $type_ent = $ent->ents("typed","typedef");
+    return 0 if !$type_ent;
+    return checkPointerType($type_ent);
+}
+
+# Pass a variable entity. Return an array of:
+#   the begin line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getVarDefn {
+    my $var = shift;
+    my $begin_ref = $var->ref("definein");
+    return undef if (!$begin_ref);
+    return ($begin_ref->line(), $begin_ref->file());
+}
+
+# Return the next interesting lexeme or undef when all lexemes
+# are used.
+sub nextLexeme {
+    my $lexeme = shift;
+    while ($lexeme) {      
+      $lexeme = $lexeme->next() or return undef;
+      next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+      return $lexeme;
+    };
+    return undef;
+}

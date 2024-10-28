@@ -1,0 +1,126 @@
+import re
+
+
+ERR1 = "%1 should only be implemented as a non-member function"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_16.6.1')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_16.6.1': 'Published Standards/MISRA C++ 2023/16.6.1 Symmetrical operators should only be implemented as non-member functions'
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_16.6.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_16.6.1': """
+<p><b>Amplification</b></p>
+<p>The following member binary operators are symmetrical operators, even when their parameters have
+different types:</p>
+<p>operator+ operator- operator* operator/ operator%
+operator== operator!= operator< operator<= operator>= operator>
+operator^ operator& operator|
+operator&& operator||</p>
+
+<p><b>Rationale</b></p>
+<p>This rule helps to ensure that both operands of a op b are treated identically in terms of conversions.</p>
+<p>If operator+ for class C is implemented as a member (e.g. C operator+( C rhs ) const;), then
+the left-hand value can only be of type C, whilst the compiler may implicitly convert right-hand operands
+of other types to C.</p>
+<p>For example, if C has a constructor that takes an int value, then if c is a value of type C, c + 1 creates a
+temporary object from C( 1 ) and adds it to c. Depending upon what other, if any, implicit conversions
+are available, 1 + c either results in a compilation error or it may call a different function and give an
+entirely different result to c + 1. This inconsistent behaviour is undesirable.</p>
+<p>Note: this rule permits a non-member operator to be declared as a hidden friend (i.e. a friend function
+defined in the class). Hidden friend operators are only considered for overload resolution by argument-dependent lookup when the compiler has a class object as one of the operands, making it less likely
+that the wrong overload is selected due to the implicit conversion of both operands. The use of hidden
+friends for such operators is generally considered to be good practice.</p>
+
+<p><b>Example</b></p>
+<p>The constructor in the following example violates Rule 15.1.3.</p>
+<pre><code language="C++">class C
+{
+ int32_t i;
+public:
+ C( int32_t x = 0 ): i( x ) {}
+ C operator+( C rhs ) const; // Non-compliant
+ C operator+( int32_t rhs ) const; // Non-compliant
+ C operator and( C rhs ) const; // Non-compliant
+ friend C operator*( C lhs, C rhs ); // Compliant - non-member friend
+ friend C operator-( C lhs, C rhs ) // Compliant - hidden friend
+ {
+ return C( lhs.i - rhs.i );
+ }
+ friend std::ostream &
+ operator&lt;&lt;( std::ostream & os,
+ C const & c ); // Rule does not apply - not symmetrical
+ C & operator/=( C const & rhs ); // Rule does not apply - not symmetrical
+};
+
+C operator/( C lhs, C rhs ); // Compliant - non-member
+C operator*( C lhs, C rhs ); // Compliant - non-member friend
+
+int main()
+{
+ C c( 21 );
+ std::cout &lt;&lt; ( c + 1 ) &lt;&lt; '\\n';
+//std::cout &lt;&lt; ( 1 + c ) &lt;&lt; '\\n'; // Would fail to compile
+ std::cout &lt;&lt; ( c * 4 ) &lt;&lt; '\\n';
+ std::cout &lt;&lt; ( 4 * c ) &lt;&lt; '\\n';
+ std::cout &lt;&lt; ( 84 / c ) &lt;&lt; '\\n';
+}</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        for func_ref in class_ref.ent().refs("Define, Declare", "Member Function"):
+            if not re.search(r"operator([+\-*/%&|^](?![=+-])|==|!=|>(?!>)|<(?!<))", func_ref.ent().name()):
+                continue
+
+            lex = func_ref.file().lexer(lookup_ents=False).lexeme(func_ref.line(), func_ref.column())
+            is_friend = False
+
+            while lex and (lex.line_begin() == func_ref.line()):
+                if (lex.text() == "friend") and (lex.token() == "Keyword"):
+                    is_friend = True
+                    break
+
+                lex = lex.previous(True, True)
+
+            if not is_friend:
+                check.violation(func_ref.ent(), func_ref.file(), func_ref.line(), func_ref.column(), ERR1, func_ref.ent().name())

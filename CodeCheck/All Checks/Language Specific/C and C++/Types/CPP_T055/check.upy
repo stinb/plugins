@@ -1,0 +1,101 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 4-14-2021
+
+import re
+
+ERR1 = "Member object '%1' has stored type '%2' but is retrieved into variable '%4' with type '%3'"
+
+def id():
+    return ('CPP_T055')
+
+def name(id):
+    return {
+		'CPP_T055': 'All Checks/Language Specific/C and C++/Types/' +  'A value should not be retrieved from a structure or union with a different type than with which it was stored'
+	}[id]
+
+def tags(id):
+    return {
+        'CPP_T055': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+    A value should not be retrieved from a structure or union with a different type than with which it was stored."""
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Retrieving data members from a structure or union with a different type than
+it was stored with can lead to unexpected conflicts in your code.</p>
+<p><b>Example</b></p>
+<p>
+<pre><code language="C++">#define RETIRE_AGE 65
+
+struct personal_info {
+
+	char name[35]; /* Employee name */
+	unsigned char age; /* Employee age */
+	short status; /* Employee status - ACTIVE or NON_ACTIVE */
+
+}
+
+void gen_employee_report (void)
+{
+	struct personal_info employee;
+	strcpy(employee.name, "John Smith");
+	employee.age = 37; /* Store age as an unsigned char */
+	employee.status = ACTIVE;
+	process_data(&employee);
+} /* end of gen_employee_report */
+
+void process_data ( struct personal_info *emp_info ) /* Employee data */
+{
+	unsigned int emp_age; /* Employee age */
+	short emp_status;
+	emp_age = emp_info-&gt;age; /* Retrieve age as an unsigned int */
+	emp_status = emp_info-&gt;status;
+
+	if (emp_age &gt;= RETIRE_AGE) {
+		printf("%s is retired\n", emp_info-&gt;name);
+	} /* endif */
+
+} /* end of process_data */
+</code></pre></p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+
+	# grab all member objects
+	for mem_obj in file.filerefs("define", "c member object"):
+		# grab member object type
+		parent_type = mem_obj.ent().parent().kind().longname()
+
+		# if not a struct or union, skip it
+		if not (re.search(r"Struct", parent_type) or re.search(r"Union", parent_type)):
+			continue
+
+		stored_type = mem_obj.ent().type()
+
+		# grab all refs where the object's value has been assigned to another variable
+		retrievals = mem_obj.ent().refs("c assignby value")
+		if retrievals:
+			# check that new variable's type and verify that it matches the stored type
+			for ret in retrievals:
+				var = ret.ent()
+				var_type = var.type()
+
+				if var_type != stored_type:
+					check.violation(mem_obj.ent(), ret.file(), ret.line(), ret.column(), 
+						ERR1, mem_obj.ent(), stored_type, var_type, var)

@@ -1,0 +1,183 @@
+import re
+
+
+ERR1 = 'Use valid format strings.'
+FORMATTED_OUTPUT_FUNCS = ["fprintf", "printf", "snprintf", "sprintf"]
+CONVERSION_SPEC_CHARS = ["d", "i", "o", "u", "x", "X", "f", "F",
+                         "e", "E", "g", "G", "a", "A", "c", "s", "p", "n", "C", "S"]
+
+
+# The ID for the check
+def id():
+    return ('FIO47-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO47-C': 'Published Standards/SEI Cert Standards/C/Use valid format strings',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO47-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Types',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Use valid format strings'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Use valid format strings</p>
+<p><b>Risk Assessment</b></p>
+<p>Incorrectly specified format strings can result in memory corruption or abnormal program termination.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO47-C.+Use+valid+format+strings</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void func(void) {
+  const char *error_msg = "Resource not available to user.";
+  int error_type = 3;
+  /* ... */
+  printf("Error (type %s): %d\\n", error_type, error_msg);
+  /* ... */
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check may give false positive violations when operations are used within the argument.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(lex):
+        check.violation(lex.ent(), file, lex.line_begin(),
+                        lex.column_begin(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call", "Function"):
+        if call_ref.ent().name() in FORMATTED_OUTPUT_FUNCS:
+            format_specs = []
+            on_param = 0
+            on_index = 0
+            param_ctr = 0
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            format_arg_ctr = None
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif lex.text() == "[":
+                    on_index += 1
+                elif lex.text() == "]":
+                    on_index -= 1
+                elif (on_param == 1) and (lex.text() == ","):
+                    param_ctr += 1
+                elif on_param and re.search(r'".*"', lex.text()):
+                    on_conspec = False
+                    conspec = ""
+
+                    for text in list(lex.text()):
+                        if text == "%":
+                            on_conspec = True
+                        elif on_conspec:
+                            conspec += text
+
+                            if text in CONVERSION_SPEC_CHARS:
+                                if text in ["d", "i", "u"] and re.search(r"#|L", conspec):
+                                    check_violation(lex)
+                                    break
+                                elif text in ["o", "x", "X"] and re.search(r"'|L", conspec):
+                                    check_violation(lex)
+                                    break
+                                elif text in ["f", "F", "g", "G", "a", "A"] and re.search(r"h|j|z|t", conspec):
+                                    check_violation(lex)
+                                    break
+                                elif text in ["e", "E"] and re.search(r"'|h|j|z|t", conspec):
+                                    check_violation(lex)
+                                    break
+                                elif text in ["c", "s"] and re.search(r"'|#|0|h|ll|j|z|t|L", conspec):
+                                    check_violation(lex)
+                                    break
+                                elif text in ["p", "C", "S"] and re.search(r"'|#|0|h|l|j|z|t|L", conspec):
+                                    check_violation(lex)
+                                    break
+                                elif text == "n" and re.search(r"'|-|\+|\s|0|L", conspec):
+                                    check_violation(lex)
+                                    break
+
+                                format_specs.append(text)
+                                on_conspec = False
+                                conspec = ""
+
+                    if lex.next().text() == ",":
+                        format_arg_ctr = param_ctr + 1
+                elif format_specs and format_arg_ctr and (len(format_specs) > (param_ctr - format_arg_ctr)) and lex.ent() and (on_param == 1) and not on_index:
+                    lex_type = lex.ent().freetext("UnderlyingType")
+
+                    if lex.next().text() == "[":
+                        while lex.text() != "]":
+                            lex = lex.next()
+
+                    if lex.next().text() in ["->", "."]:
+                        pass
+                    elif lex_type:
+                        if format_specs[param_ctr-format_arg_ctr] in ["d", "i", "o", "u", "x", "X", "c"] and not re.search(r"short|char|long|int|intmax_t|size_t|ptrdiff_t", lex_type):
+                            check_violation(lex)
+                            break
+                        elif format_specs[param_ctr-format_arg_ctr] in ["f", "F", "e", "E", "g", "G", "a", "A"] and "double" not in lex_type:
+                            check_violation(lex)
+                            break
+                        elif format_specs[param_ctr-format_arg_ctr] == "s" and not re.search(r"char|wchar_t", lex_type):
+                            check_violation(lex)
+                            break
+                        elif format_specs[param_ctr-format_arg_ctr] == "p" and ("void *" != lex_type):
+                            check_violation(lex)
+                            break
+                        elif format_specs[param_ctr-format_arg_ctr] == "n" and not re.search(r"(short|char|long|int|intmax_t|size_t|ptrdiff_t).\*", lex_type):
+                            check_violation(lex)
+                            break
+                        elif format_specs[param_ctr-format_arg_ctr] == "C" and ("wint_t" != lex_type):
+                            check_violation(lex)
+                            break
+                        elif format_specs[param_ctr-format_arg_ctr] == "S" and ("wchar_t" != lex_type):
+                            check_violation(lex)
+                            break
+
+                lex = lex.next()

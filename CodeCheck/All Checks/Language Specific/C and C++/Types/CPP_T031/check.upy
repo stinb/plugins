@@ -1,0 +1,205 @@
+import re
+
+ERR1 = 'Common way of passing parameters not used.'
+
+# The ID for the check
+def ids():
+    return ('A8-4-3', 'CPP_T031')
+
+# The short name of the check
+def name(id):
+    return {
+        'A8-4-3': 'Published Standards/AUTOSAR/Common ways of passing parameters should be used.',
+        'CPP_T031': 'All Checks/Language Specific/C and C++/Types/Common ways of passing parameters should be used.',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A8-4-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T031': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p>Common ways of passing parameters should be used.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Using common and well-understood parameter passing patterns as summarised in the following table helps meeting developer expectations.</p>
+
+<p>
+<table>
+<thead>
+    <tr>
+        <th></th>
+        <th>cheap to copy or move only</th>
+        <th>cheap to move</th>
+        <th>expensive to move</th>
+    </tr>
+</thead>
+<tbody>
+    <tr>
+        <td>in</td>
+        <td>f(X)</td>
+        <td>f(const X &amp;)</td>
+        <td>f(const X &amp;)</td>
+    </tr>
+    <tr>
+        <td>in/out</td>
+        <td>f(X &amp;)</td>
+        <td>f(X &amp;)</td>
+        <td>f(X &amp;)</td>
+    </tr>
+    <tr>
+        <td>out</td>
+        <td>X f()</td>
+        <td>X f()</td>
+        <td>f(X &amp;)</td>
+    </tr>
+    <tr>
+        <td>consume</td>
+        <td>f(X &amp;&amp;)</td>
+        <td>f(X &amp;&amp;)</td>
+        <td>f(X &amp;&amp;)</td>
+    </tr>
+    <tr>
+        <td>forward</td>
+        <td>template f(T &amp;&amp;)</td>
+        <td>template f(T &amp;&amp;)</td>
+        <td>template f(T &amp;&amp;)</td>
+    </tr>
+</tbody>
+</table>
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A8-4-3.cpp 308906 2018-02-23 15:34:15Z christof.meerwald $
+
+#include &lt;algorithm&gt;
+#include &lt;array&gt;
+#include &lt;cstdint&gt;
+#include &lt;numeric&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+// Compliant: passing cheap-to-copy parameter by value
+int32_t Increment(int32_t i)
+{
+    return i + 1;
+}
+
+// Compliant: passing expensive to copy parameter by reference to const
+int32_t Sum(const std::vector&lt;int32_t&gt; &v)
+{
+    return std::accumulate(v.begin(), v.end(), 0);
+}
+
+// Compliant: passing in-out parameter by reference
+void Decrement(int32_t &i)
+{
+    --i;
+}
+
+// Compliant: returning out parameter by value
+std::string GetGreeting()
+{
+    return "Hello";
+}
+
+struct A
+{
+    std::string text;
+    std::array&lt;std::string, 1000&gt; arr;
+};
+
+// Expensive to move "out" parameter passed by reference. If
+// intentional, violation of A8-4-8 needs to be explained
+void InitArray(std::array&lt;std::string, 1000&gt; &arr,
+                 const std::string &text)
+{
+    std::for_each(arr.begin(), arr.end(), [&text] (std::string &
+            s = text;
+        });
+}
+
+// Compliant: passing in-out parameter by reference
+void PopulateA(A &a)
+{
+    InitArray(a.arr, a.text);
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>C++ Core Guidelines [11]: F.16: Prefer simple and conventional ways of passing information</p>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# check if a pointer
+def is_pointer(ent):
+    seen = set()
+    while ent not in seen:
+        seen.add(ent)
+        if re.search(r"\*", str(ent.type())):
+            return True
+        typed = ent.ref("Typed")
+        if typed:
+            ent = typed.ent()
+        else:
+            return False
+
+# check if pass by ref
+def is_passby_ref(type):
+    return re.search(r"\&", str(type))
+
+# if move
+def is_move(type):
+    return re.search(r"\&&", str(type))
+
+def check(check, file):
+    for ref in file.filerefs("Define","~Unresolved Parameter", True):
+        # get non lambda and non pointer parameters
+        # skipping pointer (parameter) entities
+        if ref.scope().kind().check("~Lambda") and not is_pointer(ref.ent()):
+            ent_line, ent_col = ref.line(), ref.column()
+            ent = ref.ent()
+            # if typed ref is available
+            if ref.ent().ref("Typed ~TemplateArgument"):
+                typed_ref = ref.ent().ref("Typed ~TemplateArgument")
+                # if not a primitive data type
+                if typed_ref.ent().kind().check("~Typedef"):
+                    # if template class, should be move variable (&&)
+                    if typed_ref.ent().kind().check("TemplateParameter"):
+                        if not is_move(ent.type()):
+                            check.violation(ent, file, ent_line, ent_col, ERR1)
+                    # should be pass by reference
+                    elif typed_ref.ent().kind().check("~Enum"):
+                        if not is_passby_ref(ent.type()):
+                            check.violation(ent, file, ent_line, ent_col, ERR1)

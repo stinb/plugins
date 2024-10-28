@@ -1,0 +1,204 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 6/1/2022
+
+import re
+
+ERR1 = 'Do not synchronize on the class object returned by getClass()'
+
+DEF_NAME = "Do not synchronize on the class object returned by getClass()"
+
+# The ID for the check
+def ids():
+    return ('LCK02-J', 'JAVA_LCK02')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'LCK02-J': 'Published Standards/SEI Cert Standards/Java/' + DEF_NAME,
+        'JAVA_LCK02': 'All Checks/Language Specific/Java/Locking/' + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'LCK02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_LCK02': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not synchronize on the class object returned by getClass()</p>
+<p><b>Risk Assessment</b></p>
+<p>Synchronizing on the class object returned by getClass() can result in nondeterministic behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/pages/viewpage.action?pageId=88487849</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Base {
+  static DateFormat format =
+      DateFormat.getDateInstance(DateFormat.MEDIUM);
+
+  public Date parse(String str) throws ParseException {
+    synchronized (getClass()) {
+      return format.parse(str);
+    }
+  }
+}
+
+class Derived extends Base {
+  public Date doSomethingAndParse(String str) throws ParseException {
+    synchronized (Base.class) {
+      // ...
+      return format.parse(str);
+    }
+  }
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox("dot", "Test for values with dot operator", True)
+
+def check(check, file):
+
+    dot = check.option().lookup('dot')
+
+    for mRef in file.filerefs("Define", "Method"):
+        sync = getSyncBlockItems(mRef, check)
+        if sync[0]:
+            for sl in sync[1]:
+                text = ""
+                for l in sl:
+                    text += l.text()
+
+                if (dot and "getClass()" in text) or ("getClass()" == text):
+                    pm(ERR1, check, mRef.ent(), mRef.file(), sl[-1].line_begin(), sl[-1].column_begin())
+
+# gets all the sync blocks within a method
+def getSyncBlockItems(ref, check = None):
+    contents = ref.ent().contents()
+
+    # Remove any // style comments
+    contents = re.sub(r'\/\/.*?\n','', contents)
+
+    # Remove any /* */ style comments
+    contents = re.sub(r'\/\*[\s\S]*?\*\/','', contents)
+
+    # Remove strings
+    contents = re.sub(r'\"[\s\S]*?\"','', contents)
+    contents = re.sub(r'\'[\s\S]*?\'','', contents)
+
+    # do we have sync?
+    if not re.search(r"synchronized\s*\([\s\S]*?\)", contents):
+        return (False, None)
+
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return (False, None)
+
+    # now get details about it
+    contents = ref.ent().contents()
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    lexemeC = lexeme
+    # find end pos of method so we only find inside block
+    while lexemeC and lexemeC.text() != "{":
+        lexemeC = lexemeC.next(True, True)
+    lexemeC = findClose(lexemeC)
+
+    syncList = []
+
+    #find all sync items within this method
+    while withinCodePos(ref, -1, -1, lexemeC.line_begin(), lexemeC.column_begin(), lexeme):
+
+        while lexeme and lexeme.text() != "synchronized" and withinCodePos(ref, -1, -1, lexemeC.line_begin(), lexemeC.column_begin(), lexeme):
+            lexeme = lexeme.next(True, True)
+
+        if lexeme is None:
+            if len(syncList) > 0:
+                return (True, syncList)
+            else:
+                return (False, None)
+
+        lexeme = lexeme.next(True, True) # (
+
+        if not lexeme or lexeme.text() != "(":
+            break
+        c = findClose(lexeme, True)
+        syncList.append(c)
+
+    if len(syncList) > 0:
+        return (True, syncList)
+    else:
+        return (False, None)
+
+# Find corresponding closing curly brace or parenthesis of given opening curly
+# brace or parenthesis
+def findClose(lexeme, getAll = False, keepWhite = False):
+    all = []
+    count = 0
+    open = lexeme.text()
+    if lexeme.text() == '{':
+        close = '}'
+    elif lexeme.text() == '(':
+        close = ')'
+    else:
+        return None
+
+    while lexeme and not (lexeme.text() == close and count == 0):
+        if getAll and count > 0:
+            all.append(lexeme)
+
+        if lexeme.text() == open:
+            count += 1
+
+        lexeme = lexeme.next(not keepWhite, not keepWhite)
+
+        if lexeme.text() == close:
+            count -= 1
+
+    if getAll:
+        return all
+    return lexeme
+
+#check if a ref is within two positions of code
+def withinCodePos(ref, startLine, startColumn, closeLine, closeColumn, lex = None):
+    line = ref.line()
+    column = ref.column()
+    if lex:
+        line = lex.line_begin()
+        column = lex.column_begin()
+    #check start
+    if startLine < line or ( startLine == line and startColumn <= column):
+        #check end
+        if closeLine > line or ( closeLine == line and closeColumn  >= column):
+            return True
+
+    return False
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

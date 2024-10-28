@@ -1,0 +1,160 @@
+ERR1 = 'Increment/decrement operator is mixed with other operators'
+
+
+# The ID for the check
+def ids():
+    return ('M5-2-10', 'MISRA08_5-2-10', 'CPP_E043')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M5-2-10': 'Published Standards/AUTOSAR/The increment (++) and decrement (--) operators shall not be mixed with other operators in an expression',
+        'MISRA08_5-2-10': 'Published Standards/MISRA-C++ 2008/5-2-10 The increment (++) and decrement (--) operators shall not be mixed with other operators in an expression',
+        'CPP_E043': 'All Checks/Language Specific/C and C++/Expressions/The increment (++) and decrement (--) operators shall not be mixed with other operators in an expression',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-2-10': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Advisory',
+            'Expressions',
+        ],
+        'M5-2-10': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E043': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p>The use of increment and decrement operators in combination with other arithmetic operators is
+not recommended, because:</p>
+<p>•	 It can significantly impair the readability of the code.</p>
+<p>•	 It introduces additional side effects into a statement, with the potential for undefined
+behaviour</p>
+<p>It is safer to use these operators in isolation from any other arithmetic operators.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include &lt;iostream&gt;
+
+void fn()
+{
+    int x = 0;
+    int y = 0;
+    int z = 0;
+    int *xp;
+
+    x = ++y + 10;  //Non-compliant
+    y++;           //Compliant
+    z = x-- + y;   //Non-compliant
+    y = x + y++;   //Non-compliant
+    --z;           //Compliant
+    x = --x - ++y; //Non-compliant (--x and ++y)
+
+    for (x = 0; x &lt; y + z; x--) //Compliant
+    {
+        std::cout &lt;&lt; x;
+    };
+
+    fn2(y + 1, x++); //Compliant
+}
+
+void fn2(int, int)
+{
+}
+</code></pre>
+<p>See MISRA C++ 2008 [7]</p>
+<p>Note: Obligation level changed.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+    line_done = []
+
+    for lex in lexer.lexemes():
+        if lex.token() == "Operator" and lex.text() in {"++", "--"}:
+            in_loop = False
+            has_pointer = False
+            in_assignment = False
+            is_enclosed = False
+            is_conditional = False
+            texts = []
+            operators = {"+", "-", "/", "%"}
+
+            for line_lex in lexer.lexemes(lex.line_begin(), lex.line_begin()):
+                try:
+                    if line_lex.text() in {"for", "while"} and line_lex.token() == "Keyword":
+                        in_loop = True
+                    elif line_lex.token() == "Identifier":
+                        if "*" in line_lex.ent().type():
+                            has_pointer = True
+                    elif line_lex.token() == "Keyword" and line_lex.text() == "this":
+                        has_pointer = True
+                    elif line_lex.text() == "=" and lex.column_begin() < line_lex.column_begin():
+                        in_assignment = True
+                except TypeError:
+                    pass
+                except AttributeError:
+                    pass
+
+                if line_lex.token() in {"Operator", "Punctuation"}:
+                    if line_lex.text() in {"->", "."}:
+                        continue
+                    texts.append(line_lex.text())
+
+            for ind, _text in enumerate(texts):
+                if (_text in {"++", "--"}):
+                    try:
+                        if not is_conditional:
+                            if texts[ind-1] in {"(", "=="} and texts[ind+1] in {"==", ")"}:
+                                is_conditional = True
+                        elif is_conditional:
+                            is_conditional = False
+                            if texts[ind-1] in {"(", "=="} and texts[ind+1] in {"==", ")"}:
+                                is_conditional = True
+
+                        if not is_enclosed:
+                            if texts[ind-1] in {",", "("} and texts[ind+1] in {")", ","}:
+                                is_enclosed = True
+                        elif is_enclosed:
+                            is_enclosed = False
+                            if texts[ind-1] in {",", "("} and texts[ind+1] in {")", ","}:
+                                is_enclosed = True
+                    except IndexError:
+                        continue
+
+            if (any(operator in texts for operator in operators) or ("*" in texts and not has_pointer)) and not in_loop and not in_assignment and not is_enclosed and not is_conditional:
+                check.violation(lex.ent(), file, lex.line_begin(),
+                                lex.column_begin(), ERR1)

@@ -1,0 +1,311 @@
+import re
+
+ERR1 = 'Exception thrown across execution boundaries'
+
+
+def ids():
+    return ('A15-1-5', 'CPP_EH008', 'ERR59-CPP')
+
+
+def name(id):
+    return {
+        'A15-1-5': 'Published Standards/AUTOSAR/Exceptions thrown across execution boundaries',
+        'CPP_EH008': 'All Checks/Language Specific/C and C++/Exception Handling/Exceptions thrown across execution boundaries',
+        'ERR59-CPP': 'Published Standards/SEI Cert Standards/C++/Do not throw an exception across execution boundaries',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A15-1-5': [
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Exception Handling',
+        ],
+        'ERR59-CPP': [
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Exception Handling',
+        ],
+        'CPP_EH008': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'A15-1-5': '''\
+<p><b>Rule</b></p>
+<p>Exceptions shall not be thrown across execution boundaries.</p>
+<p><b>Rationale</b></p>
+<p>An execution boundary is the delimitation between code compiled by differing
+compilers, including different versions of a compiler produced by the same
+vendor. For instance, a function may be declared in a header file but defined in
+a library that is loaded at runtime. The execution boundary is between the call
+site in the executable and the function implementation in the library. Such
+boundaries are also called ABI (application binary interface) boundaries because
+they relate to the interoperability of application binaries.</p>
+<p>Throwing an exception across an execution boundary requires that both sides
+of the execution boundary use the same ABI for exception handling, which may be
+difficult to ensure.</p>
+<p><b>Exception</b></p>
+<p>If it can be ensured that the execution boundaries use the same ABI for
+exception handling routines on both sides, then throwing an exception across
+these execution boundaries is allowed.</p>
+<p><b>Developer's Note</b></p>
+<p>Create at least one architecture containing all the files within the same
+boundary.</p>
+<p><b>See also</b></p>
+<p>• SEI CERT C++ [10]: ERR59-CPP. Do not throw an exception across execution
+boundaries</p>
+''',
+        'CPP_EH008': '''\
+<p><b>Rule</b></p>
+<p>Exceptions shall not be thrown across execution boundaries.</p>
+<p><b>Rationale</b></p>
+<p>An execution boundary is the delimitation between code compiled by differing
+compilers, including different versions of a compiler produced by the same
+vendor. For instance, a function may be declared in a header file but defined in
+a library that is loaded at runtime. The execution boundary is between the call
+site in the executable and the function implementation in the library. Such
+boundaries are also called ABI (application binary interface) boundaries because
+they relate to the interoperability of application binaries.</p>
+<p>Throwing an exception across an execution boundary requires that both sides
+of the execution boundary use the same ABI for exception handling, which may be
+difficult to ensure.</p>
+<p><b>Exception</b></p>
+<p>If it can be ensured that the execution boundaries use the same ABI for
+exception handling routines on both sides, then throwing an exception across
+these execution boundaries is allowed.</p>
+<p><b>Developer's Note</b></p>
+<p>Create at least one architecture containing all the files within the same
+boundary.</p>
+<p><b>See also</b></p>
+<p>• SEI CERT C++ [10]: ERR59-CPP. Do not throw an exception across execution
+boundaries</p>
+''',
+        'ERR59-CPP': '''\
+<p>Do not throw an exception across execution boundaries</p>
+
+<p><b>Risk Assessment</b></p>
+
+<p>The effects of throwing an exception across execution boundaries depends on
+the implementation details of the exception-handling mechanics. They can range
+from correct or benign behavior to undefined behavior.</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/ERR59-CPP.+Do+not+throw+an+exception+across+execution+boundaries
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">// library.h
+void func() noexcept(false); // Implemented by the library
+
+// library.cpp
+void func() noexcept(false) {
+  // ...
+  if (/* ... */) {
+    throw 42;
+  }
+}
+
+// application.cpp
+#include "library.h"
+
+void f() {
+  try {
+    func();
+  } catch(int &e) {
+    // Handle error
+  }
+}
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+<p>Create at least one architecture containing all the files within the same
+boundary.</p>
+''',
+    }[id]
+
+
+def define_options(check):
+    check.options().text('arch_1',
+                        'Name of the architecture denoting execution boundary 1:',
+                        '')
+    check.options().text('arch_2',
+                        'Name of the architecture denoting execution boundary 2:',
+                        '')
+    check.options().checkbox('scan_outside',
+                            'Check to scan everything outside the given architecture. (Applicable if only one architecture is given)')
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check):
+    db = check.db()
+    selectedFiles = []
+    for f in check.files():
+        selectedFiles.append(f.longname())
+    throw_func_ids = []
+    aarch_1 = check.options().lookup('arch_1')
+    aarch_2 = check.options().lookup('arch_2')
+    arch_1 = db.lookup_arch(aarch_1)
+    arch_2 = db.lookup_arch(aarch_2)
+    scan_outside = check.options().lookup('scan_outside')
+
+    if aarch_1:
+        if not arch_1:
+            files1 = [db.lookup(aarch_1, "File")]
+        else:
+            files1 = arch_1.ents()
+    if aarch_2:
+        if not arch_2:
+            files2 = [db.lookup(aarch_2, "File")]
+        else:
+            files2 = arch_2.ents()
+
+    if aarch_1 and aarch_2:
+        for file in files1:
+            if isinstance(file, list):
+                if len(file):
+                    file = file[0]
+                else:
+                    continue
+            throw_func_ids = get_throw_funcs(file, throw_func_ids)
+
+        for file in files2:
+            if isinstance(file, list):
+                if len(file):
+                    file = file[0]
+                else:
+                    continue
+            throw_func_ids = get_throw_funcs(file, throw_func_ids)
+
+        for file in files1:
+            if isinstance(file, list):
+                if len(file):
+                    file = file[0]
+                else:
+                    continue
+            for func_ref in file.filerefs("Define", "Function"):
+                check_try_catch(check, func_ref, throw_func_ids, selectedFiles)
+
+        for file in files2:
+            if isinstance(file, list):
+                if len(file):
+                    file = file[0]
+                else:
+                    continue
+            for func_ref in file.filerefs("Define", "Function"):
+                check_try_catch(check, func_ref, throw_func_ids, selectedFiles)
+    elif arch_1 or arch_2:
+        arch_to_scan = arch_1 if arch_1 else arch_2
+
+        if not scan_outside:
+            arch_file_ids = [file.id() for file in arch_to_scan.ents()]
+            archs = db.root_archs()
+
+            for file in arch_to_scan.ents():
+                throw_func_ids = get_throw_funcs(file, throw_func_ids)
+
+            if len(archs) > 2:
+                for arch_db in db.root_archs():
+                    if arch_db.longname() == arch_to_scan.longname():
+                        continue
+
+                    for file in arch_db.ents():
+                        for func_ref in file.filerefs("Define", "Function"):
+                            check_try_catch(check, func_ref, throw_func_ids, selectedFiles)
+            else:
+                files = db.ents("code file, header file")
+
+                for file in files:
+                    if file.id() in arch_file_ids:
+                        continue
+
+                    for func_ref in file.filerefs("Define", "Function"):
+                        check_try_catch(check, func_ref, throw_func_ids, selectedFiles)
+        else:
+            arch_file_ids = [file.id() for file in arch_to_scan.ents()]
+            archs = db.root_archs()
+
+            if len(archs) > 2:
+                for arch_db in archs:
+                    if arch_db.longname() == arch_to_scan.longname():
+                        continue
+
+                    for file in arch_db.ents():
+                        throw_func_ids = get_throw_funcs(file, throw_func_ids)
+            else:
+                files = db.ents("code file, header file")
+
+                for file in files:
+                    if file.id() in arch_file_ids:
+                        continue
+
+                    throw_func_ids = get_throw_funcs(file, throw_func_ids)
+
+            for file in arch_to_scan.ents():
+                for func_ref in file.filerefs("Define", "Function"):
+                    check_try_catch(check, func_ref, throw_func_ids, selectedFiles)
+
+
+def get_throw_funcs(file, throw_func_ids):
+    for func_ref in file.filerefs("Define", "Function"):
+        if "throw" in func_ref.ent().contents():
+            throw_func_ids.append(func_ref.ent().id())
+
+    return throw_func_ids
+
+
+def check_try_catch(check, func_ref, throw_func_ids, selectedFiles):
+    lexer = func_ref.file().lexer()
+    lex = lexer.lexeme(func_ref.line(), func_ref.column())
+    on_try_catch = False
+    try_catch_body = 0
+
+    while lex:
+        lex_ent = lex.ent().id() if lex.ent() else None
+
+        if lex.text() in {"try", "catch"} and lex.token() == "Keyword":
+            on_try_catch = True
+        elif on_try_catch and lex.text() == "{" and lex.token() == "Punctuation":
+            try_catch_body += 1
+        elif on_try_catch and lex.text() == "}" and lex.token() == "Punctuation":
+            try_catch_body -= 1
+
+            if not try_catch_body:
+                on_try_catch = False
+        elif on_try_catch and lex.ref() and lex.ref().kind().check("Callby") and lex.ent().id() in throw_func_ids:
+            if lex.ref().file().longname() in selectedFiles:
+                check.violation(lex.ent(), lex.ref().file(
+                ), lex.ref().line(), lex.ref().column(), ERR1)
+
+        elif lex.ref() and lex.ref().kind().check("End") and lex_ent == func_ref.ent().id():
+            break
+
+        lex = lex.next(ignore_whitespace=True,
+                       ignore_comments=True)

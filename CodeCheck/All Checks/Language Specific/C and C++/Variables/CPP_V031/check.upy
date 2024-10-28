@@ -1,0 +1,82 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 06-29-2021
+
+import re
+
+ERR1 = """\
+Variable %1 used a static_cast for an operation provided by const_cast or
+dynamic_cast"""
+
+def id():
+    return 'CPP_V031'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Variables/The static_cast operator should \
+be used for routine cast operations not provided by const_cast and dynamic_cast. \
+"""
+
+
+def tags(id):
+    return {
+        'CPP_V031': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>The static_cast operator should be used for routine cast
+operations not provided by const_cast and dynamic_cast.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    # Skip if const_cast is found in the file
+    if not re.search(r'static_cast', file.contents()):
+        return
+
+    refs = file.filerefs('Define', 'Object')
+
+    # Look for static_cast in variables
+    for ref in refs:
+        if not re.search(r'static_cast', str(ref.ent().value())):
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        ok = True
+
+        # Check if static_cast is used with classes as would a dynamic_cast
+        while lexeme and not lexeme.text() == 'static_cast':
+            lexeme = lexeme.next(True, True)
+        while lexeme and not re.match(r'<', lexeme.text()):
+            lexeme = lexeme.next(True, True)
+
+        if lexeme and lexeme.text() == '<':
+            lexeme = lexeme.next(True, True)
+
+        while lexeme and not lexeme.ent() and lexeme.text() != '>':
+            lexeme = lexeme.next(True, True)
+        if lexeme and lexeme.ent() and lexeme.ent().kindname() == 'Class' and lexeme.ent().ref('Base'):
+            ok = False
+        elif lexeme:
+            # Check if static_cast is used to change constness
+            avRef = ref.ent().ref('Assign Value')
+            if avRef and not re.search(r'const', str(avRef.ent().type())) and re.search(r'const', str(ref.ent().type())):
+                ok = False
+
+        if not ok:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+

@@ -1,0 +1,139 @@
+ERR1 = 'Const member function returns a non-const pointer or reference to class-data'
+
+LOGICAL_RELATIONAL_OPERATORS = {"<", "<=", ">", ">=",
+                                "==", "!=", "&&", "||", "!"}
+
+
+# The ID for the check
+def ids():
+    return ('M9-3-1', 'CPP_P034')
+
+# The short name of the check
+def name(id):
+    return {
+        'M9-3-1': """\
+Published Standards/AUTOSAR/Const Member Function Returning Non-Const Pointer or \
+Reference""",
+        'CPP_P034': """\
+All Checks/Language Specific/C and C++/Pointers/Const Member Function Returning \
+Non-Const Pointer or Reference"""
+    }[id]
+
+
+
+
+
+
+def tags(id):
+    return {
+        'M9-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P034': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>const member functions shall not return non-const
+pointers or references to class-data.</p>
+<p><b>Rationale</b></p>
+<p>When an object is declared with const class type, only const member functions can be invoked on
+that object. The common expectation of const member functions is that the state of the object may
+not be modified when invoking the functions. However, returning a non-const pointer or reference
+to class-data from a const function allows a modification to the conceptual state of an object.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">class C
+{
+public:
+ C ( int32_t & b_ ) : a ( new int32_t [ 10 ] ), b ( b_ )
+ {
+ }
+ int32_t * getA () const // Non-compliant
+ // Returns non const pointer to data
+ {
+ return a;
+ }
+ int32_t * getB () const // Non-compliant
+ // Returns non const pointer to data
+ {
+ return &b;
+ }
+ const int32_t * getC () const // Compliant
+ // Returns const pointer to data
+ {
+ return &b;
+ }
+private:
+ int32_t * a;
+ int32_t & b;
+};
+void fn ( C const & c )
+{
+ c.getA()[ 0 ] = 0; // Modification to conceptual state of C
+ *c.getB() = 0; // Modification to conceptual state of C
+ fn2 ( c.getC() ); // Value can be used,
+ *c.getC() = 0; // but compiler will report an error here
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Member Const Function"):
+        func_type = func_ref.ent().type()
+        
+        if ((func_type and "const" in func_type)
+            or "operator" in func_ref.ent().name()
+                or not func_ref.ent().parent().kind().check("Class")):
+            continue
+
+        for return_ref in func_ref.ent().refs("Return", "Member"):
+            bool_expression = False
+            ent_type = return_ref.ent().type()
+
+            if not ent_type or not ("*" in ent_type or "&" in ent_type):
+                continue
+
+            if "bool" in func_ref.ent().type():
+                lex = lexer.lexeme(return_ref.line(), 0)
+
+                while lex and lex.text() != ";":
+                    if lex.text() in LOGICAL_RELATIONAL_OPERATORS and lex.token() == "Operator":
+                        bool_expression = True
+                        break
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+            if not bool_expression:
+                check.violation(func_ref.ent(), file,
+                                func_ref.line(), func_ref.column(), ERR1)

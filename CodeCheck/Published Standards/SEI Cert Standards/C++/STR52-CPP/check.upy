@@ -1,0 +1,169 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-22-2023
+
+import re
+import Modules
+
+ERR1 = "Iterator is invalidated after the first call to insert()"
+ERR2 = "data() is invalidated after the call to replace()"
+
+def id():
+    return 'STR52-CPP'
+
+def name():
+    return "Published Standards/SEI Cert Standards/C++/" +  """\
+Use valid references, pointers, and iterators to reference elements of a \
+basic_string"""
+
+
+
+
+def tags(id):
+    return {
+        'STR52-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Types',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Since std::basic_string is a container of characters, this rule is a specific
+instance of CTR51-CPP. Use valid references, pointers, and iterators to
+reference elements of a container. As a container, it supports iterators just
+like other containers in the Standard Template Library. However, the
+std::basic_string template class has unusual invalidation semantics. The C++
+Standard, [string.require], paragraph 5 [ISO/IEC 14882-2014], states the
+following:</p>
+<p><i>References, pointers, and iterators referring to the elements of a
+basic_string sequence may be invalidated by the following uses of that
+basic_string object:</i></p>
+<ul><li><i>As an argument to any standard library function taking a reference to
+non-const basic_string as an argument.</i></li>
+<li><i>Calling non-const member functions, except operator[], at, front, back,
+begin, rbegin, end, and rend.</i></li>
+<p>Examples of standard library functions taking a reference to non-const std::basic_string are std::swap(), ::operator>>(basic_istream &, string &), and std::getline().</p>
+<p>Do not use an invalidated reference, pointer, or iterator because doing so results in undefined behavior.</p>
+<p><b>Non-compliant Code Example</b></p>
+<p>his noncompliant code example copies input into a std::string, replacing semicolon (;) characters with spaces. This example is noncompliant because the iterator loc is invalidated after the first call to insert(). The behavior of subsequent calls to insert() is undefined.</p>
+<pre><code language="C++">#include &lt;string&gt;
+  
+void f(const std::string &input) {
+  std::string email;
+ 
+  // Copy input into email converting ";" to " "
+  std::string::iterator loc = email.begin();
+  for (auto i = input.begin(), e = input.end(); i != e; ++i, ++loc) {
+    email.insert(loc, *i != ';' ? *i : ' ');
+  }
+}</code></pre>
+<p><b>Compliant Solution (std::string::insert())</b></p>
+<p>In this compliant solution, the value of the iterator loc is updated as a
+result of each call to insert() so that the invalidated iterator is never
+accessed. The updated iterator is then incremented at the end of the
+loop.</p>
+<pre><code language="C++">#include &lt;string&gt;
+  
+void f(const std::string &input) {
+  std::string email;
+ 
+  // Copy input into email converting ";" to " "
+  std::string::iterator loc = email.begin();
+  for (auto i = input.begin(), e = input.end(); i != e; ++i, ++loc) {
+    loc = email.insert(loc, *i != ';' ? *i : ' ');
+  }
+}</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    refs = file.filerefs('Define', 'Object, Parameter', True)
+    lexer = None
+
+    for ref in refs:
+        if not re.search(r'std::string', str(ref.ent().type())):
+            continue
+
+        dict = {}
+        scopes = []
+
+        # Go through use refs to find uses of .insert(), .replace(), and .data()
+        for uref in ref.ent().refs('Useby'):
+            ok = True
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(uref.line(), uref.column())
+            if lexeme:
+                nextLex = lexeme.next(True, True)
+                if nextLex and nextLex.text() == '.':
+                    nextLex = nextLex.next(True, True)
+                    # Check if assigned to variable/iterator
+                    if nextLex and nextLex.text() == 'insert':
+                        ok = False
+                        prevLex = lexeme.previous(True, True)
+                        while prevLex and not re.search(';|{', prevLex.text()):
+                            if re.search(r'}|\)', prevLex.text()):
+                                prevLex = Modules.findClose(prevLex)
+                                if prevLex:
+                                    prevLex = prevLex.previous(True, True)
+                                    continue
+
+                            if prevLex and prevLex.text() == '=':
+                                ok = True
+                                break
+                            if prevLex:
+                                prevLex = prevLex.previous(True, True)
+
+                    # Keep track of when .replace() was used
+                    elif nextLex and nextLex.text() == 'replace':
+                        if uref.scope().name() not in scopes:
+                            scopes.append(uref.scope().name())
+                        if uref.scope().name() + 'replace' in dict.keys():
+                            if dict[uref.scope().name() + 'replace'] < uref.line():
+                                dict[uref.scope().name() + 'replace'] = uref.line()
+
+                        else:
+                            dict[uref.scope().name() + 'replace'] = uref.line()
+
+
+                    # Keep track of when .data() was used
+                    elif nextLex and nextLex.text() == 'data':
+                        if uref.scope().name() not in scopes:
+                            scopes.append(uref.scope().name())
+                        if uref.scope().name() + 'data' in dict.keys():
+                            if dict[uref.scope().name() + 'data'] < uref.line():
+                                dict[uref.scope().name() + 'data'] = uref.line()
+
+                        else:
+                            dict[uref.scope().name() + 'data'] = uref.line()
+
+            if not ok:
+                check.violation(uref.ent(), file, uref.line(), uref.column(), ERR1)
+
+        # Throw violation if .replace() is called after last .data() call
+        for scope in scopes:
+            replace = 0
+            data = 0
+            if scope + 'replace' in dict.keys():
+                replace = dict[scope + 'replace']
+            if scope + 'data' in dict.keys():
+                data = dict[scope + 'data']
+
+            if replace != 0 and data != 0:
+                if replace > data:
+                    check.violation(ref.ent(), file, data, 0, ERR2)
+

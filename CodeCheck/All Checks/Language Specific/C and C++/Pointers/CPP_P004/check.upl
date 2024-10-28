@@ -1,0 +1,101 @@
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => "Uninitialized Pointer";
+
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+sub checkID { return "CPP_P004";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Pointers\\Pointers Must Be Initialized";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Pointers',
+  );
+}
+
+sub description {
+	return "Pointers must be initialized to 0, or some valid value when created.";
+}
+
+sub detailed_description {
+	return "Pointers must be initialized to 0, or some valid value when created.\nAssumptions:
+   1. Any initialization statement is sufficient.
+   2. Non-static members are not considered.";
+}
+
+sub test_language {
+	my $language = shift;
+	return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+	return 1;
+}
+
+sub test_global {
+	return 0;
+}
+
+sub define_options{
+  my $check = shift;  
+  $check->option->checkbox("testArrays","Also test for array initialization",0);
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check('c file');
+  my @entRefs = $file->filerefs("define","object ~member ~unknown ~unresolved,object static member ~unresolved",1);
+  foreach my $ref (@entRefs) {
+    my $var = $ref->ent;
+    next if !checkPointerType($var,$check);
+    do_one_variable($check,$var);
+  }  
+}
+
+
+# check one variable
+sub do_one_variable {
+  my $check = shift;
+  my $var = shift;
+  if (!$var->ref("setby init")) {
+    my ($line,$file) = getVarDefn($var);
+    $check->violation($var,$file,$line,-1,ERR1);
+  }
+}
+
+
+# Return true if entity type is a pointer type.
+sub checkPointerType {
+    my $ent = shift;
+    my $check = shift;
+    return 0 if !$ent;
+    return 1 if $ent->type() =~ m/^\w+\s?\*/;
+    return 1 if $ent->type() =~ m/[*\[]/ && $check->option->lookup("testArrays");
+    my $type_ent = $ent->ents("typed","typedef");
+    return 0 if !$type_ent;
+    return 0 if $type_ent == $ent; # hack for parse problem before b273
+    return checkPointerType($type_ent,$check);
+}
+
+
+# Pass a variable entity. Return an array of:
+#   the begin line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getVarDefn {
+    my $var = shift;
+    my $begin_ref = $var->ref("definein");
+    return undef if (!$begin_ref);
+    return ($begin_ref->line(), $begin_ref->file());
+}
+

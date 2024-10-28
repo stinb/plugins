@@ -1,0 +1,136 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 5/09/2022
+
+ERR1 = 'Do not increase the accessibility of overridden or hidden methods'
+
+DEF_NAME = "Do not increase the accessibility of overridden or hidden methods"
+
+ACCESSIBILITY_LEVELS = ["Private", "Default", "Protected", "Public"]
+
+# The ID for the check
+def ids():
+    return ('MET04-J', 'JAVA_MET04')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'MET04-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_MET04': "All Checks/Language Specific/Java/Methods/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MET04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_MET04': [
+            'Language: Java',
+            'Methods',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not increase the accessibility of overridden or hidden methods</p>
+<p><b>Risk Assessment</b></p>
+<p>Subclassing allows weakening of access restrictions, which can compromise the security of a Java application.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/MET04-J.+Do+not+increase+the+accessibility+of+overridden+or+hidden+methods</i></p>
+<p><b>Exceptions</b></p>
+<p><i>MET04-J-EX0: </i>For classes that implement the java.lang.Cloneable interface, the accessibility of the Object.clone() method should be increased from protected to public.</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Super {
+  protected void doLogic() {
+    System.out.println("Super invoked");
+  }
+}
+
+public class Sub extends Super {
+  public void doLogic() {
+    System.out.println("Sub invoked");
+    // Do sensitive operations
+  }
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox("abstractMethods", "Flag Overridden Abstract Methods", False)
+
+def check(check, file):
+    ca = check.option().lookup('abstractMethods')
+    for cRef in file.filerefs("Define", "Class"):
+        subClass = cRef.ent()
+        extendClassL = subClass.refs("Extend", "Class")
+
+        if len(extendClassL) < 1:
+            continue
+
+        extendClass = extendClassL[0]
+        if extendClass.ent().longname() == "java.lang.Object":
+            continue
+
+        #check e
+        subMethods = subClass.refs("Define", "Method,Constructor")
+
+        for m in subMethods:
+            if check_if_overrides_and_changes(m, extendClass, ca):
+                pm(ERR1, check, m.ent(), m.file(), m.line(), m.column())
+
+
+def check_if_overrides_and_changes(method, pClass, checka = False):
+    myLevel = get_access_level(method)
+
+    #check override
+    for o in method.ent().refs("Overrides"):
+        ab = "Abstract" in o.ent().kindname() and not checka
+        if o.ent().longname() == "java.lang.Object.clone" or ab: #exception
+            continue
+        oLevel = get_access_level(o)
+        if oLevel < myLevel:
+            return True
+
+    #now check fo hidden
+    for m in pClass.ent().refs("Define", "Method,Constructor"):
+        en = m.ent().name() == method.ent().name()
+        ep = m.ent().parameters() == method.ent().parameters()
+        if en and ep:
+            ab = "Abstract" in m.ent().kindname() and not checka
+            if m.ent().longname() == "java.lang.Object.clone" or ab: #exception
+                continue
+            oLevel = get_access_level(m)
+            if oLevel < myLevel:
+                return True
+
+    return False
+def get_access_level(method, check = None):
+    for i in range(len(ACCESSIBILITY_LEVELS)):
+        a = ACCESSIBILITY_LEVELS[i]
+        if a in method.ent().kind().longname():
+            return i
+    return -1
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

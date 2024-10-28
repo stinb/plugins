@@ -1,0 +1,153 @@
+# This script is designed to run with Understand - CodeCheck
+
+import re
+
+
+ERR1 = 'The operand is not a bool type'
+RELATIONAL_OPERATORS = {"<", "<=", ">", ">=", "==", "!="}
+
+
+# The ID for the check
+def ids():
+    return ('M5-3-1', 'MISRA08_5-3-1', 'CPP_E044')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M5-3-1': 'Published Standards/AUTOSAR/Each operand of the ! operator, the logical && or the logical || operators shall have type bool',
+        'MISRA08_5-3-1': 'Published Standards/MISRA-C++ 2008/5-3-1 Each operand of the ! operator, the logical && or the logical || operators shall have type bool',
+        'CPP_E044': 'All Checks/Language Specific/C and C++/Expressions/Each operand of the ! operator, the logical && or the logical || operators shall have type bool',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Expressions',
+        ],
+        'M5-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E044': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Each operand of the ! operator, the logical && or the
+logical || operators shall have type bool.</p>
+<p><b>Rationale</b></p>
+<p>The use of operands with types other than bool with these operators is unlikely to be meaningful
+(or intended). This rule allows the detection of such uses, which often occur because the logical
+operators (&&, || and !) can be easily confused with the bitwise operators (&, | and ~).</p>
+<p><b>Example</b></p>
+<pre><code language="C++">if ( ( a &gt; b ) && ( c &gt; d ) ) // Compliant
+if ( 1 && ( c &gt; d ) ) // Non-compliant
+if ( ( a &gt; b ) && ( c + d ) ) // Non-compliant
+if ( u8_a && ( c + d ) ) // Non-compliant
+if ( !0 ) // Non-compliant -
+ // also breaks other rules
+if ( !ptr ) // Non-compliant
+if ( !false ) // Compliant with this rule,
+ // but breaks others
+</code></pre>
+<p><b>See also</b></p>
+<p>ISO/IEC 14882:2003 [1] §5.14, §5.15</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(_lex):
+        check.violation(None, file, _lex.line_begin(),
+                        _lex.column_begin(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() in {"&&", "||", "!"} and lex.token() == "Operator":
+            if not rho(lex):
+                check_violation(lex)
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+                continue
+
+            if lex.text() != "!" and not lho(lex):
+                check_violation(lex)
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+
+def rho(_lex):
+    parenthesis = 1
+
+    while _lex and parenthesis:
+        if _lex.text() == "(":
+            parenthesis += 1
+        elif _lex.text() == ")":
+            parenthesis -= 1
+        elif _lex.ent() and re.search(r"bool", str(_lex.ent().type()), re.I):
+            return True
+        elif _lex.text() in {"true", "false"} and _lex.token() == "Keyword":
+            return True
+        elif _lex.token() == "Operator" and _lex.text() in RELATIONAL_OPERATORS:
+            return True
+
+        _lex = _lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return False
+
+
+def lho(_lex):
+    parenthesis = 1
+
+    while _lex and parenthesis:
+        if _lex.text() == ")":
+            parenthesis += 1
+        elif _lex.text() == "(":
+            parenthesis -= 1
+        elif _lex.ent() and re.search(r"bool", str(_lex.ent().type()), re.I):
+            return True
+        elif _lex.text() in {"true", "false"} and _lex.token() == "Keyword":
+            return True
+        elif _lex.token() == "Operator" and _lex.text() in RELATIONAL_OPERATORS:
+            return True
+
+        _lex = _lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+    return False

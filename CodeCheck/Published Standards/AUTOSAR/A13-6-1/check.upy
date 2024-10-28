@@ -1,0 +1,151 @@
+ERR1 = "Digital sequence operator ' should only be used every 3 digits for decimal values"
+ERR2 = "Digital sequence operator ' should only be used every 2 digits for hexadecimal values"
+ERR3 = "Digital sequence operator ' should only be used every 4 digits for binary values"
+
+NUMERIC_TYPE = {"int", "float", "double", "char"}
+
+
+# The ID for the check
+def ids():
+    return ('A13-6-1', 'CPP_N017')
+
+
+# The short name of the check
+def name(id):
+    return {
+        "A13-6-1": "Published Standards/AUTOSAR/Digit sequences separators ' shall only be used as follows: (1) for decimal, every 3 digits, (2) for hexadecimal, every 2 digits, (3) for binary, every 4 digits", \
+        "CPP_N017": "All Checks/Language Specific/C and C++/Naming Conventions/Digit sequences separators ' shall only be used as follows: (1) for decimal, every 3 digits, (2) for hexadecimal, every 2 digits, (3) for binary, every 4 digits",
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A13-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Naming Conventions'
+        ],
+        'CPP_N017': [
+            'Language: C',
+            'Language: C++',
+            'Naming Conventions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Digit sequences separators ' shall only be used as follows: (1) for decimal,
+every 3 digits, (2) for hexadecimal, every 2 digits, (3) for binary, every 4
+digits.</p>
+<p><b>Rationale</b></p>
+<p>Since C++14 Language Standard it is allowed (optionally) to separate any two digits in
+digit sequences with separator '. However, to meet developer expectations, usage of
+separator in integer and floating-point digit sequences should be unified:</p>
+<p>• for decimal values, separator can be placed every 3 digits, e.g. 3'000'000,
+3.141'592'653
+<br>• for hexadecimal values, separator can be placed every 2 digits, e.g.
+0xFF'FF'FF'FF</br>
+<br>• for binary values, separator can be placed very 4 digits, e.g. 0b1001'1101'0010</b></p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A13-6-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 void Fn() noexcept
+4 {
+5 std::uint32_t decimal1 = 3'000'000; // Compliant
+6 std::uint32_t decimal2 = 4'500; // Compliant
+7 std::uint32_t decimal3 = 54'00'30; // Non-compliant
+8 float decimal4 = 3.141'592'653; // Compliant
+9 float decimal5 = 3.1'4159'265'3; // Non-compliant
+10 std::uint32_t hex1 = 0xFF'FF'FF'FF; // Compliant
+11 std::uint32_t hex2 = 0xFAB'1'FFFFF; // Non-compliant
+12 std::uint8_t binary1 = 0b1001'0011; // Compliant
+13 std::uint8_t binary2 = 0b10'00'10'01; // Non-compliant
+14 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• ISO 26262-6 [5]: 8.4.4 e) readability and comprehensibility</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref, error_msg):
+        check.violation(ref.ent(), file, ref.line(),
+                        ref.column(), error_msg)
+        return
+
+    def evaluate(sequence: list, place, ref, error_msg):
+        if len(sequence) > 1:
+            for ind, nums in enumerate(sequence):
+                if ind == 0:
+                    if len(nums) > place:
+                        check_violation(ref, error_msg)
+                        return False
+                elif len(nums) != place:
+                    check_violation(ref, error_msg)
+                    return False
+
+        return True
+
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    for obj_ref in file.filerefs("Define", "Object"):
+        typed_ref = obj_ref.ent().ref("Typed")
+        obj_ref_type = obj_ref.ent().type()
+        obj_ref_val = obj_ref.ent().value()
+
+        seen = set()
+        while typed_ref and typed_ref not in seen:
+            obj_ref_type = typed_ref.ent().type()
+            typed_ref = typed_ref.ent().ref("Typed")
+            seen.add(typed_ref)
+
+        if obj_ref_type and any(num_type in obj_ref_type for num_type in NUMERIC_TYPE):
+            for lex in lexer.lexemes(obj_ref.line(), obj_ref.line()):
+                if lex.text() == "=" and lex.token() == "Operator":
+                    value = lex.next(ignore_whitespace=True).text()
+
+                    if value.startswith("0x"):
+                        hex_list = value[2:].split("'")
+                        evaluate(hex_list, 2, obj_ref, ERR2)
+                    elif value.startswith("0b"):
+                        bin_list = value[2:].split("'")
+                        evaluate(bin_list, 4, obj_ref, ERR3)
+                    elif "." in value and value.count('.') == 1:
+                        whole, fract = value.split(".")
+                        whole = whole.split("'")
+                        if evaluate(whole, 3, obj_ref, ERR1):
+                            fract = fract.split("'")
+                            fract.reverse()
+                            evaluate(fract, 3, obj_ref, ERR1)
+                    elif obj_ref_val and not obj_ref_val.startswith("'"):
+                        true_val = obj_ref_val.replace("'", "")
+
+                        if true_val and true_val.isdigit():
+                            value = value.split("'")
+                            evaluate(value, 3, obj_ref, ERR1)
+
+                    break

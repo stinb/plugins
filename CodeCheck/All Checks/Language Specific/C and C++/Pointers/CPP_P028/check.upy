@@ -1,0 +1,160 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2021-11-12
+
+
+import re
+
+
+ERR1 = 'No lifetime semantics expressed for smart pointer parameter'
+
+
+def ids():
+    return ('A8-4-11', 'CPP_P028')
+
+
+def name(id):
+    return {
+        'A8-4-11': 'Published Standards/AUTOSAR/A smart pointer shall only be used as a parameter type if it expresses lifetime semantics',
+        'CPP_P028': 'All Checks/Language Specific/C and C++/Pointers/A smart pointer shall only be used as a parameter type if it expresses lifetime semantics',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A8-4-11': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P028': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+If the object passed into the function is merely used without affecting the lifetime, it is preferable to pass it by reference or raw pointer instead.
+</p>
+
+<p>
+Keeping a copy of a <code>std::shared_ptr</code> or moving a <code>std::unique_ptr</code> would be examples that affect the lifetime.
+</p>
+
+<p>
+Note: When an object whose lifetime is managed by a non-local smart pointer is passed by reference or raw pointer, care needs to be taken that the lifetime of the object doesn't end during the duration of the called function. In the case of a <code>std::shared_ptr</code> this can be achieved by keeping a local copy of the <code>shared_ptr</code>.
+</p>
+
+
+<p><b>Exception</b></p>
+A non-owning smart pointer, like <code>std::observer_ptr</code> from the C++ Library Fundamentals TS v2, that documents the non-owning property of the parameter does not violate this rule.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A8-4-11.cpp 307966 2018-02-16 16:03:46Z christof.meerwald $
+
+#include &lt;cstdint&gt;
+#include &lt;memory&gt;
+#include &lt;numeric&gt;
+#include &lt;vector&gt;
+
+class A
+{
+    public:
+    void do_stuff();
+};
+
+// Non-Compliant: passing object as smart pointer
+void foo(std::shared_ptr&lt;A&gt; a)
+{
+    if (a)
+    {
+        a-&gt;do_stuff();
+    }
+    else
+    {
+        // ...
+    }
+}
+
+// Compliant: passing as raw pointer instead
+void bar(A *a)
+{
+    if (a != nullptr)
+    {
+        a-&gt;do_stuff();
+    }
+    else
+    {
+        // ...
+    }
+}
+
+
+class B
+{
+public:
+    void add_a(std::shared_ptr&lt;A&gt; a)
+    {
+        m_v.push_back(a);
+    }
+
+private:
+    std::vector&lt;std::shared_ptr&lt;A&gt;&gt; m_v;
+};
+
+// Compliant: storing the shared pointer (affecting lifetime)
+void bar(B &b, std::shared_ptr&lt;A&gt; a)
+{
+    b.add_a(a);
+}
+</code></pre>
+
+<p><b>See also</b></p>
+• C++ Core Guidelines [11]: R.30: Take smart pointers as parameters only to explicitly express lifetime semantics.<br>
+• C++ Core Guidelines [11]: R.37: Do not pass a pointer or reference obtained from an aliased smart pointer.<br>
+• C++ Core Guidelines [11]: F.7: For general use, take T* or T& arguments rather than smart pointers.<br>
+• A18-5-2 in section 6.18.5
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+
+    smartPointer = 'std::(__1::)?(unique_ptr|shared_ptr|weak_ptr|auto_ptr)'
+
+    # Parameter defined
+    for ref in file.filerefs('Define', 'Parameter'):
+        ent = ref.ent()
+
+        # Skip types besides smart pointers
+        if not ent.type() or not re.match(smartPointer, ent.type()):
+            continue
+
+        # Skip if stored or used in an assignment
+        if ent.refs('Assign Value, Assignby Value'):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+        break

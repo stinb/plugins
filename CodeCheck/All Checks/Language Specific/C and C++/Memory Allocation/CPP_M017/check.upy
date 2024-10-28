@@ -1,0 +1,124 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 07-07-2021
+
+import re
+
+ERR1 = """\
+Local allocation of object %1 was not deallocated prior to exiting the method"""
+
+def id():
+    return 'CPP_M017'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Memory Allocation/All local allocations \
+made in a method, other than the destructor, should be deallocated prior to \
+exiting the method."""
+
+
+def tags(id):
+    return {
+        'CPP_M017': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>All local allocations made in a method, other than the
+destructor, should be deallocated prior to exiting the method.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # Gather method refs
+    methods = file.filerefs('Define', 'Member Function')
+
+    # Skip if file does not have one of the following keywords
+    if not methods or not re.search(r'new|malloc|calloc|realloc', file.contents()):
+        return
+
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+
+    for method in methods:
+        # Skip destructors
+        if re.search(r'~', method.ent().name()):
+            continue
+        # Gather set and set init refs
+        refs = method.ent().refs('Set', 'Object')
+        for ref in refs:
+            ok = True
+
+            # If new keyword is used look for delete
+            if re.search(r'new', str(ref.ent().value())):
+                ok = False
+                deallocate = findDeallocation(lexer, ref, method, 'new')
+                if deallocate and deallocate.text() == 'delete':
+                    ok = True
+
+            # If one of these keywords are used the look for free
+            elif re.search(r'malloc|calloc|realloc', str(ref.ent().value())):
+                ok = False
+                deallocate = findDeallocation(lexer, ref, method, '')
+                if deallocate and deallocate.text() == 'free':
+                    ok = True
+
+            elif not ref.ent().value():
+                lexeme = lexer.lexeme(ref.line(), 0)
+
+                while lexeme and not lexeme.text() == ';':
+                    # If new keyword is used look for delete
+                    if lexeme.text() == 'new':
+                        ok = False
+                        deallocate = findDeallocation(lexer, ref, method, 'new')
+                        if deallocate and deallocate.text() == 'delete':
+                            ok = True
+
+                    # If one of these keywords are used the look for free
+                    elif re.match(r'malloc|calloc|realloc', lexeme.text()):
+                        ok = False
+                        deallocate = findDeallocation(lexer, ref, method, '')
+                        if deallocate and deallocate.text() == 'free':
+                            ok = True
+
+                    lexeme = lexeme.next(True, True)
+
+            if not ok:
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+
+
+
+# Find the associated deallocation keyword
+def findDeallocation(lexer, ref, method, type):
+    deallocate = None
+    if type == 'new':
+        de = 'delete'
+    else:
+        de = 'free'
+    useRefs = ref.ent().refs('Useby')
+    for useRef in useRefs:
+        if not lexer:
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(useRef.line(), 0)
+        while lexeme and not lexeme.text() == ';':
+            if lexeme.text() == de and method.line() < lexeme.line_begin() and method.ent().ref('End').line() > lexeme.line_begin():
+                deallocate = lexeme
+                break
+
+            lexeme = lexeme.next(True, True)
+
+    return deallocate
+
+

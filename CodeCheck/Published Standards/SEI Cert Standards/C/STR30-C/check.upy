@@ -1,0 +1,134 @@
+import re
+
+
+ERR1 = 'Do not attempt to modify string literals.'
+LIB_FUNCTIONS = {"strpbrk", "strchr", "strrchr", "strstr",
+                 "wcspbrk", "wcschr", "wcsrchr", "wcsstr", "memchr", "wmemchr"}
+STRING_PTR = {"char *", "wchar_t *"}
+
+
+# The ID for the check
+def id():
+    return ('STR30-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'STR30-C': 'Published Standards/SEI Cert Standards/C/Do not attempt to modify string literals',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'STR30-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P9',
+            'Level: L2',
+            'Types',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not attempt to modify string literals'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not attempt to modify string literals</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/STR30-C.+Do+not+attempt+to+modify+string+literals</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">char *p = "string literal";
+p[0] = 'S';
+
+
+#include &lt;stdlib.h&gt;
+void func(void) {
+ mkstemp("/tmp/edXXXXXX");
+}
+
+
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+const char *get_dirname(const char *pathname) {
+ char *slash;
+ slash = strrchr(pathname, '/');
+ if (slash) {
+ *slash = '&#92;0'; /* Undefined behavior */
+ }
+ return pathname;
+ }
+int main(void) {
+ puts(get_dirname(__FILE__));
+ return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object Local"):
+            if obj_ref.ent().type() in STRING_PTR:
+                init_value = obj_ref.ent().value() if obj_ref.ent().value() else "None"
+
+                if re.search(r'^".*"', init_value):
+                    for modify_ref in obj_ref.ent().refs("Deref Setby"):
+                        check.violation(modify_ref.scope(), file,
+                                        modify_ref.line(), modify_ref.column(), ERR1)
+                else:
+                    for set_ref in obj_ref.ent().refs("Setby ~Deref"):
+                        lexemes = lexer.lexemes(set_ref.line(), set_ref.line())
+
+                        for lex in lexemes:
+                            if lex.text() in LIB_FUNCTIONS and lex.token() == "Identifier":
+                                in_param = 0
+
+                                while lex:
+                                    if lex.text() == "(":
+                                        in_param += 1
+                                    elif lex.text() == ")":
+                                        in_param -= 1
+
+                                        if not in_param:
+                                            break
+                                    elif (in_param == 1) and (lex.text() == ","):
+                                        break
+                                    elif (in_param == 1) and ((lex.ent() and lex.ent().type() and "const" in lex.ent().type() and lex.token() == "Identifier") or (lex.token() == "String")):
+                                        for modify_ref in obj_ref.ent().refs("Deref Setby"):
+                                            if (modify_ref.line() > lex.line_begin()) and (modify_ref.ent().id() == func_ref.ent().id()):
+                                                check.violation(modify_ref.scope(), file,
+                                                        modify_ref.line(), modify_ref.column(), ERR1)
+                                            
+                                        break
+
+                                    lex = lex.next(True, True)                                
+
+                                break

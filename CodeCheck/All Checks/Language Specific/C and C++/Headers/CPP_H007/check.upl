@@ -1,0 +1,108 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+use warnings;
+
+
+# Required - Return the short name of the check
+
+sub checkID { return "CPP_H007";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Headers\\Unnecessary #Includes";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Headers',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Identify #includes that are unnecessary";}
+
+# Required - Return the long description of the check
+sub detailed_description { <<'END_DESC'
+Identify #includes that are unnecessary
+
+<p><b>Developer's Note</b></p>
+This check only works using the Strict Parser. To change your parser settings, click
+Project -> Configure Project then select Languages on the left and then click
+Strict*.
+</p>
+
+END_DESC
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language eq "C++"; 
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+# Optional - define configurable options for the check.
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox('stdlib','Flag unneeded standard library headers',1);
+}
+
+
+# Required - Run the check and return violations if any.
+# This is called for each file if test_entity is set to 1 and $file is the Understand::Ent object for the file
+# it is also called once with $file set to null if test_global is set to 1
+sub check {
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift;  # Will be empty if test_global set to 1 and test_entity set to 0
+
+  my $stdlib = $check->option->lookup('stdlib');
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check('c file'); 
+  my @includes = $file->refs("include","file",1);
+  return unless @includes;
+  
+  my $depends = $file->depends();
+  return unless $depends;
+  INC:foreach my $incRef (@includes){
+    my @fileDeps = $depends->value($incRef->ent);
+    DEP:foreach my $depRef (@fileDeps){
+      next DEP if $depRef->kind->check("include");
+      next INC;
+    }
+	my @defEnts = map{$_->ent;}$file->filerefs("","",1);
+	my @declEnts = map{$_->ent;}$incRef->ent->filerefs("declare, define");
+	foreach my $ent(@defEnts){
+		foreach my $declEnt(@declEnts){
+			next INC if $ent->id == $declEnt->id;
+		}
+	}
+
+  # if 'flag stdlib' checkbox not selected and we find a std library header, ignore it
+  if (($stdlib == 0) and ($incRef->ent->name() !~ /\.h/)) {
+    # do nothing, pass
+  } else {
+    $check->violation($incRef->ent,$file,$incRef->line,$incRef->column,"#Include file '%1' not directly used", $incRef->ent->name());
+  }
+
+  }
+    
+  
+  # Register a violation with the syntax below. 
+  #   $check->violation($entity,$file,$line,$column,"Error String"); 
+  #   $check->violation(0,0,-1,-1,"Error String")  #if no entity or location
+  
+  # lookup the value or values for an option  
+  #   my $optionVal = $check->option->lookup($name);
+}
+
+

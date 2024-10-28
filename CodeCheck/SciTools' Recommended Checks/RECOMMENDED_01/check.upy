@@ -1,0 +1,103 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2/8/21
+import re
+
+ERR1 = '"%1" defined in header file.'
+
+# The ID for the check
+def ids():
+    return ('RECOMMENDED_01', 'MISRA04_8.5', 'CPP_H003')
+
+# The short name of the check
+def name(id):
+    return {
+            'RECOMMENDED_01': 'SciTools\' Recommended Checks/Definitions in Header Files', \
+            'MISRA04_8.5': 'Published Standards/MISRA-C 2004/8.5 No definitions of objects or functions in a header file', \
+            'CPP_H003': 'All Checks/Language Specific/C and C++/Headers/Definitions in Header Files', \
+            }[id] \
+
+
+
+
+def tags(id):
+    return {
+        'MISRA04_8.5': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Headers',
+        ],
+        'RECOMMENDED_01': [
+            'Language: C',
+            'Language: C++',
+            'Headers',
+        ],
+        'CPP_H003': [
+            'Language: C',
+            'Language: C++',
+            'Headers',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    return {
+            'RECOMMENDED_01': """\
+<p><b>Rationale</b></p>
+<p>Header files should be used to declare objects, functions, typedefs, and
+macros. Header files shall not contain or produce definitions of objects
+or functions (or fragment of functions or objects) that occupy storage.
+This makes it clear that only C/CPP files contain executable source code
+and that header files only contain declarations. A <b>header file</b> is
+defined as any file that is included via the #include directive,
+regardless of name or suffix.</p>
+<p><b>Exception</b></p>
+Inline Functions can be defined in the declaration of a class.</p>""",
+            'MISRA04_8.5': """\
+<p>Header files should be used to declare objects, functions, typedefs, and
+macros. Header files shall not contain or produce definitions of objects or
+functions (or fragment of functions or objects) that occupy storage. This makes
+it clear that only C files contain executable source code and that header files
+only contain declarations. A header file is defined as any file that is
+included via the #include directive, regardless of name or suffix.</p>""",
+            'CPP_H003': """\
+<p><b>Rationale</b></p>
+<p>Header files should be used to declare objects, not define them.</p>
+<p><b>Possible Exception</b></p>
+<p>Inline Functions can be defined in the declaration of a class.</p>""",
+            }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    template = False if (check.id() == 'CPP_H003') else True
+    check.option().checkbox("allowInlineFuncs", "Allow Inline Functions in Header Files", False)
+    check.option().checkbox("ignoreConst", "Ignore constants defined in headers", False)
+    check.option().checkbox('template', 'Include Templates', template)
+
+def check(check, file):
+
+    if not check.option().lookup('template'):
+        refsDefined = file.filerefs('define', 'function ~Template, object', False)
+    else:
+        refsDefined = file.filerefs('define', 'c function, c object', True)
+
+    for ref in refsDefined:
+        if re.search(r'const', str(ref.ent().type())) and not re.search(r'\*const', str(ref.ent().type())) and check.option().lookup("ignoreConst"):
+            continue
+        if ref.ent().kind().check('member object ~static'):
+            continue
+        if ref.ent().kind().check('function') and ref.scope().kind().check('class') and check.option().lookup("allowInlineFuncs"):
+            continue
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+
+

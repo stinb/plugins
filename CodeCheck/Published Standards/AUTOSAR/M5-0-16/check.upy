@@ -1,0 +1,157 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 1-20-2022
+import re
+
+ERR1 = 'Pointer operand and pointer result did not address elements of the same array'
+ERR2 = 'Pointers access different size arrays'
+ERR3 = 'Pointers access an array sized by a variable'
+
+def ids():
+    return ('M5-0-16', 'CPP_P049')
+
+def name(id):
+    return {
+        'M5-0-16': """\
+Published Standards/AUTOSAR/A pointer operand and any pointer resulting from \
+pointer arithmetic using that operand shall both address elements of the same \
+array""",
+        'CPP_P049': """\
+All Checks/Language Specific/C and C++/Pointers/A pointer operand and any \
+pointer resulting from pointer arithmetic using that operand shall both address \
+elements of the same array"""
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'M5-0-16': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P049': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>This rule applies to expressions of the form:</p>
+<ul><li>integer_expression + pointer_expression</li>
+<li>pointer_expression + integer_expression</li>
+<li>pointer_expression - integer_expression</li>
+<li>++pointer_expression</li>
+<li>pointer_expression++</li>
+<li>--pointer_expression</li>
+<li>pointer_expression--</li>
+<li>pointer_expression [ integer_expression ]</li></ul>
+<p>where pointer_expression is a pointer to an array element.</p>
+<p>It is undefined behaviour if the result obtained from one of the above
+expressions is not a pointer to an element of the array pointed to by
+pointer_expression or an element one beyond the end of that array.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">void f1 ( const int32_t * a1 )
+{
+  int32_t a2[ 10 ];
+  const int32_t * p1 = &a1 [ 1 ]; // Non-compliant – a1 not an array
+  int32_t * p2 = &a2 [ 10 ]; // Compliant
+  int32_t * p3 = &a2 [ 11 ]; // Non-compliant
+}
+void f2 ( )
+{
+  int32_t b;
+  int32_t c [ 10 ];
+  f1 ( &b );
+  f1 ( c );
+}
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.option().checkbox('variables', 'Check this box to include array size set by variables (this codecheck cannot detect what value is in the variable so a violation will be thrown everytime unless both arrays were set with this variable name)')
+
+
+def check(check, file):
+    refs = file.filerefs('Define', 'Object')
+    lexer = None
+
+    for ref in refs:
+        # Skip if not a pointer
+        if not re.search(r'\*|ptr', str(ref.ent().type())):
+            continue
+
+        arr = False
+
+
+        if not lexer:
+            lexer = file.lexer()
+
+        ok = False
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        while lexeme and re.match('=|;', lexeme.text()):
+            lexeme = lexeme.next(True, True)
+        if not lexeme or lexeme.text() == ';':
+            ok = True
+
+        bracket = False
+        while not ok and lexeme and lexeme.text() != ';':
+            if lexeme.text() == '[':
+                bracket = True
+
+            if re.search('static.cast|make.shared|shared.ptr|unique.ptr|nullptr', lexeme.text()):
+                ok = True
+                break
+            if lexeme.ent() and lexeme.ent().type() and re.search(r'\[\d*\]', str(lexeme.ent().type())):
+                arr = True
+                # Delete the array brackets and number
+                type = re.sub(r'\[.*\]', '', str(lexeme.ent().type()))
+                # Delete array brackets to keep the number
+                arrSize = re.sub(r'.*\[', '', str(lexeme.ent().type()))
+                arrSize = re.sub(r'\[|\]', '', arrSize)
+                while lexeme and lexeme.text() != ';':
+                    if lexeme.text() == '[':
+                        lexeme = lexeme.next(True, True)
+                        ok = True
+                        if lexeme.text() != arrSize:
+                            if lexeme.token() == "Literal":
+                                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR2)
+                            elif check.option().lookup('variables'):
+                                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR3)
+                            break
+
+                    lexeme = lexeme.next(True, True)
+
+
+
+            elif lexeme.ent() and lexeme.ent().kind().check("unresolved"):
+                ok = True
+
+
+            lexeme = lexeme.next(True, True)
+
+
+
+        if not ok and bracket:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+
+

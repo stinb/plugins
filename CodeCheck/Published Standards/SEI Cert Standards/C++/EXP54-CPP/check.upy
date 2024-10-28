@@ -1,0 +1,259 @@
+import re
+
+
+ERR1 = 'Do not access an object outside of its lifetime.'
+
+
+# The ID for the check
+def id():
+    return ('EXP54-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP54-CPP': 'Published Standards/SEI Cert Standards/C++/Do not access an object outside of its lifetime',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not access an object outside of its lifetime'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not access an object outside of its lifetime</p>
+<p><b>Risk Assessment</b></p>
+<p>Referencing an object outside of its lifetime can result in an attacker being able to run arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP54-CPP.+Do+not+access+an+object+outside+of+its+lifetime</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">struct S {
+  void mem_fn();
+};
+  
+void f() {
+  S *s;
+  s-&gt;mem_fn();
+}
+
+
+struct B {};
+  
+struct D1 : virtual B {};
+struct D2 : virtual B {};
+  
+struct S : D1, D2 {};
+  
+void f(const B *b) {}
+  
+void g() {
+  S *s = new S;
+  // Use s
+  delete s;
+  
+  f(s);
+}
+
+
+int *g() {
+  int i = 12;
+  return &i;
+}
+  
+void h(int *i);
+  
+void f() {
+  int *i = g();
+  h(i);
+}
+
+
+int *g() {
+  int i = 12;
+  return &i;
+}
+  
+void h(int *i);
+  
+void f() {
+  int *i = g();
+  h(i);
+}
+
+
+
+#include &lt;functional&gt;
+  
+void f() {
+  auto l = [](const int &j) { return j; };
+  std::function&lt;const int&(const int &)&gt; fn(l);
+  
+  int i = 42;
+  int j = fn(i);
+}
+
+
+class S {
+  int v;
+  
+public:
+  S() : v(12) {} // Non-trivial constructor
+  
+  void f();
+};  
+  
+void f() {
+  
+  // ...  
+  
+  goto bad_idea;  
+  
+  // ...
+  
+  S s; // Control passes over the declaration, so initialization does not take place.  
+  
+  bad_idea:
+    s.f();
+}
+
+
+#include &lt;algorithm&gt;
+#include &lt;cstddef&gt;
+#include &lt;memory&gt;
+#include &lt;type_traits&gt;
+  
+class S {
+  int i;
+ 
+public:
+  S() : i(0) {}
+  S(int i) : i(i) {}
+  S(const S&) = default;
+  S& operator=(const S&) = default;
+};
+ 
+template &lt;typename Iter&gt;
+void f(Iter i, Iter e) {
+  static_assert(std::is_same&lt;typename std::iterator_traits&lt;Iter&gt;::value_type, S&gt;::value,
+                "Expecting iterators over type S");
+  ptrdiff_t count = std::distance(i, e);
+  if (!count) {
+    return;
+  }
+   
+  // Get some temporary memory.
+  auto p = std::get_temporary_buffer&lt;S&gt;(count);
+  if (p.second &lt; count) {
+    // Handle error; memory wasn't allocated, or insufficient memory was allocated.
+    return;
+  }
+  S *vals = p.first;
+   
+  // Copy the values into the memory.
+  std::copy(i, e, vals);
+   
+  // ...
+   
+  // Return the temporary memory.
+  std::return_temporary_buffer(vals);
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check does not cover the last non-compliant code example where an object is copied before its lifetime.</p>
+"""
+
+def tags(id):
+    return {
+        'EXP54-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object"):
+            obj_type = obj_ref.ent().type()
+            is_set = False
+            is_used = False
+            is_deleted = False
+            prev_line = 0
+            check_last_line = True
+
+            if obj_type and re.search(r"function<.+&+\(.*\)>", obj_type):
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)
+                break
+            elif obj_type and "*" in obj_type:
+                for ref in sorted(obj_ref.ent().refs(""), key=lambda x: x.line()):
+                    if is_deleted:
+                        check.violation(ref.scope(), ref.file(),
+                                        ref.line(), ref.column(), ERR1)
+                        break
+                    elif (prev_line != ref.line()) and is_used and not is_set:
+                        check.violation(is_used.scope(), file,
+                                        is_used.line(), is_used.column(), ERR1)
+                        check_last_line = False
+                        break
+                    elif ref.kind().check("Assignby Ptr"):
+                        is_set = True
+                    elif ref.kind().check("Setby"):
+                        lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+                        lex = lex.next(ignore_whitespace=True)
+
+                        if lex.text() == "=":
+                            lex = lex.next(ignore_whitespace=True)
+
+                            if lex.ent() and lex.ent().kind().check("Function"):
+                                if lex.ent().ref("Addr Use Return", "~Static Object Local"):
+                                    check.violation(
+                                        ref.scope(), ref.file(), ref.line(), ref.column(), ERR1)
+                                    break
+
+                        is_set = True
+                    elif ref.kind().check("Useby ~Addr ~Inactive"):
+                        lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+                        prev_lex = lex.previous(ignore_whitespace=True)
+
+                        if prev_lex.text() == "*":
+                            while prev_lex.token() != "Keyword":
+                                prev_lex = prev_lex.previous(
+                                    ignore_whitespace=True)
+
+                            if prev_lex.text() == "sizeof":
+                                prev_line = ref.line()
+                                continue
+
+                        if prev_lex.text() == "delete":
+                            is_deleted = True
+                        else:
+                            is_used = ref
+
+                    prev_line = ref.line()
+
+                if check_last_line and is_used and not is_set:
+                    check.violation(is_used.scope(), is_used.file(
+                    ), is_used.line(), is_used.column(), ERR1)

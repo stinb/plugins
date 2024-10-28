@@ -1,0 +1,127 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+
+import re
+
+ERR1 = 'Undefined macro identifier %1 used incorrectly'
+ERR2 = 'Undefined macro usage: %1'
+
+def ids():
+	return ('M16-0-7', 'MISRA08_16-0-7', 'CPP_PR037')
+
+def name(id):
+	return {
+		'M16-0-7': 'Published Standards/AUTOSAR/Undefined macro identifiers shall not be used in #if or #elif preprocessor directives, except as operands to the defined operator',
+		'MISRA08_16-0-7': 'Published Standards/MISRA-C++ 2008/16-0-7 Undefined macro identifiers shall not be used in #if or #elif preprocessor directives, except as operands to the defined operator',
+		'CPP_PR037': 'All Checks/Language Specific/C and C++/Preprocessor/Undefined macro identifiers shall not be used in #if or #elif preprocessor directives, except as operands to the defined operator',
+	}[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_16-0-7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'M16-0-7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Preprocessor',
+        ],
+        'CPP_PR037': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+def description():
+	return 'Undefined macro identifiers shall not be used in #if or #elif preprocessor directives, except as operands to the defined operator.'
+
+def detailed_description(id):
+	return '''\
+<p><b>Rationale</b></p>
+<p>
+If an attempt is made to use an identifier in a preprocessor directive, and that identifier has not been defined, the preprocessor will assume the value zero. <i>#ifdef</i>, <i>#ifndef</i> and <i>defined()</i> are provided to test the existence of a macro, and are therefore excluded.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">#if x &lt; 0 // Non-compliant - x assumed to be zero as it is not defined
+</code></pre>
+
+<p>
+Consideration should be given to the use of a <i>#ifdef</i> test before an identifier is used.
+</p>
+
+<p>
+Note that preprocessing identifiers may be defined either by use of <i>#define</i> directives or by options
+specified at compiler invocation. However, the use of the <i>#define</i> directive is preferred.
+</p>
+'''
+
+def test_language(language):
+	return language == 'C++'
+
+def test_entity(file):
+	return file.kind().check('header file, code file')
+
+def test_global():
+	return False
+
+def check(check, file):	
+	# Loop through all macros and check and check if they are unknown
+	unknownMacros = file.filerefs('Use', 'C Unknown Macro')
+	
+	# Start loop of unknown macros found
+	for macro in unknownMacros:
+
+		lexeme = file.lexer().lexeme(macro.line(), macro.column())
+
+		# Sometimes the macro references have a column of 0, if so, we need tomove the lexeme to the correct spot
+		if lexeme.text() != macro.ent().simplename():
+			while lexeme and lexeme.text() != macro.ent().simplename():
+				lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+		if not lexeme:
+			continue
+
+		# Test if lexeme is inactive
+		if lexeme.inactive():
+			continue
+
+		# Save the original lexeme in case the use refence has a bad column number
+		originalLexeme = lexeme
+
+		# Set a token flag and look at macro usage
+		nextMacro = False
+		while lexeme:
+
+			# If we see a test for definition, we are good and can move on
+			if lexeme.text() in {'ifdef', 'ifndef', 'defined'}:
+				nextMacro = True
+				break
+
+			# If we see connecting tokens, then we are good
+			goodToken = False
+			if lexeme.text() in {'(', '||', '&&', '>', '>=', '<', '<=', '=='} or lexeme.token() == 'Identifier':
+				goodToken = True
+
+			# Throw error if we are not looking at a good token
+			if not goodToken:
+				check.violation(macro.ent(), macro.file(), originalLexeme.line_begin(), originalLexeme.column_begin(), ERR1, macro.ent().name())
+				nextMacro = True
+				break
+
+			lexeme = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+		# This should not happen, has special error code
+		if not nextMacro:
+			check.violation(macro.ent(), macro.file(), macro.line(), macro.column(), ERR2, macro.ent().name())

@@ -1,0 +1,217 @@
+ERR1 = 'The key used for the thread-specific storage is not freed properly.'
+
+
+# The ID for the check
+def id():
+    return ('CON30-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON30-C': 'Published Standards/SEI Cert Standards/C/Clean up thread-specific storage',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'CON30-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Threads',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Clean up thread-specific storage'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Clean up thread-specific storage</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to free thread-specific objects results in memory leaks and could result in a denial-of-service attack.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/CON30-C.+Clean+up+thread-specific+storage</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;threads.h&gt;
+#include &lt;stdlib.h&gt;
+
+/* Global key to the thread-specific storage */
+tss_t key;
+enum { MAX_THREADS = 3 };
+
+int *get_data(void) {
+  int *arr = (int *)malloc(2 * sizeof(int));
+  if (arr == NULL) {
+    return arr;  /* Report error  */
+  }
+  arr[0] = 10;
+  arr[1] = 42;
+  return arr;
+}
+
+int add_data(void) {
+  int *data = get_data();
+  if (data == NULL) {
+    return -1;  /* Report error */
+  }
+
+  if (thrd_success != tss_set(key, (void *)data)) {
+    /* Handle error */
+  }
+  return 0;
+}
+
+void print_data(void) {
+  /* Get this thread's global data from key */
+  int *data = tss_get(key);
+
+  if (data != NULL) {
+    /* Print data */
+  }
+}
+
+int function(void *dummy) {
+  if (add_data() != 0) {
+    return -1;  /* Report error */
+  }
+  print_data();
+  return 0;
+}
+
+int main(void) {
+  thrd_t thread_id[MAX_THREADS];
+
+  /* Create the key before creating the threads */
+  if (thrd_success != tss_create(&key, NULL)) {
+    /* Handle error */
+  }
+
+  /* Create threads that would store specific storage */
+  for (size_t i = 0; i &lt; MAX_THREADS; i++) {
+    if (thrd_success != thrd_create(&thread_id[i], function, NULL)) {
+      /* Handle error */
+    }
+  }
+
+  for (size_t i = 0; i &lt; MAX_THREADS; i++) {
+    if (thrd_success != thrd_join(thread_id[i], NULL)) {
+      /* Handle error */
+    }
+  }
+
+  tss_delete(key);
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for obj_ref in file.filerefs("Define", "Object"):
+        obj_type = obj_ref.ent().type()
+
+        if obj_type and obj_type in {"pthread_key_t", "tss_t"}:
+            for assign_ref in obj_ref.ent().refs("Assignby Ptr", "Parameter"):
+                lex = lexer.lexeme(assign_ref.line(), assign_ref.column())
+
+                while lex and lex.line_begin() == assign_ref.line():
+                    if lex.ref() and lex.ref().kind().check("Callby"):
+                        if lex.text() in {"tss_create", "pthread_key_create"}:
+                            compliant = False
+                            create_ref = lex.ref()
+                            create_lex = lexer.lexeme(
+                                create_ref.line(), create_ref.column())
+                            on_param = 0
+                            param = 0
+
+                            while create_lex:
+                                if create_lex.text() == "(":
+                                    on_param += 1
+                                elif create_lex.text() == ")":
+                                    on_param -= 1
+
+                                    if not on_param:
+                                        break
+                                elif on_param == 1 and create_lex.text() == ",":
+                                    param += 1
+                                elif param == 1 and create_lex.token() == "Identifier":
+                                    if create_lex.ent() and create_lex.ent().kind().check("Unresolved Function") and lex.text() == "free":
+                                        compliant = True
+                                    elif create_lex.ent() and create_lex.ent().kind().check("Function"):
+                                        for ref in create_lex.ent().refs("Call", "Unresolved Function"):
+                                            if ref.ent().name() == "free":
+                                                compliant = True
+
+                                create_lex = create_lex.next(
+                                    ignore_whitespace=True)
+
+                            if not compliant:
+                                proceed_error = True
+
+                                for call_ref in create_ref.ent().refs("Call", "Unresolved Function"):
+                                    if call_ref.ent().name() in {"thrd_create", "pthread_create"}:
+                                        call_lex = lexer.lexeme(
+                                            call_ref.line(), call_ref.column())
+                                        on_param = 0
+
+                                        while call_lex:
+                                            if call_lex.text() == "(":
+                                                on_param += 1
+                                            elif call_lex.text() == ")":
+                                                on_param -= 1
+
+                                                if not on_param:
+                                                    break
+                                            elif call_lex.token() == "Identifier" and call_lex.ref() and call_lex.ref().kind().check("Useby Ptr") and call_lex.ent() and call_lex.ent().kind().check("Function"):
+                                                for fcall_ref in call_lex.ent().refs("Call", "Unresolved Function"):
+                                                    if fcall_ref.ent().name() == "free":
+                                                        fcall_lex = lexer.lexeme(
+                                                            fcall_ref.line(), fcall_ref.column())
+
+                                                        while fcall_lex.text() != ";":
+                                                            if fcall_lex.ent() and fcall_lex.ent().id() == obj_ref.ent().id():
+                                                                proceed_error = False
+                                                                break
+
+                                                            fcall_lex = fcall_lex.next(
+                                                                ignore_whitespace=True)
+
+                                            call_lex = call_lex.next(
+                                                ignore_whitespace=True)
+
+                                if proceed_error:
+                                    check.violation(create_ref.scope(), file,
+                                                    create_ref.line(), create_ref.column(), ERR1)
+
+                        break
+
+                    lex = lex.previous(ignore_whitespace=True)

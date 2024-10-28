@@ -1,0 +1,149 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 10-15-2020
+
+def id():
+    return 'CPP_CM000'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Comments/Comments shall precede code being commented and shall align with code they represent"""
+
+
+def tags(id):
+    return {
+        'CPP_CM000': [
+            'Language: C',
+            'Language: C++',
+            'Comments',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+Comments shall precede code being commented and shall have same level of indentation as the code they represent."""
+
+def detailed_description():
+    return """\
+<p>Developers Note: For the purposes of this CodeCheck, only comments that are 
+directly above or below the statement or control structure will be recognized 
+as "belonging" to that piece of code. This means it will not associate the 
+comment with the code if there is a blank line between.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+    lexeme = lexer.first()
+
+    while lexeme:
+
+        # we are only interested in statements and control structures
+        if isStatement(lexeme) == True or isLoop(lexeme) == True:
+
+            # look for comments inline with statement/loop (flag), above (valid if aligned), or directly below (flag)
+            commentAbove = False
+            commentColumn = 0
+            commentInline = False
+            commentBelow = False
+
+            temp = lexeme
+            # check inline
+            while temp.token() != "Newline":
+                if temp.token() == "Comment":
+                    commentInline = True
+                temp = temp.next()
+
+            temp = lexeme
+            # check above
+            while temp and temp.token() != "Newline":
+                temp = temp.previous()
+            if temp and temp.previous():
+                temp = temp.previous()
+            else:
+                lexeme = lexeme.next()
+                continue
+            while temp and temp.token() != "Newline":
+                if temp.token() == "Comment":
+                    commentAbove = True
+                    commentColumn = temp.column_begin()
+                temp = temp.previous()
+
+            temp = lexeme
+            # check below (loops and statements must be handled separately)
+            if isLoop == False:
+                while temp.token() != "Newline":
+                    temp = temp.next()
+                temp = temp.next()
+                while temp.token() != "Newline":
+                    if temp.token() == "Comment":
+                        commentBelow = True
+                    temp = temp.next()
+            elif isLoop == True:
+                # find end of loop structure
+                while temp.previous().text() != "{":
+                    temp = temp.next()
+                numBrackets = 1
+                while numBrackets != 0:
+                    if temp.text() == "{":
+                        numBrackets += 1
+                    elif temp.text() == "}":
+                        numBrackets -= 1
+
+                while temp.token() != "Newline":
+                    temp = temp.next()
+                temp = temp.next()
+                while temp.token() != "Newline":
+                    if temp.token() == "Comment":
+                        commentBelow = True
+                    temp = temp.next()
+
+
+            if commentInline == True or commentBelow == True:
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Inline or following comment should precede the code it represents')
+
+            # if comment is directly above, check that it is aligned correctly
+            if commentAbove == True:
+                statementColumn = 0
+                temp = lexeme
+                # find the first meaningful lexeme of the statement, record location
+                while (temp.previous() and temp.previous().previous()) and not (temp.previous().token() == "Whitespace" and temp.previous().previous().token() == "Newline"):
+                    temp = temp.previous()
+                statementColumn = temp.column_begin()
+
+
+                if statementColumn != commentColumn:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Preceding comment does not align with the code it represents')
+
+
+        lexeme = lexeme.next()
+
+
+
+
+def isStatement(lex):
+    result = False
+
+    if lex.token() == "Punctuation" and lex.text() == ";":
+        result = True
+
+    return result
+
+def isLoop(lex):
+    result = False
+    controlStructs = ["for", "while", "if", "else"]
+    
+    if lex.token() == "Keyword" and lex.text() in controlStructs:
+        result = True
+
+    return result
+    

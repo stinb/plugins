@@ -1,0 +1,111 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'More than %1 characters are significant';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA04_5.1";}
+
+
+sub name { return "Published Standards\\MISRA-C 2004\\5.1 Identifiers shall not rely on the significance of more than 31 characters";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2004',
+    'Category: required',
+    'Identifiers',
+  );
+}
+
+sub description { return "5.1 (Global)(Required)  Identifiers (internal and external) shall not rely on the significance of more than 31 characters.";}
+
+sub detailed_description { return <<"END_DESC"
+<p>The ISO standard requires internal identifiers to be distinct in the first 31 characters to guarantee 
+code portability. This limitation shall not be exceeded, even if the compiler supports it. This rule 
+shall  apply  across  all  name  spaces.  Macro  names  are  also  included  and  the  31  character limit 
+applies before and after substitution.</p>
+<p>The ISO standard requires external identifiers to be distinct in the first 6 characters, regardless 
+of  case,  to  guarantee  optimal  portability.  However  this  limitation  is  particularly  severe  and  is 
+considered unnecessary. The intent of this rule is to sanction a relaxation of the ISO requirement 
+to a degree commensurate with modern environments and it shall be confirmed that 31 character/
+case significance is supported by the implementation.</p>
+<p>Note  that  there  is  a  related  issue  with  using  identifier  names  that  differ  by  only  one  or  a  few 
+characters, especially if the identifier names are long. The problem is heightened if the differences 
+are in easily mis-read characters like 1 (one) and l (lower case L), 0 and O, 2 and Z, 5 and S, or n 
+and h. It is recommended to ensure that identifier names are always easily visually distinguishable. 
+Specific guidelines on this issue could be placed in the style guidelines (see section 4.2.2).</p>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 0;}
+
+sub test_global { return 1;}
+
+sub define_options{
+  my $check = shift;
+  $check->option->integer("significantChars","Signficant Characters",31);
+}
+
+
+sub check {
+  my $check = shift; 
+  my $significantChars = $check->option->lookup("significantChars");
+  my @ents = $check->db->ents("c ~file");
+  my @longEnts;
+  my @fileObjs = $check->get_files;
+  my @files = ();
+  foreach my $f(@fileObjs) {
+    push(@files, $f->longname);
+  }
+  
+  foreach (@ents){
+    push @longEnts,$_ if length($_->simplename) > $significantChars;
+  }
+  
+  my $prev;
+  my $prevReported;
+  foreach my $ent (sort {$a->simplename cmp $b->simplename;} @longEnts){
+    next if $ent->kind->check( 'Inactive' );
+    my $beginning = substr($ent->simplename,0,$significantChars);
+    my $prevBegin = substr($prev->simplename,0,$significantChars) if $prev;
+    if ($prevBegin eq $beginning && $prev->simplename ne $ent->simplename){
+      reportEnt(\@files,$ent,$check);
+      reportEnt(\@files,$prev,$check) unless $prevReported;
+      $prevReported = 1;
+    }else{
+      $prev = $ent;
+      $prevReported = 0;
+    }
+  }
+}
+
+sub reportEnt{
+  my @files = @{$_[0]};
+  my $ent = $_[1];
+  my $check = $_[2];
+  my $ref = $ent->ref("define, declare");
+  $ref = $ent->ref unless $ref;
+  $check->violation($ent,$ref->file,$ref->line,$ref->column,ERR1,$check->option->lookup("significantChars")) if checkFile(\@files, $ref->file);
+}
+
+sub checkFile {
+  my @files = @{$_[0]};
+  my $file = $_[1];
+
+  return 1 if index(join(',', @files), $file->longname) != -1;
+  return 0;
+}
+

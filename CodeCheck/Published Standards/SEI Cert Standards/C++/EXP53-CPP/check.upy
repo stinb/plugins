@@ -1,0 +1,177 @@
+import re
+
+
+ERR1 = 'Do not read uninitialized memory.'
+
+
+# The ID for the check
+def id():
+    return ('EXP53-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP53-CPP': 'Published Standards/SEI Cert Standards/C++/Do not read uninitialized memory',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not read uninitialized memory'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not read uninitialized memory</p>
+<p><b>Risk Assessment</b></p>
+<p>Reading uninitialized variables is undefined behavior and can result in unexpected program behavior. In some cases, these security flaws may allow the execution of arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP53-CPP.+Do+not+read+uninitialized+memory</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++"># include &lt;iostream&gt;
+
+void f() {
+  int i;
+  std::cout &lt;&lt; i;
+}
+
+
+
+# include &lt;iostream&gt;
+
+void f() {
+  int *i = new int;
+  std::cout &lt;&lt; i &lt;&lt; ", " &lt;&lt; *i;
+}
+
+
+class S {
+  int c;
+
+public:
+  int f(int i) const { return i + c; }
+};
+
+void f() {
+  S s;
+  int i = s.f(10);
+}
+</code></pre>
+"""
+
+def tags(id):
+    return {
+        'EXP53-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object"):
+            is_set = False
+            is_used = False
+            check_last_line = True
+            prev_line = 0
+
+            obj_type = obj_ref.ent().type()
+
+            if obj_type and re.search(r"\[.+\]", obj_type):
+                continue
+
+            for ref in sorted(obj_ref.ent().refs(""), key=lambda x: x.line()):
+                if (prev_line != ref.line()) and is_used and not is_set:
+                    check.violation(is_used.scope(), file,
+                                    is_used.line(), is_used.column(), ERR1)
+                    check_last_line = False
+                    break
+                elif ref.kind().check("Assignby ~Indirect, Addr Useby"):
+                    is_set = True
+                elif ref.kind().check("Setby"):
+                    on_new = False
+                    set_val = ""
+                    lex = lexer.lexeme(ref.line(), ref.column())
+                    on_param = 0
+
+                    while lex and (lex.text() != ";"):
+                        if on_new:
+                            set_val += lex.text()
+                        elif lex.text() == "(":
+                            on_param += 1
+                        elif lex.text() == ")":
+                            on_param -= 1
+                        elif not on_param and (lex.text() == "new"):
+                            on_new = True
+
+                        lex = lex.next(ignore_whitespace=True,
+                                       ignore_comments=True)
+
+                    if (on_new and re.search(r"(\(|{).*(\)|})", set_val)) or not on_new:
+                        is_set = True
+
+                elif ref.kind().check("Useby ~Addr ~Inactive"):
+                    lex = lexer.lexeme(ref.line(), ref.column())
+                    lex = lex.previous(ignore_whitespace=True).previous(
+                        ignore_whitespace=True)
+
+                    if (lex.text() == "sizeof") and (lex.token() == "Keyword"):
+                        pass
+                    else:
+                        is_used = ref
+
+                prev_line = ref.line()
+
+            if check_last_line and is_used and not is_set:
+                check.violation(is_used.scope(), file,
+                                is_used.line(), is_used.column(), ERR1)
+
+    for class_ref in file.filerefs("Define", "Class"):
+        for mem_ref in class_ref.ent().refs("Define", "Object"):
+            is_set = False
+            is_used = False
+
+            for ref in mem_ref.ent().refs(""):
+                if is_used and is_set:
+                    break
+                elif ref.kind().check("Useby"):
+                    if ref.ent().name() == class_ref.ent().name():
+                        is_set = True
+                        break
+
+                    is_used = ref
+                elif ref.kind().check("Setby, Assignby ~Indirect"):
+                    is_set = True
+                    break
+
+            if is_used and not is_set:
+                check.violation(is_used.scope(), is_used.file(),
+                                is_used.line(), is_used.column(), ERR1)

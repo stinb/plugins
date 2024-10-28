@@ -1,0 +1,138 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-29-21
+
+
+import re
+
+
+ERR1 = '"%1" has opposite operators that are not defined in terms of the others'
+
+
+def ids():
+    return ('A13-5-4', 'CPP_F042')
+
+
+def name(id):
+    return {
+        'A13-5-4': 'Published Standards/AUTOSAR/If two opposite operators are defined, one shall be defined in terms of the other',
+        'CPP_F042': 'All Checks/Language Specific/C and C++/Functions/If two opposite operators are defined, one shall be defined in terms of the other',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A13-5-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions'
+        ],
+        'CPP_F042': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+Defining one operator in terms of the other simplifies maintenance and prevents from accidental errors during code development.
+</p>
+
+<p>
+Note: Completeness of relational operators can be achieved by implementing just <code>operator==</code> and <code>operator&lt;</code> and using namespace <code>rel_ops</code>.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A13-5-4.cpp 328319 2018-08-03 14:08:42Z christof.meerwald $
+#include &lt;cstdint&gt;
+
+// non-compliant
+class A
+{
+  public:
+    explicit A(std::uint32_t d) : d(d) {}
+
+    friend bool operator==(A const & lhs, A const & rhs) noexcept
+    {
+      return lhs.d == rhs.d;
+    }
+    friend bool operator!=(A const & lhs, A const & rhs) noexcept
+    {
+      return lhs.d != rhs.d;
+    }
+
+  private:
+    std::uint32_t d;
+};
+
+// compliant
+class B
+{
+  public:
+    explicit B(std::uint32_t d) : d(d) {}
+
+    friend bool operator==(B const & lhs, B const & rhs) noexcept
+    {
+      return lhs.d == rhs.d;
+    }
+
+    friend bool operator!=(B const & lhs, B const & rhs) noexcept
+    {
+      return !(lhs == rhs);
+    }
+  private:
+    std::uint32_t d;
+};
+</code></pre>
+
+<p><b>See also</b><br>
+• JSF December 2005 [8]: AV Rule 85: When two operators are opposites (such as == and !=), both will be defined and one will be defined in terms of the other.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+
+    # Classes
+    for classRef in file.filerefs('Define', 'Class'):
+        classEnt = classRef.ent()
+
+        # Get all the operator overloaders that don't reference other operator overloaders
+        operatorsNotReliant = set()
+        for define in classEnt.ents('Define', '~Member Function'):
+            if re.match(r'operator', define.name()):
+                if not define.ents('Call', '~Member Function'):
+                    operatorsNotReliant.add(define.name())
+
+        # If 2 opposite operators are not reliant on each other
+        if operatorsNotReliant:
+            violation = False
+            if 'operator==' in operatorsNotReliant and 'operator!=' in operatorsNotReliant:
+                violation = True
+            elif 'operator<' in operatorsNotReliant and 'operator>=' in operatorsNotReliant:
+                violation = True
+            elif 'operator>' in operatorsNotReliant and 'operator<=' in operatorsNotReliant:
+                violation = True
+
+            if violation:
+                check.violation(classEnt, file, classRef.line(), classRef.column(), ERR1, classEnt.name())

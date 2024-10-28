@@ -1,0 +1,158 @@
+ERR1 = 'Do not use finalizers.'
+ERR2 = 'Do not use the System.runFinalizersOnExit() method.'
+
+
+# The ID for the check
+def ids():
+    return ('MET12-J', 'JAVA_MET12')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MET12-J': 'Published Standards/SEI Cert Standards/Java/Do not use finalizers',
+        'JAVA_MET12': 'All Checks/Language Specific/Java/Methods/Do not use finalizers',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MET12-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_MET12': [
+            'Language: Java',
+            'Methods',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not use finalizers'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use finalizers</p>
+<p><b>Risk Assessment</b></p>
+<p>Improper use of finalizers can result in resurrection of garbage-collection-ready objects and result in denial-of-service vulnerabilities.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/MET12-J.+Do+not+use+finalizers</i></p>
+<p><b>Exceptions</b></p>
+<p><i>MET12-J-EX0: Finalizers may be used when working with native code because the garbage collector cannot reclaim memory used by code written in another language and because the lifetime of the object is often unknown. Again, the native process must not perform any critical jobs that require immediate resource deallocation.</i></p>
+<p><i>MET12-J-EX1: A class may use an empty final finalizer to prevent a finalizer attack, as specified in OBJ11-J. Be wary of letting constructors throw exceptions.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class MyFrame extends JFrame {
+  private byte[] buffer = new byte[16 * 1024 * 1024];
+  // Persists for at least two GC cycles
+}
+
+
+class BaseClass {
+  protected void finalize() throws Throwable {
+    System.out.println("Superclass finalize!");
+    doLogic();
+  }
+
+  public void doLogic() throws Throwable {
+    System.out.println("This is super-class!");
+  }
+}
+
+class SubClass extends BaseClass {
+  private Date d; // Mutable instance field
+
+  protected SubClass() {
+    d = new Date();
+  }
+
+  protected void finalize() throws Throwable {
+    System.out.println("Subclass finalize!");
+    try {
+      //  Cleanup resources
+      d = null;
+    } finally {
+      super.finalize();  // Call BaseClass's finalizer
+    }
+  }
+
+  public void doLogic() throws Throwable {
+    // Any resource allocations made here will persist
+
+    // Inconsistent object state
+    System.out.println(
+        "This is sub-class! The date object is: " + d);
+    // 'd' is already null
+  }
+}
+
+public class BadUse {
+  public static void main(String[] args) {
+    try {
+      BaseClass bc = new SubClass();
+      // Artificially simulate finalization (do not do this)
+      System.runFinalizersOnExit(true);
+    } catch (Throwable t) {
+      // Handle error
+    }
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    def check_violation(ref, err):
+        check.violation(ref.scope(), file, ref.line(), ref.column(), err)
+
+    for class_ref in file.filerefs("Define", "Class"):
+        if(has_finalize_superclass(class_ref.ent())):
+            compliant = False
+
+            for method_ref in class_ref.ent().refs("Define", "Method Member"):
+                if method_ref.ent().name() == "finalize":
+                    for call_ref in method_ref.ent().refs("Call Nondynamic", "Method Member"):
+                        if call_ref.ent().name() == "finalize" and call_ref.ent().parent().id() != class_ref.ent().id():
+                            compliant = True
+
+            if not compliant:
+                check_violation(class_ref, ERR1)
+
+    for call_ref in file.filerefs("Call", "Unknown Method Member"):
+        if call_ref.ent().name() == "runFinalizersOnExit":
+            check_violation(call_ref, ERR2)
+
+
+def has_finalize_superclass(_ent):
+    ext_ref = _ent.ref("Extend ~Implicit", "Class")
+
+    if not ext_ref:
+        return False
+    else:
+        for method_ref in ext_ref.ent().refs("Define", "Method Member"):
+            if method_ref.ent().name() == "finalize":
+                return True
+
+        has_finalize_superclass(ext_ref.ent())

@@ -1,0 +1,136 @@
+import re
+
+
+ERR1 = 'Moved-from object shall not be read-accessed.'
+STL_EXCEPTIONS = "std::(unique_ptr|shared_ptr|weak_ptr|basic_ios|ios_base|basic_filebuf|thread|unique_lock|shared_lock|promise|future|shared_future|packaged_task)"
+
+
+# The ID for the check
+def ids():
+    return ('A12-8-3', 'CPP_M004')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-8-3': 'Published Standards/AUTOSAR/Moved-from object shall not be read-accessed.',
+        'CPP_M004': 'All Checks/Language Specific/C and C++/Memory Allocation/Moved-from object shall not be read-accessed.',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A12-8-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Partially Automated',
+            'Memory Allocation'
+        ],
+        'CPP_M004': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Moved-from object shall not be read-accessed.</p>
+<p><b>Rationale</b></p>
+<p>Except in rare circumstances, an object will be left in an unspecified state after its
+values has been moved into another object. Accessing data members of such object
+may result in abnormal behavior and portability concerns.</p>
+<p><b>Exception</b></p>
+<p>It is permitted to access internals of a moved-from object if it is guaranteed to be left in
+a well-specified state.</p>
+<p>The following Standard Template Library functions are guaranteed to leave the movedfrom object in a well-specified state:</p>
+<pre><code language="C++">• move construction, move assignment, “converting” move construction and
+“converting” move assignment of std::unique_ptr type
+• move construction, move assignment, “converting” move construction,
+“converting” move assignment of std::shared_ptr type
+• move construction and move assignment from a std::unique_ptr of
+std::shared_ptr type
+• move construction, move assignment, “converting” move construction and
+“converting” move assignment of std::weak_ptr type
+• std::move() of std::basic_ios type
+• move constructor and move assignment of std::basic_filebuf type
+• move constructor and move assignment of std::thread type
+• move constructor and move assignment of std::unique_lock type
+• move constructor and move assignment of std::shared_lock type
+• move constructor and move assignment of std::promise type
+• move constructor and move assignment of std::future type
+• move construction, move assignment, “converting” move construction and
+“converting” move assignment of std::shared_future type
+• move constructor and move assignment of std::packaged_task type
+</code></pre>
+<p><b>Note</b></p>
+<p>This check directly flags moved-from objects that are not a type in any of the exceptions stated above.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-8-3.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 #include &lt;iostream&gt;
+4 #include &lt;memory&gt;
+5 #include &lt;string&gt;
+6 void F1()
+7 {
+8 std::string s1{"string"};
+9 std::string s2{std::move(s1)};
+10 // ...
+11 std::cout &lt;&lt; s1 &lt;&lt; "\n"; // Non-compliant - s1 does not contain "string"
+12 // value after move operation
+13 }
+14 void F2()
+15 {
+16 std::unique_ptr&lt;std::int32_t&gt; ptr1 = std::make_unique&lt;std::int32_t&gt;(0);
+17 std::unique_ptr&lt;std::int32_t&gt; ptr2{std::move(ptr1)};
+18 std::cout &lt;&lt; ptr1.get() &lt;&lt; std::endl; // Compliant by exception - move
+19 // construction of std::unique_ptr
+20 // leaves moved-from object in a
+21 // well-specified state
+22 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• SEI CERT C++ [10]: EXP63-CPP Do not rely on the value of a moved-from object.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call", "Unresolved Function Template"):
+        if re.search(r"std::(__1::)?move", call_ref.ent().longname()):
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            obj_ent = None
+
+            while lex and lex.text() != ";":
+                if lex.ent() and lex.ent().kind().check("Object"):
+                    obj_ent = lex.ent()
+
+                lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+            if obj_ent and not re.search(STL_EXCEPTIONS, obj_ent.type()):
+                for use_ref in obj_ent.refs("Useby"):
+                    if use_ref.line() > call_ref.line() and use_ref.ent().id() == call_ref.scope().id():
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)

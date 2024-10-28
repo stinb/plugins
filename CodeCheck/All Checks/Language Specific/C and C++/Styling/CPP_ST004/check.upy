@@ -1,0 +1,104 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-11-2020
+
+import re
+
+# The ID for the check
+def id():
+    return 'CPP_ST004'
+
+# The short name of the check
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/Code between the beginning and ending braces of a function shall start with one level of indentation"""
+
+
+def tags(id):
+    return {
+        'CPP_ST004': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Code between the beginning and ending braces of a function shall start with one level of indentation"""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Developer's Note</b></p>
+<p>The fixit only will indent the first line after the curly brace only. The
+rest of the function will have to be indented manually by the developer.</p>
+<p>Continuation lines shall be indented at least one level 
+from the line being continued.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_global():
+    return False
+
+# Options for the check
+def define_options(check):
+    check.option().integer('indentation', 'Enter the number of spaces to be used as one level of indentation', 2)
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file): 
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return   
+
+    # Obtain user inputted number of spaces for indentation
+    indent = check.option().lookup('indentation')
+    if not lexer:
+        return
+    
+    # Obtain function references
+    func_refs = file.filerefs('Define', 'C Function ~Unknown ~Unresolved')
+    if not func_refs:
+        return
+
+    for func in func_refs:
+        funcIndent = 0
+        lexeme = lexer.lexeme(func.line(), func.column())
+        if not lexeme:
+            return
+        prevLex = lexeme
+        while prevLex and prevLex.previous() and (prevLex.previous().token() != 'Newline'):
+            prevLex = prevLex.previous()
+
+        # Obtain indentation level before the function
+        if prevLex.token() == 'Whitespace':
+            funcIndent = len(prevLex.text())
+
+        # Find function opening curly brace
+        while lexeme and lexeme.next(ignore_whitespace=True, ignore_comments=True) and (lexeme.text() != '{'):
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+        line = lexeme.line_begin()
+        if lexeme.next(ignore_whitespace=True, ignore_comments=True):
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+        # Check if the code following the opening curly brace is indented one level
+        if lexeme and lexeme.previous(ignore_comments=True) and (lexeme.line_begin() != line) and (lexeme.text() != '}'):
+            lexeme = lexeme.previous(ignore_comments=True)
+            if lexeme.token() != 'Whitespace' or len(lexeme.text()) != (indent + funcIndent):
+                    violation = check.violation(func.ent(), file, lexeme.line_begin(), lexeme.column_begin(), f'Code between the curly braces of the function {func.ent()} did not start with one level of indentation')
+                    if lexeme.token() == 'Whitespace':
+                        violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_begin(), lexeme.column_begin() + len(lexeme.text()), ' ' * indent)
+
+                    else:
+                        if lexeme.token() == 'Newline':
+                            lexeme = lexeme.next()
+                        violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_begin(), lexeme.column_begin(), ' ' * indent)
+

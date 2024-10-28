@@ -1,0 +1,141 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-17-22
+
+
+import re
+
+
+ERR1 = 'Identical unnamed lambda expressions'
+
+
+def ids():
+    return ('A5-1-9', 'CPP_E038')
+
+
+def name(id):
+    return {
+        'A5-1-9': '''Published Standards/AUTOSAR/\
+Identical unnamed lambda expressions shall be replaced with a named function or \
+a named lambda expression''',
+        'CPP_E038': '''All Checks/Language Specific/C and C++/Expressions/\
+Identical unnamed lambda expressions shall be replaced with a named function or \
+a named lambda expression''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A5-1-9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E038': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+Code duplication reduces readability and maintainability as it might not be
+obvious that the lambda expressions are identical and any changes need to be
+applied in more than one place.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A5-1-9.cpp 307019 2018-02-09 15:16:47Z christof.meerwald $
+#include &lt;algorithm&gt;
+#include &lt;cstdint&gt;
+#include &lt;vector&gt;
+
+void Fn1(const std::vector&lt;int16_t&gt; &v)
+{
+    // Non-compliant: identical unnamed lambda expression
+    if (std::none_of(v.begin(), v.end(),
+            [] (int16_t i) { return i &lt; 0; }))
+    {
+        // ...
+    }
+    else if (std::all_of(v.begin(), v.end(),
+            [] (int16_t i) { return i &lt; 0; }))
+    {
+        // ...
+    }
+}
+
+void Fn2(const std::vector&lt;int16_t&gt; &v)
+{
+    // Compliant: re-using lambda expression
+    auto is_negative = [] (int16_t i) { return i &lt; 0; };
+
+    if (std::none_of(v.begin(), v.end(), is_negative))
+    {
+        // ...
+    }
+    else if (std::all_of(v.begin(), v.end(), is_negative))
+    {
+        // ...
+    }
+}
+
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+SEI CERT C++ Coding Standard [10]: MSC51-CPP: Ensure your random number
+generator is properly seeded.
+</p>
+'''
+
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lambdas = dict()
+
+    for ref in file.filerefs('Define', 'Lambda', True):
+        ent = ref.ent()
+
+        # Get content of lambda expression, while trimming other characters
+        begin = ref.column()
+        end = ent.ref('End').column() + 1
+        content = ent.contents().split('\n')
+        if len(content) == 1:
+            content[0] = content[0][begin:end]
+        else:
+            content[0] = content[0][begin:]
+            content[-1] = content[-1][:end]
+        content = '\n'.join(content)
+
+        # Skip if lambda is only defined once in scope
+        scope = ref.scope()
+        if scope not in lambdas:
+            lambdas[scope] = set()
+        if content not in lambdas[scope]:
+            lambdas[scope].add(content)
+            continue
+
+        check.violation(scope, file, ref.line(), ref.column(), ERR1)

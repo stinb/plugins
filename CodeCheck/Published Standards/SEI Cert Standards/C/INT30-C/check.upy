@@ -1,0 +1,152 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 04-11-2023
+
+import re
+import Modules
+
+ERR1 = "Unsigned integer operations were not checked"
+
+def id():
+    return 'INT30-C'
+
+def name():
+    return "Published Standards/SEI Cert Standards/C/" +  """\
+Ensure that unsigned integer operations do not wrap"""
+
+
+
+
+def tags(id):
+    return {
+        'INT30-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P9',
+            'Level: L2',
+            'Types',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Ensure that unsigned integer operations do not wrap</p>
+<p>A computation involving unsigned operands can never overflow, because a
+result that cannot be represented by the resulting unsigned integer type is
+reduced modulo the number that is one greater than the largest value that can be
+represented by the resulting type.</p>
+<p>Non-compliant</p>
+<pre><code language="C++">void func(unsigned int ui_a, unsigned int ui_b) {
+  unsigned int usum = ui_a + ui_b;
+  /* ... */
+}
+</code></pre>
+<p>Compliant</p>
+<pre><code language="C++"></code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+
+    lexeme = lexer.first()
+    # List of operators that will result in wrapping
+    wraps = ['+', '-', '*', '++', '--', '+=', '-=', '*=', '<<=', '<<']
+    checked = []
+
+    while lexeme:
+        currentLex = lexeme
+
+        # Add unsigned int ents to checked list if found in 'if' statement
+        if lexeme.text() == 'if':
+            lexeme = lexeme.next(True, True)
+            if lexeme and lexeme.text() == '(':
+                close = Modules.findClose(lexeme)
+                while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    if lexeme.ent() and re.search(r'unsigned int', str(lexeme.ent().type())) and lexeme.ent().longname() not in checked:
+                        checked.append(lexeme.ent().longname())
+                    lexeme = lexeme.next(True, True)
+
+
+        # Check for unsigned int ents when a wrap operator is found
+        if lexeme.text() in wraps:
+            ok = True
+            left = None
+            right = None
+            lhs = None
+            if lexeme.text() == '-':
+                prevLex = lexeme.previous(True, True)
+                if prevLex and prevLex.text() == '=':
+                    lexeme = lexeme.next(True, True)
+                    if lexeme and lexeme.ent() and re.search(r'unsigned int', str(lexeme.ent().type())):
+                        right = lexeme.ent().longname()
+                        ok = False
+                        prevLex = prevLex.previous(True, True)
+                        if prevLex and prevLex.ent():
+                            lhs = prevLex.ent().longname()
+                else:
+                    ok, left, right, lhs = checkSides(lexeme)
+
+            else:
+                ok, left, right, lhs = checkSides(lexeme)
+
+
+
+            # Check if wrap is checked after and throw violation if not
+            if not ok and not left in checked and not right in checked:
+                while lexeme and lexeme.text() != ';':
+                    lexeme = lexeme.next(True, True)
+                if lexeme:
+                    lexeme = lexeme.next(True, True)
+                    if lexeme and lexeme.text() == 'if':
+                        lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.text() == '(':
+                            close = Modules.findClose(lexeme)
+                            while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                                if lexeme.ent() and lexeme.ent().longname() == lhs:
+                                    ok = True
+                                lexeme = lexeme.next(True, True)
+
+                if not ok:
+                    check.violation(file, file, currentLex.line_begin(), currentLex.column_begin(), ERR1)
+
+
+        if lexeme.line_begin() == currentLex.line_begin() and lexeme.column_begin() == currentLex.column_begin():
+            lexeme = lexeme.next(True, True)
+
+
+
+# Check both sides of binary operator for unsigned ints and return them
+def checkSides(lexeme):
+    prevLex = lexeme.previous(True, True)
+    nextLex = lexeme.next(True, True)
+    if prevLex and nextLex and prevLex.ent() and nextLex.ent():
+        if re.search(r'unsigned int', str(prevLex.ent().type())) and re.search(r'unsigned int', str(nextLex.ent().type())):
+            left = prevLex.ent().longname()
+            right = nextLex.ent().longname()
+            while prevLex and not re.search(r'=|;|{|}', prevLex.text()):
+                prevLex = prevLex.previous(True, True)
+
+            if prevLex and prevLex.text() == '=':
+                prevLex = prevLex.previous(True, True)
+                while prevLex and not re.search(r';|{|}', prevLex.text()):
+                    if prevLex.ent() and re.search(r'unsigned int', str(prevLex.ent().type())):
+                        return False, left, right, prevLex.ent().longname()
+                    prevLex = prevLex.previous(True, True)
+
+
+    return True, None, None, None
+
+
+

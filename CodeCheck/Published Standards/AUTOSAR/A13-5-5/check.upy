@@ -1,0 +1,189 @@
+import re
+
+ERR1 = 'Comparison operator shall be a non-member function with identical parameter types and noexcept'
+COMPARISON_OPERATORS = {"operator==", "operator!=", "operator<", "operator<=", "operator>", "operator>="}
+
+
+# The ID for the check
+def ids():
+    return ('A13-5-5', 'CPP_F043')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A13-5-5': 'Published Standards/AUTOSAR/Comparison operators shall be non-member functions with identical parameter types and noexcept',
+        'CPP_F043': 'All Checks/Language Specific/C and C++/Functions/Comparison operators shall be non-member functions with identical parameter types and noexcept',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A13-5-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions'
+        ],
+        'CPP_F043': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Comparison operators shall be non-member functions with identical parameter types and noexcept.</p>
+<p><b>Rationale</b></p>
+<p>Any asymmetric behavior for comparison functions can be confusing. In order to
+achieve fully symmetric treatment, comparison functions need to be defined as nonmember functions, as the implicit object parameter of a member function does not
+allow user-defined conversions to be applied (but the right hand side would).</p>
+<p>Since comparison is a fundamental operation, it should never throw an exception.</p>
+<p>Note: This rule applies to ==, !=, &lt;, &lt;=, &gt;, and >=</p>
+<p>Note: Declaring a comparison operator as a friend allows it to access internal data
+similar to a member function and is allowed by exception in rule A11-3-1.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A13-5-5.cpp 325916 2018-07-13 12:26:22Z christof.meerwald $
+2 #include &lt;cstdint&gt;
+3
+4 class A
+5 {
+6 public:
+7 explicit A(std::uint32_t d)
+8 : m_d(d)
+9 { }
+10
+11 bool operator ==(A const & rhs) const // Non-compliant: member, not noexcept
+12 {
+13 return m_d == rhs.m_d;
+14 }
+15
+16 private:
+17 std::uint32_t m_d;
+18 };
+19
+20 class C
+21 {
+22 public:
+23 operator A() const;
+24 };
+25
+26 void Foo(A const & a, C const & c)
+27 {
+28 a == c; // asymmetric as "a ==c" compiles, but "c == a" doesn’t compile
+29 }
+30
+31
+32 class B
+33 {
+34 public:
+35 explicit B(std::uint32_t d)
+36 : m_d(d)
+37 { }
+38
+39 // Compliant: non-member, identical parameter types, noexcept
+40 friend bool operator ==(B const & lhs, B const & rhs) noexcept
+41 {
+42 return lhs.m_d == rhs.m_d;
+43 }
+44
+45 private:
+46 std::uint32_t m_d;
+47 };
+48
+49 class D
+50 {
+51 public:
+52 operator B() const;
+53 };
+54
+55 void Bar(B const & b, D const & d)
+56 {
+57 b == d;
+58 d == b;
+59 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• C++ Core Guidelines [11]: C.86: Make == symmetric with respect to operand
+types and noexcept</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"operator", file.contents()):
+        return
+
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    for ref in file.filerefs("Define", "Function"):
+        if ref.ent().name() in COMPARISON_OPERATORS:
+            a_friend = False
+            no_except = False
+            unidentical_params = False
+
+            if "Member" in ref.ent().kind().longname():
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                continue
+
+            for lex in lexer.lexemes(ref.line(), ref.line()):
+                next_lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+                if lex.text() == "operator" and lex.token() == "Keyword" and next_lex.text() in {"==", "!=", "<", "<=", ">", ">="} and next_lex.token() == "Operator":
+                    prev_lex = lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+                    # check if friend
+                    while prev_lex.line_begin() == lex.line_begin():
+                        if prev_lex.text() == "friend" and prev_lex.token() == "Keyword":
+                            a_friend = True
+                            break
+                        prev_lex = prev_lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+                    # check if noexcept
+                    while next_lex.line_begin() == lex.line_begin():
+                        if next_lex.text() == "noexcept" and next_lex.token() == "Identifier":
+                            no_except = True
+                            break
+                        next_lex = next_lex.next(ignore_whitespace=True, ignore_comments=True)
+
+                    # see if parameters are identical
+                    params = ref.ent().parameters()
+                    if params:
+                        params = ref.ent().parameters().split(",")
+
+                        if len(params) == 2:
+                            param1 = params[0].split(" ")
+                            param2 = params[1].split(" ")
+
+                            for ind, par in enumerate(param1[:-1]):
+                                if par != param2[ind]:
+                                    unidentical_params = True
+                                    break
+
+                    if not a_friend or not no_except or unidentical_params:
+                        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+                    break

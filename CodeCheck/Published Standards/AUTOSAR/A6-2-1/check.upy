@@ -1,0 +1,176 @@
+import re
+
+DEF_NAME = "Move and copy assignment operators shall either move or respectively copy base classes and data members of a class, without any side effects."
+
+# The ID for the check
+def ids():
+    return ('A6-2-1', 'CPP_A005')
+
+# The short name of the check
+def name(id):
+    return {
+        'A6-2-1': 'Published Standards/AUTOSAR/Move and copy assignment operators shall either move or respectively copy base classes and data members of a class, without any side effects',
+        'CPP_A005': 'All Checks/Language Specific/C and C++/Assignment Operators/Move and copy assignment operators shall either move or respectively copy base classes and data members of a class, without any side effects',
+    }[id]
+
+def tags(id):
+    return {
+        'A6-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Assignment Operators',
+        ],
+        'CPP_A005': [
+            'Language: C',
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>It is expected behavior that the move/copy assigned operator are only used to move/copy the object of the class type and possibly set moved-from object to a valid state. Those operators are not supposed to provide any performance overhead or side effects that could affect moving or copying the object.</p>
+<p>Note: Class members that are not essential for a class invariant may not need to be moved/copied (e.g. caches, debug information).</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A6-2-1.cpp 305786 2018-01-30 08:58:33Z michal.szczepankiewicz $
+2
+3 #include &lt;cstdint&gt;
+4 #include &lt;utility&gt;
+5 class A
+6 {
+7 public:
+8 A& operator=(const A& oth) // Compliant
+9 {
+10 if(&oth == this)
+11 {
+12 return *this;
+13 }
+14 x = oth.x;
+15 return *this;
+16 }
+17
+18 private:
+19 std::int32_t x;
+20 };
+21 class B
+22 {
+23 public:
+24 ~B() { delete ptr; }
+25
+26 //compliant
+27 B& operator=(B&& oth)
+28 {
+29 if(&oth == this)
+30 {
+31 return *this;
+32 }
+33 ptr = std::move(oth.ptr);
+34 // Compliant - this is not a side-effect, in this
+35 // case it is essential to leave moved-from object
+36 // in a valid state, otherwise double deletion will
+37 // occur.
+38 return *this;
+39 }
+40
+41 private:
+42 std::int32_t* ptr;
+43 };
+44
+45 class C
+46 {
+47 public:
+48 C& operator=(const C& oth)
+49 {
+50 if(&oth == this)
+51 {
+52 return *this;
+53 }
+54 x = oth.x % 2; // Non-compliant - unrelated side-effect
+55 return *this;
+56 }
+57
+58 private:
+59 std::int32_t x;
+60 };
+61
+62 class D
+63 {
+64 public:
+65 explicit D(std::uint32_t a) : a(a), noOfModifications(0) {}
+66
+67 D& operator=(const D& oth)
+68 {
+69 if(&oth == this)
+70 {
+71 return *this;
+72 }
+73 a = oth.a;
+74 //compliant, not copying the debug information about number of
+modifications
+75 return *this;
+76 }
+77
+78 void SetA(std::uint32_t aa)
+79 {
+80 ++noOfModifications;
+81 a = aa;
+82 }
+83 std::uint32_t GetA() const noexcept
+84 {
+85 return a;
+86 }
+87
+88 private:
+89 std::uint32_t a;
+90 std::uint64_t noOfModifications;
+91 };
+</code></pre>
+<p><b>See also</b></p>
+<p>JSF December 2005 [8]: AV Rule 83: An assignment operator shall assign all data members and bases that affect the class invariant (a data element representing a cache, for example, would not need to be copied).</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# check if ent have Assignby ref
+def validate_param(param, line):
+    for ref in param.refs("Assignby ~Indirect"):
+        if ref.line() == line:
+            return True
+    return False
+
+def check(check, file):
+    lexer = file.lexer(False, 8, False, False)
+    for ref in file.filerefs("Define","Public Function", True):
+        # check for operator=
+        if str(ref.ent()) == "operator=":
+            ent = ref.ent()
+            # get class and operator type
+            ent_class = ref.scope()
+            # get class members
+            obj_list = []
+            for param in ent_class.ents("Define","Member Object"):
+                if param.refs("Setby ~Init"):
+                    # store member on a list
+                    obj_list.append(param.id())
+                    for setby in param.refs("Setby ~Init"):
+                        # limit to operator= definition only
+                        if setby.ent() == ref.ent():
+                            # actual rule validation
+                            if not validate_param(param, setby.line()):
+                                check.violation(param, file, setby.line(), setby.column(), DEF_NAME)
+            obj_list.clear()

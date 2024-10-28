@@ -1,0 +1,237 @@
+use base ("Understand::Codecheck");
+use strict;
+use constant ERR1 => "Else If with no following Else";
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+
+}
+
+
+
+sub checkID { return "CPP_C014";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Control Flow\\Dangling Else";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Control Flow',
+  );
+}
+
+sub description {
+  return "Every 'else if' must have an 'else'";
+}
+
+sub detailed_description {
+  return "Every 'else if' must have an 'else'";
+}
+
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox("ignoreInactive", "Ignore inactive code", 0);
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file ~unresolved ~unknown");
+
+  # create lexer once for file
+  my $lexer = $file->lexer();
+  return unless $lexer;
+
+  # loop through functions defined in the file
+  foreach my $ref ($file->filerefs("define","function",1)) {
+      my $func = $ref->ent();
+      my ($begin,$end) = getFunctionDefnLines($func);
+      next if (!$begin);
+      next if ($check->option->lookup("ignoreInactive") && $ref->lexeme()->inactive());
+
+      do_one_function($check,$file,$func,$lexer,$begin,$end);
+  }
+}
+
+
+# Check one function.
+sub do_one_function {
+    my ($check,$file,$func,$lexer,$begin,$end) = @_;
+
+    setupLexemes($lexer,$begin,$end);
+    my $lexeme = nextLexeme();
+    while ($lexeme && $lexeme->text() ne "{") {
+  $lexeme = nextLexeme();
+    }
+    handle_statement($check,$file,$func);
+}
+
+
+# Begin with current lexeme at the first token of the statement, end
+# with current lexeme at the first token past the end of the statement.
+sub handle_statement {
+    my ($check,$file,$func) = @_;
+    my $lexeme = currentLexeme() or return;
+    my $text = $lexeme->text();
+    my $stmtLine=$lexeme->line_begin();
+    my $debug=0;
+	
+	
+    $check->violation($func,$file,$lexeme->line_begin(),$lexeme->column_begin(),"$stmtLine: Start Statement - $text") if $debug;
+    # handle 'for', 'if', 'switch', 'while' statement
+    if ($lexeme->token eq "Keyword" && ($text eq "for" || $text eq "if" || $text eq "switch" || $text eq "while")) {
+      while ($lexeme && $lexeme->text() ne "("){
+        $lexeme = nextLexeme() ;
+      }
+      return unless $lexeme;
+      my $paren=1;
+      while ($paren && ($lexeme = nextLexeme())) {
+        $text = $lexeme->text();
+        if ($text eq "(" && $lexeme->token eq "Punctuation") {
+        ++$paren;
+        }elsif ($text eq ")" && $lexeme->token eq "Punctuation") {
+        --$paren;
+        }	
+      }	
+      nextLexeme();
+      handle_statement($check,$file,$func);
+    }elsif ($text =~ /case|default/ && $lexeme->token eq "Keyword") {
+		while ($lexeme && !($lexeme->text() eq ":" && $lexeme->token eq "Operator")) {
+        $lexeme = nextLexeme();
+      }
+	$lexeme = nextLexeme();
+	}elsif ($text eq "do" && $lexeme->token eq "Keyword") {
+      # handle 'do' statement
+      nextLexeme();
+      handle_statement($check,$file,$func);
+      handle_statement($check,$file,$func); # while (...);
+    }elsif ($text eq "{" && $lexeme->token eq "Punctuation") {
+      # handle compound statement
+      $lexeme = nextLexeme();
+      while ($lexeme && !($lexeme->text() eq "}" && $lexeme->token eq "Punctuation")) {
+        handle_statement($check,$file,$func);
+        $lexeme = currentLexeme();
+      }
+      nextLexeme();
+    }elsif (!$lexeme->inactive() && $text eq "else" && $lexeme->token eq "Keyword") {
+      $lexeme = nextLexeme();
+      if($lexeme->text() eq "if" && $lexeme->token eq "Keyword"){    
+        # handle 'else if'
+        handle_statement($check,$file,$func);
+        $lexeme = currentLexeme();
+
+        ######### Special case code for if / else if chains built with the preprocessor
+        if ( $lexeme && $lexeme->text eq '#' && $lexeme->token eq "Preprocessor" ) {
+
+          $lexeme = processPreprocessor( $lexeme );
+          $lexeme = nextLexeme();
+        }
+        ######### end special case code
+        
+        if (!$lexeme || ( ( ! $lexeme->inactive() ) and ( ! ( $lexeme->text() eq "else" && $lexeme->token eq "Keyword")) )) {
+            $lexeme = lastLexeme() if !$lexeme;
+            $check->violation($func,$file,$lexeme->line_begin(),$lexeme->column_begin(),ERR1);
+            $check->violation($func,$file,$lexeme->line_begin(),$lexeme->column_begin(),$lexeme->text) if $lexeme && $debug;
+        }
+      }else{
+        #handle else statements
+        handle_statement($check,$file,$func);
+      }
+    }else {
+      if ( $lexeme->text eq '#' && $lexeme->token eq "Preprocessor" ) {
+
+        $lexeme = processPreprocessor( $lexeme );
+
+      } else {
+
+        while ($lexeme && !($lexeme->text() =~ /;|}/ && $lexeme->token eq "Punctuation")) {
+          $lexeme = nextLexeme();
+        }
+
+      }
+      nextLexeme();
+     
+    }
+     $check->violation($func,$file,$lexeme->line_begin(),$lexeme->column_begin(),"$stmtLine: End Statement") if $lexeme && $debug;
+}
+
+
+# This function takes a lexeme pointing at a preprossing directive and returns a lexeme at the end of said directive
+sub processPreprocessor {
+  my $lexeme = shift;
+  if ( $lexeme->text eq '#' && $lexeme->token eq "Preprocessor" ) {
+
+    my $tracer = $lexeme;
+    while ( $tracer->token ne "Newline" ) {
+      $tracer = $tracer->next;
+      $lexeme = nextLexeme() if $tracer->token() !~ m/Comment|Whitespace|Newline/;
+    }
+
+  }
+  return $lexeme;
+}
+
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Setup the global lexemes array once per function, to use
+# the nextLexeme() sub.
+my @lexemes=();
+my $lexeme_pos=0;
+sub setupLexemes {
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+    @lexemes = $lexer->lexemes($begin,$end);
+    $lexeme_pos = 0;
+}
+
+# Return the current lexeme.
+sub currentLexeme {
+    return $lexemes[$lexeme_pos-1] if $lexeme_pos < $#lexemes;
+    return undef;
+}
+
+# Return the last lexeme.
+sub lastLexeme {
+    return $lexemes[$#lexemes-1]
+}
+
+# Return the next interesting lexeme or undef when all lexemes
+# are used.
+sub nextLexeme {
+    while ($lexeme_pos < $#lexemes) {
+      my $lexeme = $lexemes[$lexeme_pos++];
+      next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+      next if ($lexeme->inactive());
+      return $lexeme;
+    };
+    return undef;
+}

@@ -1,0 +1,180 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 6-14-22
+
+
+import re
+
+
+ERR1 = 'Noncharacter data from "%1" encoded as a string'
+
+
+def ids():
+    return ('STR03-J', 'JAVA_STR03')
+
+
+def name(id):
+    return {
+        'STR03-J': 'Published Standards/SEI Cert Standards/Java/Do not encode noncharacter data as a string',
+        'JAVA_STR03': 'All Checks/Language Specific/Java/Characters and Strings/Do not encode noncharacter data as a string',
+    }[id]
+
+
+def tags(id):
+    return {
+        'STR03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_STR03': [
+            'Language: Java',
+            'Characters and Strings',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Do not encode noncharacter data as a string
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Encoding noncharacter data as a string is likely to result in a loss of data integrity.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/STR03-J.+Do+not+encode+noncharacter+data+as+a+string
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">BigInteger x = new BigInteger("530500452766");
+byte[] byteArray = x.toByteArray();
+String s = new String(byteArray);
+byteArray = s.getBytes();
+x = new BigInteger(byteArray);
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Because of the infinite variety of data types, the scope of this check is\
+ limited. It looks for variables with an essential Class type of \
+ "extends Number", a value from "parseHex", or a noncharacter primitive type.\
+  Intermediate steps may include the method "toByteArray".
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+primitiveNotChar = {'short', 'int', 'long', 'float', 'double', 'boolean'}
+
+
+def getOriginalType(lexer, lex):
+    lex = lex.next(True, True)
+
+    while lex:
+        ent, token, text = lex.ent(), lex.token(), lex.text()
+
+        # End of statement
+        if text == ';':
+            return
+        # Variable
+        elif ent and ent.kind().check('Variable'):
+            # Variable type is an ent
+            types = ent.ents('Typed', 'Class Type ~TypeVariable')
+            if types:
+                return types[0]
+            # Variable type is a byte array
+            elif ent.type() in {'byte[]', 'var'}:
+                init = ent.ref('Setby Init')
+                if init:
+                    initLex = lexer.lexeme(init.line(), init.column())
+                    # Value is an inline array with a number
+                    if re.search(r'[,|\[]\W*\d+', ent.value()):
+                        return ent
+                    # Value is hexadecimal
+                    if ent.value() == 'parseHex':
+                        return ent
+                    # Recursively get the original value
+                    return getOriginalType(lexer, initLex)
+            # Value is a number
+            elif ent.type() in primitiveNotChar:
+                return ent
+        # Class of toByteArray method called
+        elif ent and text == 'toByteArray':
+            if ent.parent():
+                return ent.parent()
+
+        lex = lex.next(True, True)
+
+
+def numberType(ent):
+    if re.match(r'extends Number', str(ent.type())):
+        return ent.longname()
+    if ent.type() == 'byte[]':
+        return ent.type() + ' from ' + ent.value()
+    if ent.type() in primitiveNotChar:
+        return ent.type()
+
+
+def check(check, file):
+    lexer = None
+
+    javaVar = '[$|_|a-z|A-Z][$|_|a-z|A-Z|0-9]*'
+
+    for define in file.filerefs('Set', 'Variable'):
+        var = define.ent()
+
+        # Skip variables that are not strings
+        varType = var.ents('Typed', 'Class Type ~TypeVariable')
+        if not varType or varType[0].longname() != 'java.lang.String':
+            continue
+
+        # Skip strings that don't have known values
+        if not var.value():
+            continue
+
+        # Get lexeme of definition
+        if not lexer:
+            lexer = file.lexer()
+        lex = lexer.lexeme(define.line(), define.column())
+
+        originalType = None
+
+        # Flag if toByteArray is called on a new object inside
+        if var.value() == 'String(toByteArray)':
+            originalType = getOriginalType(lexer, lex)
+        # Flag if a variable is inside
+        elif re.match(r'String\(' + javaVar + r'\)$', var.value()):
+            originalType = getOriginalType(lexer, lex)
+        # Flag if toByteArray is called on a variable inside
+        elif re.match(r'String\(' + javaVar + r'\.toByteArray\)$', var.value()):
+            originalType = getOriginalType(lexer, lex)
+
+        # Skip if the original type is not a number
+        if not originalType:
+            continue
+        originalType = numberType(originalType)
+        if not originalType:
+            continue
+
+        check.violation(var, file, define.line(), define.column(), ERR1, originalType)

@@ -1,0 +1,241 @@
+import re
+
+
+ERR1 = 'The rule of five is not followed.'
+MOVE_PARAM = "(const)?.?(volatile)?.?T.?&{2}"
+COPY_PARAM = "(const)?.?(volatile)?.?T.?&"
+
+
+# The ID for the check
+def ids():
+    return ('A12-0-1', 'CPP_D060')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-0-1': 'Published Standards/AUTOSAR/If a class declares a copy or move operation, or a destructor, either via "=default", "=delete", or via a user-provided declaration, then all others of these five special member functions shall be declared as well.',
+        'CPP_D060': 'All Checks/Language Specific/C and C++/Declarations and Definitions/If a class declares a copy or move operation, or a destructor, either via "=default", "=delete", or via a user-provided declaration, then all others of these five special member functions shall be declared as well.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A12-0-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D060': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>If a class declares a copy or move operation, or a destructor, either via
+"=default", "=delete", or via a user-provided declaration, then all others of
+these five special member functions shall be declared as well.</p>
+<p><b>Rationale</b></p>
+<p>The semantics of five of the special member functions,
+<br>• the copy constructor,</br>
+<br>• the move constructor,</br>
+<br>• the copy assignment operator,</br>
+<br>• the move assignment operator,</br>
+<br>• and the destructor,</br>
+<br>are closely related to each other. If, for example, there is need to provide a non-default
+destructor to release a resource, special handling usually also needs to be added in
+the copy and move operations to properly handle this resource.</br></p>
+<p>Language rules exist to generate the special member functions under certain
+conditions. For historical reasons, these language rules are not entirely consistent. For
+example, the presence of a destructor does not prevent the compiler from generating
+copy operations. However, it prevents the move operations from being generated. Thus
+it is required, in order to maintain consistency and document the programmer's intent,
+that either none or all of the five functions are declared.</p>
+<p>This rule is also known as "the rule of zero", or "the rule of five" respectively. It is highly
+recommended to design classes in a way that the rule of zero can be followed.</p>
+<p>Note that the default constructor (which is also a special member function) is not part
+of this rule. The presence of any user-declared constructor inhibits the generation of
+the default constructor. Therefore, if a user-declared constructor is present, it may
+be necessary (depending on requirements) to also declare the default constructor.
+However, the presence of a user-declared default constructor does not inhibit the
+generation of the other five special member functions. This rule therefore allows to
+follow the rule of zero when the class only has a user-declared default constructor
+(and possibly one or more constructors which are not special member functions).</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-0-1.cpp 309769 2018-03-01 17:40:29Z jan.babst $
+2 #include &lt;string&gt;
+3
+4 namespace v1
+5 {
+6 // Class is copyable and moveable via the compiler generated funtions.
+7 // Compliant - rule of zero.
+8 class A
+9 {
+10 private:
+11 // Member data ...
+12 };
+13 } // namespace v1
+14
+15 namespace v2
+16 {
+17 // New requirement: Destructor needs to be added.
+18 // Now the class is no longer moveable, but still copyable. The program
+19 // still compiles, but may perform worse.
+20 // Non-compliant - Unclear if this was the developers intent.
+21 class A
+22 {
+23 public:
+24 ~A()
+25 {
+26 // ...
+27 }
+28
+29 private:
+30 // Member data ...
+31 };
+32 } // namespace v2
+33
+34 namespace v3
+35 {
+36 // Move operations are brought back by defaulting them.
+37 // Copy operations are defaulted since they are no longer generated
+38 // (complies to A12-0-1 but will also be a compiler error if they are needed).
+39 // Default constructor is defaulted since it is no longer generated
+40 // (not required by A12-0-1 but will be a compiler error if it is needed).
+41 // Compliant - rule of five. Programmer's intent is clear, class behaves the
+42 // same as v1::A.
+43 class A
+44 {
+45 public:
+46 A() = default;
+47 A(A const&) = default;
+48 A(A&&) = default;
+49 ~A()
+50 {
+51 // ...
+52 }
+53 A& operator=(A const&) = default;
+54 A& operator=(A&&) = default;
+55
+56 private:
+57 // Member data ...
+58 };
+59 } // namespace v3
+60
+61 // A class with regular (value) semantics.
+62 // Compliant - rule of zero.
+63 class Simple
+64 {
+65 public:
+66 // User defined constructor, also acts as default constructor.
+67 explicit Simple(double d = 0.0, std::string s = "Hello")
+68 : d_(d), s_(std::move(s))
+69 {
+70 }
+71
+72 // Compiler generated copy c'tor, move c'tor, d'tor, copy assignment, move
+73 // assignment.
+74
+75 private:
+76 double d_;
+77 std::string s_;
+78 };
+79
+80 // A base class.
+81 // Compliant - rule of five.
+82 class Base
+83 {
+84 public:
+85 Base(Base const&) = delete; // see also A12-8-6
+86 Base(Base&&) = delete; // see also A12-8-6
+87 virtual ~Base() = default; // see also A12-4-1
+88 Base& operator=(Base const&) = delete; // see also A12-8-6
+89 Base& operator=(Base&&) = delete; // see also A12-8-6
+90
+91 // Declarations of pure virtual functions ...
+92
+93 protected:
+94 Base() = default; // in order to allow construction of derived objects
+95 };
+96
+97 // A move-only class.
+98 // Compliant - rule of five.
+99 class MoveOnly
+100 {
+101 public:
+102 MoveOnly();
+103 MoveOnly(MoveOnly const&) = delete;
+104 MoveOnly(MoveOnly&&) noexcept;
+105 ~MoveOnly();
+106 MoveOnly& operator=(MoveOnly const&) = delete;
+107 MoveOnly& operator=(MoveOnly&&) noexcept;
+108
+109 private:
+110 // ...
+111 };
+</code></pre>
+<p><b>See also</b></p>
+<p>• C++ Core Guidelines [11]: C.21: If you define or =delete any default operation,
+define or =delete them all.</p>
+<p>• C++ Core Guidelines [11]: C.81: Use =delete when you want to disable default
+behavior (without wanting an alternative).</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        class_name = class_ref.ent().name()
+        parent_name = class_ref.ent().longname()
+
+        special_function = {
+            "copy_constructor": False,
+            "move_constructor": False,
+            "copy_assignment": False,
+            "move_assignment": False,
+            "destructor": False
+        }
+
+        for func_ref in class_ref.ent().refs("Define, Declare ~Implicit", "Function ~Template"):
+            func_param = func_ref.ent().parameters()
+            func_param = func_param.replace(parent_name, "T")
+
+            if "~" in func_ref.ent().name():
+                special_function["destructor"] = True
+            elif class_name == func_ref.ent().name():
+                if re.search(MOVE_PARAM, func_param):
+                    special_function["move_constructor"] = True
+                elif re.search(COPY_PARAM, func_param):
+                    special_function["copy_constructor"] = True
+            elif "operator=" == func_ref.ent().name():
+                if re.search(MOVE_PARAM, func_param):
+                    special_function["move_assignment"] = True
+                elif re.search(COPY_PARAM, func_param):
+                    special_function["copy_assignment"] = True
+
+        if any(special_function.values()) and not all(special_function.values()):
+            check.violation(class_ref.ent(), file,
+                            class_ref.line(), class_ref.column(), ERR1)

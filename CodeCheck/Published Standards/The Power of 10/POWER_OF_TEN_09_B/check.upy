@@ -1,0 +1,382 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-07-06
+
+
+import re
+
+from Modules import findClose
+from Modules import refBetweenNodes
+
+
+ERR1 = 'Multi-pointer type declared'
+ERR2 = 'Macro has a pointer dereference operation'
+ERR3 = '%1 is a pointer type'
+ERR4 = 'Function pointer declared'
+
+CHOICES = ['No', 'Multi-pointer type', 'Multi-pointer/array type']
+
+LEFT_OF_EXPR = {'<<', '>>', '==', '!=', '&', '^', '|', '&&', '||', '?', ':',
+'=', '+=', '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '^=', '|=', ',', ';',
+'{', '}', 'return'}
+
+macrosWithViolations = set()
+
+
+def ids():
+    return ('POWER_OF_TEN_09_B', 'CPP_P014_B')
+
+
+def name(id):
+    return {
+        'POWER_OF_TEN_09_B': '''Published Standards/The Power of 10/\
+9B Restrict Pointer Usage - Other''',
+        'CPP_P014_B': '''All Checks/Language Specific/C and C++/Pointers/\
+Restrict Pointer Usage - Other''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POWER_OF_TEN_09_B': [
+            'Language: C',
+            'Language: C++',
+            'Standard: The Power of Ten',
+            'Pointers'
+        ],
+        'CPP_P014_B': [
+            'Language: C',
+            'Language: C++',
+            'Pointers'
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p>The use of pointers must be restricted. Specifically, no more than one level
+of dereferencing should be used. Pointer dereference operations may not be
+hidden in macro definitions or inside <code>typedef</code> declarations.
+Function pointers are not permitted.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Pointers are easily misused, even by experienced programmers. They can make
+it hard to follow or analyze the flow of data in a program, especially by
+tool-based analyzers. Similarly, function pointers should be used only if there
+is a very strong justification for doing so because they can seriously restrict
+the types of automated checks that code checkers can perform. For example, if
+function pointers are used, it can become impossible for a tool to prove the
+absence of recursion, requiring alternate guarantees to make up for this loss in
+checking power.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">typedef struct {
+  int x;
+  int y;
+} point_t;
+
+// Multiple dereferences at once
+char hello[6] = "Hello";
+char **hello_ptr = (char **) &hello;
+void fn(void)
+{
+  char first_char = **hello_ptr;
+}
+
+// Pointer in type definition
+typedef point_t* point_ptr_t;
+
+// Dereference in macro definition
+#define RESET_POINT_PTR(point_ptr) { point_ptr-&gt;x = 0; point_ptr-&gt;y = 0; }
+
+// Function pointer
+void (*function_ptr) (void);
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+
+<p>"No more than one level of dereferencing should be used" can be enforced
+in 2 ways:</p>
+
+<ul>
+<li>Do not declare multi-pointer or multi-pointer/array types (Option)</li>
+<li>Do not perform multiple dereferences in one expression (Part A)</li>
+</ul>
+
+<p>Macros that don't use objects (directly as parameters or in the definition)
+may not have violations. This is because there may not enough information to
+know if <code>*</code> or <code>[</code> tokens are really dereferencing
+operators. Because the AST is constructed after preprocessing, complex
+expressions with these operators are ignored.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().choice('multiPointer', 'Violation for declaring multi-pointer types', CHOICES, CHOICES[0])
+
+
+def check(check, file):
+    checkMultiPointer(check, file)
+    checkDerefInMacro(check, file)
+    checkTypeDefinitions(check, file)
+    checkFunctionPointers(check, file)
+
+
+def checkMultiPointer(check, file):
+    # Choose the regular expression
+    choice = check.options().lookup('multiPointer')
+    if choice == CHOICES[0]:
+        return
+    elif choice == CHOICES[1]:
+        pattern = r'[*][^,()<>]*[*]'
+    else:
+        pattern = r'[*[][^,()<>]*[*[]'
+
+    # All declarations, other than those with unevaluated types
+    for ref in file.filerefs('Declare, Define', '~Macro', True):
+        ent = ref.ent()
+
+        # Skip if no known type
+        entType = ent.type()
+        if not entType:
+            continue
+
+        # Skip if not a multi-pointer
+        if not re.search(pattern, entType):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+
+def checkDerefInMacro(check, file):
+    lexerNoExpand = None
+    macroUses = dict() # { functionEnt: macroUseRefs }
+
+    # Deref by references in the usages
+    for deref in file.filerefs('Deref', 'Object, Parameter'):
+
+        # Skip if it's not in a macro
+        macro = getOuterMacroOfRef(file, lexerNoExpand, deref, macroUses)
+        if not macro:
+            continue
+
+        # Skip if there's a dereference in or adjacent to the macro
+        if macroUsageHasDerefLexeme(file, lexerNoExpand, deref, macro):
+            continue
+
+        # Skip if the macro already had a violation
+        if macro in macrosWithViolations:
+            continue
+
+        # Get the macro definition, if it exists, preferably in this file
+        ref = None
+        defines = macro.refs('Definein')
+        for define in defines:
+            if define.file() == file:
+                ref = define
+                break
+        if not ref:
+            if defines:
+                ref = defines[0]
+            else:
+                ref = deref
+
+        macrosWithViolations.add(macro)
+        check.violation(macro, ref.file(), ref.line(), ref.column(), ERR2)
+
+    lexerExpand = None
+
+    # Deref by lexemes in the definition
+    for ref in file.filerefs('Define', 'Macro'):
+        macro = ref.ent()
+
+        # Skip if the macro already had a violation
+        if macro in macrosWithViolations:
+            continue
+
+        # Skip if the macro doesn't seem to have a dereference
+        if not lexerExpand:
+            lexerExpand = file.lexer(lookup_ents=False, expand_macros=True)
+        if not macroDefinitionHasDerefLexeme(lexerExpand, ref):
+            continue
+
+        macrosWithViolations.add(macro)
+        check.violation(macro, file, ref.line(), ref.column(), ERR2)
+
+
+def checkTypeDefinitions(check, file):
+    for ref in file.filerefs('Declare, Define', 'Typedef, Alias', True):
+        ent = ref.ent()
+
+        # Skip if no known type
+        if not ent.type():
+            continue
+
+        # Skip if pointer is not in the type
+        if not re.search(r'[*[]', ent.type()):
+            continue
+
+        # Skip if type is function and not function pointer
+        if re.search(r'\(', ent.type()) and not re.search(r'\(\*+\)', ent.type()):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR3, ent.kindname())
+
+
+def checkFunctionPointers(check, file):
+    for ref in file.filerefs('Declare, Define', 'Object, Parameter', True):
+        ent = ref.ent()
+
+        # Skip if no known type
+        if not ent.type():
+            continue
+
+        # Skip if type is not function pointer
+        if not re.search(r'\(\*+\)', ent.type()):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR4)
+
+
+def getOuterMacroOfRef(file, lexerNoExpand, ref, macroUses):
+    function = ref.scope()
+    if function not in macroUses:
+        macroUses[function] = function.refs('Use', 'Macro')
+
+    for macroUse in macroUses[function]:
+        macro = macroUse.ent()
+
+        # Ref is in the macro definition
+        if macroUse.line() == ref.line() and macroUse.column() == ref.column():
+            return macro
+
+        # Ref is an argument to a functional macro
+        if macro.kind().check('Functional'):
+            if not lexerNoExpand:
+                lexerNoExpand = file.lexer(lookup_ents=False, expand_macros=False)
+
+            # Match macro identifier
+            lex = lexerNoExpand.lexeme(macroUse.line(), macroUse.column())
+            if not lex or lex.text() != macro.name():
+                continue
+
+            # Match (
+            lex = lex.next(True, True)
+            if not lex or lex.text() != '(':
+                continue
+
+            # Match )
+            lexClose = findClose(lex)
+            if not lexClose:
+                continue
+
+            if refBetweenNodes(lex, ref, lexClose):
+                return macro
+
+
+def macroUsageHasDerefLexeme(file, lexerNoExpand, ref, macro):
+    # Get lexeme of object/parameter
+    if not lexerNoExpand:
+        lexerNoExpand = file.lexer(lookup_ents=False, expand_macros=False)
+    lex = lexerNoExpand.lexeme(ref.line(), ref.column())
+
+    # See if this object/parameter is dereferenced before the macro
+    leftLeft = lex.previous(True, True)
+    leftRight = lex.next(True, True)
+    if isDerefLexeme(leftLeft, leftRight):
+        return True
+
+    # See if this object/parameter is dereferenced after the macro
+    if macro.kind().check('Functional'):
+        while lex and lex.text() != macro.name():
+            lex = lex.previous(True, True)
+        leftLex = lex.previous(True, True)
+        leftRight = findClose(lex.next(True, True)) if lex else None
+        leftRight = leftRight.next(True, True) if leftRight else None
+        if isDerefLexeme(leftLex, leftRight):
+            return True
+
+    return False
+
+
+def isDerefLexeme(leftLex, rightLex):
+    if leftLex and leftLex.text() == '*':
+        leftLex = leftLex.previous(True, True)
+        if not leftLex:
+            return True
+        elif leftLex and (leftLex.text() in LEFT_OF_EXPR or leftLex.text() == '('):
+            return True
+
+    if rightLex and rightLex.text() in {'[', '->'}:
+        return True
+
+    return False
+
+
+def macroDefinitionHasDerefLexeme(lexerExpand, ref):
+    # Get first lexeme of definition
+    firstLex = lexerExpand.lexeme(ref.line(), ref.column())
+    if not firstLex:
+        return False
+    if ref.ent().kind().check('Functional'):
+        firstLex = findClose(firstLex.next(True, True))
+        if not firstLex:
+            return False
+        firstLex = firstLex.next(True, True)
+    else:
+        firstLex = firstLex.next(True, True)
+
+    # Ambiguous dereference symbols
+    asterisks  = []
+    brackets = []
+
+    # Get last lexeme of definition and find the dereference symbols
+    lastLex = firstLex
+    lex = firstLex
+    line = ref.line()
+    while lex:
+        # End of macro definition
+        if lex.line_begin() != line:
+            break
+        # Check the text
+        elif lex.text() == '->':
+            return True
+        elif lex.text() == '*':
+            asterisks.append(lex)
+        elif lex.text() == '[':
+            brackets.append(lex)
+        elif lex.text() == '\\\n':
+            line += 1
+        lastLex = lex
+        lex = lex.next(True, True)
+
+    # Determine if any asterisk is a dereference
+    for asterisk in asterisks:
+        # It's a dereference if it has no left operand
+        # (as opposed to a multiply operator or a pointer declaration)
+        prevLex = asterisk.previous(True, True)
+        if isSameLexPos(firstLex, asterisk) or prevLex.text() in LEFT_OF_EXPR:
+            return True
+
+    return False
+
+
+def isSameLexPos(lex0, lex1):
+    return lex0.column_begin() == lex1.column_begin() \
+    and lex0.column_end() == lex1.column_end() \
+    and lex0.line_begin() == lex1.line_begin() \
+    and lex0.line_end() == lex1.line_end()

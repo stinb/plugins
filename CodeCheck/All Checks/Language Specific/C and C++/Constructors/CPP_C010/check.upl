@@ -1,0 +1,193 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+# Violation messages should use constants and can have additonal parameters 
+# indicated with %1, %2, %3 etc. like printf does
+use constant ERR1 => 'The expected order is: %1';
+
+# Required - Violation messages should be registred for translation
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+# Required - Return the short name of the check
+
+sub checkID { return "CPP_C010";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Constructors\\Incomplete constructor initialization list";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Constructors',
+  );
+}
+
+# Required - Return the short description of the check
+sub description { return "Initializers and base classes must be in the correct order";}
+
+# Required - Return the long description of the check
+sub detailed_description { return <<"END_DESC"
+Assume:
+ 1. initializers must occur in the same order members are defined.
+ 2. base classes must be initialized first, in the order of inheritance.
+END_DESC
+}
+
+# Required - Test the language of the current file, the check will be 
+# skipped if this returns 0
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; 
+  #return 1;
+}
+
+# Required - Return 1 if this check will be run on a per-entity basis
+# Currently only supported on a per-file basis
+sub test_entity { return 1;}
+
+# Required - Return 1 if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for 
+# project-level checks
+sub test_global { return 0;}
+
+sub check {
+  my $check = shift; #The check object, needed to report violations and lookup option values
+  my $file = shift; 
+  
+  # test_entity only runs on files for now, but could change in the future, so force the check to only run on files
+  return unless $file->kind->check("c file ~unresolved ~unknown");
+
+  my $lexer = undef;
+  
+  # loop through functions defined in the file
+	foreach my $ref ($file->filerefs("define","function",1)) {
+	    my $func = $ref->ent();
+	    next if !checkConstructor($func);
+	    my ($begin) = getFunctionDefnLines($func) or next;
+	    if (!$lexer) {
+        $lexer = $file->lexer(1,0);
+	    }
+      return unless $lexer;
+	    do_one_function($check,$file,$func,$lexer->lexeme($begin,0));
+	}
+}  
+
+# Check one function.
+sub do_one_function {
+    my ($check,$file,$func,$lexeme) = @_;
+    my @expected = getExpectedMemberInitialization($func);
+
+    my $expectedList = '';
+    my %toFind = ();
+
+    my $expectedList = join(', ',map{$_->name;}@expected);
+    foreach my $ent ( @expected ) {
+      $toFind{ $ent->name } = 1;
+    }
+
+    my @actual = getActualMemberInitialization($lexeme, \%toFind);
+    my $actual_ent = shift @actual;
+
+    foreach my $expected_ent (@expected) {
+      if ($expected_ent->name() eq $actual_ent) {
+        $actual_ent = shift @actual or return;
+      }
+    }
+    return if !$actual_ent;
+    
+    $check->violation($func,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1,$expectedList);
+}
+
+
+# Return the list of expected member initialization entities, in
+# the expected order.
+sub getExpectedMemberInitialization {
+    my $func = shift;
+    my @list;
+    my $parent = $func->parent() or return @list;
+
+    # get base classes
+    foreach my $ent ($parent->ents("base")) {
+	push @list,$ent;
+    }
+
+    # get members
+    foreach my $ent ($parent->ents("define","member object ~static")) {
+	push @list,$ent;
+    }
+
+    return @list;
+}
+
+
+# Return the list of actual member initialization names, in
+# the actual order.
+sub getActualMemberInitialization {
+
+  my $lexeme = shift;
+  my $expectedList = shift;
+  my %toFind = %$expectedList;
+  my @list;
+
+  # skip to member initialization clause
+  while ($lexeme) {
+
+    my $text = $lexeme->text();
+    last if $text =~ m/[{;]/ || $text eq ":";
+    $lexeme = $lexeme->next();
+
+  }
+
+  while ($lexeme && $lexeme->text() !~ m/[{;]/) {
+
+    # pickup last id before '('
+    my $safeString = quotemeta( $lexeme->text );
+    if ( $lexeme->token() eq "Identifier" and ( $lexeme->nextUseful->text eq '(' or $lexeme->nextUseful->text eq '<' ) and $toFind{ $lexeme->text } ) {
+
+      delete $toFind{ $lexeme->text };
+      push @list, $lexeme->text();
+
+    } 
+
+    $lexeme = $lexeme->nextUseful();
+    last if !$lexeme;
+
+	### Would have be better to use refs, but have to handle case where
+	### no default constructors are created and thus can't be referenced.
+	#
+	#my $ref = $lexeme->ref();
+	#if ($ref && $ref->kind()->check("setby,callby")) {
+	#    my $ent = $lexeme->ent();
+	#    push @list,$ent if $ent;
+	#}
+	#$lexeme = $lexeme->next();
+  }
+
+  return @list;
+}
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+# Return true if entity is a constructor.
+sub checkConstructor {
+    my $ent = shift or return 0;
+    return 0 if !$ent->kind()->check("member");
+    my $parent = $ent->parent() or return 0;
+    return $ent->name() eq $parent->name();
+}

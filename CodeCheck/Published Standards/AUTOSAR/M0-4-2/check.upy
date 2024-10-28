@@ -1,0 +1,123 @@
+import re
+
+
+ERR1 = 'Use of floating-point arithmetic shall be documented'
+
+
+# The ID for the check
+def ids():
+    return ('M0-4-2', 'CPP_T044')
+
+def name(id):
+    return {
+        'M0-4-2': """\
+Published Standards/AUTOSAR/Undocumented Use of Floating-point Arithmetic""",
+        'CPP_T044': """\
+All Checks/Language Specific/C and C++/Types/Undocumented Use of Floating-point Arithmetic"""
+
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'M0-4-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Types',
+        ],
+        'CPP_T044': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Use of floating-point arithmetic shall be documented.</p>
+<p><b>Rationale</b></p>
+<p>The safe use of floating-point arithmetic requires a high level of numerical analysis skills and indepth knowledge of the compiler and target hardware.</p>
+<p>If floating-point is to be used, then the following issues need to be covered as part of the deviation
+process:</p>
+<p>• A justification explaining why floating-point is the appropriate or only solution.</p>
+<p>• Demonstrate that appropriate skills are available.</p>
+<p>• Demonstrate that an appropriate process is being applied.</p>
+<p>• Document the floating-point implementation.</p>
+<p>The paper “What Every Computer Scientist Should Know about Floating-Point Arithmetic” [13]
+explains the issues that need to be considered when using floating-point.</p>
+<p><b>Example</b></p>
+<p>
+When solving a quadratic equation, the value of b2
+–4.a.c is calculated. Assume that a=1.22,
+b=3.34, c=2.28 and that three significant digits are used during calculation. The exact value of
+b2
+–4.a.c is 0.0292. However, b2
+ rounds to 11.2 and 4.a.c rounds to 11.1, giving a final answer
+of 0.1. This example demonstrates catastrophic cancellation. The subtraction does not cause an
+error, but it does expose errors introduced in the multiplications that are used when generating its
+operands.
+</p>
+"""
+
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    flagged_lines = []
+
+    for obj_ref in file.filerefs("Use", "Object ~Frominclude"):
+        if obj_ref.line() in flagged_lines:
+            continue
+
+        obj_val = obj_ref.ent().value()
+        if obj_ref.ent().type() and re.search(r"float|double", obj_ref.ent().type()) and obj_val and "." in obj_val:
+            has_comment = False
+            has_operator = False
+            current_line = obj_ref.line()
+            lexemes = lexer.lexemes(current_line, current_line)
+            prev_line = current_line - 1
+            prev_lexemes = lexer.lexemes(prev_line, prev_line)
+
+            for lex in prev_lexemes:
+                if lex.token() == "Comment":
+                    if "undcc_violation" not in lex.text().lower(): #special case for aspen
+                        has_comment = True
+                elif lex.token() in {"Keyword", "Identifier"}:
+                    has_comment = False
+                    break
+
+            for lex in lexemes:
+                if lex.token() == "Comment":
+                    if "undcc_violation" not in lex.text().lower(): #special case for aspen
+                        has_comment = True
+                elif lex.token() == "Operator" and lex.text() in {"+", "-", "*", "/"}:
+                    has_operator = True
+
+            if has_operator and not has_comment:
+                flagged_lines.append(obj_ref.line())
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)

@@ -1,0 +1,107 @@
+ERR1 = 'Do not alternately input and output from a file stream without an intervening positioning call.'
+
+
+# The ID for the check
+def id():
+    return ('FIO50-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO50-CPP': 'Published Standards/SEI Cert Standards/C++/Do not alternately input and output from a file stream without an intervening positioning call',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not alternately input and output from a file stream without an intervening positioning call'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not alternately input and output from a file stream without an intervening positioning call</p>
+<p><b>Risk Assessment</b></p>
+<p>Alternately inputting and outputting from a stream without an intervening flush or positioning call is undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/FIO50-CPP.+Do+not+alternately+input+and+output+from+a+file+stream+without+an+intervening+positioning+call</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;fstream&gt;
+#include &lt;string&gt;
+ 
+void f(const std::string &fileName) {
+  std::fstream file(fileName);
+  if (!file.is_open()) {
+    // Handle error
+    return;
+  }
+   
+  file &lt;&lt; "Output some data";
+  std::string str;
+  file &gt;&gt; str;
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'FIO50-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        call_refs = sorted(func_ref.ent().refs(
+            "Call", "Unresolved Function"), key=lambda x: x.line())
+
+        for obj_ref in func_ref.ent().refs("Define", "Object"):
+            ent_type = obj_ref.ent().type()
+
+            if ent_type and (("fstream" or "std::fstream") in ent_type):
+                state = 0  # 0: file positioning, 1: input, output
+
+                for call_ref in call_refs:
+                    if call_ref.ent().name() in ["operator<<", "operator>>"]:
+                        lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+                        lex = lex.previous(ignore_whitespace=True)
+
+                        if lex.ent() and (lex.ent().id() == obj_ref.ent().id()):
+                            if state != 0:
+                                check.violation(
+                                    lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                                break
+                            else:
+                                state = 1
+                    elif call_ref.ent().name() in ["fflush", "fseek", "fsetpos", "rewind", "seekoff", "seekp", "seekg"]:
+                        lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+                        lex = lex.previous(ignore_whitespace=True)
+
+                        if lex.text() == ".":
+                            lex = lex.previous(ignore_whitespace=True)
+
+                        if lex.ent() and (lex.ent().id() == obj_ref.ent().id()):
+                            state = 0

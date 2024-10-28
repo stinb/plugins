@@ -1,0 +1,227 @@
+ERR1 = 'Do not dereference null pointers.'
+
+
+# The ID for the check
+def id():
+    return ('EXP34-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP34-C': 'Published Standards/SEI Cert Standards/C/Do not dereference null pointers',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP34-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not dereference null pointers'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not dereference null pointers</p>
+<p><b>Risk Assessment</b></p>
+<p>Dereferencing a null pointer is undefined behavior, typically abnormal program termination. In some situations, however, dereferencing a null pointer can lead to the execution of arbitrary code [Jack 2007, van Sprundel 2006]. The indicated severity is for this more severe case; on platforms where it is not possible to exploit a null pointer dereference to execute arbitrary code, the actual severity is low.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/EXP34-C.+Do+not+dereference+null+pointers</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++"># include &lt;png.h&gt; /* From libpng */
+# include &lt;string.h&gt;
+
+void func(png_structp png_ptr, int length, const void *user_data) {
+  png_charp chunkdata;
+  chunkdata = (png_charp)png_malloc(png_ptr, length + 1);
+  /* ... */
+  memcpy(chunkdata, user_data, length);
+  /* ... */
+ }
+
+
+# include &lt;string.h&gt;
+# include &lt;stdlib.h&gt;
+
+void f(const char *input_str) {
+  size_t size = strlen(input_str) + 1;
+  char *c_str = (char *)malloc(size);
+  memcpy(c_str, input_str, size);
+  /* ... */
+  free(c_str);
+  c_str = NULL;
+  /* ... */
+}
+
+
+static unsigned int tun_chr_poll(struct file *file, poll_table *wait)  {
+  struct tun_file *tfile = file-&gt;private_data;
+  struct tun_struct *tun = __tun_get(tfile);
+  struct sock *sk = tun-&gt;sk;
+  unsigned int mask = 0;
+
+  if (!tun)
+    return POLLERR;
+
+  DBG(KERN_INFO "%s: tun_chr_poll\n", tun-&gt;dev-&gt;name);
+
+  poll_wait(file, &tun-&gt;socket.wait, wait);
+
+  if (!skb_queue_empty(&tun-&gt;readq))
+    mask |= POLLIN | POLLRDNORM;
+
+  if (sock_writeable(sk) ||
+     (!test_and_set_bit(SOCK_ASYNC_NOSPACE, &sk-&gt;sk_socket-&gt;flags) &&
+     sock_writeable(sk)))
+    mask |= POLLOUT | POLLWRNORM;
+
+  if (tun-&gt;dev-&gt;reg_state != NETREG_REGISTERED)
+    mask = POLLERR;
+
+  tun_put(tun);
+  return mask;
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check flags any function call that accepts at least two pointer parameters, if at least one of those parameters is not checked for null.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function", True):
+        for call_ref in func_ref.ent().refs("Call", "Function", True):
+            if call_ref.scope().id() != func_ref.ent().id():
+                continue
+
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            ptr_params = 0
+            checked_params = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and lex.ent() and lex.ent().ref("Assignby Ptr"):
+                    first_assign_line = None
+                    _, ent_type = get_ent_type(lex.ent())
+
+                    if (ent_type and "*" not in ent_type) or (lex.previous().text() == "->"):
+                        pass
+                    else:
+                        ptr_params += 1
+
+                        for assign_ref in sorted(lex.ent().refs("Assignby Ptr"), key=lambda x: x.line()):
+                            first_assign_line = assign_ref.line()
+                            break
+
+                        for use_ref in lex.ent().refs("Useby, Setby"):
+                            if use_ref.line() <= first_assign_line:
+                                has_check = False
+                                has_null = False
+
+                                check_lexes = lexer.lexemes(
+                                    use_ref.line(), use_ref.line())
+
+                                for check_lex in check_lexes:
+                                    if check_lex.text() in {"if", "=="}:
+                                        has_check = True
+                                    elif check_lex.text() in {"NULL", "nullptr", "!", "0"}:
+                                        has_null = True
+                                    elif check_lex.text() == "while":
+                                        compliant = True
+                                        break
+
+                                if has_check and has_null:
+                                    checked_params += 1
+                                    break
+
+                lex = lex.next(ignore_whitespace=True)
+
+            if (ptr_params > 1) and (ptr_params != checked_params):
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), ERR1)
+
+        for deref_ref in func_ref.ent().refs("Deref Use", "Object", True):
+            compliant = False
+            _, ent_type = get_ent_type(deref_ref.ent())
+
+            if ent_type and "*" not in ent_type:
+                continue
+
+            for use_ref in deref_ref.ent().refs("Useby, Setby"):
+                if use_ref.line() <= deref_ref.line():
+                    has_check = False
+                    has_null = False
+
+                    check_lexes = lexer.lexemes(
+                        use_ref.line(), use_ref.line())
+
+                    for check_lex in check_lexes:
+                        if check_lex.text() in {"if", "=="}:
+                            has_check = True
+                        elif check_lex.text() in {"NULL", "nullptr", "!", "0"}:
+                            has_null = True
+                        elif check_lex.text() == "while":
+                            compliant = True
+                            break
+
+                    if has_check and has_null:
+                        compliant = True
+                        break
+
+            if not compliant:
+                check.violation(deref_ref.ent(), file,
+                                deref_ref.line(), deref_ref.column(), ERR1)

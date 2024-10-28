@@ -1,0 +1,160 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 8-24-22
+
+
+import re
+
+
+ERR1 = 'Array exposed'
+ERR2 = 'Modifiable collection exposed - made modifiable by %1'
+
+
+def ids():
+    return ('OBJ13-J', 'JAVA_OBJ13')
+
+
+def name(id):
+    return {
+        'OBJ13-J': "Published Standards/SEI Cert Standards/Java/" + "Ensure that references to mutable objects are not exposed",
+        'JAVA_OBJ13': "All Checks/Language Specific/Java/Object Orientation/" + "Ensure that references to mutable objects are not exposed",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'OBJ13-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P18',
+            'Level: L1',
+        ],
+        'JAVA_OBJ13': [
+            'Language: Java',
+            'Object Orientation',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Ensure that references to mutable objects are not exposed
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Having a public static final array is a potential security risk because the\
+ array elements may be modified by a client.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/OBJ13-J.+Ensure+that+references+to+mutable+objects+are+not+exposed
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public static final SomeType [] SOMETHINGS = { ... };
+</code></pre>
+
+<p><b>Noncompliant Code Example (getter method)</b></p>
+<pre><code language="Java">private static final SomeType [] SOMETHINGS = { ... };
+public static final getSomethings() {return SOMETHINGS;}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def extends(ent, match):
+    while ent:
+        if re.match(match, ent.name()):
+            return True
+
+        ent = ent.ref('Extend').ent() if ent.ref('Extend') else None
+
+    return False
+
+
+def modifiableCollection(ent):
+    # Not UnmodifiableCollection, but Collection or AbstractCollection
+    typeEnts = ent.ents('Typed')
+    typeEnt = typeEnts[0] if typeEnts else None
+    if not typeEnt or extends(typeEnt, 'UnmodifiableCollection') or not extends(typeEnt, 'Collection|AbstractCollection'):
+        return
+
+    # Modifiable by assignment
+    for ref in ent.refs('Setby'):
+        lex = ref.file().lexer(False).lexeme(ref.line(), ref.column())
+
+        # Match =
+        lex = lex.next(True, True)
+        if not lex or lex.text() != '=':
+            return ref
+
+        # Match identifier
+        lex = lex.next(True, True)
+        if not lex or lex.token() != 'Identifier':
+            return ref
+
+        # Match .
+        lex = lex.next(True, True)
+        if not lex or lex.text() != '.':
+            return ref
+
+        # Match unmodifiableList, unmodifiableSet, etc.
+        lex = lex.next(True, True)
+        if not lex or not re.match(r'unmodifiable', lex.text()):
+            return ref
+
+
+def modifiableArrayOrCollection(check, ref):
+    ent = ref.ent()
+
+    error = None
+    errorMore = None
+
+    # Array
+    if ent.type() and re.match(r'.*\[\]$', ent.type()):
+        error = ERR1
+
+    # Collection that is modifiable
+    else:
+        otherRef = modifiableCollection(ent)
+        if otherRef:
+            error = ERR2
+            errorMore = otherRef.ent().longname()
+
+    if not error:
+        return
+
+    if errorMore:
+        check.violation(ent, ref.file(), ref.line(), ref.column(), error, errorMore)
+    else:
+        check.violation(ent, ref.file(), ref.line(), ref.column(), error)
+
+
+def check(check, file):
+    for define in file.filerefs('Define', 'Public Variable ~EnumConstant'):
+        modifiableArrayOrCollection(check, define)
+
+    for define in file.filerefs('Define', 'Public Method'):
+        method = define.ent()
+        for ret in method.refs('Use Return', 'Variable'):
+            modifiableArrayOrCollection(check, ret)

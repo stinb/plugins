@@ -1,0 +1,118 @@
+ERR1 = 'Do not use pointer arithmetic on polymorphic objects.'
+
+
+# The ID for the check
+def id():
+    return ('CTR56-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CTR56-CPP': 'Published Standards/SEI Cert Standards/C++/Do not use pointer arithmetic on polymorphic objects',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not use pointer arithmetic on polymorphic objects'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use pointer arithmetic on polymorphic objects</p>
+<p><b>Risk Assessment</b></p>
+<p>Using arrays polymorphically can result in memory corruption, which could lead to an attacker being able to execute arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR56-CPP.+Do+not+use+pointer+arithmetic+on+polymorphic+objects</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;iostream&gt;
+  
+// ... definitions for S, T, globI, globD ...
+ 
+void f(const S *someSes, std::size_t count) {
+  for (const S *end = someSes + count; someSes != end; ++someSes) {
+    std::cout &lt;&lt; someSes-&gt;i &lt;&lt; std::endl;
+  }
+}
+ 
+int main() {
+  T test[5];
+  f(test, 5);
+}
+
+
+#include &lt;iostream&gt;
+  
+// ... definitions for S, T, globI, globD ...
+ 
+void f(const S *someSes, std::size_t count) {
+  for (std::size_t i = 0; i &lt; count; ++i) {
+    std::cout &lt;&lt; someSes[i].i &lt;&lt; std::endl;
+  }
+}
+ 
+int main() {
+  T test[5];
+  f(test, 5);
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'CTR56-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P9',
+            'Level: L2',
+            'Pointers',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Class, Struct"):
+        base_ids = []
+
+        for base_ref in obj_ref.ent().refs("Base"):
+            base_ids.append(base_ref.ent().id())
+
+        if not base_ids:
+            continue
+
+        for type_ref in obj_ref.ent().refs("Typedby"):
+            for ptr_ref in type_ref.ent().refs("Ptr"):
+                ptr_type = ptr_ref.ent().ref("Typed")
+
+                if ptr_type and (ptr_type.ent().id() in base_ids):
+                    for use_ref in ptr_ref.ent().refs("Useby, Modifyby"):
+                        lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+
+                        next_lex = lex.next(ignore_whitespace=True)
+                        prev_lex = lex.previous(ignore_whitespace=True)
+
+                        if next_lex and next_lex.text() == "->":
+                            continue
+                        elif (next_lex and (next_lex.text() in ["+", "-", "++", "--", "+=", "-=", "["])) or (prev_lex and (prev_lex.text() in ["+", "-", "++", "--", "+=", "-="])):
+                            check.violation(ptr_ref.scope(), ptr_ref.file(
+                            ), ptr_ref.line(), ptr_ref.column(), ERR1)
+                            break

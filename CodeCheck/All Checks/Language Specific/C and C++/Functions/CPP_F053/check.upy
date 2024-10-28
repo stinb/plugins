@@ -1,0 +1,138 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-19-2020
+
+import re
+
+# The ID for the check
+def id():
+    return 'CPP_F053'
+
+# The short name of the check
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Functions/Every function shall have an \
+explicitly declared return type."""
+
+
+def tags(id):
+    return {
+        'CPP_F053': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Every function shall have an explicitly declared return type. Functions that do not return a value shall be declared as type void."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>Every function shall have an explicitly declared return type.
+Functions that do not return a value shall be declared as type void.</p>
+<p>Developer's Note: For this check you must be using the Strict Parser (in Project-&gt;Configure Project)</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+# Options for the check
+def define_options(check):
+   return
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    func_refs = file.filerefs('C Define', 'C Function ~Unknown ~Unresolved')
+    if not func_refs:
+        return
+
+    for func in func_refs:
+        if re.search(r'unknown', func.ent().kindname().lower()):
+            continue
+        # Obtain lexemes in each function
+        funcLexer = func.ent().lexer(True, 8, True, False)
+        if not funcLexer:
+            return
+
+        begin, end = getFunctionDefnLines(func.ent())
+        if begin == None or end == None:
+            continue
+
+        funcLexemes = funcLexer.lexemes(begin, end)
+
+        # Find out if return type is declared as an int
+        findReturnType = funcLexer.lexeme(func.line(), func.column())
+        if findReturnType != None:
+            rtEnt = findReturnType.ent()
+        else:
+            continue
+
+        # Skip Macros, Lambdas, Operator overloads and [unnamed] ents
+        if func.ent().kind().check("Macro"):
+            continue
+        if func.ent().kind().check("Lambda Function"):
+            continue
+        if func.ent().name() == "[unnamed]":
+            continue
+        # will handle 'operator==', 'operator!=', 'operator=', 'operator++', 'operator--', etc.
+        if re.search(r"operator", func.ent().name()):
+            continue
+
+        # Check if return type is declared as an int
+        findInt = False
+
+        findReturnType = findReturnType.previous(ignore_comments=True, ignore_whitespace=True)
+        if findReturnType.text() == 'int':
+            findInt = True
+
+        ok = False
+
+
+        # Check to see if a value was returned in a function
+        for lexeme in funcLexemes:
+            if lexeme.text() == 'return':
+                ok = True
+                break
+
+
+        if not ok:
+            # Throw violation if the return type was not declared as void and nothing was returned
+            if func.ent().type() != 'void':
+                violation = check.violation(func.ent(), file, func.line(), func.column(), 'The return type was not declared as void but nothing was returned')
+
+                # Find first lexeme of return type
+                prevLex = findReturnType
+                while prevLex.previous(ignore_whitespace=True, ignore_comments=True) and (prevLex.previous(ignore_whitespace=True, ignore_comments=True).text() == '*' or re.match(r'\(|\)', prevLex.previous(ignore_whitespace=True, ignore_comments=True).text()) or (func.ent().type() != None and re.search(prevLex.previous(ignore_whitespace=True, ignore_comments=True).text(), func.ent().type()))):
+                    prevLex = prevLex.previous(ignore_whitespace=True, ignore_comments=True)
+
+
+                # If the return type is specified
+                if findReturnType and not re.match(r'}|;', findReturnType.text()):
+                    violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), findReturnType.line_begin(), findReturnType.column_begin() + len(findReturnType.text()), 'void')
+
+                # If the return type is not specified
+                else:
+                    violation.add_fixit_hint(func.line(), func.column(), func.line(), func.column(), 'void ')
+
+        # Throw violation if the return type is an int but int wasn't declared as a return type
+        elif func.ent().type() == 'int' and not findInt:
+            violation = check.violation(func.ent(), file, func.line(), func.column(), 'Return type was not explicitly declared')
+            violation.add_fixit_hint(func.line(), func.column(), func.line(), func.column(), 'int ')
+
+
+
+
+# Obtains function begin and end lines
+def getFunctionDefnLines(func):
+    begin_ref = func.ref("definein")
+    end_ref = func.ref("end")
+    if not begin_ref or not end_ref:
+        return None, None
+    return (begin_ref.line(), end_ref.line())

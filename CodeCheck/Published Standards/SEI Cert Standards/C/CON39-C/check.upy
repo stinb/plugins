@@ -1,0 +1,188 @@
+
+ERR1 = 'Do not join or detach a thread that was previously joined or detached.'
+
+
+# The ID for the check
+def ids():
+    return ('CON39-C', 'MISRA23_22.11')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON39-C': 'Published Standards/SEI Cert Standards/C/Do not join or detach a thread that was previously joined or detached',
+        'MISRA23_22.11': 'Published Standards/MISRA C 2023/22.11 A thread that was previously either joined or detached shall not be subsequently joined nor detached',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'CON39-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Threads',
+        ],
+        'MISRA23_22.11': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Automation: Automated',
+            'Threads',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not join or detach a thread that was previously joined or detached'
+
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_22.11':
+        return '''
+<p><b>Rationale</b></p>
+<p>Invoking thrd_detach() or thrd_join() on a thread that has been previously detached or joined is
+undefined behaviour.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void main( void )
+{
+ thrd_t id1, id2, id3, id4;
+ thrd_create( &id1, t1, NULL );
+ thrd_create( &id2, t2, NULL );
+ thrd_create( &id3, t3, NULL );
+ thrd_create( &id4, t4, NULL );
+
+ thrd_join ( id1, NULL ); /* Compliant */
+ thrd_join ( id1, NULL ); /* Non-compliant - already joined */
+
+ thrd_detach( id2 ); /* Compliant */
+ thrd_detach( id2 ); /* Non-compliant - already detached */
+
+ thrd_join ( id3, NULL ); /* Compliant */
+ thrd_detach( id3 ); /* Non-compliant - already joined */
+
+ thrd_detach( id4 ); /* Compliant */
+ thrd_join ( id4, NULL ); /* Non-compliant - already detached */
+}
+</code></pre>
+        '''
+
+    return """
+<p>Do not join or detach a thread that was previously joined or detached</p>
+<p><b>Risk Assessment</b></p>
+<p>Joining or detaching a previously joined or detached thread is undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/CON39-C.+Do+not+join+or+detach+a+thread+that+was+previously+joined+or+detached</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stddef.h&gt;
+#include &lt;threads.h&gt;
+
+int thread_func(void *arg) {
+  /* Do work */
+  thrd_detach(thrd_current());
+  return 0;
+}
+
+int main(void) {
+  thrd_t t;
+
+  if (thrd_success != thrd_create(&t, thread_func, NULL)) {
+    /* Handle error */
+    return 0;
+  }
+
+  if (thrd_success != thrd_join(t, 0)) {
+    /* Handle error */
+    return 0;
+  }
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        thread_objs = {}  # key: thread ent id, value: True if joined or detached, False otherwise
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Unresolved Function"), key=lambda x: x.line()):
+            if call_ref.ent().name() in {"thrd_create", "pthread_create"}:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                thread_id = None
+
+                while lex and lex.line_begin() == call_ref.line():
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif lex.token() == "Identifier" and lex.ent() and lex.ent().type() in {"thrd_t", "pthread_t"}:
+                        thread_id = lex.ent().id()
+                        thread_objs[thread_id] = False
+                    elif on_param and lex.token() == "Identifier" and lex.ent().kind().check("Function"):
+                        for ref in lex.ent().refs("Call", "Unresolved Function"):
+                            if ref.ent().name() in {"thrd_detach", "thrd_join", "pthread_detach", "pthread_join"}:
+                                thread_objs[thread_id] = True
+
+                        break
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+            elif call_ref.ent().name() in {"thrd_detach", "thrd_join", "pthread_detach", "pthread_join"}:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                thread_id = None
+
+                while lex and lex.line_begin() == call_ref.line():
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif lex.token() == "Identifier" and lex.ent() and lex.ent().type() in {"thrd_t", "pthread_t"}:
+                        thread_id = lex.ent().id()
+
+                        if thread_id in thread_objs and thread_objs[thread_id]:
+                            check.violation(
+                                lex.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+                        elif thread_id in thread_objs:
+                            thread_objs[thread_id] = True
+                        elif thread_id not in thread_objs:
+                            thread_objs[thread_id] = False
+
+                        break
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)

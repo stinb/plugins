@@ -1,0 +1,153 @@
+ERR1 = 'Class is not declared final and public destructor is non-virtual.'
+
+
+# The ID for the check
+def ids():
+    return ('A12-4-2', 'CPP_D066')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-4-2': 'Published Standards/AUTOSAR/If a public destructor of a class is non-virtual, then the class should be declared final.',
+        'CPP_D066': 'All Checks/Language Specific/C and C++/Destructors/If a public destructor of a class is non-virtual, then the class should be declared final.',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A12-4-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Destructors'
+        ],
+        'CPP_D066': [
+            'Language: C',
+            'Language: C++',
+            'Destructors',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>If a public destructor of a class is non-virtual, then the class should be declared final.</p>
+<p><b>Rationale</b></p>
+<p>If a public destructor of a class is non-virtual (i.e. no virtual, override or final keyword),
+then the class is not supposed to be used as a base class in inheritance hierarchy.</p>
+<p>Note that a destructor needs to be virtual in a base class in order to correctly destroy
+an instance of a derived class through a pointer to the base class.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-4-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 class A // Non-compliant - class A should not be used as a base class because
+3 // its destructor is not virtual, but it is
+4 // not declared final
+5 {
+6 public:
+7 A() = default;
+8 A(A const&) = default;
+9 A(A&&) = default;
+10 A& operator=(A const&) = default;
+11 A& operator=(A&&) = default;
+12 ~A() = default; // Public non-virtual destructor
+13 };
+14 class B final // Compliant - class B can not be used as a base class, because
+15 // it is declared final, and it should not be derived
+16 // because its destructor is not virtual
+17 {
+18 public:
+19 B() = default;
+20 B(B const&) = default;
+21 B(B&&) = default;
+22 B& operator=(B const&) = default;
+23 B& operator=(B&&) = default;
+24 ~B() = default; // Public non-virtual destructor
+25 };
+26 class C // Compliant - class C is not final, and its destructor is virtual. It
+27 // can be used as a base class
+28 {
+29 public:
+30 C() = default;
+31 C(C const&) = default;
+32 C(C&&) = default;
+33 C& operator=(C const&) = default;
+34 C& operator=(C&&) = default;
+35 virtual ~C() = default; // Public virtual destructor
+36 };
+37 class AA : public A
+38 {
+39 };
+40 // class BA : public B // Compilation error - can not derive from final base
+41 // class B
+42 //{
+43 //};
+44 class CA : public C
+45 {
+46 };
+47 void Fn() noexcept
+48 {
+49 AA obj1;
+50 CA obj2;
+51 A& ref1 = obj1;
+52 C& ref2 = obj2;
+53
+54 ref1.~A(); // Calls A::~A() only
+55 ref2.~C(); // Calls both CA::~CA() and C::~C()
+56 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• SEI CERT C++ Coding Standard [10]: OOP52-CPP: Do not delete a polymorphic
+object without a virtual destructor.</p>
+"""
+
+
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        is_final = False
+        derived_class = class_ref.ent().ref("Base")
+
+        if derived_class:
+            continue
+
+        for class_lex in lexer.lexemes(class_ref.line(), class_ref.line()):
+            if class_lex.text() == "final" and class_lex.token() == "Identifier":
+                is_final = True
+
+        for func_ref in class_ref.ent().refs("Declare, Define", "Public Function"):
+            is_virtual = False
+            implicit = func_ref.scope().ref("Implicit")
+
+            if func_ref.file() == class_ref.file() and not implicit and "~" in func_ref.ent().name():
+                for dest_lex in lexer.lexemes(func_ref.line(), func_ref.line()):
+                    if dest_lex.text() == "virtual" and dest_lex.token() == "Keyword":
+                        is_virtual = True
+                        break
+
+                if not is_final and not is_virtual:
+                    check.violation(class_ref.ent(), file,
+                                    class_ref.line(), class_ref.column(), ERR1)

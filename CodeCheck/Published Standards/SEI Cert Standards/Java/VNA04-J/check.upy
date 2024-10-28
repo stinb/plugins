@@ -1,0 +1,148 @@
+ERR1 = 'Ensure that calls to chained methods are atomic.'
+
+
+# The ID for the check
+def ids():
+    return ('VNA04-J', 'JAVA_VNA04')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'VNA04-J': 'Published Standards/SEI Cert Standards/Java/Ensure that calls to chained methods are atomic',
+        'JAVA_VNA04': 'All Checks/Language Specific/Java/Visibility and Atomicity/Ensure that calls to chained methods are atomic',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'VNA04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_VNA04': [
+            'Language: Java',
+            'Visibility and Atomicity',
+        ],
+    }.get(id)
+
+
+# The short description of the check
+def description():
+    return 'Ensure that calls to chained methods are atomic'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure that calls to chained methods are atomic</p>
+<p><b>Risk Assessment</b></p>
+<p>Using method chaining in multithreaded environments without performing external locking can lead to nondeterministic behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/VNA04-J.+Ensure+that+calls+to+chained+methods+are+atomic</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class USCurrency {
+  // Change requested, denomination (optional fields)
+  private int quarters = 0;
+  private int dimes = 0;
+  private int nickels = 0;
+  private int pennies = 0;
+
+  public USCurrency() {}
+
+  // Setter methods
+  public USCurrency setQuarters(int quantity) {
+    quarters = quantity;
+    return this;
+  }
+  public USCurrency setDimes(int quantity) {
+    dimes = quantity;
+    return this;
+  }
+  public USCurrency setNickels(int quantity) {
+    nickels = quantity;
+    return this;
+  }
+  public USCurrency setPennies(int quantity) {
+    pennies = quantity;
+    return this;
+  }
+}
+
+// Client code:
+class ExampleClientCode {
+
+  private final USCurrency currency = new USCurrency();
+  // ...
+
+  public ExampleClientCode() {
+
+    Thread t1 = new Thread(new Runnable() {
+        @Override public void run() {
+          currency.setQuarters(1).setDimes(1);
+        }
+    });
+    t1.start();
+
+    Thread t2 = new Thread(new Runnable() {
+        @Override public void run() {
+          currency.setQuarters(2).setDimes(2);
+        }
+    });
+    t2.start();
+
+    //...
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for override_ref in file.filerefs("Overrides", "Abstract Method Public Member, Abstract Method Default Member"):
+        if override_ref.ent().longname() == "java.lang.Runnable.run":
+            for call_ref in override_ref.scope().refs("Call Nondynamic"):
+                if "return this;" in call_ref.ent().contents():
+                    lex = lexer.lexeme(
+                        call_ref.line(), call_ref.column())
+                    on_param = 0
+
+                    while lex:
+                        if lex.text() == "(" and lex.token() == "Punctuation":
+                            on_param += 1
+                        elif lex.text() == ")" and lex.token() == "Punctuation":
+                            on_param -= 1
+
+                            if not on_param:
+                                if lex.next().text() == ".":
+                                    lex = lex.next().next()
+                                    if lex.ref() and lex.ref().kind().check("Callby Nondynamic") and lex.ent() and "return this;" in lex.ent().contents():
+                                        check.violation(
+                                            call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                                break
+
+                        lex = lex.next(ignore_whitespace=True)

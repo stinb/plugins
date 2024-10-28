@@ -1,0 +1,415 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 5/11/2022
+
+import re
+
+ERR1 = 'Do not rely on the write() method to output integers outside the range 0 to 255'
+
+DEF_NAME = "Do not rely on the write() method to output integers outside the range 0 to 255"
+
+# The ID for the check
+def ids():
+    return ('FIO09-J', 'JAVA_FIO09')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'FIO09-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_FIO09': "All Checks/Language Specific/Java/Input Output/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'FIO09-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_FIO09': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not rely on the write() method to output integers outside the range 0 to 255</p>
+<p><b>Risk Assessment</b></p>
+<p>Using the write() method to output integers outside the range 0 to 255 will result in truncation.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/FIO09-J.+Do+not+rely+on+the+write%28%29+method+to+output+integers+outside+the+range+0+to+255</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class ConsoleWrite {
+  public static void main(String[] args) {
+    // Any input value &gt; 255 will result in unexpected output
+    System.out.write(Integer.valueOf(args[0]));
+    System.out.flush();
+  }
+}</code></pre>
+<p><i>Developer Notes: </i>Variables and parameters that are not final cannot have their values guaranteed at the time of comparison so they cannot be flagged. An option is available to flag these, but it may lead to false positives.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox("pot", "Check potential violations", False)
+
+def check(check, file):
+    pot = check.option().lookup('pot')
+    # get all writes and check values
+    for wRef in file.filerefs("Call", "Public Method"):
+        if wRef.ent().longname() == "java.io.PrintStream.write":
+            value, n = get_value(wRef, pot, check)
+            if value:
+                if value < 0 or value > 255:
+                    ns = str(value)
+                    if n is not None:
+                        ns = n.name() + " > " + ns
+                    pm(ERR1 + ": " + ns, check, wRef.scope(), wRef.file(), wRef.line(), wRef.column())
+
+def get_value(ref, pot, check = None):
+    # get the value, if its a identifier or a literal, otherwise we cant check computed value
+    lexeme = get_lexeme_of_single_input(ref, check)
+
+    if lexeme is None:
+        return None, None
+
+    # if indentifier, it needs to be final / have a value
+    if lexeme.token() == "Identifier":
+        e = lexeme.ent()
+
+        v = None
+
+        if not e:
+            return None, None
+
+        if "Final" not in e.kindname() and not pot:
+            return None, None
+
+        if "Variable" in e.kindname():
+            v = e.value()
+
+            # if we dont have a value or we assign it to another variable
+            toV = False
+            if v:
+                toV = re.search(r'[a-zA-Z]', v)
+
+            if v is None or toV:
+
+                refs = e.refs("Setby")
+                if len(refs) < 1:
+                    return None, None
+
+                alexer = refs[0].file().lexer()
+                alex = alexer.lexeme(refs[0].line(),refs[0].column())
+
+                lexs = get_assignment_value(alex)
+
+                v = intupret_assignment_lexemes(lexs, pot, check)
+
+        #could be a final parameter   also pm here because there can be mulitple
+        if "Parameter" in e.kindname():
+            pValues = get_parameter_values(lexeme, check)
+            for p in pValues:
+
+                val, s = intTryParse(p[0])
+                if s:
+                    if val < 0 or val > 255:
+                        ns = lexeme.text() + " > " + str(val)
+                        pm(ERR1 + ": " + ns, check, e, p[1].file(), p[1].line(), p[1].column())
+
+
+        val, s = intTryParse(v)
+        if s:
+            return val, e
+
+
+    # if literal, its easy
+    if lexeme.token() == "Literal":
+        val, s = intTryParse(lexeme.text())
+        if s:
+            return val, None
+
+    return None, None
+
+def get_lexeme_of_single_input(ref, check = None):
+
+    lexer = ref.file().lexer()
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    lexeme = lexeme.next(True, True) # (
+    if not lexeme:
+        return None
+
+    #template, skip it
+    if lexeme.text() == "<":
+        pc = 1
+        while not (lexeme.text() == ">" and pc == 0):
+            lexeme = lexeme.next(True, True)
+            if not lexeme:
+                return None
+
+            if lexeme.text() == "<":
+                pc += 1
+            if lexeme.text() == ">":
+                pc -= 1
+
+        lexeme = lexeme.next(True, True) # (
+        if not lexeme:
+            return None
+
+    lexeme = lexeme.next(True, True) #value!
+
+    if lexeme is None:
+        return None
+
+    if lexeme.text() == ")":
+        return None
+
+    #dot refs can be identifier, if we have a next and its a .
+    while lexeme.next(True, True) and lexeme.next(True, True).text() == ".":
+        #skip the . and go to the next value
+        lexeme = lexeme.next(True, True).next(True, True)
+        if lexeme is None:
+            return None
+
+    #not simple value so we cant read it
+    if lexeme.next(True, True).text() != ")":
+        return None
+
+    return lexeme
+
+def intupret_assignment_lexemes(lexs, pot, check = None):
+    if len(lexs) < 1:
+        return None
+
+    if len(lexs) == 1:
+        #could be a literal
+        l = lexs[0]
+        if l.token == "Literal":
+            return l.text()
+
+        #could be a identifier, needs to be final
+        if l.ent() is None:
+            return None
+
+        if "Final" not in l.ent().kindname() and not pot:
+            return None
+
+        if "Variable" in l.ent().kindname():
+            return l.ent().value()
+
+        #could be a final parameter, since there can be multiple, we pm here
+        if "Parameter" in l.ent().kindname():
+
+            pValues = get_parameter_values(l, check)
+            for p in pValues:
+                val, s = intTryParse(p[0])
+                if s:
+                    if val < 0 or val > 255:
+                        ns = l.text() + " > " + str(val)
+                        pm(ERR1 + ": " + ns, check, l.ent(), p[1].file(), p[1].line(), p[1].column())
+
+
+    if len(lexs) > 1:
+        #check for negatives
+        if lexs[0].text() == "-":
+            v = ""
+            for i in lexs:
+                v += i.text()
+            val, s = intTryParse(v)
+            if s:
+                return val
+            else:
+                return None
+
+        #could be identifier, needs to be final
+        l = lexs[-1]
+
+        if l.ent() is None:
+            return None
+
+        if "Final" not in l.ent().kindname() and not pot:
+            return None
+
+        if "Variable" in l.ent().kindname():
+            return l.ent().value()
+
+    return None
+
+def get_parameter_values(lex, check = None):
+    pvlist = []
+
+    defby = lex.ent().refs("Definein")
+    params = get_params(defby[0].ent().ref("Definein"))
+    index = -1
+    for i in range(len(params)):
+        if params[i][1].ent().name() == lex.ent().name():
+            index = i
+
+    calls = defby[0].ent().refs("Callby")
+
+    for call in calls:
+        v = get_value_of_param_call(call, index)
+        if v != "":
+            pvlist.append((v,call))
+
+    return pvlist
+
+def get_value_of_param_call(ref, index):
+    value = ""
+    lexer = ref.file().lexer()
+
+    if lexer is None:
+        return value
+
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if lexeme is None:
+        return value
+
+    pCount = 0
+    lCount = 0
+    cIndex = 0
+    while True:
+        lexeme = lexeme.next(True, True)
+        if lexeme is None:
+            break
+
+        if lexeme.text() == "(":
+            pCount += 1
+            if pCount == 1:
+                continue
+
+        if lexeme.text() == ")":
+            pCount -= 1
+            if pCount == 0:
+                break
+
+        if lexeme.text() == "<":
+            lCount += 1
+
+        if lexeme.text() == ">":
+            lCount -= 1
+
+        if pCount == 0:
+            break
+
+        if lexeme.text() == "," and pCount == 1 and lCount == 0:
+            cIndex += 1
+            continue
+
+        if pCount == 1 and cIndex == index:
+            value += lexeme.text()
+
+    return value
+
+
+def get_assignment_value(lex):
+    lexeme = lex
+    if lexeme is None:
+        return None
+
+    lexeme = lexeme.next(True, True) # =
+    if lexeme is None:
+        return None
+
+    lexeme = lexeme.next(True, True) # first v
+
+    lexemes = []
+    while lexeme and lexeme.text() != ";":
+        lexemes.append(lexeme)
+        lexeme = lexeme.next(True, True)
+
+    return lexemes
+
+
+######### other ##########
+
+# get the types of a param since we cant get final via api
+def get_params(ref):
+
+    par = []
+    lexer = ref.file().lexer()
+
+    if lexer is None:
+        return par
+
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if lexeme is None:
+        return par
+
+    currentType = ""
+    pCount = 0
+    lCount = 0
+    previousLex = lexeme
+
+    while True:
+        previousLex = lexeme
+        lexeme = lexeme.next(True, True)
+        if lexeme is None:
+            break
+
+        if lexeme.text() == "(":
+            pCount += 1
+            if pCount == 1:
+                continue
+
+        if lexeme.text() == ")":
+            pCount -= 1
+            if pCount == 0:
+                break
+
+        if lexeme.text() == "<":
+            lCount += 1
+
+        if lexeme.text() == ">":
+            lCount -= 1
+
+        if pCount == 0:
+            break
+
+        if lexeme.text() == "," and pCount == 1 and lCount == 0:
+            par.append((currentType, previousLex))
+            currentType = ""
+            continue
+
+        if currentType == "":
+            currentType += lexeme.text()
+        else:
+            currentType += " " + lexeme.text()
+
+    if not currentType == "":
+        par.append((currentType, previousLex))
+    return par
+
+
+
+def intTryParse(value):
+    if value is None:
+        return value, False
+    try:
+        return int(value), True
+    except ValueError:
+        return value, False
+
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

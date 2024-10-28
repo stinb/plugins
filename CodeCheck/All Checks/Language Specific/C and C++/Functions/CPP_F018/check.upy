@@ -1,0 +1,193 @@
+import re
+
+
+ERR1 = 'Default arguments are different from base object.'
+
+
+# The ID for the check
+def ids():
+    return ('M8-3-1', 'MISRA08_8-3-1', 'CPP_F018', 'MISRA23_13.3.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M8-3-1': 'Published Standards/AUTOSAR/Parameters in an overriding virtual function shall either use the same default arguments as the function they override, or else shall not specify any default arguments.',
+        'MISRA08_8-3-1': 'Published Standards/MISRA-C++ 2008/8-3-1 Parameters in an overriding virtual function shall either use the same default arguments as the function they override, or else shall not specify any default arguments.',
+        'CPP_F018': 'All Checks/Language Specific/C and C++/Functions/Parameters in an overriding virtual function shall either use the same default arguments as the function they override, or else shall not specify any default arguments.',
+        'MISRA23_13.3.2': 'Published Standards/MISRA C++ 2023/13.3.2 Parameters in an overriding virtual function shall not specify different default arguments',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_8-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Functions',
+        ],
+        'M8-3-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions',
+        ],
+        'CPP_F018': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+        'MISRA23_13.3.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_13.3.2':
+        return '''
+<p><b>Amplification</b></p>
+<p>Each parameter in an overriding virtual function shall either:</p>
+<p>1. Not specify a default argument; or</p>
+<p>2. Use a constant expression as its default argument, with the corresponding parameter in the
+non-overriding function also specifying a default argument that is a constant expression with
+the same value.</p>
+
+<p><b>Rationale</b></p>
+<p>Default arguments are determined by the static type of the object. If a default argument is different
+for a parameter in an overriding function, the value used in the call will be different when calls are
+made via the base or derived object, which may be contrary to developer expectations.</p>
+<p>Requiring that multiple default arguments for the same parameter be constant expressions allows
+compliance checks for this rule to be decidable.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">int32_t x();
+class Base
+{
+public:
+ virtual void good1( int32_t a = 0 );
+ virtual void good2( int32_t a = x() );
+ virtual void bad1 ( int32_t a = 0 );
+ virtual void bad2 ( int32_t a );
+ virtual void bad3 ( int32_t a = x() );
+};
+class Derived : public Base
+{
+public:
+ void good1( int32_t a = 0 ) override; // Compliant - same default used
+ void good2( int32_t a ) override; // Compliant - no default specified
+ void bad1 ( int32_t a = 1 ) override; // Non-compliant - different value
+ void bad2 ( int32_t a = 2 ) override; // Non-compliant - no default in base
+ void bad3 ( int32_t a = x() ) override; // Non-compliant - not constant
+};
+void f( Derived & d )
+{
+ Base & b = d;
+ b.good1(); // Will use default of 0
+ d.good1(); // Will use default of 0
+ b.good2(); // Will use default of x( )
+ d.good2( 0 ); // No default value available to use
+ b.bad1(); // Will use default of 0
+ d.bad1(); // Will use default of 1
+ b.bad2( 0 ); // No default value available to use
+ d.bad2(); // Will use default of 2
+}
+</code></pre>
+
+        '''
+
+    return '''
+<p>
+In an overriding virtual function, do not change the default parameters.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Default arguments are determined by the static type of the object. If a default argument is different for a parameter in an overriding function, the value used in the call will be different when calls are made via the base or derived object, which may be contrary to developer expectations.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">class Base
+{
+public:
+    virtual void g1 ( int32_t a = 0 );
+    virtual void g2 ( int32_t a = 0 );
+    virtual void b1 ( int32_t a = 0 );
+};
+class Derived : public Base
+{
+public:
+    virtual void g1 ( int32_t a = 0 );  // Compliant - same default used
+    virtual void g2 ( int32_t a );      // Compliant -
+                                        // no default specified
+    virtual void b1 ( int32_t a = 10 ); // Non-compliant - different value
+};
+void f( Derived& d )
+{
+    Base& b = d;
+    b.g1 ( );   // Will use default of 0
+    d.g1 ( );   // Will use default of 0
+    b.g2 ( );   // Will use default of 0
+    d.g2 ( 0 ); // No default value available to use
+    b.b1 ( );   // Will use default of 0
+    d.b1 ( );   // Will use default of 10
+}
+</code></pre>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Declare", "Virtual Function"):
+        base_params = {}
+
+        for param_ref in func_ref.ent().refs("", "Parameter"):
+            init = param_ref.ent().freetext("InitText")
+            base_params[param_ref.ent().name()] = init
+
+        for override_ref in func_ref.ent().refs("Overriddenby", "Virtual Function"):
+            derived_params = {}
+
+            for param_ref in override_ref.ent().refs("", "Parameter"):
+                init = param_ref.ent().freetext("InitText")
+                derived_params[param_ref.ent().name()] = init
+
+            for param in derived_params:
+                if ((param not in base_params and derived_params[param])
+                    or (param in base_params and base_params[param] and derived_params[param] and base_params[param] != derived_params[param])
+                    or (param in base_params and not base_params[param] and derived_params[param])
+                    or (param in base_params and derived_params[param] and re.search(r"\(.*\)", derived_params[param]))
+                    ):
+                    check.violation(
+                        override_ref.ent(), file, override_ref.line(), override_ref.column(), ERR1)

@@ -1,0 +1,98 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Function like Macro arguments not enclosed in parentheses in file %1';
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA04_19.10";}
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA-C 2004\\19.10 In the definition of a function-like macro, each instance of a parameter shall be enclosed in parentheses, unless it is used as the operand of # or ##";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2004',
+    'Category: required',
+    'Preprocessor',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { return "19.10 (Required) In the definition of a function-like macro, each instance of a parameter shall be enclosed in parentheses, unless it is used as the operand of # or ##.";}
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Within a definition of a function-like macro, the arguments shall be enclosed in parentheses. For
+example define an abs function using:
+<pre><code language="C++">  #define abs(x) (((x) &gt;= 0) ? (x) : -(x)) // Compliant
+and not:
+  #define abs(x) ((x &gt;= 0) ? x : -x) // Non-compliant
+If this rule is not adhered to then when the preprocessor substitutes the macro into the code the
+operator precedence may not give the desired results.
+Consider what happens if the second, incorrect, definition is substituted into the expression:
+  z = abs( a - b );
+giving:
+  z = ((a - b &gt;= 0) ? a - b : -a – b);
+The sub-expression -a - b is equivalent to (-a)-b rather than -(a-b) as intended. Putting all the
+parameters in parentheses in the macro definition avoids this problem.
+  #define subs(x) a ## x // Compliant
+</code></pre>
+END_DESC
+}
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+# This determines if this script is per file
+sub test_entity { return 1;}
+
+# This determines if this script is per project or per file
+sub test_global { return 0;}
+
+# Any defined options go here
+sub define_options{}
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift; 
+  my $file = shift;
+  return unless $file->kind->check("c file");
+  
+  # Loop through all macros and check if they are functional
+  my @funcrefs = $file->filerefs("Define","macro functional"); 
+  foreach my $ref(@funcrefs) {
+
+    my $freeText = $ref->ent->freetext("Parameters");
+    next unless $freeText;
+
+    my $strings = join "|", split(",", $freeText);
+    my $re = qr/$strings/;
+
+    my $testString = $ref->ent->value;
+    $testString =~ s/\s+//g;
+
+    next unless $testString =~ /[^(\w]$re[^)\w]|$re[^)\w]|[^(\w]$re/;
+    next if $ref->ent->value =~ /#\s*$re|##\s*$re/;
+    $check->violation( $ref->ent, $file, $ref->line, $ref->column, ERR1, $file->name);
+
+  }
+}

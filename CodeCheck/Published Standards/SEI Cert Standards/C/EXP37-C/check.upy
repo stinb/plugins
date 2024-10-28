@@ -1,0 +1,216 @@
+ERR1 = 'Call functions with the correct number and type of arguments.'
+ERR2 = 'Function is redeclared without arguments.'
+NO_COMPLEX_FUNCS = {"atan2", "erf", "fdim", "fmin", "ilogb", "llround", "logb", "nextafter", "rint", "tgamma", "cbrt",	"erfc",	"floor", "fmod", "ldexp", "log10", "lrint", "nexttoward",
+                    "round", "trunc", "ceil", "exp2", "fma", "frexp", "lgamma",	"log1p", "lround", "remainder", "scalbn", "copysign", "expm1", "fmax", "hypot", "llrint", "log2", "nearbyint", "remquo", "scalbln"}
+
+
+# The ID for the check
+def id():
+    return ('EXP37-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP37-C': 'Published Standards/SEI Cert Standards/C/Call functions with the correct number and type of arguments',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP37-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+            'Functions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Call functions with the correct number and type of arguments'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Call functions with the correct number and type of arguments</p>
+<p><b>Risk Assessment</b></p>
+<p>Calling a function with incorrect arguments can result in unexpected or unintended program behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/EXP37-C.+Call+functions+with+the+correct+number+and+type+of+arguments</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;tgmath.h&gt;
+
+void func(void) {
+  double complex c = 2.0 + 4.0 * I;
+  double complex result = log2(c);
+}
+
+
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+char *(*fp)();
+
+int main(void) {
+  const char *c;
+  fp = strchr;
+  c = fp('e', "Hello");
+  printf("%s\n", c);
+  return 0;
+}
+
+
+/* In another source file */
+long f(long x) {
+  return x &lt; 0 ? -x : x;
+}
+
+/* In this source file, no f prototype in scope */
+long f();
+
+long g(int x) {
+  return f(x);
+}
+
+
+
+fd = open(ms, O_CREAT | O_EXCL | O_WRONLY | O_TRUNC);
+</code></pre>
+<p><i>Developer Notes: </i>This check does not cover function pointers.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref, ent, err):
+        check.violation(ent, ref.file(), ref.line(), ref.column(), err)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call", "Unresolved Function"):
+        if call_ref.ent().name() == "open":
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            param_ctr = 0
+            has_create = False
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        if ((has_create and (param_ctr < 2)) or (not has_create and (param_ctr > 1))):
+                            check_violation(call_ref, call_ref.ent(), ERR1)
+                        break
+                elif lex.text() == ",":
+                    param_ctr += 1
+
+                    if has_create and (param_ctr == 2):
+                        break
+                elif on_param and (param_ctr == 1) and (lex.text() == "O_CREAT"):
+                    has_create = True
+
+                lex = lex.next(ignore_whitespace=True)
+
+    for func_ref in file.filerefs("Define", "Function"):
+        complex_ents = []
+        use_refs = func_ref.ent().refs("Use", "Unresolved Macro")
+
+        for redef_ref in func_ref.ent().refs("Declarein ~Using"):
+            if func_ref.file().name() != redef_ref.file().name():
+                redef_lex = redef_ref.file().lexer().lexeme(
+                    redef_ref.line(), redef_ref.column())
+                func_params = func_ref.ent().refs("Define", "Parameter")
+                has_param = False
+                on_param = 0
+
+                if redef_lex.ent() and redef_lex.ent().kind().check("Macro"):
+                    continue
+
+                while redef_lex:
+                    if redef_lex.text() == "(":
+                        on_param += 1
+                    elif redef_lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and redef_lex.token() in {"Identifier", "Keyword"}:
+                        has_param = True
+
+                    redef_lex = redef_lex.next(ignore_whitespace=True)
+
+                if len(func_params) and not has_param:
+                    check_violation(redef_ref, redef_ref.scope(), ERR2)
+
+        for use_ref in use_refs:
+            if use_ref.ent().name() == "_Complex_I":
+                lex = lexer.lexeme(use_ref.line(), use_ref.column())
+                on_set = False
+
+                while lex and (lex.line_begin() == use_ref.line()):
+                    if lex.text() == "=" and lex.token() == "Operator":
+                        on_set = True
+                    elif on_set and lex.token() == "Identifier":
+                        complex_ents.append(lex.ent().id())
+                        break
+
+                    lex = lex.previous(ignore_whitespace=True)
+
+        for use_ref in use_refs:
+            if use_ref.ent().name() in NO_COMPLEX_FUNCS:
+                lex = lexer.lexeme(use_ref.line(), use_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and ((lex.ent().id() in complex_ents) or (lex.ent().name() == "_Complex_I")):
+                        check_violation(use_ref, use_ref.ent(), ERR1)
+                        break
+                    elif on_param and lex.token() == "Identifier" and lex.text() == "creal":
+                        on_creal = 0
+
+                        while lex:
+                            if lex.text() == "(":
+                                on_creal += 1
+                            elif lex.text() == ")":
+                                on_creal -= 1
+
+                                if not on_creal:
+                                    break
+
+                            lex = lex.next(ignore_whitespace=True)
+
+                    lex = lex.next(
+                        ignore_whitespace=True)

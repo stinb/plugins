@@ -1,0 +1,129 @@
+import re
+
+DEF_NAME = "Functions malloc, calloc, realloc and free shall not be used"
+
+# The ID for the check
+def ids():
+    return ('A18-5-1', 'CPP_M006')
+
+def name(id):
+    return {
+        'A18-5-1': """\
+Published Standards/AUTOSAR/Functions malloc, calloc, realloc and free shall not \
+be used""",
+        'CPP_M006': """\
+All Checks/Language Specific/C and C++/Memory Allocation/Functions malloc, \
+calloc, realloc and free shall not be used"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Memory Allocation',
+        ],
+        'CPP_M006': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>C-style allocation/deallocation using malloc/calloc/realloc/free functions is not type safe and does not invoke class’s constructors and destructors.</p>
+<p>Note that invoking free function on a pointer allocated with new, as well as invoking delete on a pointer allocated with malloc/realloc/calloc function, result in undefined behavior.</p>
+<p>Also, note that realloc function should only be used on memory allocated via malloc or calloc functions.</p>
+<p><b>Exception</b></p>
+<p>This rule does not apply to dynamic memory allocation/deallocation performed in userdefined overloads of new and delete operators or malloc and free functions custom implementations.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A18-5-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 #include &lt;cstdlib&gt;
+4 void F1() noexcept(false)
+5 {
+6 // Non-compliant
+7 std::int32_t* p1 = static_cast&lt;std::int32_t*&gt;(malloc(sizeof(std::int32_t)));
+8 *p1 = 0;
+9
+10 // Compliant
+11 std::int32_t* p2 = new std::int32_t(0);
+12
+13 // Compliant
+14 delete p2;
+15
+16 // Non-compliant
+17 free(p1);
+18
+19 // Non-compliant
+20 std::int32_t* array1 =
+21 static_cast&lt;std::int32_t*&gt;(calloc(10, sizeof(std::int32_t)));
+22
+23 // Non-compliant
+24 std::int32_t* array2 =
+25 static_cast&lt;std::int32_t*&gt;(realloc(array1, 10 * sizeof(std::int32_t)));
+26
+27 // Compliant
+28 std::int32_t* array3 = new std::int32_t[10];
+29
+30 // Compliant
+31 delete[] array3;
+32
+33 // Non-compliant
+34 free(array2);
+35
+36 // Non-compliant
+37 free(array1);
+38 }
+39 void F2() noexcept(false)
+40 {
+41 // Non-compliant
+42 std::int32_t* p1 = static_cast&lt;std::int32_t*&gt;(malloc(sizeof(std::int32_t)));
+43 // Non-compliant - undefined behavior
+44 delete p1;
+45
+46 std::int32_t* p2 = new std::int32_t(0); // Compliant
+47 free(p2); // Non-compliant - undefined behavior
+48 }
+49 void operator delete(void* ptr) noexcept
+50 {
+51 std::free(ptr); // Compliant by exception
+52 }
+</code></pre>
+<p><b>See also</b></p>
+<p>HIC++ v4.0 [9]: 5.3.2 Allocate memory using new and release it using delete.</p>
+<p>C++ Core Guidelines [11]: R.10: Avoid malloc() and free().</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# function to check if scope is an operator overload for new and delete
+def exception_scopes(scope):
+  if ( re.match(r"^operator delete$", str(scope))
+        or re.match(r"^operator new$", str(scope)) ):
+    return True
+  return False
+
+def check(check, file):
+  for ref in file.filerefs("Call","Function", False):
+    ent = ref.ent()
+    if str(ent) in ["malloc","calloc","realloc","free"] and not exception_scopes(ref.scope()):
+      check.violation(ent, file, ref.line(), ref.column(), DEF_NAME)

@@ -1,0 +1,204 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 10-14-14
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => "Bit-field %1 declared with an inappropriate type";
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_B001";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Bit-fields\\( Fuzzy parser ) Bit-fields shall only be declared with an appropriate type";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Bit-fields',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return "( Required ) Bit-fields shall only be declared with an appropriate type.";
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Amplification</b></p>
+The appropriate bit-field types are:
+</p>
+
+<p>
+• C90: either unsigned int or signed int;
+</p>
+
+<p>
+• C99: one of:
+</p>
+
+<p>
+- either unsigned int or signed int;
+</p>
+
+<p>
+- another explicitly signed or explicitly unsigned integer type that is permitted by the
+implementation;
+</p>
+
+<p>
+- _Bool.
+</p>
+
+<p>
+Note: It is permitted to use typedefs to designate an appropriate type.
+</p>
+
+<p><b>Rationale</b></p>
+Using int is implementation-defined because bit-fields of type int can be either signed or unsigned.
+</p>
+
+<p>
+The use of enum, short, char or any other type for bit-fields is not permitted in C90 because the
+behaviour is undefined.
+</p>
+
+<p>
+In C99, the implementation may define other integer types that are permitted in bit-field declarations.
+</p>
+
+<p><b>Example</b></p>
+The following example is applicable to C90 and to C99 implementations that do not provide any
+additional bit-field types. It assumes that the int type is 16-bit.
+</p>
+
+<pre><code language="C++">typedef unsigned int UINT_16;
+
+struct s {
+  unsigned int  b1:2;   /* Compliant */
+  int           b2:2;   /* Non-compliant - plain int not permitted */
+  UINT_16       b3:2;   /* Compliant - typedef designating unsigned int */
+  signed long   b4:2;   /* Non-compliant even if long and int are the
+                         * same size */
+};
+
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+This check is mostly functional when using the Strict parser. The only known issue when using Strict is 
+this check will throw a false positive for explicitly signed bit-fields. A common work around is to use
+a typedef for explicity signed values.
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'C99', 'Use C99 standard? ( C90 default )', 0 );
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check( 'file' );
+
+  # Pull all objectss, return if non exists
+  my @bitfieldsDefined = $file->filerefs( 'Define, Declare', 'Object');
+  return unless @bitfieldsDefined;
+
+  # Start my hash for tracking patterns and get options
+  my $c99 = $check->option->lookup( 'C99' );
+
+  # Loop through each Object
+  foreach my $bitfield ( @bitfieldsDefined ) {
+
+    # Move on if this is not a bitfield    
+    next unless $bitfield->ent->freetext("Bitfield");
+
+    # Set flag and get base type
+    my $ok = 0;
+    my $baseType = getBaseType( $bitfield->ent );
+
+    if ( $c99 ) {
+
+      $ok = 1 if $baseType =~ /\bsigned\b/ and $baseType =~ /\bint\b/;
+      $ok = 1 if $baseType =~ /\bunsigned\b/ and $baseType =~ /\bint\b/;
+      $ok = 1 if $baseType =~ /\bsigned\b/ and $baseType =~ /\benu\b/;
+      $ok = 1 if $baseType =~ /\bunsigned\b/ and $baseType =~ /\benum\b/;
+      $ok = 1 if $baseType =~ /\bsigned\b/ and $baseType =~ /\bshort\b/;
+      $ok = 1 if $baseType =~ /\bunsigned\b/ and $baseType =~ /\bshort\b/;
+      $ok = 1 if $baseType =~ /\bsigned\b/ and $baseType =~ /\bchar\b/;
+      $ok = 1 if $baseType =~ /\bunsigned\b/ and $baseType =~ /\bchar\b/;
+      $ok = 1 if $baseType =~ /\bsigned\b/ and $baseType =~ /\blong\b/;
+      $ok = 1 if $baseType =~ /\bunsigned\b/ and $baseType =~ /\blong\b/;
+      $ok = 1 if $baseType =~ /\bsigned\b/ and $baseType =~ /\b_Bool\b/;
+      $ok = 1 if $baseType =~ /\bunsigned\b/ and $baseType =~ /\b_Bool\b/;
+
+    } else {
+
+      $ok = 1 if $baseType =~ /\bsigned\b/ and  $baseType =~ /\bint\b/;
+      $ok = 1 if $baseType =~ /\bunsigned\b/ and  $baseType =~ /\bint\b/;
+
+    }
+
+    $check->violation( $bitfield->ent, $bitfield->file, $bitfield->line, $bitfield->column, ERR1, $bitfield->ent->name ) unless $ok;
+
+  }
+}
+
+
+# Takes and ent and returns it's base type
+sub getBaseType {
+
+  my $ent = shift;
+  my @type_ent = $ent->ents( 'typed' );
+  return 0 if scalar( @type_ent > 1 );
+  return getBaseType( @type_ent[0] ) if @type_ent;
+  return $ent->type;
+    
+}

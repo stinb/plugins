@@ -1,0 +1,137 @@
+import re
+
+
+ERR1 = 'Guarantee that storage for strings has sufficient space for character data and the null terminator.'
+
+
+# The ID for the check
+def id():
+    return ('STR50-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'STR50-CPP': 'Published Standards/SEI Cert Standards/C++/Guarantee that storage for strings has sufficient space for character data and the null terminator',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Guarantee that storage for strings has sufficient space for character data and the null terminator'
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Title</b></p>
+<p>Guarantee that storage for strings has sufficient space for character data and the null terminator</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Copying string data to a buffer that is too small to hold that data results in a buffer overflow. Attackers can exploit this condition to execute arbitrary code with the permissions of the vulnerable process.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/STR50-CPP.+Guarantee+that+storage+for+strings+has+sufficient+space+for+character+data+and+the+null+terminator'>https://wiki.sei.cmu.edu/confluence/display/cplusplus/STR50-CPP.+Guarantee+that+storage+for+strings+has+sufficient+space+for+character+data+and+the+null+terminator</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">
+#include &lt;iostream&gt;
+  
+void f() {
+  char buf[12];
+  std::cin &gt;&gt; buf;
+}
+
+
+
+#include &lt;iostream&gt;
+  
+void f() {
+  char bufOne[12];
+  char bufTwo[12];
+  std::cin.width(12);
+  std::cin &gt;&gt; bufOne;
+  std::cin &gt;&gt; bufTwo;
+}
+
+
+#include &lt;fstream&gt;
+#include &lt;string&gt;
+  
+void f(std::istream &in) {
+  char buffer[32];
+  try {
+    in.read(buffer, sizeof(buffer));
+  } catch (std::ios_base::failure &e) {
+    // Handle error
+  }
+  
+  std::string str(buffer);
+  // ...
+}
+</code></pre>
+'''
+
+
+def tags(id):
+    return {
+        'STR50-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1'
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for call_ref in file.filerefs("Call ~Implicit"):
+        if call_ref.ent().name() in ["operator>>", "basic_string"]:
+            lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+            lex = lex.next(ignore_whitespace=True)
+            lex_type = lex.ent().type() if lex.ent() else None
+
+            if lex.ent() and lex_type and re.search(r"char\[.*\]", lex.ent().type()):
+                check.violation(lex.ent(), file, call_ref.line(),
+                                call_ref.column(), ERR1)
+            elif lex.text() == "(":
+                on_param = 0
+                char_ent = None
+                compliant = False
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.ent() and lex.ent().type() and re.search(r"char\[.*\]", lex.ent().type()):
+                        char_ent = lex.ent()
+                    elif (on_param == 1) and lex.text() == ",":  # has other param
+                        compliant = True
+                        break
+
+                    lex = lex.next(ignore_whitespace=True)
+
+                if char_ent and not compliant:
+                    check.violation(char_ent, file,
+                                    call_ref.line(), call_ref.column(), ERR1)

@@ -1,0 +1,430 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-07-12
+
+
+import re
+
+from Modules import refBetweenNodes
+
+
+ERR1 = 'Parameter not checked'
+ERR2 = 'Parameter(s) not checked'
+ERR3 = 'Return value not checked'
+
+NULL_KEYWORD = ['nullptr']
+NULL_ZERO = ['0']
+NULL_ZERO_CAST = ['(', 'void', '*', ')', '0']
+NULL_ZERO_CAST_PAREN = ['(', '(', 'void', '*', ')', '0', ')']
+NULL_MACRO = ['NULL']
+
+NULL_COMPARE = {'>', '==', '!='}
+LEFT_OF_BOOL = {'(', '&&', '!'}
+RIGHT_OF_BOOL = {')', '&&'}
+LEFT_OF_TERNARY = {'=', '+=', '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '^=',
+'|=', ',', ';', '{', '}', 'return'}
+
+
+def ids():
+    return ('POWER_OF_TEN_07_B', 'CPP_F038_B')
+
+
+def name(id):
+    return {
+        'POWER_OF_TEN_07_B': '''Published Standards/The Power of 10/\
+7B Check Parameters and Return Values - Unchecked Parameters and Return Values''',
+        'CPP_F038_B': '''All Checks/Language Specific/C and C++/Functions/\
+Check Parameters and Return Values - Unchecked Parameters and Return Values''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POWER_OF_TEN_07_B': [
+            'Language: C',
+            'Language: C++',
+            'Standard: The Power of Ten',
+            'Functions'
+        ],
+        'CPP_F038_B': [
+            'Language: C',
+            'Language: C++',
+            'Functions'
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p>Each calling function must check the return value of non-void functions, and
+each called function must check the validity of all parameters provided by the
+caller.</p>
+
+<p><b>Rationale</b></p>
+
+<p>This is possibly the most frequently violated rule, and therefore it is
+somewhat more suspect for inclusion as a general rule. In its strictest form,
+this rule means that even the return value of <code>printf</code> statements and
+file <code>close</code> statements must be checked. Yet, if the response to an
+error would be no different than the response to success, there is little point
+in explicitly checking a return value. This is often the case with calls to
+<code>printf</code> and <code>close</code>. In cases like these, explicitly
+casting the function return value to <code>(void)</code> can be acceptable,
+thereby indicating that the programmer explicitly and not accidentally decided
+to ignore a return value.</p>
+
+<p>In more dubious cases, a comment should be offered to explain why a return
+value can be considered irrelevant. In most cases, though, a function's return
+value should not be ignored, especially if the function should propagate an
+error return value up the function call chain.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">static int error = 0;
+
+static int unchecked(int x, int y) // Violation
+{
+  return 5 * x + 2 * y;
+}
+
+static int partially_checked_by_if(int x, int y) // Violation
+{
+  if (!x) {
+    error = -1;
+    return -1;
+  }
+  return 5 * x + 2 * y;
+}
+
+static int checked_by_if(int x, int y)
+{
+  if (!x || y &lt;= 0) {
+    error = -1;
+    return -1;
+  }
+  return 5 * x + 2 * y;
+}
+
+static int helper_function_checked_by_conditional(int x)
+{
+  return (x &gt; 0) ? (x &lt;&lt; 1) : x;
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+
+<p>When a function checks its parameters, it is not possible to know if this
+check is effective. Therefore, the problem will be simplified: if the parameters
+are all checked before control flow, then a function will not have a violation.
+It may be checked in an <code>if</code> condition or a ternary operator
+<code>?</code> condition.</p>
+
+<p>A boolean parameter or return value is allowed to be unchecked.</p>
+
+<p>This check, Part B, looks at parameters and variables that are assigned as
+function results, then makes sure that they are checked. To see if function
+results are ignored entirely, use Part A.</p>
+
+<p>A pointer or array must be compared with the null pointer, which can be
+represented as <code>nullptr</code>, <code>0</code>, or <code>(void *) 0</code>.
+</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('eachParameter', 'Violation for each parameter', False)
+    check.options().checkbox('uncheckedParameters', 'Violation for unchecked parameters', True)
+    check.options().checkbox('uncheckedReturnValues', 'Violation for unchecked return values', True)
+
+
+def check(check, file):
+    uncheckedParameters   = check.options().lookup('uncheckedParameters')
+    uncheckedReturnValues = check.options().lookup('uncheckedReturnValues')
+
+    if uncheckedParameters:
+        checkParameters(check, file)
+    if uncheckedReturnValues:
+        checkReturnValues(check, file)
+
+
+def checkParameters(check, file):
+    eachParameter = check.options().lookup('eachParameter')
+
+    lexer = None
+
+    # Each function
+    for funRef in file.filerefs('Define', '~Unknown ~Unresolved Function', True):
+        funEnt = funRef.ent()
+
+        # Skip if no control flow graph
+        cfg = funEnt.control_flow_graph()
+        if not cfg:
+            return
+
+        # Each parameter
+        for paramRef in funEnt.refs('Define', '~Unknown ~Unresolved Parameter', True):
+            paramEnt = paramRef.ent()
+
+            # Skip if the parameter is checked first
+            if seeIfVarChecked(file, lexer, cfg, paramRef, paramEnt):
+                continue
+
+            # Violation for each parameter
+            if eachParameter:
+                checkViolation(check, paramRef, ERR1)
+            # One violation for the function
+            else:
+                checkViolation(check, funRef, ERR2)
+                break
+
+
+def checkReturnValues(check, file):
+    lexer = file.lexer(lookup_ents=True, expand_macros=True)
+
+    # Each definition
+    for defineRef in file.filerefs('Define', '~Unknown ~Unresolved Function', True):
+        defineEnt = defineRef.ent()
+
+        # Skip if no control flow graph
+        cfg = defineEnt.control_flow_graph()
+        if not cfg:
+            return
+
+        # Each function call
+        for callRef in defineEnt.refs('Call', 'Function'):
+            callEnt = callRef.ent()
+
+            # Match the function call
+            lex = lexer.lexeme(callRef.line(), callRef.column())
+            if not lex or lex.text() != callEnt.name():
+                continue
+
+            # Match =
+            lex = lex.previous(True, True)
+            if not lex or lex.text() != '=':
+                continue
+
+            # Match an object
+            lex = lex.previous(True, True)
+            if not lex:
+                continue
+            objEnt = lex.ent()
+            if not objEnt or not objEnt.kind().check('Object'):
+                continue
+
+            # Skip if variable is checked first
+            if seeIfVarChecked(file, lexer, cfg, lex.ref(), objEnt):
+                continue
+
+            checkViolation(check, callRef, ERR3)
+
+
+def seeIfVarChecked(file, lexer, cfg, defineOrAssign, ent):
+    # Skip if variable is an allowed type
+    entType = ent.type()
+    if entType and entType in {'bool', '_Bool'}:
+        return True
+
+    # Get first use after defineOrAssign
+    firstUse = None
+    uses = ent.refs('~Definein ~Declarein')
+    if ent.kind().check('Parameter'):
+        firstUse = uses[0] if uses else None
+    else:
+        for use in uses:
+            if use.file() == defineOrAssign.file():
+                if use.line() > defineOrAssign.line():
+                    firstUse = use
+                    break
+
+    # Skip if variable is unused
+    if not firstUse:
+        return True
+
+    isPointer = seeIfIsPointer(ent)
+
+    # Visit nodes until the node contains the first use
+    for node in cfg.nodes():
+        # Skip if the node is before or at the same statement as the reference
+        if seeIfNodeBeforeOrAtRef(node, defineOrAssign):
+            continue
+        # Skip start
+        if node.kind() == 'start':
+            continue
+        # The first 'if' node should test the parameter
+        elif node.kind() == 'if':
+            refIsInNode = seeIfRefIsInNode(firstUse, node)
+            if isPointer:
+                return refIsInNode and seeIfPointerChecked(file, lexer, firstUse, False)
+            else:
+                return refIsInNode
+        # If it's in a non-control-flow node, it should be in a ternary condition
+        elif node.kind() in {'return', 'passive'}:
+            if seeIfRefIsInNode(firstUse, node):
+                inTernary = seeIfVarInTernaryCondition(file, lexer, firstUse)
+                if isPointer:
+                    return inTernary and seeIfPointerChecked(file, lexer, firstUse, True)
+                else:
+                    return inTernary
+        # If it's in another node, then it's unchecked
+        else:
+            return False
+
+
+def seeIfNodeBeforeOrAtRef(node, ref):
+    if not node.line_end():
+        return False
+    if node.line_begin() < ref.line():
+        return True
+    if node.line_end() == ref.line() and ref.column() <= node.column_end():
+        return True
+    return False
+
+
+def seeIfIsPointer(ent):
+    # False if a function with a pointer in the parameter/return value
+    if not ent.kind().check('Object, Parameter'):
+        return False
+
+    # Remove <> from type
+    entType = []
+    angleBrackets = 0
+    for char in str(ent.type()):
+        if angleBrackets == '<':
+            angleBrackets += 1
+        elif angleBrackets == '>':
+            angleBrackets -= 1
+        elif angleBrackets == 0:
+            entType.append(char)
+    entType = ''.join(entType)
+
+    # False if no pointer symbol in type
+    if not re.search(r'[*[]', entType):
+        return False
+
+    return True
+
+
+def seeIfPointerChecked(file, lexer, ref, inTernary):
+    if not lexer:
+        lexer = file.lexer(lookup_ents=False, expand_macros=True)
+
+    # False if lexeme not found
+    lex = lexer.lexeme(ref.line(), ref.column())
+    if not lex or lex.text() != ref.scope().name():
+        return False
+
+    # False if surrounding lexemes not found
+    l = lex.previous(True, True)
+    r = lex.next(True, True)
+    if not l or not r:
+        return False
+
+    # True if something like this: = var_ptr ?
+    if inTernary and l.text() in LEFT_OF_TERNARY and r.text() == '?':
+        return True
+
+    # True if something like this: (var_ptr)
+    if l.text() in LEFT_OF_BOOL and r.text() in RIGHT_OF_BOOL:
+        return True
+
+    # True if something like this: var_ptr != nullptr
+    if l.text() in LEFT_OF_BOOL and r.text() in NULL_COMPARE:
+        rr = r.next(True, True)
+        if matchText(rr, NULL_KEYWORD + [RIGHT_OF_BOOL], True):
+            return True
+        if matchText(rr, NULL_ZERO + [RIGHT_OF_BOOL], True):
+            return True
+        if matchText(rr, NULL_ZERO_CAST + [RIGHT_OF_BOOL], True):
+            return True
+        if matchText(rr, NULL_ZERO_CAST_PAREN + [RIGHT_OF_BOOL], True):
+            return True
+        if matchText(rr, NULL_MACRO + [RIGHT_OF_BOOL], True):
+            return True
+
+    # True if something like this: nullptr != var_ptr
+    if r.text() in RIGHT_OF_BOOL and l.text() in NULL_COMPARE:
+        ll = l.next(True, True)
+        if matchText(ll, NULL_KEYWORD + [LEFT_OF_BOOL], False):
+            return True
+        if matchText(ll, NULL_ZERO + [LEFT_OF_BOOL], False):
+            return True
+        if matchText(ll, NULL_ZERO_CAST + [LEFT_OF_BOOL], False):
+            return True
+        if matchText(ll, NULL_ZERO_CAST_PAREN + [LEFT_OF_BOOL], False):
+            return True
+        if matchText(ll, NULL_MACRO + [RIGHT_OF_BOOL], True):
+            return True
+
+    return False
+
+
+def matchText(lex, strOrStrSetArray, moveRight):
+    if not moveRight:
+        strOrStrSetArray = reversed(strOrStrSetArray)
+
+    for strOrStrSet in strOrStrSetArray:
+        if not lex:
+            return False
+        if isinstance(strOrStrSet, str):
+            if lex.text() != strOrStrSet:
+                return False
+        else:
+            if lex.text() not in strOrStrSet:
+                return False
+        if moveRight:
+            lex = lex.next(True, True)
+        else:
+            lex = lex.previous(True, True)
+    return True
+
+
+def seeIfVarInTernaryCondition(file, lexer, ref):
+    if not lexer:
+        lexer = file.lexer(lookup_ents=False, expand_macros=True)
+
+    # False if lexeme not found
+    lex = lexer.lexeme(ref.line(), ref.column())
+    if not lex or lex.text() != ref.scope().name():
+        return False
+
+    # Go through the lexemes and find ? before the end of the statement
+    while lex:
+        if lex.text() in {';', '{', '}', ':', ','}:
+            return False
+        elif lex.text() == '?':
+            return True
+
+        lex = lex.next(True, True)
+
+    return False
+
+
+
+def seeIfRefIsInNode(ref, node):
+    if not node.line_begin():
+        return False
+    afterNode = node.children()[0]
+    afterNodeLine = afterNode.line_begin()
+    afterNodeColumn = afterNode.line_begin()
+    if ref.line() < node.line_begin() or afterNodeLine and ref.line() >= afterNodeLine:
+        return False
+    if ref.column() < node.column_begin() or afterNodeLine and ref.column() >= afterNodeColumn:
+        return False
+    return True
+
+
+def checkViolation(check, ref, err):
+    check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), err)

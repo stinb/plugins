@@ -1,0 +1,331 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 3/1/2022
+
+import re
+
+ERR1 = 'Do not attempt comparisons with NaN.'
+
+ERR2 = 'Do not attempt comparisons with NaN. This variable is set to a NaN value and then compared.'
+
+ERR3 = 'Do not attempt comparisons with NaN. - A NaN value is passed as an argument and then compared.'
+
+ERR4 = 'Do not attempt comparisons with NaN. - This variable has a potential value of NaN and is then compared.'
+
+ERR5 = 'Do not attempt comparisons with NaN. - This argument has a potential value of NaN and is then compared.'
+
+DEF_NAME = "Do not attempt comparisons with NaN"
+
+BAD_OPERATORS = ["!=", "==", "<", "<=", ">", ">="]
+
+NAN_NAMES = ["java.lang.Double.NaN", "java.lang.Float.NaN"]
+
+NAN_VALUES = ["Float.NaN", "Double.NaN"]
+
+
+# The ID for the check
+def ids():
+    return ('NUM07-J', 'JAVA_NUM07')
+
+
+
+# The short name of the check
+def name(id):
+    return {
+        'NUM07-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_NUM07': "All Checks/Language Specific/Java/Numeric Types and Operations/" + DEF_NAME,
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'NUM07-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_NUM07': [
+            'Language: Java',
+            'Numeric Types and Operations',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p>Do not attempt comparisons with NaN.</p>
+<p><b>Risk Assessment</b></p>
+<p>Comparisons with NaN values can lead to unexpected results.</p>
+<p>For the full standard:<i>https://wiki.sei.cmu.edu/confluence/display/java/NUM07-J.+Do+not+attempt+comparisons+with+NaN</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class NaNComparison {
+  public static void main(String[] args) {
+    double x = 0.0;
+    double result = Math.cos(1/x); // Returns NaN if input is infinity
+    if (result == Double.NaN) { // Comparison is always false!
+      System.out.println("result is NaN");
+    }
+  }
+}</code></pre>
+<p><i>Developer Notes:</i> Since it is impossible to track the value of non-final paramaters and variables, these will not be checked. An option is avaible to check if they are ever set to a NaN value and which may lead to false positives.</p>
+'''
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox("potentialNaN", "Check potential variables", False)
+
+def check(check, file):
+
+    pot = check.option().lookup('potentialNaN')
+
+    #if the file contains .NaN
+    if re.search(r'\.NaN', file.contents()):
+        #search for the places they are used - base case
+        for nanref in file.filerefs("Use", "Public Static Final Variable"):
+            if nanref.ent() and nanref.ent().longname() in NAN_NAMES:
+                #if they are compared to return a violation
+                if check_is_compared(nanref, check, False):
+                    pm(ERR1, check, nanref.ent(), file, nanref.line(), nanref.column())
+
+        #final variables
+        for nanref in file.filerefs("Use", "final variable"):
+            if nanref.ent() and nanref.ent().value() in NAN_VALUES:
+                if check_is_compared(nanref, check, True):
+                    pm(ERR2, check, nanref.ent(), nanref.file(), nanref.line(), nanref.column())
+
+    #params
+    for funref in file.filerefs("Define", "Method"):
+        #get all functions that have final par and see if they compare them
+        par = get_params(funref)
+        for p in par:
+            if "final" in p[0]:
+                    if p[1].ent():
+                        # this is a final var, now see if it is compared
+                        compare = False
+                        for useof in p[1].ent().refs("Useby ~Use"):
+                            if check_is_compared(useof, check, True):
+                                compare = True
+                                break
+                        if compare:
+                            #it does get compared, so now see if it is ever called with NaN as value
+                            for callof in funref.ent().refs("Callby ~Call"):
+                                if passed_in_value_as_par(callof, par.index(p), check):
+                                    pm(ERR3, check, funref.ent(), callof.file(), callof.line(), callof.column())
+
+            #if we are checking potential values we check all
+            elif pot:
+                if p[1].ent():
+                    compare = False
+                    comref = None
+                    for useof in p[1].ent().refs("Useby ~Use"):
+                        if check_is_compared(useof, check, True):
+                            comref = useof
+                            compare = True
+                            break
+                    if compare:
+                        #it does get compared, so now see if it is ever called with NaN as value
+                        for callof in funref.ent().refs("Callby ~Call"):
+                            if passed_in_value_as_par(callof, par.index(p), check):
+                                pm(ERR5, check, funref.ent(), callof.file(), callof.line(), callof.column())
+
+
+                        #we also need to see if it gets set to nan in the fun
+                        if is_set_to_value(p[1], NAN_VALUES, check):
+                        #now check every place it is used to see if it is compared
+                            pm(ERR5, check, p[1].ent(), comref.file(), comref.line(), comref.column())
+            else:
+                pass
+
+
+    if not pot:
+        return
+
+    #check for potential values
+    for varref in file.filerefs("Define", "Variable"):
+        if is_set_to_value(varref, NAN_VALUES, check):
+            #now check every place it is used to see if it is compared
+            for uref in varref.ent().refs("Useby"):
+                if check_is_compared(uref, check, True):
+                    pm(ERR4, check, uref.ent(), uref.file(), uref.line(), uref.column())
+
+
+def is_set_to_value(ref, values, check):
+
+    if ref.ent() is None:
+        return False
+
+    #check initial value
+    if ref.ent().value() in values:
+        return True
+
+    #check all places it gets set
+    for sref in ref.ent().refs("Setby"):
+        lexer = sref.file().lexer()
+        lexeme = lexer.lexeme(sref.line(), sref.column())
+
+        #value text
+        strv = ""
+        if lexeme is not None:
+            lexeme = lexeme.next(True, True) # =
+            lexeme = lexeme.next(True, True) # value
+            while lexeme is not None and lexeme.text() != ";":
+                strv += lexeme.text()
+                lexeme = lexeme.next(True, True)
+
+            lexeme = lexeme.previous(True, True)
+
+            #pm(strv, check, sref.ent(), sref.file(), sref.line(), sref.column())
+
+            #check if the last value, so defualt variable, is has value
+            if lexeme.ent() and lexeme.ent().value() in values:
+                return True
+            #check if whole string is equal to value
+            if strv in values:
+                return True
+
+    #return false if neither are the value
+    return False
+
+
+
+#checks if values of params are in bad values
+def check_param_bad(lexeme, badValues, check):
+    if lexeme is None:
+        return False
+
+    if lexeme.ent() and lexeme.ent().value() in badValues:
+        return True
+
+    combine = ""
+    for i in range(3):
+        if lexeme is None:
+            break
+        combine = lexeme.text() + combine
+        lexeme = lexeme.previous(True, True)
+
+    if combine in badValues:
+        return True
+
+    return False
+
+
+def passed_in_value_as_par(ref, i, check):
+    if ref is None:
+        return False
+
+    par = get_params(ref)
+    return check_param_bad( par[i][1], NAN_VALUES, check )
+
+#checks to the left and right for operations
+def check_is_compared(ref, check, isVar, givenLex = False):
+
+    lexeme = ref
+
+    if not givenLex:
+        lexer = ref.file().lexer()
+        if lexer is None:
+            return False
+
+        #get the lexemes to the left and right
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+    lexemeLeft = lexeme.previous(True, True)
+    if not isVar:
+        lexemeLeft = lexeme.previous(True, True).previous(True,True).previous(True,True)
+    lexemeRight = lexeme.next(True, True)
+
+    if lexemeLeft is None or lexemeRight is None:
+        return False
+
+    #special case
+    while lexemeLeft.text() == "(" and lexemeRight.text() == ")":
+        lexemeLeft = lexemeLeft.previous(True, True)
+        lexemeRight = lexemeRight.next(True, True)
+
+        if lexemeLeft is None or lexemeRight is None:
+            return False
+
+    #pm(lexemeLeft.text() +" "+ lexeme.text() +" "+ lexemeRight.text(), check, ref.ent(), ref.file(), ref.line(), ref.column())
+    if lexemeLeft is None or lexemeRight is None:
+        return False
+
+    if lexemeLeft.text() not in BAD_OPERATORS and lexemeRight.text() not in BAD_OPERATORS:
+        return False
+
+    return True
+
+# get the types of a param since we cant get final via api
+def get_params(ref):
+
+    par = []
+    lexer = ref.file().lexer()
+
+    if lexer is None:
+        return par
+
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if lexeme is None:
+        return par
+
+    currentType = ""
+    pCount = 0
+    lCount = 0
+    previousLex = lexeme
+
+    while True:
+        previousLex = lexeme
+        lexeme = lexeme.next(True, True)
+        if lexeme is None:
+            break
+
+        if lexeme.text() == "(":
+            pCount += 1
+            if pCount == 1:
+                continue
+
+        if lexeme.text() == ")":
+            pCount -= 1
+            if pCount == 0:
+                break
+
+        if lexeme.text() == "<":
+            lCount += 1
+
+        if lexeme.text() == ">":
+            lCount -= 1
+
+        if pCount == 0:
+            break
+
+        if lexeme.text() == "," and pCount == 1 and lCount == 0:
+            par.append((currentType, previousLex))
+            currentType = ""
+            continue
+
+        if currentType == "":
+            currentType += lexeme.text()
+        else:
+            currentType += " " + lexeme.text()
+
+    if not currentType == "":
+        par.append((currentType, previousLex))
+    return par
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

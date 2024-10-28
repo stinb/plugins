@@ -1,0 +1,70 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 06-25-2021
+
+import re
+
+ERR1 = """\
+Variable %1 used a const_cast that altered more than just the constness of the
+variable"""
+
+def id():
+    return 'CPP_V029'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Variables/The const_cast operator should \
+be used exclusively for altering the constness attribute of a variable."""
+
+
+def tags(id):
+    return {
+        'CPP_V029': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>The const_cast operator should be used exclusively for altering the constness
+attribute of a variable.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    # Skip if const_cast is found in the file
+    if not re.search(r'const_cast', file.contents()):
+        return
+
+    refs = file.filerefs('Define', 'Object')
+
+    # Look for const_cast in variables
+    for ref in refs:
+        value = ref.ent().value()
+        if not value:
+            continue
+        if not re.search(r'const_cast', value):
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        # Check if const_cast changed more than just 
+        while lexeme and not lexeme.text() == 'const_cast':
+            lexeme = lexeme.next(True, True)
+        while lexeme and not lexeme.ent() and not re.match(r';|}', lexeme.text()):
+            lexeme = lexeme.next(True, True)
+
+        if lexeme and lexeme.ent():
+            if lexeme.ent().type() != 'const ' + ref.ent().type():
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())

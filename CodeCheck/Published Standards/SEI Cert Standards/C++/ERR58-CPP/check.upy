@@ -1,0 +1,134 @@
+import re
+
+
+ERR1 = 'Handle all exceptions thrown before main() begins executing.'
+
+
+# The ID for the check
+def id():
+    return ('ERR58-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ERR58-CPP': 'Published Standards/SEI Cert Standards/C++/Handle all exceptions thrown before main() begins executing',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Handle all exceptions thrown before main() begins executing'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Handle all exceptions thrown before main() begins executing</p>
+<p><b>Risk Assessment</b></p>
+<p>Throwing an exception that cannot be caught results in abnormal program termination and can lead to denial-of-service attacks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/ERR58-CPP.+Handle+all+exceptions+thrown+before+main%28%29+begins+executing</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+struct S {
+  S() noexcept(false);
+};
+  
+static S globalS;
+
+
+#include &lt;string&gt;
+  
+static const std::string global("...");
+ 
+int main()
+try {
+  // ...
+} catch(...) {
+  // IMPORTANT: Will not catch exceptions thrown
+  // from the constructor of global
+}
+
+
+extern int f() noexcept(false);
+int i = f();
+  
+int main() {
+  // ...
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'ERR58-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P9',
+            'Level: L2',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for call_ref in file.filerefs("Callby ~Inactive", "File"):
+        if re.search(r"std.*string", call_ref.scope().longname()):
+            check.violation(call_ref.scope(), file,
+                            call_ref.line(), call_ref.column(), ERR1)
+        else:
+            lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+
+            if lex.ent() and lex.ent().kind().check("Macro"):
+                continue
+
+            def_ref = call_ref.scope().ref("Declarein") if not call_ref.scope().ref(
+                "Definein") else call_ref.scope().ref("Definein")
+
+            if not def_ref:
+                continue
+
+            lex = def_ref.file().lexer().lexeme(def_ref.line(), def_ref.column())
+            noexcept = False
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        lex = lex.next(ignore_whitespace=True)
+
+                        if lex.text() == "noexcept":
+                            noexcept = True
+
+                            if lex.next().text() == "(" and lex.next().next().text() == "false":
+                                noexcept = False
+
+                        break
+
+                lex = lex.next(ignore_whitespace=True)
+
+            if not noexcept:
+                check.violation(call_ref.scope(), file,
+                                call_ref.line(), call_ref.column(), ERR1)

@@ -1,0 +1,158 @@
+ERR1 = 'Do not use background threads during class initialization.'
+
+
+# The ID for the check
+def ids():
+    return ('TSM02-J', 'JAVA_TSM02')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'TSM02-J': 'Published Standards/SEI Cert Standards/Java/Do not use background threads during class initialization',
+        'JAVA_TSM02': 'All Checks/Language Specific/Java/Thread-Safety Miscellaneous/Do not use background threads during class initialization',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'TSM02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_TSM02': [
+            'Language: Java',
+            'Thread-Safety Miscellaneous',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not use background threads during class initialization'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use background threads during class initialization</p>
+<p><b>Risk Assessment</b></p>
+<p>Starting and using background threads during class initialization can result in deadlock.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TSM02-J.+Do+not+use+background+threads+during+class+initialization</i></p>
+<p><b>Exceptions</b></p>
+<p><i>TSM02-J-EX0: Programs are permitted to start a background thread (or threads) during class initialization, provided the thread cannot access any fields. For example, the following ObjectPreserver class (based on [Grand 2002]) provides a mechanism for storing object references, which prevents an object from being garbage-collected even when the object is never again dereferenced.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class ConnectionFactory {
+  private static Connection dbConnection;
+  // Other fields ...
+
+  static {
+    Thread dbInitializerThread = new Thread(new Runnable() {
+        @Override public void run() {
+          // Initialize the database connection
+          try {
+            dbConnection = DriverManager.getConnection("connection string");
+          } catch (SQLException e) {
+            dbConnection = null;
+          }
+        }
+    });
+
+    // Other initialization, for example, start other threads
+
+    dbInitializerThread.start();
+    try {
+      dbInitializerThread.join();
+    } catch (InterruptedException ie) {
+      throw new AssertionError(ie);
+    }
+  }
+
+  public static Connection getConnection() {
+    if (dbConnection == null) {
+      throw new IllegalStateException("Error initializing connection");
+    }
+    return dbConnection;
+  }
+
+  public static void main(String[] args) {
+    // ...
+    Connection connection = getConnection();
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        lex = lexer.lexeme(class_ref.line(), class_ref.column())
+        on_body = 0
+        on_static_block_init = 0
+        bg_thread_init = False
+
+        while lex:
+            if lex.text() == "{" and lex.token() == "Punctuation":
+                on_body += 1
+
+                if on_static_block_init:
+                    on_static_block_init += 1
+            elif lex.text() == "}" and lex.token() == "Punctuation":
+                on_body -= 1
+
+                if not on_body:
+                    break
+                elif on_static_block_init:
+                    on_static_block_init -= 1
+            elif on_body == 1 and lex.text() == "static" and lex.token() == "Keyword" and lex.next(ignore_whitespace=True).text() == "{":
+                on_static_block_init += 1
+            elif on_static_block_init and lex.text() == "Thread" and lex.token() == "Identifier" and lex.ref().kind().check("Createby"):
+                bg_thread_init = True
+                check.violation(None, file, lex.line_begin(),
+                                lex.column_begin(), ERR1)
+                break
+
+            lex = lex.next(ignore_whitespace=True,
+                           ignore_comments=True)
+
+        if not bg_thread_init:
+            for method_ref in class_ref.ent().refs("Define", "Member Method"):
+                if method_ref.ent().name() == class_ref.ent().name():
+                    has_thread = False
+                    has_member_access = False
+
+                    for ref in method_ref.ent().refs(""):
+                        if ref.kind().check("Create") and ref.ent().name() == "Thread":
+                            has_thread = True
+                        elif ref.ent().kind().check("Member Variable") and ref.ent().parent() and (ref.ent().parent().id() == class_ref.ent().id()):
+                            has_member_access = True
+
+                    if has_thread and has_member_access:
+                        check.violation(
+                            method_ref.ent(), file, method_ref.line(), method_ref.column(), ERR1)
+                        break

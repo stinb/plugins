@@ -1,0 +1,111 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant MULT => 'Multiple exit points from method';
+use constant NOEXIT => 'No exit point in method';
+use constant NOTEND => 'Exit point not at end of method';
+use constant MULTTRY => 'Multiple exit points from method try block';
+use constant MULTCATCH => 'Multiple exit points from catch handler';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(MULT);
+  $check->add_tr_text(NOEXIT);
+  $check->add_tr_text(NOTEND);
+}
+
+sub checkID { return "JAVA_03";}
+
+sub name { return "All Checks\\Language Specific\\Java\\Single exit point at end";}
+
+sub tags {
+  return (
+    'Language: Java',
+    'Control Flow',
+  );
+}
+
+sub description { return "A method shall have exactly one point of exit, and it will be at the end.";}
+
+sub detailed_description { return <<"END_DESC"
+All methods shall have exactly one point of exit, located at the end of the method.
+A method with a method-try-block can have one exit for the try block and one for each catch handler.
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /Java/; 
+}
+
+sub test_entity { return 1;}
+
+sub test_global { return 0;}
+
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox("ignore","Ignore Constructors",0);
+}
+
+
+sub check {
+  my $check = shift; 
+  my $file = shift; 
+  return unless $file->kind->check("file");
+  my $extraSting = " ~constructor" if $check->option->lookup("ignore");
+  my @funcEnds =$file->filerefs("end","method$extraSting ~abstract");
+  return unless @funcEnds;
+  
+  my $lexer = $file->lexer;
+  return unless $lexer;
+  
+  #Start at the end of the method and walk through it backwards;
+  FUNCTIONLOOP:foreach my $funcEnd (@funcEnds){
+    my $start = $funcEnd->ent->ref("definein");
+    my $atEnd = 0;
+    my $statementCount;
+    my $exitCount;
+    my $bracket=0;
+    my $tryFunc;
+    my $lexeme = $lexer->lexeme($funcEnd->line,$funcEnd->column);
+    while($lexeme && $lexeme->line_begin >= $start->line){
+      $exitCount++ if $lexeme->token eq "Keyword" && $lexeme->text =~ /Exit|return|goto/i  && ! $lexeme->inactive();
+      $statementCount++ if $lexeme->token eq "Punctuation" && $lexeme->text =~ /[;}]/ && ! $lexeme->inactive();
+      $bracket++ if $lexeme->token eq "Punctuation" && $lexeme->text eq "}"  && ! $lexeme->inactive();
+      $bracket-- if $lexeme->token eq "Punctuation" && $lexeme->text eq "{"  && ! $lexeme->inactive();
+      if ($statementCount == 2 && $exitCount){
+        $atEnd = 1;
+      }
+      #$check->violation($funcEnd->ent,$file,$lexeme->line_begin,$lexeme->column_begin,$lexeme->text.":".$bracket);  
+      if (!$bracket && $lexeme->token eq "Keyword" && $lexeme->text =~ /catch|try/i  && ! $lexeme->inactive()){ #Hopefully we are on a new set of method try block
+       if ($exitCount > 1){
+          my $err = $lexeme->text =~ /catch/i ?MULTCATCH:MULTTRY  && ! $lexeme->inactive();
+          $check->violation($funcEnd->ent,$file,$lexeme->line_begin,$lexeme->column_begin,$err);
+        }
+        $exitCount = 0;
+        $atEnd = 1;
+        $tryFunc=1;
+     }
+     
+    }continue{
+      $lexeme=$lexeme->previous;
+    }
+    next FUNCTIONLOOP if $tryFunc;
+    if ($exitCount && $exitCount > 1){
+      $check->violation($funcEnd->ent,$file,$start->line,$start->column,MULT);
+    }elsif(! $exitCount && $funcEnd->ent->type ne "void"){
+      $check->violation($funcEnd->ent,$file,$start->line,$start->column,NOEXIT);
+    }elsif($exitCount==1 && ! $atEnd){
+      $check->violation($funcEnd->ent,$file,$start->line,$start->column,NOTEND);
+    }
+  }
+  
+ 
+  
+  # $check->violation($entity,$file,$line,$column,ERR1,%1,%2);  # the %1 and %2 are optional parameters
+  # $check->violation(0,0,-1,-1,ERR1,%1,%2)  #if no entity or location
+  
+  #my $optionVal = $check->option->lookup($name);
+}

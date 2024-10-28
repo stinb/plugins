@@ -1,0 +1,152 @@
+ERR1 = 'A bit-field shall have an appropriate type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_12.2.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_12.2.2': "Published Standards/MISRA C++ 2023/12.2.2 A bit-field shall have an appropriate type"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_12.2.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Bit-fields',
+        ],
+    }.get(id)
+
+
+def description(id):
+    return {
+        'MISRA23_12.2.2': "A bit-field shall have an appropriate type"
+    }[id]
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_12.2.2': """
+<p><b>Amplification</b></p>
+<p>The following types are appropriate for a bit-field:</p>
+<p>● Signed and unsigned integer types;</p>
+<p>● An enum with a fixed underlying type of signed or unsigned integer type, provided that all of its
+enumeration values are representable within the width of the bit-field;</p>
+<p>● bool.</p>
+
+<p><b>Rationale</b></p>
+<p>The char and wchar_t types shall not be used for bit-fields as it is implementation-defined if they are
+signed or unsigned. The char16_t and char32_t types are not permitted as they are only intended
+to be used to store character code points.</p>
+<p>Similarly, when using an unscoped enum without specifying the underlying type, it is implementation-defined if the underlying representation is signed or unsigned. Therefore, the exact number of bits
+required to represent all values in the enumeration is also implementation-defined.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">struct S
+{
+ signed int a : 2; // Compliant
+ int : 2; // Compliant
+ int32_t b : 2; // Compliant
+ char c : 2; // Non-compliant
+ signed char d : 2; // Compliant - signed integer type
+ wchar_t e : 2; // Non-compliant - not a signed or unsigned integer type
+ char32_t f : 2; // Non-compliant - not a signed or unsigned integer type
+ bool g : 1; // Compliant
+};
+
+enum Direction { Top, Left, Bottom, Right };
+enum Colour : char { Red, Pink, Blue };
+enum Line : unsigned char { Plain, Dash, Dot};
+
+struct S
+{
+ Direction dir : 4; // Non-compliant - unscoped and no underlying type
+ Colour lineColour : 2; // Non-compliant - underlying type is plain char
+ Line lineStyle1 : 1; // Non-compliant - cannot represent Dot
+ Line lineStyle2 : 2; // Compliant
+};</code></pre>  
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object"):
+        bitfield = obj_ref.ent().freetext("Bitfield")
+
+        if bitfield:
+            utype = obj_ref.ent().freetext("UnderlyingType")
+
+            if utype and ((utype in ["int", "bool"]) or ("signed" in utype)):
+                continue
+
+            type_ent, _ = get_ent_type(obj_ref.ent())
+
+            if type_ent and type_ent.kind().check("Enum Type"):
+                def_ref = type_ent.ref("Definein")
+                on_type = False
+                enum_type = ""                
+                max_val = 0
+
+                if not def_ref:
+                    continue
+
+                lex = def_ref.file().lexer().lexeme(def_ref.line(), def_ref.column())
+
+                while lex and lex.text() != "{":
+                    if (lex.text() == ":") and (lex.token() == "Operator"):
+                        on_type = True
+                    elif on_type:
+                        enum_type += lex.text()
+
+                    lex = lex.next(True, True)
+
+                for enums_ref in def_ref.scope().refs("Define", "Enumerator"):                    
+                    val = enums_ref.ent().value()
+
+                    if val and int(val) > max_val:
+                        max_val = int(val)
+
+                if enum_type and (("signed" in enum_type) or ("int" in enum_type)) and (int(bitfield) == max_val):
+                    continue   
+                
+            check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+            
+
+
+            

@@ -1,0 +1,100 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-3-2020
+
+import re
+
+# The ID for the check
+def id():
+    return 'CPP_ST017'
+
+# The short name of the check
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/White space shall not be used in \
+the following places"""
+
+
+def tags(id):
+    return {
+        'CPP_ST017': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'White space shall not be used in the following places.'
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>White space shall not be used:</p>
+<ul><li>Between the name of an array and open bracket that introduces its index 
+(e.g. array[i])</li>
+<li>Between unary operators and the objects they operate on (e.g. -1)</li>
+<li>Surrounding the operators "-&gt;" and "." (e.g. rec_ptr-&gt;name or name_rec.name.
+first)</li></ul>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_global():
+    return False
+
+# Options for the check
+def define_options(check):
+   return
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file): 
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+    lexeme = lexer.first()
+
+    while lexeme:
+        nex = True
+        if not lexeme.next():
+            nex = False
+
+        # Check for array
+        if lexeme.ent():
+            typeStr = str(lexeme.ent().type())
+            if lexeme.ent().kindname() != 'Macro' and re.search(r"\[", typeStr):
+                lexeme = lexeme.next()
+                # if there is whitespace between the name of the array and the open bracket that introduces its index, flag
+                if lexeme.next(ignore_comments=True, ignore_whitespace=True).text() == "[" and lexeme.token() == 'Whitespace':
+                    violation = check.violation(lexeme.previous().ent(), file, lexeme.line_begin(), lexeme.column_begin(), 'Whitespace was placed between the name of an array and the open bracket that introduces its index')
+                    violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_begin(), lexeme.column_begin() + len(lexeme.text()), '')
+            
+        # Check for negative sign
+        elif lexeme.text() == '-':
+            prevLex = lexeme.previous(ignore_whitespace=True)
+            if prevLex.token() == 'Operator' and prevLex.text() != ']':
+                if not (prevLex.text() == '++' or prevLex.text() == '--') and lexeme.next().token() == 'Whitespace':
+                    violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Whitespace was placed between a unary operator and the object it operates on')
+                    violation.add_fixit_hint(lexeme.next().line_begin(), lexeme.next().column_begin(), lexeme.next().line_begin(), lexeme.next().column_begin() + len(lexeme.next().text()), '')
+
+
+        # Check for "->" operator
+        elif lexeme.text() == '->' and (lexeme.previous().token() == 'Whitespace' or lexeme.next().token() == 'Whitespace'):
+            violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Whitespace was placed around the operator "->"')
+            if lexeme.previous().token() == 'Whitespace':
+                violation.add_fixit_hint(lexeme.previous().line_begin(), lexeme.previous().column_begin(), lexeme.previous().line_begin(), lexeme.previous().column_begin() + len(lexeme.previous().text()), '')
+            if lexeme.next().token() == 'Whitespace':
+                violation.add_fixit_hint(lexeme.next().line_begin(), lexeme.next().column_begin(), lexeme.next().line_begin(), lexeme.next().column_begin() + len(lexeme.next().text()), '')
+
+
+        # Check for "." operator
+        elif lexeme.text() == '.' and (lexeme.previous().token() == 'Whitespace' or lexeme.next().token() == 'Whitespace'):
+            violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Whitespace was placed around the operator "."')
+            violation.add_fixit_hint(lexeme.next().line_begin(), lexeme.next().column_begin(), lexeme.next().line_begin(), lexeme.next().column_begin() + len(lexeme.next().text()), '')
+        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)

@@ -1,0 +1,292 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 10-6-14
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Non distinct identifier %1 conflicts with entity on line %2';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_I007";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Identifiers\\Identifiers declared in the same scope and name space shall be distinct";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Identifiers',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return '( Required ) Identifiers declared in the same scope and name space shall be distinct.';
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Amplification</b></p>
+This rule does not apply if both identifiers are external identifiers because this case is covered by
+Rule 5.1.
+</p>
+
+<p>
+This rule does not apply if either identifier is a macro identifier because this case is covered by Rule 5.4
+and Rule 5.5.
+</p>
+
+<p>
+The definition of distinct depends on the implementation and on the version of the C language that
+is being used:
+</p>
+
+<p>
+• In C90 the <strong>minimum</strong> requirement is that the first 31 characters are significant;
+</p>
+
+<p>
+• In C99 the <strong>minimum</strong> requirement is that the first 63 characters are significant, with each
+universal character or extended source character counting as a single character.
+</p>
+
+<p><b>Rationale</b></p>
+If two identifiers differ only in non-significant characters, the behaviour is undefined.
+</p>
+
+<p>
+If portability is a concern, it would be prudent to apply this rule using the minimum limits specified in
+The Standard.
+</p>
+
+<p>
+Long identifiers may impair the readability of code. While many automatic code generation systems
+produce long identifiers, there is a good argument for keeping identifier lengths well below this limit.
+</p>
+
+<p><b>Example</b></p>
+In the following example, the implementation in question supports 31 significant case-sensitive
+characters inidentifi ers that do not have external linkage.
+</p>
+
+<p>
+The identifier engine_exhaust_gas_temperature_local is compliant with this rule. Although
+it is not distinct from the identifier engine_exhaust_gas_temperature_raw, it is in a different
+scope. However, it is not compliant with Rule 5.3.
+</p>
+
+<pre><code language="C++">  /*             1234567890123456789012345678901*********    Characters */
+  extern int32_t engine_exhaust_gas_temperature_raw;
+  static int32_t engine_exhaust_gas_temperature_scaled; /*   Non-compliant */
+
+  void f ( void )
+  {
+    /*      1234567890123456789012345678901*********         Characters */
+    int32_t engine_exhaust_gas_temperature_local; /*         Compliant */
+  }
+
+  /*             1234567890123456789012345678901*********    Characters */
+  static int32_t engine_exhaust_gas_temp_raw;
+  static int32_t engine_exhaust_gas_temp_scaled;          /* Compliant */
+
+</code></pre>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'C99', 'Use C99 standard? ( C90 default )', 0 );
+}
+
+
+# Subroutine to get the length of significant characters
+sub getLength {
+
+  # Set the length of the string to be tested based off the user selected option
+  my $check = shift;
+  my $length;
+  if  ( $check->option->lookup( 'C99' ) ) {
+    $length = 63;
+  } else {
+    $length = 31
+  }
+  return $length
+
+}
+
+
+# Create a sub string of length of significant characters
+sub makeSubstring {
+
+  # Create the substring of the entity name to compare to other entities
+  my $check = shift;
+  my $name = shift;
+  my $subString = substr ( $name, 0, getLength( $check ) );
+  return $subString;
+
+}
+
+
+# Primary call, pretty much main
+sub check {
+
+  # Pull check and file from Understand. Test that we are looking at a file and return otherwise
+  my $check = shift; 
+  my $file = shift; 
+  return unless $file->kind->check("file ~unknown ~unresolved");
+  
+  # Start my hash for tracking patterns
+  my %patternsSeen = ();
+
+  # Start lexer, we have to walk through the whole file
+  my $lexer = $file->lexer(1,0,0);
+  return unless $lexer;
+  my $lexeme = $lexer->first();
+
+  # Start our descent into recursivsivsivsiv....
+  checkScope ( $check, $file, $lexeme, 0, \%patternsSeen );
+
+}
+
+
+# Subroutine for recursively checking scopes
+sub checkScope {
+
+  # Pull everything from the calling function
+  my $check = shift;
+  my $file = shift;
+  my $lexeme = shift;
+  my $level = shift;
+  my $paremeterReferences = shift;
+  my %patternsSeen = %$paremeterReferences;
+  my %parametersSeen = ();
+
+
+  # While we still have a valid lexeme
+  LEX : while ( $lexeme ) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+    
+    # Check if we need to go up a level
+    if ( $lexeme->token eq 'Punctuation' && $lexeme->text eq '}' ) {
+
+      return $lexeme;
+
+    # Check if we need to go down a level
+    } elsif ( $lexeme->token eq 'Punctuation' && $lexeme->text eq '{' ) {
+
+      $lexeme = $lexeme->nextUseful;
+      $lexeme = checkScope ( $check, $file, $lexeme, $level + 1, \%parametersSeen );
+      %parametersSeen = ();
+
+    # If we see an identifier, check it add it to our hash
+    } elsif ( $lexeme->token eq 'Identifier' and $lexeme->ref ) {
+
+      # Get our string and reference
+      my $subString = makeSubstring ( $check, $lexeme->text );
+      my $ref = $lexeme->ref;
+
+      # Set a flag and check if we should continue
+      my $continue = 0;
+      $continue = 1 if $ref->kindname eq 'Define' or $ref->kindname eq 'Declare' or $ref->kindname eq 'Init';
+      $continue = 0 if $ref->scope->kind->longname =~ /\Macro\b/;
+
+      # Unless we are looking at a define reference, we don't care
+      unless ( $continue ) {
+        
+        $lexeme = $lexeme->nextUseful;
+        next LEX;
+
+      }
+
+
+      if ( exists $patternsSeen{ $subString } and $ref->scope->kindname !~ /\bParameter\b/ ) {
+
+        # We've seen this entity before, check to see if we should throw error
+        my $seenRef = $patternsSeen{ $subString };
+
+        my $flag = 0;
+
+        if (  $seenRef->ent->kind->longname =~/\bType\b/ or $seenRef->scope->kind->longname =~/\bType\b/ ) {
+
+          # Special Case for constructors destructors
+          my $type = 0;
+          $type = $seenRef->ent if $seenRef->ent->kind->longname =~/\bType\b/;
+          $type = $seenRef->scope if $seenRef->scope->kind->longname =~/\bType\b/;
+          if (defined $ref->scope->parent) {
+            $flag = 1 if $type->longname eq $ref->scope->parent->longname;
+          } 
+        }
+
+        # Special case for overloaded functions
+        $flag = 1 if $seenRef->scope->name eq $ref->scope->name;
+
+        # Special case to ignore violations at the global scope, another check tests the global scope
+        if ( $level == 0 and $flag == 0 ) {
+
+          unless ( $ref->scope->kind->longname =~ /\bStatic\b/ or $seenRef->scope->kind->longname =~ /\bStatic\b/ ) {
+            $flag = 1;
+          }
+
+        }
+        
+        # We have a violation if flag is true
+        $check->violation( $ref->scope, $ref->file, $ref->line, $ref->column, ERR1, $ref->scope->name, $seenRef->line ) unless $flag;
+
+      } else {
+
+        # If this is a parameter, we need to put it into a different hash to pass into the next recursion, otherwise we store it in this iteration
+        if ( $ref->scope->kindname =~ /\bParameter\b/ ) {
+          $parametersSeen{ $subString } = $ref;  
+        } else {
+          $patternsSeen{ $subString } = $ref;  
+        }
+      }
+    }
+
+    return unless $lexeme;
+    $lexeme = $lexeme->nextUseful if $lexeme;
+
+  }
+}

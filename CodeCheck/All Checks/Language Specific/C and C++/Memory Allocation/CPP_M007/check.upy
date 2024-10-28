@@ -1,0 +1,98 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 4-6-2021
+
+import re
+
+ERR1 = 'Maximum field width not specified in the format string'
+
+def id():
+    return ('CPP_M007')
+
+def name(id):
+    return {
+		'CPP_M007': "All Checks/Language Specific/C and C++/Memory Allocation/" +  'When reading strings a maximum field width should be specified'
+	}[id]
+
+def tags(id):
+    return {
+        'CPP_M007': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+When reading strings using scanf, fscanf, sscanf, vscanf, and vfscanf, a 
+maximum field width should be specified when using %s, %[...], and 
+%[^...] in the format string."""
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>When reading strings using scanf, fscanf, sscanf, vscanf, and vfscanf, a 
+maximum field width should be specified when using %s, %[...], and 
+%[^...] in the format string. To specify the maximum field width of a string,
+the format specifier must be prefixed with an integer.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">    char str1[20], str2[20];
+
+    printf("Enter name: "); 
+    scanf("%5s", str1);          // valid, max field width specified
+
+    printf("Enter occupation: "); 
+    scanf("%s", str2);           // invalid, no max field width specified
+
+</code></pre>
+<p>The valid example above specifies a maximum field width of 5 when reading input
+into str1. If the provided input is greater than 5 characters, str1 will 
+contain only the first 5 characters.</p>
+<p><i>Developer's Note:</i>
+This codecheck can only parse strings that are direct arguments to any of the
+string reading functions listed above. Passing an identifier in place of a
+string may lead to a false negative result."""
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+	# define list of built-in functions for reading strings
+	str_funcs = ['scanf', 'fscanf', 'sscanf', 'vscanf', 'vfscanf']
+
+	# grab the lexer
+	if file and file.lexer():
+		lexer = file.lexer()
+	else:
+		return
+
+	# find all calls to potential string-reading functions
+	func_refs = file.filerefs("c call", "c unresolved function", False)
+
+	for ref in func_refs:
+		# continue if the unresolved function is a string reading built-in
+		if ref.ent().name() in str_funcs:
+
+			# scan the lexer for the format specifier indicated by a "%"
+			lexeme = lexer.lexeme(ref.line(), ref.column())
+
+			# continue until we find end of statement
+			while not (lexeme.token() == "Punctuation" and (lexeme.text() == ";" or lexeme.text() == "{")):
+
+				# make sure it has both percent symbol and string specifier, or [...]/[^...]
+				has_string_spec = re.search(r"[%]\S*[s]", lexeme.text())
+				has_undef_arg = re.search(r"[%]\S*\[\^?\.\.\.\]", lexeme.text())
+
+				if (has_string_spec or has_undef_arg):
+
+					# look for a width specifier in the format string, or report a violation
+					if lexeme.token() == "String" and not re.search(r"\%.*\d.*", lexeme.text()):
+
+							check.violation(file, file, ref.line(), ref.column(), ERR1)
+
+				lexeme = lexeme.next()

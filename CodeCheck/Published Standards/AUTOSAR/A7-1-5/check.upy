@@ -1,0 +1,196 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2021-11-12
+
+
+import re
+
+
+ERR1 = 'Using the auto specifier here may lead to unexpected type deduction'
+
+
+def ids():
+    return ('A7-1-5', 'CPP_D048')
+
+
+def name(id):
+    return {
+        'A7-1-5': 'Published Standards/AUTOSAR/The auto specifier shall not be used apart from following cases: (1) to declare that a variable has the same type as return type of a function call, (2) to declare that a variable has the same type as initializer of non-fundamental type, (3) to declare parameters of a generic lambda expression, (4) to declare a function template using trailing return type syntax',
+        'CPP_D048': 'All Checks/Language Specific/C and C++/Declarations and Definitions/The auto specifier shall not be used apart from following cases: (1) to declare that a variable has the same type as return type of a function call, (2) to declare that a variable has the same type as initializer of non-fundamental type, (3) to declare parameters of a generic lambda expression, (4) to declare a function template using trailing return type syntax',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A7-1-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D048': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rule</b></p>
+
+<p>
+The auto specifier shall not be used apart from following cases: (1) to declare that a variable has the same type as return type of a function call, (2) to declare that a variable has the same type as initializer of non-fundamental type, (3) to declare parameters of a generic lambda expression, (4) to declare a function template using trailing return type syntax.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Using the auto specifier may lead to unexpected type deduction results, and therefore to developers confusion. In most cases using the auto specifier makes the code less readable.
+</p>
+
+<p>
+Note that it is allowed to use the auto specifier in following cases:
+</p>
+
+<p>
+1. When declaring a variable that is initialized with a function call or initializer of non-fundamental type. Using the auto specifier for implicit type deduction in such cases will ensure that no unexpected implicit conversions will occur. In such case, explicit type declaration would not aid readability of the code.
+</p>
+
+<p>
+2. When declaring a generic lambda expression with auto parameters
+</p>
+
+<p>
+3. When declaring a function template using trailing return type syntax
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A7-1-5.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+#include &lt;vector&gt;
+
+class A
+{
+};
+void F1() noexcept
+{
+    auto x1 = 5;    // Non-compliant - initializer is of fundamental type
+    auto x2 = 0.3F; // Non-compliant - initializer is of fundamental type
+    auto x3 = {8};  // Non-compliant - initializer is of fundamental type
+
+    std::vector&lt;std::int32_t&gt; v;
+    auto x4 = v.size(); // Compliant with case (1) - x4 is of size_t type that
+                        // is returned from v.size() method
+
+    auto a = A{}; // Compliant with case (2)
+
+    auto lambda1 = []() -&gt; std::uint16_t {
+        return 5U;
+    }; // Compliant with case (2) - lambda1 is of non-fundamental lambda
+    // expression type
+    auto x5 = lambda1(); // Compliant with case (1) - x5 is of
+                         // std::uint16_t type
+}
+void F2() noexcept
+{
+    auto lambda1 = [](auto x, auto y) -&gt; decltype(x + y) {
+        return (x + y);
+    };                          // Compliant with cases (2) and (3)
+    auto y1 = lambda1(5.0, 10); // Compliant with case (1)
+}
+template &lt;typename T, typename U&gt;
+auto F3(T t, U u) noexcept -&gt; decltype(t + u) // Compliant with case (4)
+{
+    return (t + u);
+}
+template &lt;typename T&gt;
+class B
+{
+public:
+    T Fn(T t);
+};
+template &lt;typename T&gt;
+auto B&lt;T&gt;::Fn(T t) -&gt; T // Compliant with case (4)
+{
+    // ...
+    return t;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• HIC++ v4.0 [9]: 7.1.8 Use auto id = expr when declaring a variable to have the same type as its initializer function call.
+</p>
+
+<p>
+• C++ Core Guidelines [11]: Use auto.
+</p>
+
+<p>
+• Google C++ Style Guide [12]: Use auto to avoid type names that are noisy, obvious, or unimportant.
+</p>
+</p>
+
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+
+    lexer = None
+
+    for ref in file.filerefs('Define'):
+        ent = ref.ent()
+
+        # Get the previous lexeme
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False)
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        prev = lexeme.previous(ignore_comments=True, ignore_whitespace=True)
+
+        # Previous lexeme is not auto
+        if prev and prev.text() != 'auto' or not prev:
+            if not prev:
+                continue
+
+            # Not a template that returns auto
+            if not re.match(r'template\s*<.*>\s*auto', ent.contents()):
+                continue
+
+        # 1. Type is result of function call
+        if ent.value() and re.match(r'.*\)$', ent.value()):
+            continue
+
+        # 2. Type is non-fundamental
+        fundamentals = {'bool', 'char', 'signed char', 'unsigned char', 'short', 'short int', 'signed short', 'signed short int', 'unsigned short int', 'int', 'signed', 'signed int', 'unsigned', 'unsigned int', 'long', 'long int', 'signed long', 'signed long int', 'unsigned long', 'unsigned long int', 'long long', 'long long int', 'signed long long', 'signed long long int', 'unsigned long long', 'unsigned long long int', 'float', 'double', 'long double', 'void *', 'bool *', 'char *', 'signed char *', 'unsigned char *', 'short *', 'short int *', 'signed short *', 'signed short int *', 'unsigned short int *', 'int *', 'signed *', 'signed int *', 'unsigned *', 'unsigned int *', 'long *', 'long int *', 'signed long *', 'signed long int *', 'unsigned long *', 'unsigned long int *', 'long long *', 'long long int *', 'signed long long *', 'signed long long int *', 'unsigned long long *', 'unsigned long long int *', 'float *', 'double *', 'long double *'}
+        if not ent.type() or not (re.match(r'std::(__1::)?', ent.type()) or ent.type() in fundamentals):
+            continue
+
+        # 3. Type is a parameter in a lambda expression
+        if ent.parent() and ent.parent().kindname() == 'Lambda Function':
+            continue
+
+        # 4. Type is a function template using trailing return type syntax
+        if ent.contents() and re.match(r'template\s*<\s*typename.*\s*.*>.*\s*.*->', ent.contents()):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)

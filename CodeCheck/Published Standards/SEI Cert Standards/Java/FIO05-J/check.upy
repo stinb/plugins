@@ -1,0 +1,124 @@
+import re
+
+
+ERR1 = 'Do not expose buffers or their backing arrays methods to untrusted code.'
+
+
+# The ID for the check
+def ids():
+    return ('FIO05-J', 'JAVA_FIO05')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO05-J': 'Published Standards/SEI Cert Standards/Java/Do not expose buffers or their backing arrays methods to untrusted code',
+        'JAVA_FIO05': 'All Checks/Language Specific/Java/Input Output/Do not expose buffers or their backing arrays methods to untrusted code',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'FIO05-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P18',
+            'Level: L1',
+        ],
+        'JAVA_FIO05': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not expose buffers or their backing arrays methods to untrusted code'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not expose buffers or their backing arrays methods to untrusted code</p>
+<p><b>Risk Assessment</b></p>
+<p>Exposing buffers created using the wrap(), duplicate(), array(), slice(), or subsequence() methods may allow an untrusted caller to alter the contents of the original data.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/FIO05-J.+Do+not+expose+buffers+or+their+backing+arrays+methods+to+untrusted+code</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class Wrap {
+  private char[] dataArray;
+
+  public Wrap() {
+    dataArray = new char[10];
+    // Initialize
+  }
+
+  public CharBuffer getBufferCopy() {
+    return CharBuffer.wrap(dataArray);
+  }
+}
+
+
+final class Dup {
+  CharBuffer cb;
+
+  public Dup() {
+    cb = CharBuffer.allocate(10);
+    // Initialize
+  }
+
+  public CharBuffer getBufferCopy() {
+    return cb.duplicate();
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    JAVA_NIO_PACKAGE = {"ByteBuffer", "CharBuffer", "DoubleBuffer",
+                        "FloatBuffer", "IntBuffer", "LongBuffer", "ShortBuffer"}
+    EXPOSING_BUFFER_FUNCS = {"wrap", "duplicate",
+                             "array", "slice", "subsequence"}
+
+    for class_ref in file.filerefs("Define", "Class Type"):
+        for member_ref in class_ref.ent().refs("Define", "Variable Member"):
+            if member_ref.ent().type() in JAVA_NIO_PACKAGE:
+                for return_ref in member_ref.ent().refs("Useby Return"):
+                    check.violation(return_ref.scope(), file,
+                                    return_ref.line(), return_ref.column(), ERR1)
+
+    for call_ref in file.filerefs("Call", "Method Public Member"):
+        if re.search(r"java\.nio\..", call_ref.ent().longname()) and call_ref.ent().name() in EXPOSING_BUFFER_FUNCS:
+            compliant = False
+            lexer = file.lexer()
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+
+            while lex and lex.text() != ";":
+                if lex.text() == "asReadOnlyBuffer" and lex.token() == "Identifier":
+                    compliant = True
+                    break
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if not compliant:
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), ERR1)

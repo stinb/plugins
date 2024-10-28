@@ -1,0 +1,212 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-08-05
+
+
+import re
+from understand import Check, Ent, Lexeme, Ref
+
+
+ERR1 = 'Assignment operator return type should be non-const reference to %1'
+ERR2 = 'Assignment operator does not return *this'
+
+# https://en.cppreference.com/w/cpp/language/operator_assignment
+ASSIGNMENT_OPERATORS = {
+    'operator=',
+    'operator+=',
+    'operator-=',
+    'operator*=',
+    'operator/=',
+    'operator%=',
+    'operator&=',
+    'operator|=',
+    'operator^=',
+    'operator<<=',
+    'operator>>=',
+}
+
+
+def ids():
+    return ('EFFECTIVECPP_10', 'CPP_A002')
+
+
+def name(id):
+    return {
+        'EFFECTIVECPP_10': '''Published Standards/Effective C++ (3rd Edition) Scott Meyers/\
+10. Assignment Operator Return This''',
+        'CPP_A002': '''All Checks/Language Specific/C and C++/Assignment Operators/\
+Assignment Operator Return This''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_10': [
+            'Language: C++',
+            'Standard: Effective C++',
+            'Assignment Operators',
+        ],
+        'CPP_A002': [
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Have assignment operators return a reference to *this.</p>
+
+<p><b>Description</b></p>
+
+<p>One of the interesting things about assignments is that you can chain them
+together:</p>
+
+<pre><code language="C++">\
+int x, y, z;
+x = y = z = 15; // chain of assignments
+</pre></code>
+
+<p>Also interesting is that assignment is right-associative, so the above
+assignment chain is parsed like this:</p>
+
+<pre><code language="C++">\
+x = (y = (z = 15));
+</pre></code>
+
+<p>Here, 15 is assigned to z, then the result of that assignment (the updated z)
+is assigned to y, then the result of that assignment (the updated y) is assigned
+to x.</p>
+
+<p>The way this is implemented is that assignment returns a reference to its
+left-hand argument, and that’s the convention you should follow when you
+implement assignment operators for your classes.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Define', 'Member Function ~Static ~Unresolved ~Unknown', True):
+        ent = ref.ent()
+
+        if ent.name() not in ASSIGNMENT_OPERATORS:
+            continue
+
+        check_return_type(check, ref)
+        check_return_statements(check, ref)
+
+
+# Check that the return type allows assignment chaining
+def check_return_type(check: Check, fn_def: Ref):
+    ref = fn_def
+    ent = ref.ent()
+
+    # Get return type or skip
+    t = ent.freetext('UnderlyingType')
+    if not t:
+        return
+
+    # Get class name or skip
+    class_ent = ent.parent()
+    if not class_ent:
+        return
+    class_name = class_ent.name()
+
+    # Skip if the return type is a non-const reference to the class
+    if re.search(rf'^([_a-zA-Z][_a-zA-Z0-9]*::)*\b{class_name}\b.*&', t):
+        return
+
+    check.violation(ent, ref.file(), ref.line(), ref.column(), ERR1, class_name)
+
+
+# Check that the function always returns this
+def check_return_statements(check: Check, fn_def: Ref):
+    fn = fn_def.ent()
+    file = fn_def.file()
+
+    # Get function end or fail
+    end = fn.ref('Endby')
+    if not end or end.file() != file:
+        return
+
+    # Get first lexeme of the function or fail
+    lex = file.lexer(False).lexeme(fn_def.line(), fn_def.column())
+    if not lex:
+        return
+
+    # Each lexeme in the function definition
+    has_return = False
+    while lex:
+        # Stop at the end
+        if lex.line_begin() > end.line():
+            break
+        elif lex.line_begin() == end.line():
+            if lex.column_begin() > end.column():
+                break
+
+        # Match return or skip
+        if lex.text() != 'return':
+            lex = lex.next(True, True)
+            continue
+        has_return = True
+        return_lex = lex
+
+        # Start looking at the return expression
+        lex = lex.next(True, True)
+        if not lex:
+            break
+
+        # Skip if the return statement is correct
+        lex, matched = match_this(lex)
+        if matched:
+            if lex:
+                lex = lex.next(True, True)
+                continue
+            else:
+                break
+
+        check.violation(fn, file, return_lex.line_begin(), return_lex.column_begin(), ERR2)
+
+    # Violation for no return statements
+    if not has_return:
+        check.violation(fn, file, fn_def.line(), fn_def.column(), ERR2)
+
+
+# Try to match `*this;` while skipping parentheses
+def match_this(lex: Lexeme) -> (Lexeme|None, bool):
+    TEXTS = (
+        ('*', '('),
+        ('this', '('),
+        (';', ')'),
+    )
+    for matching, skipping in TEXTS:
+        lex, matched = try_match(lex, matching, skipping)
+        if not lex:
+            return None, False
+        elif not matched:
+            return lex, False
+    return lex, True
+
+
+# Try to match a string while skipping a certain string
+def try_match(lex: Lexeme, matching: str, skipping: str) -> (Lexeme|None, bool):
+    while lex:
+        if lex.text() == matching:
+            return lex.next(True, True), True
+        elif lex.text() != skipping:
+            return lex, False
+        lex = lex.next(True, True)
+    return lex, False

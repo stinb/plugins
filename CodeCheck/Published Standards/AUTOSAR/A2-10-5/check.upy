@@ -1,0 +1,129 @@
+ERR1 = 'Identifier name is reused'
+
+
+# The ID for the check
+def ids():
+    return ('A2-10-5', 'CPP_I020')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A2-10-5': 'Published Standards/AUTOSAR/An identifier name of a function with static storage duration or a non-member object with external or internal linkage should not be reused',
+        'CPP_I020': 'All Checks/Language Specific/C and C++/Identifiers/An identifier name of a function with static storage duration or a non-member object with external or internal linkage should not be reused',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A2-10-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Identifiers',
+        ],
+        'CPP_I020': [
+            'Language: C',
+            'Language: C++',
+            'Identifiers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'An identifier name of a function with static storage duration or a non-member object with external or internal linkage should not be reused.'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>An identifier name of a function with static storage duration or a
+non-member object with external or internal linkage should not be reused.</p>
+<p><b>Rationale</b></p>
+<p>Regardless of scope, no identifier with static storage duration should be re-used across
+any source files in the project. This includes objects or functions with external linkage
+and any objects or functions with static storage class specifier. While the compiler
+can understand this, the possibility exists for the developer or development tool to
+incorrectly associate unrelated variables with the same name.</p>
+<p>Note: This rule does not apply to objects without linkage, e.g. function local static
+objects.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 //% $Id: A2-10-5.cpp 305382 2018-01-26 06:32:15Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 // f1.cpp
+4 namespace n_s1
+5 {
+6 static std::int32_t globalvariable = 0;
+7 }
+8 static std::int32_t filevariable = 5; // Compliant - identifier not reused
+9 static void Globalfunction();
+10
+11 // f2.cpp
+12 namespace n_s1
+13 {
+14 // static std::int32_t globalvariable = 0; // Non-compliant - identifier reused
+15 static std::int16_t modulevariable = 10; // Compliant - identifier not reused
+16 }
+17 namespace n_s2
+18 {
+19 static std::int16_t modulevariable2 = 20;
+20 }
+21 static void Globalfunction(); // Non-compliant - identifier reused
+22 static std::int16_t modulevariable2 = 15; // Non-compliant - identifier reused
+</code></pre>
+<p><b>See also</b></p>
+<p>• MISRA C++ 2008 [7]: advisory 2-10-5 The identifier name of a non-member
+object or function with static storage duration should not be reused.</p>
+"""
+
+
+
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref):
+        check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+
+    var_list = {}
+
+    for func_ref in file.filerefs("Declare", "Static Function ~Member"):
+        for declare_ref in func_ref.ent().refs("Declarein"):
+            if func_ref.file().name() != declare_ref.file().name():
+                check_violation(func_ref)
+
+    for obj_ref in file.filerefs("Define", "Global Static Object ~Member"):
+        obj_ref_ent = obj_ref.ent().name()
+
+        if obj_ref.scope().name() == file.name():
+            var_list[obj_ref_ent] = obj_ref
+        elif obj_ref_ent in var_list and obj_ref.scope().name() != file.name():
+            check_violation(var_list[obj_ref_ent])
+
+    for namespace_ref in file.filerefs("Declare", "Namespace"):
+        var_list = {}
+
+        for static_obj in namespace_ref.ent().refs("Define", "Global Static Object ~Member"):
+            var_name = static_obj.ent().name()
+
+            if var_name not in var_list:
+                var_list[var_name] = static_obj
+            elif static_obj.file().name() == file.name():
+                check_violation(static_obj)
+            else:
+                check_violation(var_list[var_name])

@@ -1,0 +1,194 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-01-12
+
+
+import re
+
+
+ERR1 = 'Pointer dereferenced by %1 token %2 before a null check'
+ERR2 = 'Pointer dereferenced by complex expression before a null check'
+
+
+def ids():
+    return ('A5-3-2', 'CPP_P021')
+
+
+def name(id):
+    return {
+        'A5-3-2': 'Published Standards/AUTOSAR/Before dereferencing a pointer, compare it with NULL',
+        'CPP_P021': 'All Checks/Language Specific/C and C++/Pointers/Before dereferencing a pointer, compare it with NULL',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A5-3-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Partially Automated',
+            'Pointers',
+        ],
+        'CPP_P021': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''
+<p>
+Before dereferencing a pointer, compare it with NULL.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Dereferencing a NULL pointer leads to undefined behavior.
+</p>
+
+<p>
+Note: It is required that a pointer is checked for non-NULL status before dereferencing occurs.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A5-3-2.cpp 305629 2018-01-29 13:29:25Z piotr.serwa $
+#include &lt;iostream&gt;
+#include &lt;memory&gt;
+#include &lt;cstdint&gt;
+
+class A
+{
+public:
+    A(std::uint32_t a) : a(a) {}
+    std::uint32_t GetA() const noexcept { return a; }
+
+private:
+    std::uint32_t a;
+};
+
+bool Sum(const A* lhs, const A* rhs)
+{
+    // non-compliant - not checking if pointer is invalid
+    return lhs-&gt;GetA() + rhs-&gt;GetA();
+}
+bool Difference(const A* lhs, const A* rhs)
+{
+    // compliant - checked if pointer is valid
+    if (lhs && rhs)
+        return lhs-&gt;GetA() - rhs-&gt;GetA();
+    return 0;
+}
+
+
+int main(void)
+{
+    auto l = std::make_shared&lt;A&gt;(3);
+    decltype(l) r;
+
+    auto sum = Sum(l.get(), r.get());
+
+    std::cout &lt; sum &lt; std::endl;
+    return 0;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 174: The null pointer shall not be dereferenced.
+</p>
+
+<p>
+• SEI CERT C++ Coding Standard [10]: EXP34-C: Do not dereference null pointers.
+</p>
+
+<p>
+• C++ Core Guidelines [11]: ES.65: Don't dereference an invalid pointer.
+</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.option().checkbox('ignoreObjects', 'Ignore objects', False)
+    check.option().checkbox('ignoreParameters', 'Ignore parameters', False)
+
+    check.option().checkbox('ignoreArrow', 'Ignore arrow token ->', False)
+    check.option().checkbox('ignoreAsterisk', 'Ignore asterisk token *', False)
+    check.option().checkbox('ignoreBracket', 'Ignore bracket token [', False)
+    check.option().checkbox('ignoreComplex', 'Ignore complex expression', False)
+
+
+def check(check, file):
+    ignoreArrow    = check.options().lookup('ignoreArrow')
+    ignoreAsterisk = check.options().lookup('ignoreAsterisk')
+    ignoreBracket  = check.options().lookup('ignoreBracket')
+    ignoreComplex  = check.options().lookup('ignoreComplex')
+
+    entKinds = []
+    if not check.option().lookup('ignoreObjects'):
+        entKinds.append('Object')
+    if not check.option().lookup('ignoreParameters'):
+        entKinds.append('Parameter')
+    entKinds = ', '.join(entKinds)
+
+    if not entKinds:
+        return
+
+    # Inside of each function
+    for funRef in file.filerefs('Define', 'Function', True):
+        funEnt = funRef.ent()
+
+        # Each variable definition
+        for ptrRef in funEnt.refs('Define', entKinds, True):
+            ptrEnt = ptrRef.ent()
+
+            # Ignore variables that aren't pointers
+            if not ptrEnt.type() or not re.match(r'.*\*$', ptrEnt.type()):
+                continue
+
+            # Ignore if not used/set
+            useOrSetRef = ptrEnt.ref('Useby, Setby ~Init')
+            if not useOrSetRef:
+                continue
+
+            # Get the first use/set
+            useOrSetFile = useOrSetRef.file()
+            lex = useOrSetFile.lexer(False).lexeme(useOrSetRef.line(), useOrSetRef.column())
+            l = lex.previous(True, True).text()
+            r = lex.next(True, True).text()
+
+            # Variable is dereferenced as the first use/set, before a check
+            if r == '->':
+                if ignoreArrow:
+                    continue
+                check.violation(ptrEnt, useOrSetFile, useOrSetRef.line(), useOrSetRef.column(), ERR1, 'arrow', '->')
+            elif l == '*':
+                if ignoreAsterisk:
+                    continue
+                check.violation(ptrEnt, useOrSetFile, useOrSetRef.line(), useOrSetRef.column(), ERR1, 'asterisk', '*')
+            elif r == '[':
+                if ignoreBracket:
+                    continue
+                check.violation(ptrEnt, useOrSetFile, useOrSetRef.line(), useOrSetRef.column(), ERR1, 'bracket', '[')
+            elif useOrSetRef.kind().check('Deref'):
+                if ignoreComplex:
+                    continue
+                check.violation(ptrEnt, useOrSetFile, useOrSetRef.line(), useOrSetRef.column(), ERR2)

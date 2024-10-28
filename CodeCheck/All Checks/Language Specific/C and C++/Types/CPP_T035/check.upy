@@ -1,0 +1,180 @@
+ERR1 = 'Parameter is passed incorrectly'
+NON_TRIVIAL_TYPES = {"basic_string<char>", "basic_string<char, char_traits<char>, allocator<char>>"}
+CHEAP_TO_COPY_TYPES = {"short", "long", "void", "int", "float", "bool", "double", "char"}
+
+
+# The ID for the check
+def ids():
+    return ('A8-4-7', 'CPP_T035')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A8-4-7': 'Published Standards/AUTOSAR/"in" parameters for "cheap to copy" types shall be passed by value.',
+        'CPP_T035': 'All Checks/Language Specific/C and C++/Types/"in" parameters for "cheap to copy" types shall be passed by value.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A8-4-7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T035': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rule</b></p>
+
+<p>"in" parameters for "cheap to copy" types shall be passed by value.</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Passing an argument by value documents that the argument won't be modified. Copying the value (instead of passing by reference to const) also ensures that no indirection is needed in the function body to access the value.
+</p>
+
+<p>
+For the purpose of this rule, "cheap to copy" is defined as a trivially copyable type that is no longer than two words (i.e. pointers).
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A8-4-7.cpp 305588 2018-01-29 11:07:35Z michal.szczepankiewicz $
+
+#include &lt;cstdint&gt;
+#include &lt;iostream&gt;
+#include &lt;string&gt;
+
+// Compliant, pass by value
+void output(std::uint32_t i)
+{
+    std::cout &lt;&lt; i &lt;&lt; '\\n';
+}
+
+// Non-Compliant, std::string is not trivially copyable
+void output(std::string s)
+{
+    std::cout &lt;&lt; s &lt;&lt; '\\n';
+}
+
+struct A
+{
+    std::uint32_t v1;
+    std::uint32_t v2;
+};
+
+// Non-Compliant, A is trivially copyable and no longer than two words
+void output(const A &a)
+{
+    std::cout &lt;&lt; a.v1 &lt;&lt; ", " &lt;&lt; a.v2 &lt;&lt; '\\n';
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• C++ Core Guidelines [11]: F.16: For "in" parameters, pass cheaply-copied types by value and others by reference to const
+</p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 116: Small, concrete-type arguments (two or three words in size) should be passed by value if changes made to formal parameters should not be reflected in the calling function.
+</p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 117.1: An object should be passed as const T& if the function should not change the value of the object.
+</p>
+
+<p>
+• A18-9-2 in section 6.18.9
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(_ref):
+        check.violation(_ref.ent(), file, _ref.line(), _ref.column(), ERR1)
+
+    for func_ref in file.filerefs("Define", "Function ~Lambda"):
+        if "operator" in func_ref.ent().name():
+            continue
+
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            change_ref = param_ref.ent().ref(
+                "Assign Value, Modifyby, Setby, Assign Ref, Assignby Ref, Assignby Ptr, Addr Useby")
+
+            if not change_ref:
+                paramType = param_ref.ent().type()
+                is_ref = True if paramType and "&" in paramType else False
+                entity, ent_type = get_ent_type(param_ref.ent())
+
+                if not ent_type and entity.kind().check("Struct, ~Unresolved Class, Union"):
+                    if is_copyable(entity) and is_ref:
+                        check_violation(param_ref)
+                elif ent_type in NON_TRIVIAL_TYPES:
+                    if not is_ref:
+                        check_violation(param_ref)
+                elif ent_type and any(_type in ent_type for _type in CHEAP_TO_COPY_TYPES) and is_ref:
+                    check_violation(param_ref)
+
+
+def is_copyable(_ent):
+    # No virtual members
+    if _ent.ref("", "Virtual"):
+        return False
+
+    # Members should also be copyable
+    for member_ref in _ent.refs("Define", "~Static Member Object"):
+        if member_ref.ent().kind().check("Struct, ~Unresolved Class, Union"):
+            if not is_copyable(member_ref.ent()):
+                return False
+        elif member_ref.ent().type() in NON_TRIVIAL_TYPES:
+            return False
+        elif not any(_type in member_ref.ent().type() for _type in CHEAP_TO_COPY_TYPES):
+            return False
+
+    return True
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()

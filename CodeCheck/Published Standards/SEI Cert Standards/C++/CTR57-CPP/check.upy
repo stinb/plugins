@@ -1,0 +1,175 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-11-28
+
+
+import re
+
+from Modules import lexemeBefore
+
+
+ERR1 = 'Comparator should be std::less or std::greater'
+
+CONTAINERS_AND_COMPARATOR_POSITIONS = {'set': 1, 'map': 2, 'multiset': 1, 'multimap': 2, 'priority_queue': 2}
+# TODO after C++23 is defined more, add these:
+    # flat_set, flat_map, flat_multiset, flat_multimap
+
+
+def ids():
+    return ('CTR57-CPP', 'CPP_E068')
+
+
+def name(id):
+    return {
+        'CTR57-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Provide a valid ordering predicate''',
+        'CPP_E068': '''All Checks/Language Specific/C and C++/Expressions/\
+Provide a valid ordering predicate''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'CTR57-CPP': [
+            'Expressions',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'CPP_E068': [
+            'Expressions',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Provide a valid ordering predicate</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Using an invalid ordering rule can lead to erratic behavior or infinite
+loops.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR57-CPP.+Provide+a+valid+ordering+predicate'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR57-CPP.+Provide+a+valid+ordering+predicate</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+#include &lt;functional&gt;
+#include &lt;iostream&gt;
+#include &lt;set&gt;
+
+void f() {
+  std::set&lt;int, std::less_equal&lt;int&gt;&gt; s{5, 10, 20};
+  for (auto r = s.equal_range(10); r.first != r.second; ++r.first) {
+    std::cout &lt;&lt; *r.first &lt;&lt; std::endl;
+  }
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>Overloaded operators are not checked. It is not possible to automate the
+process of understanding the meaning of data, and interpreting whether or not
+it the definition is correct.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Call', 'Member Function'):
+        ent = ref.ent()
+
+        # Skip if not a standard ordered container
+        name = ent.name()
+        if name not in CONTAINERS_AND_COMPARATOR_POSITIONS:
+            continue
+        if ent.longname() != f'std::{name}::{name}':
+            continue
+
+        # Go to back to container name or skip
+        containerNameFound = False
+        lex = file.lexer(False).lexeme(ref.line(), ref.column())
+        while True:
+            lex = lex.previous(True, True)
+            if not lex or lex.text() == ';':
+                break
+            elif lex.text() == name:
+                containerNameFound = True
+                break
+        if not containerNameFound:
+            continue
+
+        # Get comparator as argument of template or skip
+        comparatorPosition = CONTAINERS_AND_COMPARATOR_POSITIONS[name]
+        lexemes = nthArgOfTemplate(lex, comparatorPosition)
+        if not lexemes:
+            continue
+
+        # Find equality comparison or skip
+        equality = False
+        for lex in lexemes:
+            if lex.text() in {'equal_to', 'not_equal_to', 'greater_equal', 'less_equal'}:
+                equality = True
+                break
+        if not equality:
+            continue
+
+        check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+
+def nthArgOfTemplate(lex, n):
+    lexemes = []
+    angleCount = 0
+    i = 0
+
+    while True:
+        lex = lex.next(True, True)
+        if not lex:
+            break
+
+        # Parse arguments
+        text = lex.text()
+        if text == '<':
+            angleCount += 1
+            if angleCount == 1:
+                continue
+        elif text == '>':
+            angleCount -= 1
+            if angleCount < 1:
+                break
+        elif text == '>>': # hack for two > tokens that are combined
+            angleCount -= 2
+            if angleCount < 1:
+                break
+        elif text == ',':
+            if angleCount == 1:
+                i += 1
+                continue
+        elif text == ';':
+            break
+
+        # Get argument lexemes
+        if angleCount > 0 and i == n:
+            lexemes.append(lex)
+
+    return lexemes

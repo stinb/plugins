@@ -1,0 +1,175 @@
+import re
+
+
+ERR1 = 'Do not call va_arg with an argument of the incorrect type.'
+ERR2 = 'The initial parameter must be the number of variadic arguments provided to the function call.'
+
+
+# The ID for the check
+def id():
+    return ('EXP47-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP47-C': 'Published Standards/SEI Cert Standards/C/Do not call va_arg with an argument of the incorrect type',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP47-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not call va_arg with an argument of the incorrect type'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not call va_arg with an argument of the incorrect type</p>
+<p><b>Risk Assessment</b></p>
+<p>Incorrect use of va_arg() results in undefined behavior that can include accessing stack memory.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/EXP47-C.+Do+not+call+va_arg+with+an+argument+of+the+incorrect+type</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdarg.h&gt;
+#include &lt;stddef.h&gt;
+
+void func(size_t num_vargs, ...) {
+  va_list ap;
+  va_start(ap, num_vargs);
+  if (num_vargs &gt; 0) {
+    unsigned char c = va_arg(ap, unsigned char);
+    // ...
+  }
+  va_end(ap);
+}
+
+void f(void) {
+  unsigned char c = 0x12;
+  func(1, c);
+}
+
+
+#include &lt;stdarg.h&gt;
+
+void func(const char *cp, ...) {
+  va_list ap;
+  va_start(ap, cp);
+  int val = va_arg(ap, int);
+  // ...
+  va_end(ap);
+}
+
+void f(void) {
+  func("The only argument");
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref or (typed_ref.ent().name() == typed_ref.scope().name()):
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+
+    if file.lexer(True, 8, False, False):
+        lexer = file.lexer(True, 8, False, False)
+    else:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        lex = lexer.lexeme(func_ref.line(), func_ref.column())
+        on_param = 0
+        param_types = []
+
+        while lex:
+            if lex.text() == "(":
+                on_param += 1
+            elif lex.text() == ")":
+                on_param -= 1
+
+                if not on_param:
+                    break
+            elif on_param and lex.ref() and lex.ref().kind().check("Definein"):
+                if lex.ent().ref("Typed"):
+                    _, lex_type = get_ent_type(lex.ent())
+                else:
+                    lex_type = lex.ent().type()
+                param_types.append(lex_type)
+            elif on_param and lex.text() == "...":
+                if ((len(param_types) > 0) and param_types[0] and not re.search(r"int|short|long", param_types[0])):
+                    check.violation(func_ref.ent(), file,
+                                    func_ref.line(), func_ref.column(), ERR2)
+
+                for use_ref in func_ref.ent().refs("Use", "Unresolved Macro"):
+                    if use_ref.ent().name() == "va_arg":
+                        use_lexer = use_ref.file().lexer()
+                        use_lex = use_lexer.lexeme(
+                            use_ref.line(), use_ref.column())
+                        use_param = 0
+                        on_sec_param = False
+                        sec_param = ""
+
+                        while use_lex:
+                            if use_lex.text() == "(":
+                                use_param += 1
+                            elif use_lex.text() == ")":
+                                use_param -= 1
+
+                                if not use_param:
+                                    # (int, double, void* are default conversions)
+                                    if not re.search(r"int|double|void*", sec_param):
+                                        check.violation(
+                                            use_ref.ent(), use_ref.file(), use_ref.line(), use_ref.column(), ERR1)
+                                    break
+                            elif use_lex.text() == ",":
+                                on_sec_param = True
+                            elif on_sec_param:
+                                sec_param += use_lex.text()
+
+                            use_lex = use_lex.next(
+                                ignore_whitespace=True, ignore_comments=True)
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)

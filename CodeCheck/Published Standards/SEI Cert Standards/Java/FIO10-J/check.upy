@@ -1,0 +1,145 @@
+ERR1 = 'Ensure the array is filled when using read() to fill an array.'
+
+
+# The ID for the check
+def ids():
+    return ('FIO10-J', 'JAVA_FIO10')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO10-J': 'Published Standards/SEI Cert Standards/Java/Ensure the array is filled when using read() to fill an array',
+        'JAVA_FIO10': 'All Checks/Language Specific/Java/Input Output/Ensure the array is filled when using read() to fill an array',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO10-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_FIO10': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure the array is filled when using read() to fill an array'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure the array is filled when using read() to fill an array</p>
+<p><b>Risk Assessment</b></p>
+<p>Incorrect use of the read() method can result in the wrong number of bytes being read or character sequences being interpreted incorrectly.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/FIO10-J.+Ensure+the+array+is+filled+when+using+read%28%29+to+fill+an+array</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public static String readBytes(InputStream in) throws IOException {
+  byte[] data = new byte[1024];
+  if (in.read(data) == -1) {
+    throw new EOFException();
+  }
+  return new String(data, "UTF-8");
+}
+
+public static String readBytes(InputStream in) throws IOException {
+  byte[] data = new byte[1024];
+  int offset = 0;
+  if (in.read(data, offset, data.length - offset)) != -1) {
+    throw new EOFException();
+  }
+  return new String(data, "UTF-8");
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call", "Method Member"):
+        if call_ref.ent().name() == "read":
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            compliant = False
+            byte_data = None
+            on_param = 0
+            param = 1
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param == 1 and lex.text() == ",":
+                    param += 1
+                elif not byte_data and lex.ent() and lex.ref().kind().check("Useby"):
+                    byte_data = lex.ent()
+
+                    if "[]" not in byte_data.type():
+                        compliant = True
+                        break
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if param == 3:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+
+                while lex.line_begin() == call_ref.line():
+                    if lex.text() == "while":
+                        compliant = True
+
+                    lex = lex.previous(
+                        ignore_whitespace=True, ignore_comments=True)
+
+            if not compliant:
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), ERR1)

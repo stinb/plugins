@@ -1,0 +1,176 @@
+import re
+
+
+ERR1 = 'Do not assume that a group of calls to independently atomic methods is atomic.'
+
+
+# The ID for the check
+def ids():
+    return ('VNA03-J', 'JAVA_VNA03')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'VNA03-J': 'Published Standards/SEI Cert Standards/Java/Do not assume that a group of calls to independently atomic methods is atomic',
+        'JAVA_VNA03': 'All Checks/Language Specific/Java/Visibility and Atomicity/Do not assume that a group of calls to independently atomic methods is atomic',
+    }[id]
+
+
+def tags(id):
+    return {
+        'VNA03-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_VNA03': [
+            'Language: Java',
+            'Visibility and Atomicity',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not assume that a group of calls to independently atomic methods is atomic'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not assume that a group of calls to independently atomic methods is atomic</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to ensure the atomicity of two or more operations that must be performed as a single atomic operation can result in race conditions in multithreaded applications.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/VNA03-J.+Do+not+assume+that+a+group+of+calls+to+independently+atomic+methods+is+atomic</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class Adder {
+  private final AtomicReference&lt;BigInteger&gt; first;
+  private final AtomicReference&lt;BigInteger&gt; second;
+
+  public Adder(BigInteger f, BigInteger s) {
+    first  = new AtomicReference&lt;BigInteger&gt;(f);
+    second = new AtomicReference&lt;BigInteger&gt;(s);
+  }
+
+  public void update(BigInteger f, BigInteger s) { // Unsafe
+    first.set(f);
+    second.set(s);
+  }
+
+  public BigInteger add() { // Unsafe
+    return first.get().add(second.get());
+  }
+}
+
+
+
+final class IPHolder {
+  private final List&lt;InetAddress&gt; ips =
+      Collections.synchronizedList(new ArrayList&lt;InetAddress&gt;());
+
+  public void addAndPrintIPAddresses(InetAddress address) {
+    ips.add(address);
+    InetAddress[] addressCopy =
+        (InetAddress[]) ips.toArray(new InetAddress[0]);
+    // Iterate through array addressCopy ...
+  }
+}
+
+
+final class KeyedCounter {
+  private final Map&lt;String, Integer&gt; map =
+      Collections.synchronizedMap(new HashMap&lt;String, Integer&gt;());
+
+  public void increment(String key) {
+    Integer old = map.get(key);
+    int oldValue = (old == null) ? 0 : old.intValue();
+    if (oldValue == Integer.MAX_VALUE) {
+      throw new ArithmeticException("Out of range");
+    }
+    map.put( key, oldValue + 1);
+  }
+
+  public Integer getCount(String key) {
+    return map.get(key);
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        flagged_funcs = []
+
+        for var_ref in class_ref.ent().refs("Define", "Variable Member"):
+            var_type = var_ref.ent().type()
+            var_value = var_ref.ent().value()
+
+            if var_type and "AtomicReference" in var_type:
+                for ref in var_ref.ent().refs("", "Method Member"):
+                    if ref.ent().id() in flagged_funcs or ref.ent().name() == class_ref.ent().name():
+                        continue
+
+                    compliant = False
+                    define_ref = ref.ent().ref("Definein")
+                    lexes = lexer.lexemes(
+                        define_ref.line(), define_ref.line())
+
+                    for lex in lexes:
+                        if lex.text() == "synchronized" and lex.token() == "Keyword":
+                            compliant = True
+                            break
+
+                    if not compliant:
+                        flagged_funcs.append(ref.ent().id())
+                        check.violation(ref.ent(), file,
+                                        ref.line(), ref.column(), ERR1)
+            elif var_value and re.search(r"synchronized(Collection|List|Map|Set|SortedMap|SortedSet)", var_value):
+                for ref in var_ref.ent().refs("", "Method Member"):
+                    if ref.ent().id() in flagged_funcs or ref.ent().name() == class_ref.ent().name():
+                        continue
+
+                    compliant = False
+                    scope_bracket = 0
+                    lex = lexer.lexeme(ref.line(), ref.column())
+
+                    while lex:
+                        if lex.text() == "{":
+                            scope_bracket += 1
+                        elif lex.text() == "}":
+                            scope_bracket -= 1
+                        elif lex.text() == "synchronized" and ((lex.line_begin() == ref.line()) or (lex.token() == "Keyword" and ((scope_bracket % 2) != 0))):
+                            compliant = True
+                            break
+                        elif lex.text() == ref.ent().name() and lex.ref() and lex.ref().kind().check("Definein"):
+                            break
+
+                        lex = lex.previous(
+                            ignore_whitespace=True, ignore_comments=True)
+
+                    if not compliant:
+                        flagged_funcs.append(ref.ent().id())
+                        check.violation(ref.ent(), file,
+                                        ref.line(), ref.column(), ERR1)

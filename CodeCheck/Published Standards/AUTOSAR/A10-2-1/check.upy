@@ -1,0 +1,131 @@
+ERR1 = 'Non-virtual public or protected member functions shall not be redefined in derived classes'
+
+
+# The ID for the check
+def ids():
+    return ('A10-2-1', 'CPP_F035')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A10-2-1': 'Published Standards/AUTOSAR/Non-virtual public or protected member functions shall not be redefined in derived classes',
+        'CPP_F035': 'All Checks/Language Specific/C and C++/Functions/Non-virtual public or protected member functions shall not be redefined in derived classes',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A10-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions'
+        ],
+        'CPP_F035': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Non-virtual public or protected member functions shall not be redefined in
+derived classes.</p>
+<p><b>Rationale</b></p>
+<p>A non-virtual member function specifies an invariant over the hierarchy. It cannot be
+overridden in derived classes, but it can be hidden by a derived class member (data or
+function) with the same identifier. The effect of this hiding is to defeat polymorphism
+by causing an object to behave differently depending on which interface is used to
+manipulate it, resulting in unnecessary complexity and error.</p>
+<p>Note that a maintenance change to a private implementation detail could impact clients
+of the base class, and often it will be the case that those clients may not be in a position
+to fix the problem. Therefore, redefinitions of functions which are private in the base
+class are not affected by this rule.</p>
+<p><b>Exception</b></p>
+<p>Redefinition of functions from private inheritance do not violate this rule.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A10-2-1.cpp 317123 2018-04-23 08:48:11Z ilya.burylov $
+2 class A
+3 {
+4 public:
+5 virtual ~A() = default;
+6 void F() noexcept {}
+7 virtual void G() noexcept {}
+8 private:
+9 void H() noexcept {}
+10 };
+11 class B : public A
+12 {
+13 public:
+14 void
+15 F() noexcept {} // Non-compliant - F() function from A class hidden by B
+class
+16 void G() noexcept override {} // Compliant - G() function from A class
+17 // overridden by B class
+18 private:
+19 void H() noexcept {} // Compliant - H() function is private in A class
+20 };
+21 class C : private A
+22 {
+23 public:
+24 F() noexcept {} // Compliant by exception - private inheritance
+25 };
+26 void Fn1(A& object) noexcept
+27 {
+28 object.F(); // Calls F() function from A
+29 object.G(); // Calls G() function from B
+30 }
+31 void Fn2() noexcept
+32 {
+33 B b;
+34 Fn1(b);
+35 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• JSF December 2005 [8]: AV Rule 94 An inherited nonvirtual function shall not be
+redefined in a derived class.</p>
+<p>• C++ Core Guidelines [11]: ES.12: Do not reuse names in nested scopes.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Public Base", "Class"):
+        base_func = {}
+
+        for func_ref in class_ref.ent().refs("Define", "Function ~Private ~Virtual"):
+            if func_ref.ent().freetext("DefinedInMacro"):
+                continue
+
+            func_name = func_ref.ent().name()
+
+            if func_name not in base_func:
+                base_func[func_name] = f"{func_ref.ent().type()} {func_ref.ent().parameters()}"
+
+        for func_ref in class_ref.scope().refs("Define", "Function ~Private ~Virtual"):
+            func_name = func_ref.ent().name()
+
+            if func_name in base_func and base_func[func_name] == f"{func_ref.ent().type()} {func_ref.ent().parameters()}":
+                check.violation(func_ref.ent(), func_ref.file(),
+                                func_ref.line(), func_ref.column(), ERR1)

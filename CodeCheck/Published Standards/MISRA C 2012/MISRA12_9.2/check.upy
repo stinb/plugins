@@ -1,0 +1,183 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 1-25-2024
+import re
+
+ERR1 = 'Aggregate or union not fully enclosed in braces'
+
+def ids():
+    return ('MISRA12_9.2', 'MISRA23_9.2')
+
+def name(id):
+    return {
+        'MISRA12_9.2': """\
+Published Standards/MISRA C 2012/9.2 The initializer for an aggregate or union \
+shall be enclosed in braces""",
+        'MISRA23_9.2': """\
+Published Standards/MISRA C 2023/9.2 The initializer for an aggregate or union \
+shall be enclosed in braces"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'MISRA12_9.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+        ],
+        'MISRA23_9.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Amplification</b></p>
+<p>This rule applies to initializers for both objects and subobjects.</p>
+<p>An initializer of the form { 0 }, which sets all values to 0, may be used to
+initialize subobjects without nested braces.</p>
+<p>Note: this rule does not itself require explicit initialization of objects or
+subobjects.</p>
+<p><b>Rationale</b></p>
+<p>Using braces to indicate init ialization of subobjects improves the clarity
+of code and forces programmers to consider the initialization of elements in
+complex data structures such as multi-dimensional arrays or arrays of
+structures.</p>
+<p><b>Exception</b></p>
+<ol type="1">
+<li>An array may be initialized u sing a string literal.</li>
+<li>An automatic structure or union may be initialized using an expression with
+compatible structure or union type.</li>
+<li>A designated initializer may be used to initialize part of a subobject.</li>
+</ol>
+<p><b>Example</p></b>
+<p>The following three initializat ions, which are permitted by The Standard, 
+are equivalent. The fi rst form is not permitted by this rule because it does
+not use braces to show subarray initialization explicitly.</p>
+<pre><code language="C++">int16_t y[ 3 ][ 2 ] = { 1, 2, 0, 0, 5, 6 }; /* Non-compliant */
+int16_t y[ 3 ][ 2 ] = { { 1, 2 }, { 0 }, { 5, 6 } }; /* Compliant */
+int16_t y[ 3 ][ 2 ] = { { 1, 2 }, { 0, 0 }, { 5, 6 } }; /* Compliant */
+</code></pre>
+<p>In the following example, the initialization of z1 is compliant by virtue of Exception 3 because a
+designated initializer is used to initialize the subobject z1[ 1 ]. The initialization of z2 is also
+compliant for the same reason. The initialization of z3 is non-compliant because part of the subobject
+z3[ 1 ] is intialized with a positional initializer but is not enclosed in braces. The initialization of
+z4 is compliant because a designated initializer is used to initialize the subobject z4[ 0 ] and the
+initializer for subobject z4[ 1 ] is brace-enclosed.</p>
+<pre><code language="C++">int16_t z1[ 2 ][ 2 ] = { { 0 }, [ 1 ][ 1 ] = 1 }; /* Compliant */
+int16_t z2[ 2 ][ 2 ] = { { 0 },
+                         [ 1 ][ 1 ] = 1, [ 1 ][ 0 ] = 0
+                       }; /* Compliant */
+int16_t z3[ 2 ][ 2 ] = { { 0 }, [ 1 ][ 0 ] = 0, 1 }; /* Non-compliant */
+int16_t z4[ 2 ][ 2 ] = { [ 0 ][ 1 ] = 0, { 0, 1 } }; /* Compliant */</pre></code>
+<p>The first line in the following example initializes 3 subarrays without using
+nested braces. The second and third lines show equivalent ways to write the same
+initializer.</p>
+<pre><code language="C++">float32_t a[ 3 ][ 2 ] = { 0 }; /* Compliant */
+float32_t a[ 3 ][ 2 ] = { { 0 }, { 0 }, { 0 } }; /* Compliant */
+float32_t a[ 3 ][ 2 ] = { { 0.0f, 0.0f },
+                          { 0.0f, 0.0f },
+                          { 0.0f, 0.0f }
+                        }; /* Compliant */
+union u1 {
+  int16_t i;
+  float32_t f;
+} u = { 0 }; /* Compliant */
+struct s1 {
+  uint16_t len;
+  char buf[ 8 ];
+} s[ 3 ] = {
+   { 5u, { 'a', 'b', 'c', 'd', 'e', '\0', '\0', '\0' } },
+   { 2u, { 0 } },
+   { .len = 0u } /* Compliant - buf initialized implicitly */
+}; /* Compliant - s[] fully initialized */</pre></code>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Set', 'Object')
+
+    for ref in refs:
+        # Skip if not array
+        if not re.search(r'\[\d\]\[\d\]', str(ref.ent().type())):
+            continue
+
+        # Prepare list
+        type = str(ref.ent().type()).split('[')
+        numbers = type[1:]
+        for i in range(0, len(numbers)):
+            numbers[i] = re.sub(r'\D', '', numbers[i])
+
+        # Create lexer if it has yet to be created
+        if numbers:
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+
+            # Reverse the list and convert to ints
+            numbers.reverse()
+            numbers = [eval(i) for i in numbers]
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            while lexeme and not re.search(r'\=|;', lexeme.text()):
+                lexeme = lexeme.next(True, True)
+
+            # Go through the set statement
+            if lexeme and lexeme.text() == '=':
+                count = 0
+                ok = False
+                onlyZero = None
+                while lexeme and lexeme.text() != ';':
+                    if re.match(r'\{|\}', lexeme.text()):
+                        count += 1
+                    elif lexeme.text() == '[':
+                        ok = True
+                    elif lexeme.token() == 'Literal' and onlyZero != False:
+                        if lexeme.text().isdigit():
+                            if lexeme.text() == '0':
+                                onlyZero = True
+                            else:
+                                onlyZero = False
+
+                    lexeme = lexeme.next(True, True)
+
+                # Check if number of braces expected is the amount found
+                if numberOfBraces(numbers) != count and not ok and not onlyZero:
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                        
+
+
+
+
+
+
+
+
+# (x * 2) + 2 for [x][y]; x((y * 2) + 2) + 2 for [x][y][z]
+# w(x((y * 2) + 2) + 2) + 2 for [w][x][y][z] and so on
+def numberOfBraces(numbers):
+    numbers.pop(0)
+    result = (numbers.pop(0) * 2) + 2
+
+    while len(numbers) > 0:
+        result = (numbers.pop(0) * result) + 2
+
+    return result
+
+
+
+
+
+

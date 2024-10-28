@@ -1,0 +1,266 @@
+import re
+
+
+ERR1 = 'Unused type declaration'
+
+
+# The ID for the check
+def ids():
+    return ('A0-1-6', 'CPP_T003', 'MISRA23_0.2.3')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A0-1-6': 'Published Standards/AUTOSAR/There should be no unused type declarations',
+        'CPP_T003': 'All Checks/Language Specific/C and C++/Types/There should be no unused type declarations',
+        'MISRA23_0.2.3': 'Published Standards/MISRA C++ 2023/0.2.3 Types with limited visibility should be used at least once',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A0-1-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Types'
+        ],
+        'CPP_T003': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+        'MISRA23_0.2.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Types',
+        ],
+    }.get(id)
+
+
+# The short description of the check
+def description():
+    return 'There should be no unused type declarations.'
+
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_0.2.3':
+        return '''
+<p><b>Amplification</b></p>
+<p>A type has limited visibility if it is declared in block scope or in unnamed namespace scope.</p>
+<p>For the purposes of this rule:</p>
+<p>● Type aliases, primary class templates, and alias templates are considered types.</p>
+<p>● The closure type associated with a lambda is always used.</p>
+<p>● A type is used if it is referenced within the translation unit outside of its definition.</p>
+<p>● An enumeration type is used if any of its enumerators are used.</p>
+<p>● An anonymous union is used if any of its members are used.</p>
+<p>● The definition of a type includes the de9nition of its members and hidden friends.</p>
+<p>● The definition of a class template includes its partial and explicit specializations.</p>
+
+<p><b>Rationale</b></p>
+<p>If a type is declared but not used, then it is unclear to a reviewer if the type is redundant or it has been
+left unused by mistake.</p>
+
+<p><b>Exception</b></p>
+<p>This rule does not apply to:</p>
+<p>1. Types that have at least one declaration with the [[maybe_unused]] attribute.</p>
+<p>2. Template parameters.</p>
+<p>3. Partial or explicit specializations of class templates.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">int16_t f1()
+{
+ using T1 = int16_t; // Non-compliant
+ using T2 [[maybe_unused]] = int32_t; // Compliant by exception #1
+ return 67;
+}
+namespace
+{
+ struct A1 { A1 f(); }; // Compliant
+ struct A2 { A2 f(); }; // Non-compliant
+ struct A2; // Not a use of A2
+ A2 A2::f() { return *this; } // Not a use of A2
+ template< typename T > // Compliant by exception #2
+ void foo()
+ {
+ A1 a; // Use of A1
+ a.f(); // - even if foo is not instantiated
+ }
+}
+template< bool cond >
+inline auto foo()
+{
+ struct res { int32_t i; }; // Compliant
+ if constexpr ( cond )
+ {
+ return 42;
+ }
+ else
+ {
+ return res { 42 }; // res is utilized, even if cond is true
+ }
+}
+template< typename >
+int32_t bar()
+{
+ return 42;
+}
+int32_t f2()
+{
+ return bar< struct P >(); // Compliant - P is used
+}
+namespace
+{
+ template< typename > struct C1 {}; // Non-compliant
+ // - C1 only utilized in its definition
+ template<> struct C1< int32_t > // Compliant by exception #3
+ {
+ void mbr()
+ {
+ C1< char > cc;
+ }
+ };
+}
+namespace
+{
+ template< typename > struct C2 {}; // Compliant - C2< float > used
+ template<> struct C2< int32_t >; // Compliant by exception #3
+ C2< float > cf; // Use of C2
+}
+namespace
+{
+ static union // Non-compliant
+ {
+ int32_t i1;
+ int32_t j1;
+ };
+ static union // Compliant
+ {
+ int32_t i2;
+ int32_t j2;
+ };
+}
+void f3()
+{
+ ++i2; // Uses the anonymous union holding i2
+}
+namespace
+{
+ void f4()
+ {
+ []( auto ){}; // Compliant - closure type is always used
+ }
+}
+</code></pre>
+
+</p>
+'''
+
+    return """\
+
+<p><b>Rationale</b></p>
+Unused type declarations make code unnecessary more complex and complicate review process. Unused types can be redundant or be unused by mistake.
+</p>
+
+<p>
+Note: Libraries development require introduction new types not used internally.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A0-1-6.cpp$
+#include &lt;cstdint&gt;
+
+std::uint32_t Fn() noexcept
+{
+  using LocalUIntPtr = std::uint32_t*;
+  return 0U;
+}
+</code></pre>
+
+<p><b>See also</b><br>
+• MISRA C++ 2008 [7]: Rule 0-1-5 reclassified from required to advisory.
+</p>
+
+"""
+
+
+# Tests the type of file
+
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for type_ref in file.filerefs("Define", "~TemplateParameter ~Typedef ~Abstract Type"):
+        lex = file.lexer().lexeme(type_ref.line(), type_ref.column())
+        parent_ent = type_ref.ent().parent()
+        is_used = False
+
+        if re.search("<.*>$", type_ref.ent().longname()) or (lex.ent() and lex.ent().kind().check("Macro")) or (parent_ent.id() == file.id()):
+            continue
+
+        for typedby_ref in type_ref.ent().refs("Typedby"):            
+            if typedby_ref.ent().refs("Useby, Modifyby"):
+                is_used = True
+            elif typedby_ref.ent().type() and re.search("<.*>$", typedby_ref.ent().type()):
+                in_def = False
+
+                begin_ref = type_ref.ent().ref("Begin, Beginby")
+                end_ref = type_ref.ent().ref("End, Endby")
+
+                if begin_ref and end_ref and (begin_ref.line() < typedby_ref.line() < end_ref.line()):
+                    in_def = True
+                else:
+                    for spec_ref in type_ref.ent().refs("Specializeby"):
+                        begin_ref = spec_ref.ent().ref("Begin, Beginby")
+                        end_ref = spec_ref.ent().ref("End, Endby")
+
+                        if begin_ref and end_ref and (begin_ref.line() < typedby_ref.line() < end_ref.line()):
+                            in_def = True
+                            break
+
+                if not in_def:
+                    is_used = True
+
+        for mem_ref in type_ref.ent().refs("Define", "Enumerator, Member"):
+            if mem_ref.ent().ref("Useby, Use"):
+                is_used = True
+                break
+            
+            for over_ref in mem_ref.ent().refs("Overrides"):
+                if over_ref.ent().ref("Callby"):
+                    is_used = True
+                    break
+
+        if type_ref.ent().ref("Callby") or (type_ref.ent().kind().check("Alias") and type_ref.ent().ref("Useby")):
+            is_used = True
+
+        if not is_used:
+            lex = file.lexer().lexeme(type_ref.line(), type_ref.column())
+            lex = lex.next(True, True)
+
+            if lex.text() == "[":
+                while lex.text() != "]":
+                    if lex.text() == "maybe_unused" and lex.token() == "Identifier":
+                        is_used = True
+                        break
+
+                    lex = lex.next(True, True)
+
+        if not is_used:
+            check.violation(type_ref.ent(), type_ref.file(), type_ref.line(), type_ref.column(), ERR1)

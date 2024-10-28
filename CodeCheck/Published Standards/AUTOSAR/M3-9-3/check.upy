@@ -1,0 +1,117 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+
+import re
+
+ERR1 = 'Bit representation of floating-point value used by %1'
+
+def ids():
+    return ('M3-9-3', 'MISRA04_12.12', 'MISRA08_3-9-3', 'CPP_B003')
+
+def name(id):
+    return {
+        'M3-9-3': 'Published Standards/AUTOSAR/The underlying bit representations of floating-point values shall not be used',
+        'MISRA04_12.12': 'Published Standards/MISRA-C 2004/12.12 The underlying bit representations of floating-point values shall not be used',
+        'MISRA08_3-9-3': 'Published Standards/MISRA-C++ 2008/3-9-3 The underlying bit representations of floating-point values shall not be used',
+        'CPP_B003': 'All Checks/Language Specific/C and C++/Bit-fields/The underlying bit representations of floating-point values shall not be used',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_3-9-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Bit-fields',
+        ],
+        'MISRA04_12.12': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Bit-fields',
+        ],
+        'M3-9-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Bit-fields',
+        ],
+        'CPP_B003': [
+            'Language: C',
+            'Language: C++',
+            'Bitfields',
+        ],
+    }.get(id)
+
+def description():
+    return 'The underlying bit representations of floating-point values shall not be used.'
+
+def detailed_description():
+    return '''\
+<p><b>Rationale</b></p>
+<p>The storage layout used for floating-point values may vary from one compiler to another, and
+therefore no floating-point manipulations shall be made which rely directly on the way the values
+are stored. The in-built operators and functions, which hide the storage details from the developer,
+should be used.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">float32_t My_fabs ( float32_t f )
+{
+    uint8_t * pB = reinterpret_cast&lt; uint8_t * &gt;( &f );
+    *( pB + 3 ) &= 0x7f;    // Non-compliant - generate the absolute value
+                            // of an IEEE-754 float value.
+    return ( f );
+}
+</code></pre>
+'''
+
+def test_language(language):
+    return language == 'C++'
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+def test_global():
+    return False
+
+def check(check, file):
+    # Pull a list of all floats to be tested for bit modification
+    floats = file.filerefs('Addr Useby')
+
+    # Loop through all floats that pass their address to another object
+    for float in floats:
+        if float.ent().type() != 'float':
+            continue
+        name = float.scope().name()
+        text = float.ent().contents()
+        # Check for reinterpret_cast
+        if re.search(r'reinterpret_cast.*&' + name, text):
+            check.violation(float.scope(), file, float.line(), float.column(), ERR1, float.ent().name())
+        # Check for C type cast
+        if re.search(r'\(.*\*\s*\)\s+&' + name, text):
+            check.violation(float.scope(), file, float.line(), float.column(), ERR1, float.ent().name())
+
+    # Pull a list of all unions and test for violation
+    unions = file.filerefs('Define', 'Union')
+
+    for union in unions:
+        # Pull everything defined within this union
+        unionDefines = union.ent().refs('Define')
+        flag = False
+        # If this union defines a float, flag for additional testing
+        for firstPass in unionDefines:
+            if firstPass.ent().type() == 'float':
+                flag = True
+        if not flag:
+            continue
+        # Test if float is modified indirectly by using another defined object within the union.
+        for secondPass in unionDefines:
+            if secondPass.ent().type() == 'float':
+                continue
+            if secondPass.ent().refs('ModifyBy, SetBy'):
+                check.violation(secondPass.ent(), file, secondPass.line(), secondPass.column(), ERR1, secondPass.ent().name())

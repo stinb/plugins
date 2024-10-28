@@ -1,0 +1,291 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-11-29
+
+
+import re
+
+
+ERR1 = 'Included file is unused'
+ERR2 = 'Included file might be unused (%1 file)'
+ERR3 = 'Included file might be unused (%1 file & no known contents)'
+
+VERSIONS = [
+    'Slow (system includes are not resolved)',
+    'Fast (system includes are resolved)',
+]
+SLOW = 0
+FAST = 1
+
+
+headersOfUnresolvedEnts = dict() # { ent: headerEnt, ... }
+
+
+def ids():
+    return ('A16-2-2', 'CPP_PR034')
+
+
+def name(id):
+    return {
+        'A16-2-2': '''Published Standards/AUTOSAR/\
+There shall be no unused include directives (slow)''',
+        'CPP_PR034': '''All Checks/Language Specific/C and C++/Preprocessor/\
+There shall be no unused include directives (slow)''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A16-2-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Automation: Automated',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'CPP_PR034': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }[id]
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+
+<p>
+There shall be no unused include directives
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Presence of unused include directives considerably slows down compilation phase,
+makes the code base larger and introduces unneeded dependencies.
+</p>
+
+<p>
+Note: In order to determine what an unused include directive is, only the
+immediate level of includes, and the specifications of external libraries shall
+be considered. So, for example, if a source file uses the standard library
+algorithm <code>std::copy</code>, it is required (see also rule A16-2-3) to
+include the standard library included <code>&lt;algorithm&gt;</code>. It is not
+a violation of this rule if <code>&lt;algorithm&gt;</code>, possibly through
+inclusion of other headers, contains declarations of symbols not used in the
+source file.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+// $Id: A16-2-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;algorithm&gt; // Non-compliant - nothing from algorithm header file is used
+#include &lt;array&gt;     // Non-compliant - nothing from array header file is used
+#include &lt;cstdint&gt;   // Compliant - std::int32_t, std::uint8_t are used
+#include &lt;iostream&gt;  // Compliant - cout is used
+#include &lt;stdexcept&gt; // Compliant - out_of_range is used
+#include &lt;vector&gt;    // Compliant - vector is used
+void Fn1() noexcept
+{
+    std::int32_t x = 0;
+    // ...
+    std::uint8_t y = 0;
+    // ...
+}
+void Fn2() noexcept(false)
+{
+    try
+    {
+        std::vector&lt;std::int32_t&gt; v;
+        // ...
+        std::uint8_t idx = 3;
+        std::int32_t value = v.at(idx);
+    }
+    catch (std::out_of_range& e)
+    {
+        std::cout &lt;&lt; e.what() &lt;&lt; '\\n';
+    }
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+HIC++ v4.0 [9]: 16.1.5 Include directly the minimum number of headers required
+for compilation.
+</p>
+
+<p><b>Developer's Notes</b></p>
+
+<p>
+To improve the accuracy and speed, select the fast version in the options above.
+Also, set the following options in "Project > Configure Project".
+</p>
+
+<ul>
+<li>Select "Dependencies > Compile Time Dependencies"</li>
+<li>Check "C++ > Includes > Add found system include files to source list"</li>
+</ul>
+
+<p>
+Slow version caveat: If a header is unresolved and its contents are known, its
+contents will be parsed. This may result in false positives.
+</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    # Version
+    check.options().choice('version', 'Version (see Developer\'s Notes)', VERSIONS, VERSIONS[SLOW])
+
+    # Slow version
+    check.options().checkbox('skipUnresolved', 'Slow version: Skip unresolved/unknown includes', False)
+    check.options().checkbox('skipMissing', 'Slow version: Skip unresolved/unknown includes without contents', True)
+
+
+def check(check, file):
+    fastVersion = check.options().lookup('version') == VERSIONS[FAST]
+
+    if fastVersion:
+        checkFast(check, file)
+    else:
+        checkSlow(check, file)
+
+
+################
+# FAST VERISON #
+################
+
+
+def checkFast(check, file):
+    # Get used included files
+    used = set()
+    for ent, refs in file.depends().items():
+        if hasUseRef(refs):
+            used.add(ent)
+
+    # Violation for each unused file
+    for ref in file.filerefs('~Inactive Include', '~Unresolved File'):
+        ent = ref.ent()
+        if ent not in used:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+
+def hasUseRef(refs):
+    # Find any ref with a kind like Call, Type, or Use
+    for ref in refs:
+        if ref.kind().check('~Include'):
+            return True
+    return False
+
+
+################
+# SLOW VERISON #
+################
+
+
+def checkSlow(check, file):
+    resolvedHeadersUsed     = dict() # { headerEnt: bool, ... }
+    unresolvedHeadersUnused = set()  # { headerEnt, ... }
+
+    # Get all unresolved headers
+    if not check.options().lookup('skipUnresolved'):
+        for include in file.filerefs('Include', 'Unresolved, Unknown', True):
+            header = include.ent()
+            unresolvedHeadersUnused.add(header)
+
+    # For each imported ent, see which files declare/define them
+    for ref in file.filerefs('~Include', '~Namespace ~Parameter', True):
+        ent = ref.ent()
+
+        declarations = ent.ents('Definein, Declarein')
+        # Resolved headers
+        for declaringFile in declarations:
+            if declaringFile not in resolvedHeadersUsed:
+                resolvedHeadersUsed[declaringFile] = True
+        # Unresolved headers
+        if not declarations and not check.options().lookup('skipUnresolved'):
+            # Declaration already known
+            if ent in headersOfUnresolvedEnts:
+                header = headersOfUnresolvedEnts[ent]
+                unresolvedHeadersUnused.remove(header)
+            # Declaration not known
+            else:
+                for header in list(unresolvedHeadersUnused):
+                    if entInHeaderContents(headersOfUnresolvedEnts, ent, header):
+                        unresolvedHeadersUnused.remove(header)
+
+    # Violation for each unused include
+    for include in file.filerefs('Include', '', True):
+        header = include.ent()
+
+        # Skip if used
+        if header.kind().check('~Unresolved ~Unknown'):
+            if resolvedHeaderUsed(resolvedHeadersUsed, header, set()):
+                continue
+        else:
+            if header not in unresolvedHeadersUnused:
+                continue
+
+        # Violation: Resolved
+        if header.kind().check('~Unresolved ~Unknown'):
+            check.violation(header, file, include.line(), include.column(), ERR1)
+        # Violation: Unresolved & not skipping unresolved
+        elif not check.options().lookup('skipUnresolved'):
+            kind = 'unresolved' if header.kind().check('Unresolved') else 'unknown'
+            # Violation: Unresolved & contents
+            if header.contents():
+                check.violation(header, file, include.line(), include.column(), ERR2, kind)
+            # Violation: Unresolved, no contents, & not skipping missing
+            elif not check.options().lookup('skipMissing'):
+                check.violation(header, file, include.line(), include.column(), ERR3, kind)
+
+
+def entInHeaderContents(headers, ent, header):
+    # Declaration pattern
+    pattern = r'\b' + str(re.escape(ent.name()))
+    if ent.kind().check('Function'):
+        pattern = r'\b' + str(re.escape(ent.name())) + r'.+\('
+    elif ent.kind().check('Class'):
+        pattern = r'class.+' + str(re.escape(ent.name()))
+
+    # Find in header contents
+    if re.search(pattern, header.contents()):
+        return True
+    return False
+
+
+def resolvedHeaderUsed(headersUsed, header, visited):
+    # Base case: visited already during recursion
+    if header in visited:
+        return header in headersUsed and headersUsed[header]
+    else:
+        visited.add(header)
+
+    # Base case: used/unused
+    if header in headersUsed:
+        return headersUsed[header]
+
+    # Recursively try to find a used header
+    for otherHeader in header.ents('Include', ''):
+        if resolvedHeaderUsed(headersUsed, otherHeader, visited):
+            headersUsed[header] = True
+            return True
+
+    headersUsed[header] = False
+    return False

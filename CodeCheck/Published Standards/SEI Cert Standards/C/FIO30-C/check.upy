@@ -1,0 +1,143 @@
+ERR1 = 'Exclude user input from format strings.'
+FORMATTED_FUNCS = {"fprintf", "vfprintf", "printf", "vprintf"}
+
+
+# The ID for the check
+def id():
+    return ('FIO30-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO30-C': 'Published Standards/SEI Cert Standards/C/Exclude user input from format strings',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO30-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Exclude user input from format strings'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Exclude user input from format strings</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to exclude user input from format specifiers may allow an attacker to crash a vulnerable process, view the contents of the stack, view memory content, or write to an arbitrary memory location and consequently execute arbitrary code with the permissions of the vulnerable process.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO30-C.+Exclude+user+input+from+format+strings</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+void incorrect_password(const char *user) {
+  int ret;
+  /* User names are restricted to 256 or fewer characters */
+  static const char msg_format[] = "%s cannot be authenticated.\n";
+  size_t len = strlen(user) + sizeof(msg_format);
+  char *msg = (char *)malloc(len);
+  if (msg == NULL) {
+    /* Handle error */
+  }
+  ret = snprintf(msg, len, msg_format, user);
+  if (ret &lt; 0) {
+    /* Handle error */
+  } else if (ret &gt;= len) {
+    /* Handle truncated output */
+  }
+  fprintf(stderr, msg);
+  free(msg);
+}
+
+
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;syslog.h&gt;
+
+void incorrect_password(const char *user) {
+  int ret;
+  /* User names are restricted to 256 or fewer characters */
+  static const char msg_format[] = "%s cannot be authenticated.\n";
+  size_t len = strlen(user) + sizeof(msg_format);
+  char *msg = (char *)malloc(len);
+  if (msg == NULL) {
+    /* Handle error */
+  }
+  ret = snprintf(msg, len, msg_format, user);
+  if (ret &lt; 0) {
+    /* Handle error */
+  } else if (ret &gt;= len) {
+    /* Handle truncated output */
+  }
+  syslog(LOG_INFO, msg);
+  free(msg);
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check assumes that objects defined in the function contain a 'tainted value'.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        obj_ids = []
+
+        for obj_ref in func_ref.ent().refs("Define", "Object, Parameter"):
+            obj_ids.append(obj_ref.ent().id())
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in FORMATTED_FUNCS:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and (lex.ent().id() in obj_ids):
+                        check.violation(call_ref.ent(), file,
+                                        call_ref.line(), call_ref.column(), ERR1)
+
+                        break
+
+                    lex = lex.next(ignore_whitespace=True)

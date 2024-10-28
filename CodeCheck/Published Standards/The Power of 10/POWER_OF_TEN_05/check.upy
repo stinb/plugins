@@ -1,0 +1,317 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-06-14
+
+
+import re
+
+from Modules import findClose
+from Modules import lexemeBeforeLexeme
+
+
+ERR1 = 'Average assertion statements per function: %1, minimum average: %2'
+ERR2 = 'Trivial assertion statement'
+ERR3 = 'Non-boolean assertion statement'
+
+TRIVIAL_TOKENS = {'Literal', 'Operator', 'Punctuation', 'String'}
+
+FLOAT_PATTERN = r'-?((\d+\.\d*(e[+-]?\d+)?[f|l]?)|(\d*\.\d+(e[+-]?\d+)?[f|l]?)|(\d+(e[+-]?\d+)?[f|l])|(\d+(e[+-]?\d+)[f|l]?))'
+INT_PATTERN = r'-?((0b([0|1]+))|(0([0-7]+))|(\d+)|(0x([\d|a-f]+)))[u|l]?'
+OPERATOR_PATTERN = r'\(|\)|\+|-|!|~|\*|/|%|<<|>>|<|<=|>|>=|==|!=|\^|\||&&|\|\||\?|:|,'
+QUALIFIER_PATTERN = r'\b(const|volatile|restrict)\b'
+
+
+checkedAverage = [False]
+
+
+def ids():
+    return ('POWER_OF_TEN_05', 'CPP_EH010')
+
+
+def name(id):
+    return {
+        'POWER_OF_TEN_05': '''Published Standards/The Power of 10/\
+5 Use Assertion Statements''',
+        'CPP_EH010': '''All Checks/Language Specific/C and C++/Exception Handling/\
+Use Assertion Statements''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POWER_OF_TEN_05': [
+            'Language: C',
+            'Language: C++',
+            'Standard: The Power of Ten',
+            'Exception Handling'
+        ],
+        'CPP_EH010': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling'
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p>The code's assertion density should average to minimally two assertions per
+function. Assertions must be used to check for anomalous conditions that should
+never happen in real-life executions. Assertions must be side-effect free and
+should be defined as Boolean tests. When an assertion fails, an explicit
+recovery action must be taken such as returning an error condition to the caller
+of the function that executes the failing assertion. Any assertion for which a
+static checking tool can prove that it can never fail or never hold violates
+this rule.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Statistics for industrial coding efforts indicate that unit tests often find
+at least one defect per 10 to 100 lines of written code. The odds of
+intercepting defects increase significantly with increasing assertion density.
+Using assertions is often recommended as part of a strong defensive coding
+strategy. Developers can use assertions to verify pre- and post-conditions of
+functions, parameter values, return values of functions, and loop invariants.
+Because the proposed assertions are side-effect free, they can be selectively
+disabled after testing in performance-critical code.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">#include &lt;assert.h&gt;
+
+enum { ZERO = 0 };
+const static int ONE = 1;
+#define TWO 2
+
+enum { THREE = 3 + 0 };
+const static int FOUR = 1L &lt;&lt; 2;
+#define FIVE '\\0' + 5L + '\\0'
+
+const static float PI = 3.14159265f;
+
+static void trivial_assertions(int x)
+{
+  int y = 4;
+  if (x)
+    y = 5;
+
+  assert(x == 0);
+  assert(y == 4);
+  assert(!"What?");   // Violation
+  assert(0);          // Violation
+  assert(1);          // Violation
+  assert(!1);         // Violation
+  assert(!(-1));      // Violation
+  assert(0 == 0);     // Violation
+  assert(0 == 1);     // Violation
+  assert(0 != 0);     // Violation
+  assert(0 != 1);     // Violation
+  assert(0 &lt; 0);      // Violation
+  assert(0 &gt; 1);      // Violation
+  assert(0 == 1 - 1); // Violation
+  assert(0 == ZERO);  // Violation
+  assert(0 == ONE);   // Violation
+  assert(0 == TWO);   // Violation
+  assert(0 == THREE); // Violation
+  assert(0 == FOUR);  // Violation
+  assert(0 == FIVE);  // Violation
+  assert(PI == PI);   // Violation
+}
+</code></pre>
+
+<pre><code language="C++">#include &lt;assert.h&gt;
+
+// Violation for the whole project
+// The ratio of assertions to functions is 3/2 = 1.5
+// The minimum ratio is 2
+
+static void three_assertions(int x)
+{
+  assert(x &gt; 0);
+  assert(x != 6);
+  assert(x != 79);
+}
+
+static void zero_assertions(void)
+{
+
+}
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+
+<p>The test for trivial assert statements is not perfect. It may have
+inaccuracies for entities with complex values, such as constants that use other
+constants.</p>
+
+<p>The test for boolean assert statements is basic. It only checks for simple
+calls. The test for trivial assert statements will create violations for
+trivial non-boolean expressions, such as integers.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().integer('minimumRatio', 'Minimum average assertions per function', 2)
+
+
+def check(check, file):
+    # Do a global check on the average ratio once
+    if not checkedAverage[0]:
+        checkedAverage[0] = True
+        checkAverage(check)
+
+    # Check each assertion in each file
+    checkEachAssertion(check, file)
+
+
+def checkEachAssertion(check, file):
+    lexer = None
+
+    # Check on each macro usage in each file
+    for ref in file.filerefs('Use', 'Macro'):
+        ent = ref.ent()
+
+        # Skip if not assert
+        if ent.longname() != 'assert':
+            continue
+
+        # Find parentheses
+        if not lexer:
+            lexer = file.lexer()
+        lex = lexer.lexeme(ref.line(), ref.column())
+        lexOpen = lex.next(True, True)
+        lexClose = findClose(lexOpen)
+
+        # Skip if parentheses not found
+        if not lexOpen or lexOpen.text() != '(' or not lexClose:
+            continue
+
+        # Make sure it's non-trivial and boolean
+        checkNonTrivialAssertion(check, ref, lexOpen, lexClose)
+        checkBooleanAssertion(check, ref, lexOpen, lexClose)
+
+
+def checkNonTrivialAssertion(check, ref, lexOpen, lexClose):
+    # Go through the lexemes and find a non-trivial token
+    lex = lexOpen
+    while lex and lexemeBeforeLexeme(lex, lexClose):
+        if not isTrivialLexeme(lex):
+            return
+        lex = lex.next(True, True)
+
+    check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR2)
+
+
+def checkBooleanAssertion(check, ref, lexOpen, lexClose):
+    # Skip if no first lexeme in the condition
+    lexFn = lexOpen.next(True, True)
+    if not lexFn:
+        return
+
+    # Skip if it's not a function
+    fn = lexFn.ent()
+    if not fn or not fn.kind().check('Function'):
+        return
+
+    # Skip if it's a boolean function
+    fnType = re.sub(QUALIFIER_PATTERN, '', str(fn.type())).strip()
+    if fnType in {'bool', '_Bool'}:
+        return
+
+    # Skip if the function isn't called here
+    lexFnOpen = lexFn.next(True, True)
+    lexFnClose = findClose(lexFnOpen)
+    if not lexFnClose:
+        return
+
+    # Skip if the expression is more complicated than a call
+    lexAfterFnClose = lexFnClose.next(True, True)
+    if not lexAfterFnClose or not isSameLexeme(lexClose, lexAfterFnClose):
+        return
+
+    check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR3)
+
+
+def isSameLexeme(lex0, lex1):
+    return lex0.line_begin() == lex1.line_begin() \
+    and lex0.line_end() == lex1.line_end() \
+    and lex0.column_begin() == lex1.column_begin() \
+    and lex0.column_end() == lex1.column_end() \
+    and lex0.text() == lex1.text()
+
+
+def isTrivialLexeme(lex):
+    # Operator, integer, literal, etc.
+    if lex.token() in TRIVIAL_TOKENS:
+        return True
+
+    # Boolean keyword
+    if lex.token() == 'Keyword' and lex.text() in {'true', 'false'}:
+        return True
+
+    # Entity with only one value
+    ent = lex.ent()
+    if ent and ent.value() and isTrivialValue(ent.value()):
+        if ent.kind().check('Enumerator, Macro') \
+        or ent.type() and re.search(r'\bconst\b[^*]*$', ent.type()):
+            return True
+
+    return False
+
+
+def isTrivialValue(string):
+    # Remove empty strings
+    string = re.sub(r'""', '', string)
+    # Remove other strings
+    string = re.sub(r'".*?[^\\]"', '', string)
+    # Remove characters
+    string = re.sub(r"'.*?[^\\]'", '', string)
+    # Remove floats
+    string = re.sub(FLOAT_PATTERN, '', string, flags=re.IGNORECASE)
+    # Remove integers
+    string = re.sub(INT_PATTERN, '', string, flags=re.IGNORECASE)
+    # Remove operators
+    string = re.sub(OPERATOR_PATTERN, '', string, flags=re.IGNORECASE)
+    # Remove whitespace
+    string = re.sub(r'\s', '', string)
+
+    # If nothing is left, it was probably a trivial expression
+    return not string
+
+
+def checkAverage(check):
+    # Calculate count of assertions
+    assertions = 0
+    for ent in check.db().ents('Macro'):
+        if ent.longname() == 'assert':
+            assertions = len(ent.refs('Useby'))
+            break
+
+    # Calculate count of functions
+    functions = len(check.db().ents('Function ~Unresolved ~Unknown'))
+
+    # Calculate ratio
+    actualRatio = assertions / functions
+
+    # Violation if not enough assertions
+    minimumRatio = check.options().lookup('minimumRatio')
+    if actualRatio < minimumRatio:
+        check.violation(None, None, -1, -1, ERR1, pretty(actualRatio), minimumRatio)
+
+
+# Round numbers like 3.0 to 3
+def pretty(number):
+    rounded = round(number)
+    return rounded if number == rounded else number

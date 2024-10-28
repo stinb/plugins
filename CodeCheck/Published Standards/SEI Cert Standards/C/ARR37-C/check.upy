@@ -1,0 +1,188 @@
+ERR1 = 'Do not add or subtract an integer to a pointer to a non-array object.'
+
+
+# The ID for the check
+def id():
+    return ('ARR37-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ARR37-C': 'Published Standards/SEI Cert Standards/C/Do not add or subtract an integer to a pointer to a non-array object',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'ARR37-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not add or subtract an integer to a pointer to a non-array object'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not add or subtract an integer to a pointer to a non-array object</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/ARR37-C.+Do+not+add+or+subtract+an+integer+to+a+pointer+to+a+non-array+object</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">struct numbers {
+  short num_a, num_b, num_c;
+};
+
+int sum_numbers(const struct numbers *numb){
+  int total = 0;
+  const short *numb_ptr;
+
+  for (numb_ptr = &numb-&gt;num_a;
+       numb_ptr &lt;= &numb-&gt;num_c;
+       numb_ptr++) {
+    total += *(numb_ptr);
+  }
+
+  return total;
+}
+
+int main(void) {
+  struct numbers my_numbers = { 1, 2, 3 };
+  sum_numbers(&my_numbers);
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    flagged_lines = []
+
+    if file.lexer():
+        lexer = file.lexer(True, 8, False, False)
+    else:
+        return
+
+    for func_ref in file.filerefs("Define", "Function", True):
+        for obj_ref in func_ref.ent().refs("Define", "Object, Parameter", True):
+
+            if obj_ref.ent().ref("Typed"):
+                obj_ent, obj_type = get_ent_type(obj_ref.ent())
+            else:
+                obj_ent = obj_ref.ent()
+                obj_type = obj_ent.type()
+
+            if not obj_type and obj_ent.kind().check("Struct, Class"):
+                for mem_ref in obj_ent.refs("Define", "Member Object"):
+                    mem_type = mem_ref.ent().freetext("UnderlyingType")
+
+                    if mem_type in {"char *"}:
+                        continue
+
+                    for assign_ref in mem_ref.ent().refs("Assignby Ptr"):
+                        if assign_ref.ent().parent() and assign_ref.ent().parent().id() != func_ref.ent().id():
+                            continue
+
+                        for use_ref in assign_ref.ent().refs("Deref Useby, Modifyby"):
+                            if (use_ref.line() in flagged_lines) or (use_ref.ent().id() != func_ref.ent().id()):
+                                continue
+
+                            skip_previous = False
+                            lex = lexer.lexeme(
+                                use_ref.line(), use_ref.column())
+
+                            next_lex = lex.next(ignore_whitespace=True)
+
+                            if next_lex.text() == ")":
+                                next_lex = next_lex.next(
+                                    ignore_whitespace=True)
+
+                            if next_lex.text() == "->":
+                                skip_previous = True
+                            elif next_lex.text() in {"++", "--"}:
+                                check_violation(use_ref, check, flagged_lines, file)
+                                skip_previous = True
+                            elif next_lex.text() in {"+", "-", "+=", "-="}:
+                                while next_lex and next_lex.token() not in {"Identifier", "Literal"}:
+                                    next_lex = next_lex.next(
+                                        ignore_whitespace=True)
+
+                                if lex.token() == "Literal":
+                                    check_violation(use_ref, check, flagged_lines, file)
+
+                                    skip_previous = True
+                                elif next_lex.ent():
+                                    ent_type = next_lex.ent().freetext("UnderlyingType")
+
+                                    if ent_type == "int":
+                                        check_violation(use_ref, check, flagged_lines, file)
+                                        skip_previous = True
+
+                            if skip_previous:
+                                continue
+
+                            prev_lex = lex.previous(ignore_whitespace=True)
+
+                            while prev_lex.text() in {"(", "*"}:
+                                prev_lex = prev_lex.previous(
+                                    ignore_whitespace=True)
+
+                            if prev_lex.text() in {"++", "--"}:
+                                check_violation(use_ref, check, flagged_lines, file)
+                            elif prev_lex.text() in {"+", "-", "+=", "-="}:
+                                while prev_lex and prev_lex.token() not in {"Identifier", "Literal"}:
+                                    prev_lex = prev_lex.previous(
+                                        ignore_whitespace=True)
+
+                                if prev_lex.token() == "Literal":
+                                    check_violation(use_ref, check, flagged_lines, file)
+                                elif prev_lex.ent():
+                                    ent_type = prev_lex.ent().freetext("UnderlyingType")
+
+                                    if ent_type == "int":
+                                        check_violation(use_ref, check, flagged_lines, file)
+
+
+def check_violation(ref, check, flagged_lines, file):
+    check.violation(ref.scope(), file, ref.line(), ref.column(), ERR1)
+    flagged_lines.append(ref.line())
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref or (typed_ref.ent().name() == typed_ref.scope().name()):
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()

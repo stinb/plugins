@@ -1,0 +1,246 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 10-8-14
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => "Non distinct macro identifier %1 conflicts with macro on line %2";
+use constant ERR2 => "Non distinct parameter %1";
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+  $check->add_tr_text(ERR2);
+}
+
+sub checkID { return "MISRA23_5.4";}
+
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA C 2023\\5.4 Macro identifiers shall be distinct";}
+
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2023',
+    'Category: Required',
+    'Identifiers',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return "5.4 ( Required ) Macro identifiers shall be distinct.";
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Amplification</b></p>
+This rule requires that, when a macro is being defined, its name be distinct from:
+</p>
+
+<p>
+• the names of the other macros that are currently defined; and
+</p>
+
+<p>
+• the names of their parameters.
+</p>
+
+<p>
+It also requires that the names of the parameters of a given macro be distinct from each other but
+does not require that macro parameters names be distinct across two different macros.
+</p>
+
+<p>
+The definition of distinct depends on the implementation and on the version of the C language that
+is being used:
+</p>
+
+<p>
+• In C90 the minimum requirement is that the first 31 characters of <i>macro identifiers</i> are
+significant;
+</p>
+
+<p>
+• In C99 the minimum requirement is that the first 63 characters of <i>macro identifiers</i> are
+significant.
+</p>
+
+<p>
+In practice, implementations may provide greater limits. This rule requires that <i>macro identifiers</i> be
+distinct within the limits imposed by the implementation.
+</p>
+
+<p><b>Rationale</b></p>
+If two <i>macro identifiers</i> differ only in non-significant characters, the behaviour is undefined. Since macro
+parameters are active only during the expansion of their macro, there is no issue with parameters in
+one macro being confused with parameters in another macro.
+</p>
+
+<p>
+If portability is a concern, it would be prudent to apply this rule using the minimum limits specified in
+The Standard.
+</p>
+
+<p>
+Long <i>macro identifiers</i> may impair the readability of code. While many automatic code generation
+systems produce long <i>macro identifiers</i>, there is a good argument for keeping <i>macro identifier</i> lengths
+well below this limit.
+</p>
+
+<p>
+<i>Note</i>: In C99, if an extended source character appears in a macro name and that character does not
+have a corresponding universal character, The Standard does not specify how many characters it
+occupies.
+</p>
+
+<p><b>Example</b></p>
+In the following example, the implementation in question supports 31 significant case-sensitive
+characters in <i>macro identifiers</i>.
+</p>
+
+<pre><code language="C++">  /*      1234567890123456789012345678901*********        Characters */
+  #define engine_exhaust_gas_temperature_raw egt_r
+  #define engine_exhaust_gas_temperature_scaled egt_s /*  Non-compliant */
+
+  /*      1234567890123456789012345678901*********        Characters */
+  #define engine_exhaust_gas_temp_raw egt_r
+  #define engine_exhaust_gas_temp_scaled egt_s /*         Compliant */
+
+</code></pre>
+
+<p><b>See also</b><br>
+Rule 5.1 , Rule 5.2, Rule 5.5
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox( 'C99', 'Use C99 standard? ( C90 default )', 0 );
+}
+
+
+# Subroutine to get the length of significant characters
+sub getLength {
+
+  # Set the length of the string to be tested based off the user selected option
+  my $check = shift;
+  my $length;
+  if  ( $check->option->lookup( 'C99' ) ) {
+    $length = 63;
+  } else {
+    $length = 31
+  }
+  return $length
+
+}
+
+
+# Create a sub string of length of significant characters
+sub makeSubstring {
+
+  # Create the substring of the entity name to compare to other entities
+  my $check = shift;
+  my $name = shift;
+  my $subString = substr ( $name, 0, getLength( $check ) );
+  return $subString;
+
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull check and file from Understand. Test that we are looking at a file and return otherwise
+  my $check = shift; 
+  my $file = shift; 
+  return unless $file->kind->check("file ~unknown ~unresolved");
+
+  # Pull all the Macros defined in this file, return if none
+  my @macrosDefined = $file->filerefs( 'Define, Declare', 'Macro ~Inactive');
+  return unless @macrosDefined;
+
+  # Start my hash for tracking patterns
+  my %patternsSeen = ();
+
+  foreach my $macro ( @macrosDefined ) {
+
+    # Create substring for hash comparison
+    my $subString = makeSubstring ( $check, $macro->ent->name );
+
+    # Check Macro paremeters if we have any
+    my @paremetersDefined = $macro->ent->parameters;
+    if ( @paremetersDefined ) {
+
+      # Create parameter hash and loop through all parameters
+      my %parametersSeen = ();
+      $parametersSeen{ $subString } = $macro->ent->name;
+
+      foreach my $parameters ( @paremetersDefined ) {
+
+        # Create substring for hash comparison and test
+        my $parameterString = makeSubstring ( $check, $parameters );
+
+        if ( exists $parametersSeen{ $parameterString } ) {
+          $check->violation( $macro->ent, $macro->file, $macro->line, $macro->column, ERR2, $parameters );
+        } else {
+          $parametersSeen{ $parameterString } = $parameters;
+        }
+      }
+    }
+
+
+    # Test if we have seen this macro before
+    if ( exists $patternsSeen{ $subString } ) {
+
+      # We've seen this macro name before, throw error
+      my $seenRef = $patternsSeen{ $subString };
+      my $overloads = 0;
+      $overloads = 1 if $macro->ent->name eq $seenRef->ent->name;
+      $check->violation( $macro->ent, $macro->file, $macro->line, $macro->column, ERR1, $macro->ent->name, $seenRef->line ) unless $overloads;
+
+    } else {
+
+      # Stuff this macro into the hash
+      $patternsSeen{ $subString } = $macro;
+
+    }
+  }
+}

@@ -1,0 +1,206 @@
+ERR1 = "All constructors that are callable with a single argument of fundamental type shall be declared explicit."
+ERR2 = "Conversion operators that are callable with a single argument shall be explicit."
+ALLOWED_PARAM_COUNT = 1
+
+
+# The ID for the check
+def ids():
+    return ('A12-1-4', 'MISRA08_12-1-3', 'CPP_D064', 'MISRA23_15.1.3')
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-1-4': 'Published Standards/AUTOSAR/All constructors that are callable with a single argument of fundamental type shall be declared explicit.',
+        'MISRA08_12-1-3': 'Published Standards/MISRA-C++ 2008/12-1-3 All constructors that are callable with a single argument of fundamental type shall be declared explicit.',
+        'CPP_D064': 'All Checks/Language Specific/C and C++/Declarations and Definitions/All constructors that are callable with a single argument of fundamental type shall be declared explicit.',
+        'MISRA23_15.1.3': 'Published Standards/MISRA C++ 2023/15.1.3 Conversion operators and constructors that are callable with a single argument shall be explicit',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_12-1-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'A12-1-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D064': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_15.1.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_15.1.3':
+        return '''
+<p><b>Amplification</b></p>
+<p>This rule does not apply to copy or move constructors.</p>
+<p>Note: this rule does not prevent the addition of explicit to other constructors.</p>
+        
+<p><b>Rationale</b></p>
+<p>The explicit keyword prevents a constructor or conversion operator from being used to implicitly
+convert from one type to another.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class C
+{
+public:
+ C( int32_t a ); // Non-compliant
+};
+class D
+{
+public:
+ explicit D( int32_t a ); // Compliant
+ D( const D & d ); // Rule does not apply - copy constructor
+ operator int32_t() const; // Non-compliant
+ explicit operator bool() const; // Compliant
+};
+class E
+{
+public:
+ E( int32_t a, int32_t b = 0 ); // Non-compliant - callable with one argument
+ E( char a = 'a', int32_t b = 0 ); // Non-compliant - callable with one argument
+ E( char a, char b ); // Rule does not apply - requires two arguments
+};
+void f( E e );
+void g()
+{
+ f( 0 ); // Implicit conversion from 0 to E
+}</code></pre>
+'''
+    return """\
+<p><b>Rationale</b></p>
+<p>The explicit keyword prevents the constructor from being used to implicitly convert a fundamental type to the class type.</p>
+<p>See: Fundamental-Types.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-1-4.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 class A
+4 {
+5 public:
+6 explicit A(std::int32_t number) : x(number) {} // Compliant
+7 A(A const&) = default;
+8 A(A&&) = default;
+9 A& operator=(A const&) = default;
+10 A& operator=(A&&) = default;
+11
+12 private:
+13 std::int32_t x;
+14 };
+15 class B
+16 {
+17 public:
+18 B(std::int32_t number) : x(number) {} // Non-compliant
+19 B(B const&) = default;
+20 B(B&&) = default;
+21 B& operator=(B const&) = default;
+22 B& operator=(B&&) = default;
+23
+24 private:
+25 std::int32_t x;
+26 };
+27 void F1(A a) noexcept
+28 {
+29 }
+30 void F2(B b) noexcept
+31 {
+32 }
+33 void F3() noexcept
+34 {
+35 F1(A(10));
+36 // f1(10); // Compilation error - because of explicit constructor it is not
+37 // possible to implicitly convert integer
+38 // to type of class A
+39 F2(B(20));
+40 F2(20); // No compilation error - implicit conversion occurs
+41 }
+</code></pre>
+<p><b>See also</b></p>
+<p>MISRA C++ 2008 [7]: Rule 12-1-3 (Required) All constructors that are callable with a single argument of fundamental type shall be declared explicit.
+</p>"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    incl_convops = True if (check.id() == 'MISRA23_15.1.3') else False
+
+    check.option().checkbox('incl_convops', 'Include conversion operators', incl_convops)
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define","Class", True):
+        incl_convops = check.option().lookup('incl_convops')
+
+        for func_ref in class_ref.ent().refs("Define, Declare", "~Explicit Public Member Function", True):
+            if func_ref.ent().name() == class_ref.ent().name():
+                param_ctr = 0
+                param_def = 0
+                skip = False
+
+                for param_ref in func_ref.ent().refs("Define, Declare", "Parameter", True):                        
+                    param_type = param_ref.ent().type()
+                    param_type = param_type.split(" ")
+                    param_val = param_ref.ent().value()
+
+                    if not param_ctr and func_ref.ent().name() in param_type:
+                        skip = True
+                        break
+                    
+                    if param_val:
+                        param_def += 1
+                                                
+                    param_ctr += 1
+
+                if not skip and ((param_ctr == 1) or ((param_ctr > 1) and ((param_ctr - param_def) < 2))):
+                    check.violation(func_ref.ent(), func_ref.file(), func_ref.line(), func_ref.column(), ERR1)
+            
+            elif incl_convops and func_ref.ent().name().startswith("operator "):
+                lex = func_ref.file().lexer().lexeme(func_ref.line(), func_ref.column())
+                compliant = False
+
+                while lex and lex.line_begin() == func_ref.line():
+                    if (lex.text() == "explicit") and (lex.token() == "Keyword"):
+                        compliant = True
+                        break
+                    
+                    lex = lex.previous(True, True)
+
+                if not compliant:
+                    check.violation(func_ref.ent(), func_ref.file(), func_ref.line(), func_ref.column(), ERR2)
+
+                    

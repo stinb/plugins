@@ -1,0 +1,323 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-01-10
+
+
+import re
+
+
+ERR1 = 'This name has another definition (in the "{}" name space)'
+ERR2 = 'File included with inconsistent #pragma pack'
+ERR3 = 'Object used by reference in externally-linked function, which is called in an inline function'
+
+TAG_KIND = '~Unresolved ~Unnamed Class, ~Unresolved ~Unnamed Struct, ~Unresolved ~Unnamed Union, ~Unresolved ~Unnamed Enum'
+ORDINARY_IDENTIFIER_KIND = '~Unresolved ~Unnamed ~Lambda ~Label ~Member ~Class ~Struct ~Union ~Enum ~Parameter'
+
+CPP_ENT_KIND = 'Abstract, Class, Member, Lambda, Namespace, Type Alias'
+
+
+def ids():
+    return ('DCL60-CPP', 'CPP_DD018')
+
+
+def name(id):
+    return {
+        'DCL60-CPP': '''Published Standards/SEI Cert Standards/C++/\
+Obey the one-definition rule''',
+        'CPP_DD018': '''All Checks/Language Specific/C and C++/\
+Declarations and Definitions/Obey the one-definition rule''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'DCL60-CPP': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Unlikely',
+            'Remediation Cost: High',
+            'Priority: P3',
+            'Level: L3',
+        ],
+        'CPP_DD018': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Obey the one-definition rule</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Violating the ODR causes undefined behavior, which can result in exploits as well as denial-of-service attacks. As shown in "Support for Whole-Program Analysis and the Verification of the One-Definition Rule in C++" [Quinlan 06], failing to enforce the ODR enables a virtual function pointer attack known as the <i>VPTR exploit</i>. In this exploit, an object's virtual function table is corrupted so that calling a virtual function on the object results in malicious code being executed. See the paper by Quinlan and colleagues for more details. However, note that to introduce the malicious class, the attacker must have access to the system building the code.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/DCL60-CPP.+Obey+the+one-definition+rule'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/DCL60-CPP.+Obey+the+one-definition+rule</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+// a.cpp
+struct S {
+  int a;
+};
+
+// b.cpp
+class S {
+public:
+  int a;
+};
+</code></pre>
+'''
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check):
+    files = set(check.files())
+
+    # Lookup name space: tag names
+    checkEnts(check, files, TAG_KIND, 'tag names')
+    # Lookup name space: ordinary identifiers
+    checkEnts(check, files, ORDINARY_IDENTIFIER_KIND, 'ordinary identifiers')
+
+    checkHeaders(check, files)
+
+    checkObjects(check, files)
+
+
+def checkEnts(check, files, entKindString, lookupNameSpace):
+    error = ERR1.format(lookupNameSpace)
+
+    customNamesSeen = dict()
+    entsWithViolations = set()
+
+    for ent in check.db().ents(entKindString):
+        # Skip if not defined
+        ref = ent.ref('Definein')
+        if not ref:
+            continue
+
+        # Skip if unnammed
+        if ent.name() == '[unnamed]':
+            continue
+
+        # Skip if only internally linked
+        if not isExternallyLinked(ent):
+            continue
+
+        customName = getNameForOneDefinitionRule(ent)
+
+        # Skip if not seen yet
+        if customName not in customNamesSeen:
+            customNamesSeen[customName] = ent
+            continue
+
+        # Violation for this ent
+        makeViolation(check, files, ref, error)
+        entsWithViolations.add(ent)
+
+        # Violation for the original ent
+        otherEnt = customNamesSeen[customName]
+        if otherEnt not in entsWithViolations:
+            makeViolation(check, files, otherEnt.ref('Definein'), error)
+            entsWithViolations.add(otherEnt)
+
+
+def isExternallyLinked(ent):
+    kind = ent.kind()
+
+    if kind.check('~Local ~Member ~Static, ~Local ~Member Static Frominclude'):
+        if kind.check('Object'):
+            # Names at the top-level namespace scope (file scope in C) that are
+            # const and not extern have external linkage in C, but internal
+            # linkage in C++.
+            if isInCppFile(ent):
+                t = ent.type()
+                if t:
+                    return not bool(re.search(r'\bconst\b', t))
+                return False
+            return True
+        return True
+
+    return False
+
+
+def isInCppFile(ent):
+    if ent.kind().check(CPP_ENT_KIND):
+        return True
+
+    ref = ent.ref('Definein, Declarein')
+    if not ref:
+        return False
+
+    file = ref.file()
+    fileName = file.name()
+    if re.search(r'\.(C|H|cc|cpp|cxx|hh|hpp|hxx)$', fileName):
+        return True
+    elif re.search(r'\.h$', fileName):
+        return bool(file.filerefs('', CPP_ENT_KIND))
+
+    return False
+
+
+def getNameForOneDefinitionRule(ent):
+    result = []
+
+    # Get parameters
+    if ent.kind().check('Function'):
+        result.append(f'({ent.parameters()})')
+
+    # Get name
+    result.append(ent.name())
+
+    # Get non-file parent names
+    parent = ent.parent()
+    while parent and not parent.kind().check('File'):
+        if parent.name() == '[unnamed]':
+            result.append(f'{parent.id()}')
+        else:
+            result.append(parent.name())
+        parent = parent.parent()
+
+    result.reverse()
+    return '::'.join(result)
+
+
+def makeViolation(check, files, ref, error):
+    file = ref.file()
+    if file in files:
+        check.violation(ref.scope(), file, ref.line(), ref.column(), error)
+
+
+def checkHeaders(check, files):
+    packAlignmentsOfAllEnts = dict()
+
+    for ent in check.db().ents('Header'):
+        # Skip if included 0-1 times
+        refs = ent.refs('Includeby')
+        if len(refs) <= 1:
+            continue
+
+        refsWithoutViolations = []
+
+        for ref in refs:
+            # Get pack alignment for this include or skip
+            pragmaPackStack = []
+            packAlignment = None
+            for lex in ref.file().lexer(False).lexemes():
+                if lex.token() == 'Preprocessor' and lex.text() == 'pragma':
+                    editPragmaPackStack(pragmaPackStack, lex)
+                elif lexAtRef(lex, ref):
+                    packAlignment = pragmaPackStack[-1] if pragmaPackStack else 'default'
+                    break
+            if packAlignment == None:
+                continue
+
+            # Remember the first pack alignment
+            if ent not in packAlignmentsOfAllEnts:
+                packAlignmentsOfAllEnts[ent] = set([packAlignment])
+
+            # Skip if this pack alignment is the only one used so far
+            packAlignments = packAlignmentsOfAllEnts[ent]
+            packAlignments.add(packAlignment)
+            if len(packAlignments) == 1:
+                refsWithoutViolations.append(ref)
+                continue
+
+            # Violations for other refs that were skipped
+            if refsWithoutViolations:
+                for otherRef in refsWithoutViolations:
+                    makeViolation(check, files, otherRef, ERR2)
+                refsWithoutViolations = []
+
+            # Violation for this ref
+            makeViolation(check, files, ref, ERR2)
+
+
+def lexAtRef(lex, ref):
+    return lex.line_begin() == ref.line() and lex.column_begin() == ref.column()
+
+
+def editPragmaPackStack(pragmaPackStack, lex):
+    # Match 'pack'
+    lex = lex.next(True, True)
+    if not lex or lex.text() != 'pack':
+        return
+
+    # Match '('
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '(':
+        return
+
+    # Match 'push'
+    lex = lex.next(True, True)
+    if not lex or lex.text() != 'push':
+        # If 'pop' then forget the last pack alignment
+        if lex and lex.text() == 'pop':
+            if pragmaPackStack:
+                pragmaPackStack.pop()
+        return
+
+    # Match ','
+    lex = lex.next(True, True)
+    if not lex or lex.text() != ',':
+        return
+
+    # Match a literal
+    lex = lex.next(True, True)
+    if not lex or lex.token() != 'Literal':
+        return
+
+    # Finally remember the pack alignment
+    try:
+        packAlignment = int(lex.text())
+        pragmaPackStack.append(packAlignment)
+    except:
+        pass
+
+
+def checkObjects(check, files):
+    for ent in check.db().ents('~Unresolved Object'):
+        # Skip if externally linked
+        if isExternallyLinked(ent):
+            continue
+
+        # Ued by function argument reference to assign a parameter
+        for ref in ent.refs('Assignby Ref', 'Parameter'):
+            parameter = ref.ent()
+
+            # Skip if the calling function is only internally linked
+            function = parameter.parent()
+            if not function or not isExternallyLinked(function):
+                continue
+
+            # Get the containing function
+            function = None
+            for otherRef in ent.refs('Useby', 'Function'):
+                if not sameRefLocation(otherRef, ref):
+                    continue
+                function = otherRef.ent()
+
+            # Skip if the containing function is not inline
+            if not function or not function.freetext('inline'):
+                continue
+
+            makeViolation(check, files, ref, ERR3)
+
+
+def sameRefLocation(ref0, ref1):
+    return ref0.line() == ref1.line() and ref0.column() == ref1.column()

@@ -1,0 +1,136 @@
+import re
+
+
+ERR1 = 'The %1 library shall not be used'
+ERR2 = 'The %1 function shall not be used'
+
+
+# The ID for the check
+def ids():
+    return ('A18-0-3', 'CPP_L029', 'MISRA23_25.5.1')
+
+# The short name of the check
+
+
+def name(id):
+    return {
+        'A18-0-3': """\
+Published Standards/AUTOSAR/Library <clocale> (locale.h)""",
+        'CPP_L029': """\
+All Checks/Language Specific/C and C++/Libraries/Library <clocale> \
+(locale.h)""",
+        'MISRA23_25.5.1': 'Published Standards/MISRA C++ 2023/25.5.1 The setlocale and std::locale::global functions shall not be called',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A18-0-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Libraries',
+        ],
+        'CPP_L029': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+        'MISRA23_25.5.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    if id == 'MISRA23_25.5.1':
+        return '''
+<p><b>Rationale</b></p>
+
+<p>
+Calls to setlocale or std::locale::global may introduce data races (leading to undefined
+behaviour) with functions that use the locale (e.g. printf, tolower). It is not as easy to guard against
+these potential data races due to the ways in which the global locale is used within the C++ Standard
+Library.
+</p>
+
+<p>
+The C++ Standard Library provides functions that allow a locale to be passed as an argument, meaning
+that it is possible to use a specific locale without having to depend on the setting of the global locale
+objects.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1()
+{
+ wchar_t c = L'\u2002'; // En-space
+ std::setlocale( LC_ALL, "ja_JP.utf8" ); // Non-compliant
+ if ( std::isspace( c ) ) {} // Uses global locale
+}
+</code></pre>
+
+<p>The following example sets the locale without violating this rule:</p>
+<pre><code language="C++">void f2()
+{
+ wchar_t c = L'\u2002'; // En-space
+ std::locale utf8( "ja_JP.utf8" );
+ if ( std::isspace( c, utf8 ) ) {} // Does not use global locale
+}
+</code></pre>
+        '''
+
+    return """
+<p><b>Rationale</b></p>
+<p>A call to the setlocale function introduces a data race with other calls to setlocale
+function.</p>
+<p>It may also introduce a data race with calls to functions that are affected by the current
+locale settings: fprintf, isprint, iswdigit, localeconv, tolower, fscanf, ispunct, iswgraph,
+mblen, toupper, isalnum, isspace, iswlower, mbstowcs, towlower, isalpha, isupper,
+iswprint, mbtowc, towupper, isblank, iswalnum, iswpunct, setlocale, wcscoll, iscntrl,
+iswalpha, iswspace, strcoll, wcstod, isdigit, iswblank, iswupper, strerror, wcstombs,
+isgraph, iswcntrl, iswxdigit, strtod, wcsxfrm, islower, iswctype, isxdigit, strxfrm, wctomb.</p>
+<p><b>See also</b></p>
+<p>• JSF December 2005 [8]: AV Rule 19 &lt;locale.h&gt; and the setlocale function shall
+not be used.</p>
+"""
+
+# Tests the type of file
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    flagLocaleLib = True if check.id() in {'A18-0-3', 'CPP_L029'} else False
+    flagGlobal = True if check.id() == 'MISRA23_25.5.1' else False
+
+    check.option().checkbox('flagLocaleLib', 'Flag the use of <clocale> (locale.h) library', flagLocaleLib)
+    check.option().checkbox('flagGlobal', 'Flag the use of std::locale::global function', flagGlobal)
+
+
+def check(check, file):
+    prohibited_funcs = {'setlocale', 'locale::global', 'std::locale::global', 'std::__1::locale::global'} if check.option().lookup('flagGlobal') else {'setlocale'}
+
+    if check.option().lookup('flagLocaleLib'):
+        for header_ref in file.filerefs('Include', 'Unresolved Header File'):
+            if re.search(r'^(clocale|locale\.h)', header_ref.ent().name()):
+                check.violation(header_ref.ent(), file, header_ref.line(), header_ref.column(), ERR1, header_ref.ent().name())
+
+    for ref in file.filerefs("Call", "~Virtual Function"):
+        if ref.ent().longname() in prohibited_funcs:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR2, ref.ent().name())

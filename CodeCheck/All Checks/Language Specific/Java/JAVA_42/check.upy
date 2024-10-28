@@ -1,0 +1,271 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 5-26-22
+
+
+import re
+
+
+ERR1 = 'Closing brace indentation incorrect for %1 starting at %2:%3'
+ERR2 = 'Closing brace indentation incorrect for block starting at %2:%3'
+
+
+def ids():
+    return ('JAVA_42')
+
+
+def name(id):
+    return {
+        'JAVA_42': '''All Checks/Language Specific/Java/\
+The end of a closing brace shall be at the same indentation as the blocks'\
+ declaring line.\
+        ''', \
+    }[id] \
+
+
+
+def tags(id):
+    return {
+        'JAVA_42': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>
+The end of a closing brace shall be at the same indentation as the blocks'\
+ declaring line.
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Closing brace "}" starts a line by itself indented to match its corresponding opening statement.
+</p>
+
+<p>
+See 6.4 Class and Interface Declarations
+<i>
+https://www.oracle.com/java/technologies/javase/codeconventions-declarations.html
+</i>
+</p>
+
+<p>
+The closing brace should begin a line and be indented to the beginning of the compound statement.
+</p>
+
+<p>
+See 7.2 Compound Statements
+<i>
+https://www.oracle.com/java/technologies/javase/codeconventions-statements.html
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class ExampleClass extends JFrame {
+    ExampleClass() {
+        addMouseListener(new MouseAdapter(){
+            @Override
+            public void
+            mouseClicked(MouseEvent e){
+                // ...
+          }
+        });
+    }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def firstOnLine(lex):
+    original = lex
+    line = lex.line_begin()
+    while lex:
+        if lex.line_begin() != line:
+            return lex.next(True, True)
+        lex = lex.previous(True, True)
+    return original
+
+
+def lexIsBefore(lex, line, column):
+    if lex.line_begin() < line:
+        return True
+    if lex.line_begin() == line and lex.column_begin() < column:
+        return True
+    return False
+
+
+def openingBraceIsArray(lex):
+    prev = lex.previous(True, True)
+    nex = lex.next(True, True)
+    return (prev and prev.text() in {',', ']', '='}) or (nex and nex.token() == 'Literal')
+
+
+def closingBraceIsArray(lex):
+    nex = lex.next(True, True)
+    return nex and nex.text() == ','
+
+
+def getFirstOfBlock(lex):
+    # Special case for regular code blocks
+    prev = lex.previous(True, True)
+    if prev and prev.text() in {'{', ';', ':'}:
+        return lex
+
+    # Get the first keyword
+    blockKeywords = {'if', 'else', 'switch', 'while', 'do', 'for', 'try', 'catch', 'new'}
+    while lex and lex.text() not in blockKeywords:
+        lex = lex.previous(True, True)
+
+    # Go until the beginning of the line
+    if lex:
+        lex = firstOnLine(lex)
+
+    return lex
+
+
+def fix(check, violation, lex, beginColumn, tabs):
+    line = lex.line_begin()
+    column = lex.column_begin()
+
+    # Calculate whitespace
+    if tabs:
+        indentation = '\t' * beginColumn
+    else:
+        indentation = ' ' * beginColumn
+
+    prev = lex.previous()
+
+    # Fix if the there is nothing before
+    if column == 1:
+        violation.add_fixit_hint(line, 1, line, 1, indentation)
+
+    # Fix if there is only whitespace before
+    elif prev and prev.token() == 'Whitespace' and prev.column_begin() == 1:
+        violation.add_fixit_hint(line, 1, line, column, indentation)
+
+    # Otherwise, fix by adding an empty line
+    else:
+        violation.add_fixit_hint(line, column, line, column, '\n' + indentation)
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False, tabstop=1)
+
+    # Check the spacing of blocks for entities: methods, classes, etc.
+    for begin in file.filerefs('Begin', ''):
+        ent = begin.ent()
+
+        end = ent.ref('End')
+        endLine = end.line()
+        endColumn = end.column()
+
+        beginLex = firstOnLine(lexer.lexeme(begin.line(), begin.column()))
+        beginLine = beginLex.line_begin()
+        beginColumn = beginLex.column_begin()
+
+        # Skip if the end is on the current column
+        if beginColumn == endColumn:
+            continue
+
+        # Skip if the end is not a curly brace
+        lex = lexer.lexeme(endLine, endColumn)
+        if lex.text() != '}':
+            continue
+
+        # Simplify the kind name
+        if ent.kind().check('Class'):
+            kind = 'Class'
+        elif ent.kind().check('Method'):
+            kind = 'Method'
+        else:
+            kind = ent.kindname()
+
+        # See if this block is spaces or tabs
+        tabs = False
+        whitespace = beginLex.previous()
+        if whitespace:
+            tabs = '\t' in whitespace.text()
+
+        violation = check.violation(ent, file, endLine, endColumn, ERR1, kind, beginLine, beginColumn)
+        fix(check, violation, lex, beginColumn, tabs)
+
+    # Get opening braces for methods
+    methodOpeningBraces = set()
+    for define in file.filerefs('Define', 'Method'):
+        lex = lexer.lexeme(define.line(), define.column())
+        while lex and lex.text() != '{':
+            lex = lex.next(True, True)
+        if lex:
+            methodOpeningBraces.add((lex.line_begin(), lex.column_begin()))
+
+    # Check the spacing of blocks for non-entities: if, else, for, while, etc.
+    for begin in file.filerefs('Begin', 'Method'):
+        ent = begin.ent()
+
+        end = ent.ref('End')
+        endLine = end.line()
+        endColumn = end.column()
+
+        # Array of tuples: (line, column)
+        openingBraces = []
+
+        lex = lexer.lexeme(begin.line(), begin.column())
+
+        # Parse the method for curly braces
+        while lex and lexIsBefore(lex, endLine, endColumn):
+            text = lex.text()
+
+            line = lex.line_begin()
+            column = lex.column_begin()
+
+            if text == '{':
+                openingBraces.append(lex)
+            elif text == '}':
+                openingBraceLex = openingBraces.pop()
+
+                # Skip methods, as they are already checked
+                if (openingBraceLex.line_begin(), openingBraceLex.column_begin()) in methodOpeningBraces:
+                    lex = lex.next(True, True)
+                    continue
+
+                # Skip arrays
+                if openingBraceIsArray(openingBraceLex) or closingBraceIsArray(lex):
+                    lex = lex.next(True, True)
+                    continue
+
+                # Find the keyword for control blocks, or { for normal blocks
+                beginBlockLex = getFirstOfBlock(openingBraceLex)
+
+                # Skip special cases where the first keyword isn't found
+                if not beginBlockLex:
+                    lex = lex.next(True, True)
+                    continue
+
+                # Skip if the column is correct
+                beginLine = beginBlockLex.line_begin()
+                beginColumn = beginBlockLex.column_begin()
+                if beginColumn == column:
+                    lex = lex.next(True, True)
+                    continue
+
+                # See if this block is spaces or tabs
+                tabs = False
+                whitespace = beginBlockLex.previous()
+                if whitespace:
+                    tabs = '\t' in whitespace.text()
+
+                violation = check.violation(ent, file, line, column, ERR2, beginLine, beginColumn)
+                fix(check, violation, lex, beginColumn, tabs)
+
+            lex = lex.next(True, True)

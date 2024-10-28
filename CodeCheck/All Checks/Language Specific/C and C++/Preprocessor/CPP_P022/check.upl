@@ -1,0 +1,143 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Kyle Jackson
+# 12-4-14
+
+
+# Boiler Plate code
+use base ( 'Understand::Codecheck' );
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Pre-processor used for something other than file inclusion or include guards';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_P022";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Preprocessor\\The pre-processor shall only be used for file inclusion and include guards";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Preprocessor',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description { 
+  return '(Required) The pre-processor shall only be used for file inclusion and include guards.';
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+
+<p><b>Rationale</b></p>
+C++ provides safer ways of achieving what is often done using the pre-processor, by way of inline
+functions and constant declarations.
+</p>
+
+<p><b>Example</b></p><pre><code language="C++">  #ifndef HDR // Compliant
+  #define HDR // Compliant
+  #define X(Y) (Y) // Non-compliant
+  #endif
+
+</code></pre>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options {
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift; 
+  my $file = shift;
+  return unless $file->kind->check('c file');
+
+  # Any functional macros are automatically violations
+  my @macrosDefined = $file->filerefs( 'Define', 'Macro Functional' );
+  foreach my $macro ( @macrosDefined ) {
+    $check->violation( $macro->ent, $macro->file, $macro->line, $macro->column, ERR1 );
+  }
+
+  # This check requires use of the Understand lexer. Initialize and check for failure 
+  my $lexer = $file->lexer();
+  return unless $lexer;
+  
+  # $lexeme is initialized as the first element returned from the lexer
+  my $lexeme = $lexer->first();
+
+  # While the lexer has lexemes 
+  while ( $lexeme ) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+    
+    # Ignore what we see unless it is a preprocessing directive
+    if ( $lexeme->token eq 'Preprocessor' and $lexeme->text eq '#' ) {
+
+      # Set our flag
+      my $ok = 0;
+
+      # Walk until the end of the preprocessing directive. Anything that is an include guard is ok
+      while ( $lexeme->token ne 'Newline' or $lexeme->previous->text eq '\\' ) {
+
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'include';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'if';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'elif';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'else';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'endif';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'ifndef';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'ifdef';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'define';
+        $ok = 1 if $lexeme->token eq 'Preprocessor' and $lexeme->text eq 'pragma' and $lexeme->nextUseful->text eq 'once';
+
+        $lexeme = $lexeme->next;
+
+      }
+
+      # Throw an error if this preprocessing directive does not look like an include guard
+      $check->violation( 0, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1 ) unless $ok;
+
+    }
+
+    $lexeme = $lexeme->next;
+  }
+}

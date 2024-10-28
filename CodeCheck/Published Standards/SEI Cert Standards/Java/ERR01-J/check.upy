@@ -1,0 +1,308 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-11-15
+
+
+import re
+from Modules import findClose, refBetweenNodes, javaAncestorOfIdExists, javaAncestorOfLongnameExists
+
+
+ERR1 = 'Exception "%1" could expose sensitive information'
+
+SENSITIVE_EXCEPTIONS = {
+  'java.io.FileNotFoundException', 'java.sql.SQLException',
+  'java.net.BindException', 'java.util.ConcurrentModificationException',
+  'javax.naming.InsufficientResourcesException',
+  'java.util.MissingResourceException', 'java.util.jar.JarException',
+  'java.security.acl.NotOwnerException', 'java.lang.OutOfMemoryError',
+  'java.lang.StackOverflowError'
+}
+
+PRINT_METHODS = {
+    'java.io.PrintStream.println',
+    'java.io.PrintStream.print',
+    'java.io.PrintStream.printf',
+    'java.io.PrintStream.format'
+}
+
+
+translationUnitCache = dict()
+
+
+def ids():
+    return ('ERR01-J', 'JAVA_ERR01')
+
+
+def name(id):
+    return {
+        'ERR01-J': '''Published Standards/SEI Cert Standards/Java/\
+Do not allow exceptions to expose sensitive information''',
+        'JAVA_ERR01': '''All Checks/Language Specific/Java/Exceptional Behavior/\
+Do not allow exceptions to expose sensitive information''',
+        }[id]
+
+
+def tags(id):
+    return {
+        'ERR01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_ERR01': [
+            'Language: Java',
+            'Exceptional Behavior',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'ERR01-J': '''\
+<p>
+Do not allow exceptions to expose sensitive information
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Exceptions may inadvertently reveal sensitive information unless care is taken
+to limit the information disclosure.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/ERR01-J.+Do+not+allow+exceptions+to+expose+sensitive+information
+</i>
+</p>
+
+<p><b>Noncompliant Code Example (Leaks from Exception Message and Type)</b></p>
+<pre><code language="Java">class ExceptionExample {
+  public static void main(String[] args) throws FileNotFoundException {
+    // Linux stores a user's home directory path in
+    // the environment variable $HOME, Windows in %APPDATA%
+    FileInputStream fis =
+        new FileInputStream(System.getenv("APPDATA") + args[0]);
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Wrapping and Rethrowing Sensitive Exception)</b></p>
+<pre><code language="Java">try {
+  FileInputStream fis =
+      new FileInputStream(System.getenv("APPDATA") + args[0]);
+} catch (FileNotFoundException e) {
+  // Log the exception
+  throw new IOException("Unable to retrieve file", e);
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Sanitized Exception)</b></p>
+<pre><code language="Java">class SecurityIOException extends IOException {/* ... */};
+
+try {
+  FileInputStream fis =
+      new FileInputStream(System.getenv("APPDATA") + args[0]);
+} catch (FileNotFoundException e) {
+  // Log the exception
+  throw new SecurityIOException();
+}
+</code></pre>
+''',
+        'JAVA_ERR01': '''\
+<p>
+Do not allow exceptions to expose sensitive information
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Exceptions may inadvertently reveal sensitive information unless care is taken
+to limit the information disclosure.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/ERR01-J.+Do+not+allow+exceptions+to+expose+sensitive+information
+</i>
+</p>
+
+<p><b>Noncompliant Code Example (Leaks from Exception Message and Type)</b></p>
+<pre><code language="Java">class ExceptionExample {
+  public static void main(String[] args) throws FileNotFoundException {
+    // Linux stores a user's home directory path in
+    // the environment variable $HOME, Windows in %APPDATA%
+    FileInputStream fis =
+        new FileInputStream(System.getenv("APPDATA") + args[0]);
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Wrapping and Rethrowing Sensitive Exception)</b></p>
+<pre><code language="Java">try {
+  FileInputStream fis =
+      new FileInputStream(System.getenv("APPDATA") + args[0]);
+} catch (FileNotFoundException e) {
+  // Log the exception
+  throw new IOException("Unable to retrieve file", e);
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Sanitized Exception)</b></p>
+<pre><code language="Java">class SecurityIOException extends IOException {/* ... */};
+
+try {
+  FileInputStream fis =
+      new FileInputStream(System.getenv("APPDATA") + args[0]);
+} catch (FileNotFoundException e) {
+  // Log the exception
+  throw new SecurityIOException();
+}
+</code></pre>
+''',
+    }[id]
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().text('blacklist', 'Exception name blacklist (space separated, case insensitive)', 'security')
+
+
+def refInTry(method, ref):
+    catchNodes = []
+
+    cfg = method.control_flow_graph()
+    if not cfg:
+        return catchNodes
+
+    # Get try & catch nodes
+    for tryNode in cfg.nodes():
+        if tryNode.kind() != 'try':
+            continue
+        for catchNode in tryNode.children():
+            if catchNode.kind() != 'try-catch':
+                continue
+
+            # See if the ref is between them
+            if refBetweenNodes(tryNode, ref, catchNode):
+                catchNodes.append(catchNode)
+
+    return catchNodes
+
+
+def getCaught(file, catchNode):
+    lex = file.lexer().lexeme(catchNode.line_begin(), catchNode.column_begin())
+
+    while lex and lex.text() != ')':
+        lex = lex.next(True, True)
+
+    if lex:
+        lex = lex.previous(True, True)
+        return lex.ent()
+
+
+def getMethodFromParameter(lex):
+    # Find ( in the same statement
+    while lex and lex.text() != '(':
+        if lex.text() in {'{', '}', ';'}:
+            return
+        lex = lex.previous(True, True)
+
+    # Match anything
+    lex = lex.previous(True, True)
+    if not lex:
+        return
+
+    return lex.ent()
+
+
+def isThrowable(ent):
+    return javaAncestorOfLongnameExists(ent, r'java\.lang\.Throwable', translationUnitCache)
+
+
+def properlyHandled(call, thrownType, blacklist):
+    catchNodes = refInTry(call.scope(), call)
+    for catchNode in catchNodes:
+        caughtVar = getCaught(call.file(), catchNode)
+
+        # Skip if the caught variable wasn't found
+        if not caughtVar:
+            continue
+
+        # Skip if the caught type is not the same or an ancestor
+        caughtType = caughtVar.ents('Typed')[0]
+        if not javaAncestorOfIdExists(thrownType, caughtType.id()):
+            continue
+
+        # Not properly handled if caught variable is printed/thrown
+        for use in caughtVar.refs('Useby'):
+            lexer = call.file().lexer()
+            lex = lexer.lexeme(use.line(), use.column())
+            method = getMethodFromParameter(lex)
+            # Skip if a method wasn't found
+            if not method:
+                continue
+            # Not properly handled if method is printed/thrown
+            if method.longname() in PRINT_METHODS or isThrowable(method):
+                return False
+
+        # Not properly handled if a blacklisted term is in a new exception name
+        for create in call.scope().refs('Create', 'Class Type'):
+            newThrownType = create.ent()
+            # Skip if the method name isn't blacklisted
+            if not re.search(blacklist, newThrownType.name(), re.IGNORECASE):
+                continue
+            # Skip if the method isn't throwable
+            if not isThrowable(newThrownType):
+                continue
+            # Not properly handled if method is in the catch block
+            lexer = call.file().lexer(False)
+            lexOpen = lexer.lexeme(catchNode.line_end(), catchNode.column_end())
+            lexOpen = lexOpen.next(True, True)
+            lexClose = findClose(lexOpen)
+            if refBetweenNodes(lexOpen, create, lexClose):
+                return False
+
+        # Caught and properly handled
+        return True
+
+    # Not caught
+    return False
+
+
+def check(check, file):
+    blacklist = check.options().lookup('blacklist')
+    blacklist = re.sub(r'[^\w ]', '', blacklist) # Only words & space
+    blacklist = re.sub(r' ', '|', blacklist)     # Separated by |
+
+    for call in file.filerefs('Call', 'Method'):
+        called = call.ent()
+
+        # Get sensitive exceptions thrown by this method
+        for throw in called.refs('Throw'):
+            thrown = throw.ent()
+
+            # Skip if the exception is not sensitive
+            if thrown.longname() not in SENSITIVE_EXCEPTIONS:
+                continue
+
+            # Skip if the exception is properly handled
+            if properlyHandled(call, thrown, blacklist):
+                continue
+
+            check.violation(called, file, call.line(), call.column(), ERR1, thrown)

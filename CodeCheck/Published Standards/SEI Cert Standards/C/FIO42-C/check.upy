@@ -1,0 +1,150 @@
+ERR1 = 'Close files when they are no longer needed.'
+
+
+# The ID for the check
+def id():
+    return ('FIO42-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO42-C': 'Published Standards/SEI Cert Standards/C/Close files when they are no longer needed',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO42-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Close files when they are no longer needed'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Close files when they are no longer needed</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to properly close files may allow an attacker to exhaust system resources and can increase the risk that data written into in-memory file buffers will not be flushed in the event of abnormal program termination.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO42-C.+Close+files+when+they+are+no+longer+needed</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+int func(const char *filename) {
+  FILE *f = fopen(filename, "r");
+  if (NULL == f) {
+    return -1;
+  }
+  /* ... */
+  return 0;
+}
+
+
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+int main(void) {
+  FILE *f = fopen(filename, "w");
+  if (NULL == f) {
+    exit(EXIT_FAILURE);
+  }
+  /* ... */
+  exit(EXIT_SUCCESS);
+}
+
+
+#include &lt;stdio.h&gt;
+#include &lt;fcntl.h&gt;
+
+int func(const char *filename) {
+  int fd = open(filename, O_RDONLY, S_IRUSR);
+  if (-1 == fd) {
+    return -1;
+  }
+  /* ... */
+  return 0;
+}
+
+
+#include &lt;Windows.h&gt;
+
+int func(LPCTSTR filename) {
+  HANDLE hFile = CreateFile(filename, GENERIC_READ, 0, NULL,
+                            OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, NULL);
+  if (INVALID_HANDLE_VALUE == hFile) {
+    return -1;
+  }
+  /* ... */
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        file_ent = {}  # key: ent id of file, value: False if not closed, True otherwise
+        file_ref = {}  # key: ent id of file, value: ref of calling of open
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Unresolved Function"), key=lambda x: x.line()):
+            if call_ref.ent().name() in {"open", "fopen", "freopen", "CreateFile"}:
+                lexemes = lexer.lexemes(call_ref.line(), call_ref.line())
+
+                for lex in lexemes:
+                    if lex.ent() and lex.ent().id() == call_ref.ent().id():
+                        break
+                    elif lex.ent() and (lex.ent().type() == call_ref.ent().type()):
+                        file_ent[lex.ent().id()] = False
+                        file_ref[lex.ent().id()] = call_ref
+                        break
+            elif call_ref.ent().name() in {"close", "fclose", "CloseHandle"}:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+
+                while lex and lex.line_begin() == call_ref.line():
+                    if lex.ent() and lex.ent().id() in file_ent:
+                        file_ent[lex.ent().id()] = True
+                        break
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+        if not all(file_ent.values()):
+            for file_id in file_ent:
+                if not file_ent[file_id]:
+                    ref = file_ref[file_id]
+                    check.violation(ref.ent(), file, ref.line(),
+                                    ref.column(), ERR1)

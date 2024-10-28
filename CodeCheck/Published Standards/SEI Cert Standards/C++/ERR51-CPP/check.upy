@@ -1,0 +1,131 @@
+ERR1 = 'Handle all exceptions.'
+
+
+# The ID for the check
+def id():
+    return ('ERR51-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ERR51-CPP': 'Published Standards/SEI Cert Standards/C++/Handle all exceptions',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Handle all exceptions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Handle all exceptions</p>
+<p><b>Risk Assessment</b></p>
+<p>Allowing the application to abnormally terminate can lead to resources not being freed, closed, and so on. It is frequently a vector for denial-of-service attacks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/ERR51-CPP.+Handle+all+exceptions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+void throwing_func() noexcept(false);
+  
+void f() {
+  throwing_func();
+}
+  
+int main() {
+  f();
+}
+
+
+#include &lt;thread&gt;
+ 
+void throwing_func() noexcept(false);
+  
+void thread_start() {
+  throwing_func();
+}
+  
+void f() {
+  std::thread t(thread_start);
+  t.join();
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'ERR51-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def is_handled(ref):
+    func_cfg = ref.ent().control_flow_graph()
+
+    for node in func_cfg.nodes():
+        if node.kind() in {"try"}:
+            start_line = node.line_begin()
+            node_end = node.end_node()
+            end_line = node_end.line_begin() if node_end else None
+
+            if start_line and end_line and ((ref.line() >= start_line) and (ref.line() <= end_line)):
+                return True
+
+    for _ref in ref.ent().refs("Callby"):
+        return is_handled(_ref)
+
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define, Declare", "Function"):
+        lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+        has_exception = False
+        on_param = 0
+
+        while lex:
+            if not on_param and (lex.text() in ";{"):
+                break
+            elif lex.text() == "(":
+                on_param += 1
+            elif lex.text() == ")":
+                on_param -= 1
+            elif lex.text() == "noexcept":
+                if (lex.next().text() == "(") and (lex.next().next().text() == "false"):
+                    has_exception = True
+                    break
+
+            lex = lex.next(ignore_whitespace=True)
+
+        if has_exception:
+            compliant = False
+
+            for call_ref in func_ref.ent().refs("Callby"):
+                compliant = is_handled(call_ref)
+
+                if not compliant:
+                    check.violation(call_ref.scope(), call_ref.file(), call_ref.line(), call_ref.column(), ERR1)

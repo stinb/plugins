@@ -1,0 +1,348 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 5/31/2022
+
+import re
+
+ERR1 = 'Do not synchronize on objects that may be reused'
+
+DEF_NAME = "Do not synchronize on objects that may be reused"
+
+PRIMITIVES = ["Boolean", "Integer", "String"]
+
+# The ID for the check
+def ids():
+    return ('LCK01-J', 'JAVA_LCK01')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'LCK01-J': 'Published Standards/SEI Cert Standards/Java/' + DEF_NAME,
+        'JAVA_LCK01': 'All Checks/Language Specific/Java/Locking/' + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'LCK01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_LCK01': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not synchronize on primitive objects that may be reused</p>
+<p><b>Risk Assessment</b></p>
+<p>A significant number of concurrency vulnerabilities arise from locking on the wrong kind of object. It is important to consider the properties of the lock object rather than simply scavenging for objects on which to synchronize.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/LCK01-J.+Do+not+synchronize+on+objects+that+may+be+reused</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">private final Boolean initialized = Boolean.FALSE;
+
+public void doSomething() {
+  synchronized (initialized) {
+    // ...
+  }
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    pass
+
+def check(check, file):
+    for mRef in file.filerefs("Define", "Method"):
+        sync = getSyncBlockItems(mRef, check)
+        if sync[0]:
+            for syncl in sync[1]:
+                if len(syncl) == 0:
+                    continue
+                s = syncl[-1]
+                #check items within scope of the check
+                if s.ent() and ("Variable" in s.ent().kindname() or "Parameter" in s.ent().kindname()) and s.ent().type() in PRIMITIVES:
+                    validLockRe(s.ent(), s, file, check)
+
+def LockViolation(ent, lex, file, check = None):
+
+    if lex is None:
+        return
+    s = ""
+    if ent != lex.ent():
+        s = " via " + ent.name() + " - L" + str(ent.ref().line()) + " - " + ent.ref().file().name()
+    pm(ERR1 + s, check, lex.ent(), file, lex.line_begin(), lex.column_begin())
+
+def validLockRe(ent, orE, file, check = None):
+
+    # not final
+    if "Final" not in ent.kindname() and not "Parameter" in ent.kindname():
+        LockViolation(ent, orE, file, check)
+        return
+
+    # bool
+    if "Boolean" in ent.type():
+        LockViolation(ent, orE, file, check)
+        return
+
+    # box primitive and strings
+    vList = getAssignmentOrCallAsText(ent)
+    for v in vList:
+        # first check if it is a recursive problem
+        if v[1] and v[1].ent() and ("Variable" in v[1].ent().kindname() or "Parameter" in v[1].ent().kindname()):
+            validLockRe(v[1].ent(), orE, file, check)
+            return
+
+        if "intern()" in v[0]:
+            LockViolation(ent, orE, file, check)
+            return
+
+        s = re.search(r"^newString\([\s\S]*?\)", v[0])
+        i = re.search(r"^newInteger\([\s\S]*?\)", v[0])
+        #o = re.search(r"^newObject\([\s\S]*?\)", v[0])
+
+        if not s and not i:
+            LockViolation(ent, orE, file, check)
+            return
+
+def getSyncBlockItems(ref, check = None):
+    contents = ref.ent().contents()
+
+    # Remove any // style comments
+    contents = re.sub(r'\/\/.*?\n','', contents)
+
+    # Remove any /* */ style comments
+    contents = re.sub(r'\/\*[\s\S]*?\*\/','', contents)
+
+    # Remove strings
+    contents = re.sub(r'\"[\s\S]*?\"','', contents)
+    contents = re.sub(r'\'[\s\S]*?\'','', contents)
+
+    # do we have sync?
+    if not re.search(r"synchronized\s*\([\s\S]*?\)", contents):
+        return (False, None)
+
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return (False, None)
+
+    # now get details about it
+    contents = ref.ent().contents()
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    lexemeC = lexeme
+    # find end pos of method so we only find inside block
+    while lexemeC and lexemeC.text() != "{":
+        lexemeC = lexemeC.next(True, True)
+    lexemeC = findClose(lexemeC)
+
+    syncList = []
+
+    #find all sync items within this method
+    while withinCodePos(ref, -1, -1, lexemeC.line_begin(), lexemeC.column_begin(), lexeme):
+
+        while lexeme and lexeme.text() != "synchronized" and withinCodePos(ref, -1, -1, lexemeC.line_begin(), lexemeC.column_begin(), lexeme):
+            lexeme = lexeme.next(True, True)
+
+        if lexeme is None:
+            if len(syncList) > 0:
+                return (True, syncList)
+            else:
+                return (False, None)
+
+        lexeme = lexeme.next(True, True) # (
+
+        if not lexeme or lexeme.text() != "(":
+            break
+        c = findClose(lexeme, True)
+        syncList.append(c)
+
+    if len(syncList) > 0:
+        return (True, syncList)
+    else:
+        return (False, None)
+
+
+
+# Find corresponding closing curly brace or parenthesis of given opening curly
+# brace or parenthesis
+def findClose(lexeme, getAll = False, keepWhite = False):
+    all = []
+    count = 0
+    open = lexeme.text()
+    if lexeme.text() == '{':
+        close = '}'
+    elif lexeme.text() == '(':
+        close = ')'
+    else:
+        return None
+
+    while lexeme and not (lexeme.text() == close and count == 0):
+        if getAll and count > 0:
+            all.append(lexeme)
+
+        if lexeme.text() == open:
+            count += 1
+
+        lexeme = lexeme.next(not keepWhite, not keepWhite)
+
+        if lexeme.text() == close:
+            count -= 1
+
+    if getAll:
+        return all
+    return lexeme
+
+#check if a ref is within two positions of code
+def withinCodePos(ref, startLine, startColumn, closeLine, closeColumn, lex = None):
+    line = ref.line()
+    column = ref.column()
+    if lex:
+        line = lex.line_begin()
+        column = lex.column_begin()
+    #check start
+    if startLine < line or ( startLine == line and startColumn <= column):
+        #check end
+        if closeLine > line or ( closeLine == line and closeColumn  >= column):
+            return True
+
+    return False
+
+# returns the text from the right of an = to the ;
+def getAssignmentOrCallAsText(ent, useful = True):
+
+    if ent is None:
+        return [("", None)]
+
+    if "Variable" in ent.kindname():
+        ref = ent.ref("Definein")
+        lexer = ref.file().lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        v = ""
+        found = False
+        while lexeme and lexeme.text() != "=":
+            lexeme = lexeme.next(True, True)
+            if lexeme.text() == "=":
+                found = True
+
+        #later init, it assumses its final!
+        if not found:
+            ref = ent.ref("Setby")
+            lexer = ref.file().lexer()
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            v = ""
+            while lexeme and lexeme.text() != "=":
+                lexeme = lexeme.next(True, True)
+
+
+        while lexeme and lexeme.text() != ";":
+            lastLex = lexeme
+            lexeme = lexeme.next(useful, useful)
+            if lexeme and lexeme.text() != ";":
+                v += lexeme.text()
+
+        return [(v, lastLex)]
+
+    if "Parameter" in ent.kindname() :
+        fun  = ent.ref("Definein")
+        calls = []
+
+        # get index
+        lexer = fun.file().lexer()
+        lexeme = lexer.lexeme(fun.line(), fun.column())
+
+        while lexeme and lexeme.text() != "(":
+            lexeme = lexeme.next(True, True)
+
+        index = getParamIndex(lexeme, ent)
+
+        for call in fun.ent().refs("Callby"):
+
+            lexer = call.file().lexer()
+            lexeme = lexer.lexeme(call.line(), call.column())
+            v = ""
+
+            while lexeme and lexeme.text() != "(":
+                lexeme = lexeme.next(True, True)
+
+            # got to next )
+            nv = findClose(lexeme, True)
+            for t in nv:
+                v += t.text()
+
+            pt = getParamFromText(v,index)
+            goodlex = None
+            for l in nv:
+                if l.text() == pt:
+                    goodlex = l
+            calls.append((pt , goodlex))
+
+        return calls
+    return []
+
+def getParamIndex(lexeme, ent):
+    nv = findClose(lexeme, True, True)
+    s = ""
+    for t in nv:
+        s += t.text()
+
+    p = 0
+    a = 0
+    i = 0
+    for c in s:
+        if c == "(":
+            p += 1
+        if c == ")":
+            p -= 1
+        if c == "<":
+            a += 1
+        if c == ">":
+            a -= 1
+        if c == "," and p == 0 and a == 0:
+            i += 1
+    return i
+
+def getParamFromText(s, index):
+    t = ""
+    p = 0
+    a = 0
+    i = 0
+    for c in s:
+        if c == "(":
+            p += 1
+        if c == ")":
+            p -= 1
+        if c == "<":
+            a += 1
+        if c == ">":
+            a -= 1
+        if c == "," and p == 0 and a == 0:
+            i += 1
+        if index == i and c != ",":
+            t += c
+    return t
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

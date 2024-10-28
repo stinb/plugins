@@ -1,0 +1,233 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 10-18-22
+
+
+import re
+
+
+ERR1 = 'Literal values shall not be used apart from type initialization'
+
+
+def ids():
+    return ('A5-1-1', 'CPP_V023')
+
+
+def name(id):
+    return {
+        'A5-1-1': '''Published Standards/AUTOSAR/\
+Literal values shall not be used apart from type initialization, otherwise \
+symbolic names shall be used instead''',
+        'CPP_V023': '''All Checks/Language Specific/C and C++/Variables/\
+Literal values shall not be used apart from type initialization, otherwise \
+symbolic names shall be used instead''',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A5-1-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Variables',
+        ],
+        'CPP_V023': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+<p>
+Avoid use of "magic" numbers and strings in expressions in preference to
+constant variables with meaningful names. Literal values are supposed to be
+used only in type initialization constructs, e.g. assignments and constructors.
+</p>
+<p>
+The use of named constants improves both the readability and maintainability of
+the code.
+</p>
+
+<p><b>Exception</b></p>
+<p>
+It is allowed to use literal values in combination with logging mechanism.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A5-1-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;array&gt;
+#include &lt;cstdint&gt;
+#include &lt;iostream&gt;
+#include &lt;stdexcept&gt;
+namespace
+{
+    const std::int32_t maxIterations = 10;   // Compliant - assignment
+    const char* const loopIterStr = "iter "; // Compliant - assignment
+    const char separator = ':';              // Compliant - assignment
+}
+void F1() noexcept
+{
+    for (std::int32_t i = 0; i &lt; 10; ++i) // Non-compliant
+    {
+        std::cout &lt;&lt; "iter " &lt;&lt; i &lt;&lt; ':' &lt;&lt; '\\n'; // Compliant by exception
+    }
+
+    for (std::int32_t i = 0; i &lt; maxIterations; ++i) // Compliant
+    {
+        std::cout &lt;&lt; loopIterStr &lt;&lt; i &lt;&lt; separator &lt;&lt; '\\n'; // Compliant
+    }
+
+    for (std::int32_t i = 0; i &lt; maxIterations; ++i) // Compliant
+    {
+        std::cout &lt;&lt; "iter " &lt;&lt; i &lt;&lt; ':' &lt;&lt; '\\n'; // Compliant by exception
+    }
+}
+void F2()
+{
+    // ...
+    throw std::logic_error("Logic Error"); // Compliant
+    // initialization of exception object
+}
+class C
+{
+  public:
+    C() : x(0), y(nullptr) // Compliant - initialization
+    {
+    }
+    C(std::int8_t num, std::int32_t* ptr) : x(num), y(ptr) {}
+
+  private:
+    std::int8_t x;
+    std::int32_t* y;
+};
+static std::int32_t* globalPointer = nullptr; // Compliant - assignment
+void F3() noexcept
+{
+    C c1;
+    // ...
+    C c2(0, globalPointer); // Compliant - initialization of C object
+}
+std::int32_t F4(std::int32_t x, std::int32_t y) noexcept
+{
+    return x + y;
+}
+void F5() noexcept
+{
+    std::int32_t ret = F4(2, 5); // Non-compliant
+    // ...
+    std::int32_t x = 2;
+    std::int32_t y = 5;
+    ret = F4(x, y); // Compliant
+
+    std::array&lt;std::int8_t, 5&gt; arr{{1, 2, 3, 4, 5}}; // Compliant
+}
+</code></pre>
+
+<p><b>See also</b></p>
+<p>
+HIC++ v4.0 [9]: 5.1.1 Use symbolic names instead of literal values in code.
+</p>
+
+<p><b>Developer's Notes</b></p>
+<p>
+The usage of <code>#define</code> is also allowed because it follows the
+principle of this check.
+</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def between(lex, l, r) :
+    if lex.token() != 'Literal':
+        return False
+
+    # Check left side
+    found = False
+    left = lex
+    while left.previous(True, True) and left.text() != ';':
+        if left.text() == l:
+            found = True
+            break
+        left = left.previous(True, True)
+    if not found:
+        return False
+
+    # Check right side
+    found = False
+    right = lex
+    while right.next(True, True) and right.text() != ';':
+        if right.text() == r:
+            found = True
+            break
+        right = right.next(True, True)
+    if not found:
+        return False
+
+    return True
+
+
+def check(check, file):
+    lex = file.lexer().first()
+
+    focus_lex = None
+    focus_ent = None
+
+    while lex:
+        # Focus on the last ent/symbol seen
+        if lex.ent() or re.match(r'[<>!#]', lex.text()):
+            focus_lex = lex
+            focus_ent = lex.ent()
+
+        # Skip if it's not a literal
+        if lex.token() != 'Literal':
+            lex = lex.next(True, True)
+            continue
+
+        # Skip if there was no last ent/symbol
+        if not focus_lex:
+            lex = lex.next(True, True)
+            continue
+
+        # Skip if the last ent was a macro
+        if focus_ent and focus_ent.kind().check('Macro'):
+            lex = lex.next(True, True)
+            continue
+
+        # Skip if the last ent is an initialized object
+        if focus_ent and focus_ent.refs('Init') and focus_ent.kind().check('Object'):
+            lex = lex.next(True, True)
+            continue
+
+        # Skip array size initialization
+        if between(lex, '[', ']') and focus_lex.ref() and focus_lex.ref().kind().check('Definein'):
+            lex = lex.next(True, True)
+            continue
+
+        # Skip object size initialization
+        if between(lex, '<', '>'):
+            lex = lex.next(True, True)
+            continue
+
+        check.violation(focus_ent, file, lex.line_end(), lex.column_end(), ERR1)
+
+        lex = lex.next(True, True)

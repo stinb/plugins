@@ -1,0 +1,117 @@
+ERR1 = 'Entity name is similar within multiple inheritance'
+
+
+# The ID for the check
+def ids():
+    return ('M10-2-1', 'CPP_I022')
+
+def name(id):
+    return {
+        'M10-2-1': """\
+Published Standards/AUTOSAR/Similiar Entity Names within Multiple Inheritance \
+""",
+        'CPP_I022': """\
+All Checks/Language Specific/C and C++/Identifiers/Similiar Entity Names within \
+Multiple Inheritance"""
+
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'M10-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Identifiers',
+        ],
+        'CPP_I022': [
+            'Language: C',
+            'Language: C++',
+            'Identifiers',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>All accessible entity names within a multiple
+inheritance hierarchy should be unique.</p>
+<p><b>Rationale</b></p>
+<p>If the names are ambiguous, the compiler should report the name clash and not generate arbitrary
+or unexpectedly resolved code. However, this ambiguity may not be obvious to a developer.</p>
+<p>There is also a specific concern that if the member function is virtual, resolving the ambiguity by
+explicitly referencing the base class in effect removes the virtual behaviour from the function.</p>
+<p><b>Exception</b></p>
+<p>For the purposes of this rule, visible function identifiers that form an overload set shall be
+considered as the same entity.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">class B1
+{
+public:
+ int32_t count; // Non-compliant
+ void foo ( ); // Non-compliant
+};
+class B2
+{
+public:
+ int32_t count; // Non-compliant
+ void foo ( ); // Non-compliant
+};
+class D : public B1, public B2
+{
+public:
+ void Bar ( )
+ {
+ ++count; // Is that B1::count or B2::count?
+ foo ( ); // Is that B1::foo() or B2::foo()?
+ }
+};
+<p>In the above example, in a member function of D, the use of count or foo is ambiguous and must
+be disambiguated by B1::count, B2::foo, etc.</p>
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref):
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+    derived_class = []
+
+    for class_ref in file.filerefs("Derive", "Class"):
+        base_refs = class_ref.ent().refs("Base")
+
+        if len(base_refs) > 1 and class_ref.ent().id() not in derived_class:
+            members = {}
+
+            for base_ref in base_refs:
+                for member_ref in base_ref.ent().refs("Define, Declare", "Public Member"):
+                    if member_ref.ent().name() not in members:
+                        members[member_ref.ent().name()] = member_ref
+                    elif members[member_ref.ent().name()].scope() == member_ref.scope():
+                        continue
+                    else:
+                        check_violation(member_ref)
+                        check_violation(members[member_ref.ent().name()])
+
+            derived_class.append(class_ref.ent().id())

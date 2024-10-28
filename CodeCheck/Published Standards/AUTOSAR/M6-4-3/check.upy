@@ -1,0 +1,207 @@
+import re
+
+
+ERR1 = 'A switch statement shall be a well-formed switch statement'
+
+
+# The ID for the check
+def ids():
+    return ('M6-4-3', 'CPP_C046')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M6-4-3': 'Published Standards/AUTOSAR/Switch Statement not Well-formed',
+        'CPP_C046': 'All Checks/Language Specific/C and C++/Control Flow/Switch Statement not Well-formed',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'M6-4-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C046': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'A switch statement shall be a well-formed switch statement.'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A switch statement shall be a well-formed switch statement.</p>
+<p>A well-formed switch statement conforms to the following syntax rules, which are additional
+to the C++ standard syntax rules. All syntax rules not defined below are as defined in
+ISO/IEC 14882:2003 [1].</p>
+<pre><code language="C++">switch-statement:
+switch ( condition ) { case-label-clause-list default-label-clauseopt }
+case-label-clause-list:
+case-label case-clauseopt
+case-label-clause-list case-label case-clauseopt
+case-label:
+case constant-expression :
+case-clause:
+case-block-seqopt break ;
+case-block-seqopt throw assignment-expressionopt ;
+{ statement-seqopt break ; }
+{ statement-seqopt throw assignment-expressionopt ; }
+default-label-clause:
+default-label default-clause
+default-label:
+default :
+default-clause:
+case-clause
+case-block:
+expression_statement
+compound_statement
+selection_statement
+iteration_statement
+try_block
+case-block-seq:
+case-block
+case-block-seq case-block
+</code></pre>
+<p>The following statements, which are permitted by C++, are explicitly not included within the
+MISRA C++ switch syntax rules. Note, however, that they are permitted within the compound
+statements forming the body of a switch-clause.</p>
+<pre><code language="C++">labelled_statement
+jump_statement
+declaration_statement
+</code></pre>
+<p>The following terms are also used within the text of the rules:</p>
+<pre><code language="C++">switch-label Either a case-label or default-label.
+case-clause The code between any two switch-labels.
+default-clause The code between the default-label and the end of the switch statement.
+switch-clause Either a case-clause or a default-clause.
+</code></pre>
+<p><b>Rationale</b></p>
+<p>The syntax for the switch statement in C++ is weak, allowing complex, unstructured behaviour.
+The previous text describes the syntax for switch statements as defined by MISRA C++. This, and
+the associated rules, imposes a simple and consistent structure on to the switch statement.</p>
+<p><b>Note</b></p>
+<p>In this checking, a switch is well-formed when the following cases are satisfied:</p>
+<p>1. Default and non-empty clauses should have a break or return statement.</p>
+<p>2. A clause before the default statement should have a break or return statement.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">switch ( x )
+{
+case 0:
+ ...
+ break; // break is required here
+case 1: // empty clause, break not required
+case 2:
+ break; // break is required here
+default: // default clause is required
+ break; // break is required here, in case a future
+ // modification turns this into a case clause
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(_lex):
+        check.violation(None, file, _lex.line_begin(),
+                        _lex.column_begin(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not (lexer and re.search(r"switch", file.contents())):
+        return
+
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() == "switch" and lex.token() == "Keyword":
+            switch_lex = lex
+            on_body = 0
+            has_default = False
+            default_break_return = False
+
+            while lex:
+                if lex.text() == "{" and lex.token() == "Punctuation":
+                    on_body += 1
+                elif lex.text() == "}" and lex.token() == "Punctuation":
+                    on_body -= 1
+
+                    if not on_body:
+                        break
+                elif lex.text() == "case" and lex.token() == "Keyword":
+                    has_break_or_return = False
+
+                    while lex.text() != ":":
+                        lex = next_lex(lex)
+
+                    lex = next_lex(lex)
+
+                    if lex.text() != "case":
+                        while lex and lex.text() not in {"case", "default"}:
+                            if lex.text() == "{" and lex.token() == "Punctuation":
+                                on_body += 1
+                            elif lex.text() == "}" and lex.token() == "Punctuation":
+                                on_body -= 1
+
+                                if not on_body:
+                                    break
+                            elif lex.text() in {"break", "return"} and lex.token() == "Keyword":
+                                has_break_or_return = True
+                                break
+
+                            lex = next_lex(lex)
+                    elif lex.text() == "default" and lex.token() == "Keyword":
+                        check_violation(switch_lex)
+                        break
+                    else:
+                        continue
+
+                    if not has_break_or_return:
+                        check_violation(switch_lex)
+                        break
+                elif lex.text() == "default" and lex.token() == "Keyword":
+                    has_default = True
+                elif has_default and lex.text() in {"break", "return"} and lex.token() == "Keyword":
+                    default_break_return = True
+
+                lex = next_lex(lex)
+
+            if has_default and not default_break_return:
+                check_violation(switch_lex)
+
+        lex = next_lex(lex)
+
+
+def next_lex(_lex):
+    if _lex and _lex.next(ignore_whitespace=True, ignore_comments=True):
+        return _lex.next(ignore_whitespace=True, ignore_comments=True)
+    else:
+        return None

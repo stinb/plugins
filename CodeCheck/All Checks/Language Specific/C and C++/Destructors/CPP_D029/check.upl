@@ -1,0 +1,209 @@
+use base ("Understand::Codecheck");
+use strict;
+use constant ERR1 => "Data Pointer not set to 0 in Destructor";
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+
+
+sub checkID { return "CPP_D029";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Destructors\\Destructor Set Data Ptr to 0";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Destructors',
+  );
+}
+
+sub description {
+  return "Destructor must set all ptr data members to 0 after releasing space. C++ Only";
+}
+
+sub detailed_description {
+  return "Destructor must set all ptr data members to 0 after releasing space. C++ Only
+  Assumptions:
+    1. Assume the set-to-0 ref always occurs after space is released, since we have no way 
+        to know when this occurs.
+    2. Assume any set-to-0 ref is okay, regardless of if it occurs on a conditional path or not.";
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox('NULL','Allow data member to be set to NULL',0);
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file ~unresolved ~unknown");
+
+  my $lexer = undef;
+
+  # loop through member functions defined in the file
+  foreach my $ref ($file->filerefs("define","member function ~static",1)) {
+      my $func = $ref->ent();
+      next if $func->name() !~ m/~/;
+
+      # get defn line
+      my ($begin) = getFunctionDefnLines($func);
+      next if (!$begin);
+
+      # get class
+      my $classref = $ref->ent()->ref("definein");
+      next if (!$classref);
+      my $class = $classref->ent();
+
+      $lexer = $file->lexer() if (!$lexer);
+      return unless $lexer;      
+      do_one_function($check,$file,$func,$class,$lexer,$begin);
+  }
+}
+
+
+# Check one function.
+sub do_one_function {
+    my $check = shift;
+    my $file = shift;
+    my $func = shift;
+    my $class = shift;
+    my $lexer = shift;
+    my $begin = shift;
+
+    # hash of members that meet the criteria
+    my %okay = ();
+
+    # Loop through all set references within the destructor and update
+    # the okay hash for ents that have a set =0 reference. Note that
+    # these may not be members of the correct class, or may not be of
+    # ptr type, which is fine, since we'll ignore them later.
+    foreach my $ref ($func->refs("set","object member ~static")) {
+
+      my $lexeme = $lexer->lexeme($ref->line(),$ref->column());
+      $lexeme = nextLexeme($lexeme) or next;
+      next if ($lexeme->text() ne "=");
+      $lexeme = nextLexeme($lexeme) or next;
+
+      my $detectedTypeCast = 0;
+      $detectedTypeCast = cStyleCast( $lexeme ) if $lexeme->text eq '(';
+      $detectedTypeCast = cppStyleCast( $lexeme ) if $lexeme->text =~ /\bdynamic_cast\b|\breinterpret_cast\b|\bstatic_cast\b|\bconst_cast\b/;
+
+      $okay{$ref->ent()->id()} = 1 if ($lexeme->text() eq "0" || $lexeme->text() eq "nullptr" || $detectedTypeCast || ($check->option->lookup('NULL') && $lexeme->text() eq "NULL"));
+
+    }
+
+    # Loop through all non-static object members of class
+    foreach my $ref ($class->refs("define","object member ~static")) {
+      next if (!checkPointerType($ref->ent()));
+      next if (exists $okay{$ref->ent()->id()});
+      $check->violation($ref->ent,$ref->file,$ref->line,$ref->column,ERR1);
+    }
+}
+
+
+# Test if this c-style cast sets pointer to 0
+sub cStyleCast {
+
+  my $lexeme = shift;
+  my $zeroCast = 0;
+  my $count = 1;
+  $lexeme = $lexeme->nextUseful;
+
+  while ( $count ) {
+
+    $count++ if $lexeme->text eq '(';
+    $count-- if $lexeme->text eq ')';
+    $lexeme = $lexeme->nextUseful;
+
+  }
+
+  $zeroCast = 1 if $lexeme->text eq '0';
+  return $zeroCast;
+
+}
+
+
+# Test if c++-style cast sets pointer to 0
+sub cppStyleCast {
+
+  my $lexeme = shift;
+  my $zeroCast = 0;
+  my $count = 1;
+  $lexeme = $lexeme->nextUseful;
+  $lexeme = $lexeme->nextUseful;
+
+  while ( $count ) {
+
+    $count++ if $lexeme->text eq '<';
+    $count-- if $lexeme->text eq '>';
+    $lexeme = $lexeme->nextUseful;
+
+  }
+
+  $lexeme = $lexeme->nextUseful;
+  $zeroCast = 1 if $lexeme->text eq '0';
+
+  return $zeroCast;
+
+}
+
+
+
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Return true if entity type is a pointer type.
+sub checkPointerType {
+    my $ent = shift;
+    return 0 if !$ent;
+    return 0 unless $ent->type =~ /\*/;
+    return 1 if $ent->type() =~ m/[\*\[]/;
+    my $type_ent = $ent->ents("typed","typedef");
+    return 0 if !$type_ent;
+    return 0 if $type_ent == $ent; # hack for parse problem before b273
+    return checkPointerType($type_ent);
+}
+
+
+# Return the next interesting lexeme or undef when all lexemes
+# are used.
+sub nextLexeme {
+    my $lexeme = shift;
+    while ($lexeme) {
+  $lexeme = $lexeme->next() or return undef;
+  next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+  return $lexeme;
+    };
+    return undef;
+}
+

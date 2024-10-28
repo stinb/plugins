@@ -1,0 +1,111 @@
+# This script is designed to run with Understand - CodeCheck for Ada
+# Written by Kyle Jackson
+# 1/4/17
+
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => 'Fixed Value(%1) used incorrectly';
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "ADA_V002";}
+
+sub name { return "All Checks\\Language Specific\\Ada\\Variables\\Magic Numbers";}
+
+sub tags {
+  return (
+    'Language: Ada',
+    'Variables',
+  );
+}
+
+sub description {
+  return "All fixed values will be defined constants.";
+}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Using fixed values(Magic Number) in code makes it difficult to know why the engineer chose that number and makes it hard to adapt and extend the program.
+Magic numbers should be replaced with name constants to make them more usable.</p>
+<p><b>Exceptions</b></p>
+Any exceptions should be in a comma delimited list of  literals that will not be tested. For example: 0,1,1024</p>
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /Ada/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox('multiple','Show multiple violations per statement',0);
+  $check->option->text('exceptions','Exception List (Comma Delimited)',''); 
+}
+
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check( 'Ada File' );
+  
+  my $lexer = $file->lexer;
+  return unless $lexer;
+  my $lexeme = $lexer->first;
+   
+  my $textList = $check->option->lookup('exceptions');
+  $textList =~ s/\s//g; #Strip whitespace in list;
+  my @exceptions = split(',',$textList);
+   
+  while ($lexeme){
+    if ($lexeme->inactive){
+      #noop
+    }elsif  (isInitialization($lexeme)){
+      while($lexeme->next() && !(($lexeme->next()->token() eq "Punctuation") && ($lexeme->next()->text() eq ";"))){
+        $lexeme = $lexeme->next;
+      }
+    }elsif ($lexeme->token() eq "Literal" && ( ! @exceptions ||  ! (grep {$_ eq $lexeme->text} @exceptions))){
+        #Get entity associated with literal
+        my $searchLex = $lexeme;
+        while ($searchLex && ! $searchLex->ent){
+            last() if $searchLex->text =~ /^[;}]$/ && $searchLex->token eq "Punctuation";
+            $searchLex = $searchLex->previous;
+        }
+        my $ent=0;
+        $ent = $searchLex->ent if ($searchLex);
+        $check->violation($ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1,$lexeme->text);
+        #Only register one violation per statement when multiple is not selected
+        while(!($check->option->lookup('multiple')) && $lexeme->next() && !(($lexeme->next()->token() eq "Punctuation") && ($lexeme->next()->text() eq ";"))){
+          $lexeme = $lexeme->next;
+        }
+    }
+      $lexeme = $lexeme->next;
+  }
+
+}
+
+
+sub isInitialization($)
+{
+    my ($lexeme) = @_;
+    my $t = $lexeme->token();
+    my $r = $lexeme->ref();
+    my $e = $lexeme->ent();
+    
+    if($r && $r->kindname() eq "Init" &&  $e->kind()->check("Variable"))
+    {
+      return 1;
+    }
+}

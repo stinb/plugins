@@ -1,0 +1,241 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-04-22
+
+
+import re
+
+
+ERR1 = 'Use fixed width integer (type has unfixed width integer: %1)'
+ERR2 = 'Use fixed width integer (underlying type has unfixed width integer: %1)'
+
+BAD_TYPES = r'\b(char|short|signed|unsigned|int|long)\b'
+GOOD_TYPES = r'\bu?int\d+_t\b'
+
+CHAR_TYPES = ['unsigned char', 'signed char', 'char']
+
+
+def ids():
+    return ('A3-9-1', 'CPP_T038')
+
+
+def name(id: str):
+    return {
+        'A3-9-1': 'Published Standards/AUTOSAR/Fixed Width Integers',
+        'CPP_T038': 'All Checks/Language Specific/C and C++/Types/Fixed Width Integers',
+    }[id]
+
+
+def tags(id: str):
+    return {
+        'A3-9-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T038': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+
+<p>Fixed width integer types from &lt;cstdint&gt;, indicating the size and
+signedness, shall be used in place of the basic numerical types.</p>
+
+<p><b>Rationale</b></p>
+
+<p>The basic numerical types of char, int, short, long are not supposed to be
+used, specific-length types from &lt;cstdint&gt; header need be used instead.
+</p>
+
+<p>Fixed width integer types are:</p>
+
+<ul>
+<li>std::int8_t</li>
+<li>std::int16_t</li>
+<li>std::int32_t</li>
+<li>std::int64_t</li>
+<li>std::uint8_t</li>
+<li>std::uint16_t</li>
+<li>std::uint32_t</li>
+<li>std::uint64_t</li>
+</ul>
+
+<p><b>Exception</b></p>
+<p>The wchar_t does not need a typedef as it always maps to a type that supports wide characters.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">\
+//% $Id: A3-9-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+void F()
+{
+    std::int32_t i1 = 5;   // Compliant
+    int i2 = 10;           // Non-compliant
+    std::int64_t i3 = 250; // Compliant
+    long int i4 = 50;      // Non-compliant
+    std::int8_t i5 = 16;   // Compliant
+    char i6 = 23;          // Non-compliant
+}
+</code></pre>
+
+<p><b>See also</b></p>
+<ul>
+<li>MISRA C++ 2008 [7]: Rule 3-9-2 typedefs that indicate size and signedness
+should be used in place of the basic numerical types.
+</ul>
+
+<p><b>Developer's Notes</b></p>
+<p>To allow a certain type, the string to enter should be part or all of the
+freetext "UnderlyingType" of the entity. For example, the underlying type of
+<code>std::string</code> is <code>std::basic_string&lt;char&gt;</code>.</p>
+<p>You may want to allow characters if they are treated as data rather than
+arthmetic numbers of variable length. The "Allow characters" option adds the
+following to the allowed types: <code>unsigned char; signed char; char</code>
+.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language: str):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().text('allowed', 'Allowed types (semicolon-separated)', '')
+    check.options().text('allowedPatterns', 'Allowed regular expression patterns (semicolon-separated)', '')
+    check.options().checkbox('allowChar', 'Allow characters', False)
+
+
+def check(check, file):
+    # Get whitelisted types from options
+    typesFromOptions = check.options().lookup('allowed').split(';')
+    patternsFromOptions = check.options().lookup('allowedPatterns').split(';')
+    if check.options().lookup('allowChar'):
+        typesFromOptions += CHAR_TYPES
+
+    # Append as regex patterns
+    allowedPatterns = [GOOD_TYPES]
+    allowedNames = set()
+    for allowedType in typesFromOptions:
+        allowedPatterns.append(re.compile(toPatternString(allowedType)))
+        allowedNames.add(allowedType)
+    for allowedPattern in patternsFromOptions:
+        allowedPattern = re.compile(addWordBoundaries(allowedPattern.strip()))
+        allowedPatterns.append(allowedPattern)
+
+    # Variables/parameters
+    for ref in file.filerefs('Define', '~Unresolved ~Unknown Object, ~Unresolved Parameter', True):
+        ent = ref.ent()
+
+        # Skip if unknown type or hidden iterator object
+        entType: str = ent.type()
+        if not isinstance(entType, str) or isHiddenIterator(ent):
+            continue
+
+        # Violation if bad type part in type
+        if re.search(BAD_TYPES, removePatterns(allowedPatterns, entType)):
+            check.violation(ent, file, ref.line(), ref.column(), ERR1, entType)
+            continue
+
+        # Skip if no underlying type
+        underlyingType: str = ent.freetext('UnderlyingType')
+        if not isinstance(underlyingType, str):
+            continue
+
+        # Each underlying type part
+        modifiedUnderlyingType: str = removePatterns(allowedPatterns, underlyingType)
+        modifiedUnderlyingType: str = removeAllocatorPart(modifiedUnderlyingType)
+        for typedRef in ent.refs('Typed'):
+            typedEnt = typedRef.ent()
+            # Skip if underlying type unknown
+            underlyingTypePart = typedEnt.freetext('UnderlyingType')
+            if not isinstance(underlyingTypePart, str):
+                continue
+            # Skip if not on the whitelist
+            if not re.search(GOOD_TYPES, typedEnt.name()) and typedEnt.name() not in allowedNames:
+                continue
+            # Remove the part from the underlying type once
+            modifiedUnderlyingType = re.sub(toPatternString(underlyingTypePart), '', modifiedUnderlyingType, 1)
+
+        # Violation in underlying type
+        if re.search(BAD_TYPES, modifiedUnderlyingType):
+            check.violation(ent, file, ref.line(), ref.column(), ERR2, underlyingType)
+            continue
+
+
+def toPatternString(string: str) -> str:
+    return addWordBoundaries(re.escape(string.strip()))
+
+
+def addWordBoundaries(string: str) -> str:
+    if re.search(r'^\w', string):
+        string = rf'\b{string}'
+    if re.search(r'\w$', string):
+        string = rf'{string}\b'
+    return string
+
+
+def isHiddenIterator(ent) -> bool:
+    if ent.type() in {'iterator', 'const_iterator'} \
+    and re.search(r'^__(begin|end)\d+$', ent.name()):
+        return True
+    elif ent.type() and ent.type().endswith('&') \
+    and re.search(r'^__(range)\d+$', ent.name()):
+        return True
+    return False
+
+
+def removePatterns(patterns: list, toModify: str) -> str:
+    for pattern in patterns:
+        toModify = re.sub(pattern, '', toModify)
+
+    return toModify
+
+
+def removeAllocatorPart(toModify: str):
+    result = []
+
+    allocator = 'std::allocator'
+    allocatorLen = len(allocator)
+
+    while True:
+        # Find std::allocator or fail
+        begin = toModify.find(allocator)
+        if begin == -1:
+            return toModify
+        # Get the end of the std::allocator<...> type expression of fail
+        end = None
+        angles = 0
+        for j in range(begin + allocatorLen, len(toModify)):
+            c = toModify[j]
+            match c:
+                case '<':
+                    angles += 1
+                case '>':
+                    angles -= 1
+                    if angles == 0:
+                        end = j
+                        break
+        if not end:
+            return toModify
+        # Remove the std::allocator<...> type expression
+        toModify = toModify[:begin] + toModify[end+1:]
+
+    return toModify

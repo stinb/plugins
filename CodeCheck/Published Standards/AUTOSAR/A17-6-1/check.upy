@@ -1,0 +1,139 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 4-21-2022
+import re
+
+ERR1 = 'Entity %1 was added to standard namespace'
+
+def ids():
+    return ('A17-6-1', 'CPP_D072')
+
+def name(id):
+    return {
+        'A17-6-1': """\
+Published Standards/AUTOSAR/Non-standard entities shall not be added to standard \
+namespaces""",
+        'CPP_D072': """\
+All Checks/Language Specific/C and C++/Declarations and Definitions/Non-standard entities shall not be added to standard namespaces"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A17-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D072': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Adding declarations or definitions to namespace std or its sub-namespaces, or
+to namespace posix or its sub-namespaces leads to undefined behavior.</p>
+<p>Declaring an explicit specialization of a member function or member function template
+of a standard library class or class template leads to undefined behavior.</p>
+<p>Declaring an explicit or partial specialization of a member class template of
+a standard library class or class template leads to undefined behavior.</p>
+<p><b>Exception</b></p>
+<p>It is allowed by the language standard to add a specialization to namespace
+std if the declaration depends on a user-defined type, meets the requirements
+for the original template and is not explicitly forbidden.</p>
+<p>It is allowed by the language standard to explicitly instantiate a template
+defined in the standard library if the declaration depends on a user defined
+type and meets the requirements for the original template.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">1  // $Id: A17-6-1.cpp 305588 2018-01-29 11:07:35Z michal.szczepankiewicz $
+2  #include &lt;cstdint&gt;
+3  #include &lt;limits&gt;
+4  #include &lt;memory&gt;
+5  #include &lt;type_traits&gt;
+6  #include &lt;utility&gt;
+7
+8  namespace std
+9  {
+10
+11 // Non-compliant - An alias definition is added to namespace std.
+12 // This is a compile error in C++17, since std::byte is already defined.
+13 using byte = std::uint8_t;
+14
+15 // Non-compliant - A function definition added to namespace std.
+16 pair<int, int> operator+(pair<int, int> const& x, pair<int, int> const& y)
+17 {
+18   return pair<int, int>(x.first + y.first, x.second + y.second);
+19 }
+20
+21 } // namespace std
+22
+23 struct MyType
+24 {
+25   int value;
+26 };
+27
+28 namespace std
+29 {
+30
+31 // Non-compliant - std::numeric_limits may not be specialized for
+32 // non-arithmetic types [limits.numeric].
+33 template &lt;&gt;
+34 struct numeric_limits&lt;MyType&gt; : numeric_limits&lt;int&gt;
+35 {
+36 };
+37
+38 // Non-compliant - Structures in &lt;type_traits&gt;, except for std::common_type,
+39 // may not be specialized [meta.type.synop].
+40 template &lt;&gt;
+41 struct is_arithmetic&lt;MyType&gt; : true_type
+42 {
+43 };
+44
+45 // Compliant (False Positive)- std::hash may be specialized for a user type if the
+46 // specialization fulfills the requirements in [unord.hash].
+47 template &lt;&gt;
+48 struct hash&lt;MyType&gt;
+49 {
+50   using result_type = size_t; // deprecated in C++17
+51   using argument_type = MyType; // deprecated in C++17
+52
+53   size_t operator()(MyType const& x) const noexcept
+54   {
+55     return hash&lt;int&gt;()(x.value);
+56   }
+57 };
+58
+59 } // namespace std
+</code></pre>
+<p><b>Developer's Note</b></p>
+<p>This check only looks for declarations and definitions added to the namespace
+std. The check is unable to check for the exception."""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    refs = file.filerefs('Declare', 'Namespace', True)
+
+    # Look for all user defined std namespaces
+    for ref in refs:
+        if ref.ent().name() != 'std':
+            continue
+
+        entRefs = ref.ent().refs('Define', '', True)
+
+        # Throw a violation for each Define ref
+        for entRef in entRefs:
+            check.violation(entRef.ent(), file, entRef.line(), entRef.column(), ERR1, entRef.ent().name())

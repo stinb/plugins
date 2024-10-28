@@ -1,0 +1,183 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 11-30-23
+
+import re
+from Modules import findClose
+
+def ids():
+    return ('ERR55-CPP')
+
+
+def name(id):
+    return {
+        'ERR55-CPP': '''Published Standards/SEI Cert Standards/C++/Honor exception specifications''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'ERR55-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P9',
+            'Level: L2',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''
+<p>
+Honor exception specifications
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Throwing unexpected exceptions disrupts control flow and can cause premature termination and denial of service.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/ERR55-CPP.+Honor+exception+specifications
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">
+#include &lt;exception&gt;
+
+class Exception1 : public std::exception {};
+class Exception2 : public std::exception {};
+
+void foo() {
+  throw Exception2{}; // Okay because foo() promises nothing about exceptions
+}
+
+void bar() throw (Exception1) {
+  foo();    // Bad because foo() can throw Exception2
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+def call_tree(func, seen, check, file, func_ref):
+    # search for a throw
+    contents = func.contents()
+    if re.search(r"\s+throw\s+", contents):
+        check.violation(func, file, func_ref.line(), func_ref.column(), "Function declared as non-throwing, but throw is found indirectly via the function '%1'", func)
+    
+
+    # Returns after printing if the function has already been seen
+    if func.uniquename() in seen.keys():
+        return
+
+    else:
+        # Marks function as seen then gathers the call references
+        seen[func.uniquename()] = True
+        calls = func.refs("call ~inactive", "function ~unknown ~unresolved", True)
+
+        # Iterates through all calls
+        for call in calls:
+            call_tree(call.ent(), seen, check, file, func_ref)
+
+def check(check, file):
+    # spin up lexer
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    # grab all functions in the file
+    for func_ref in file.filerefs("Define", "C Function ~unresolved ~unknown"):
+
+        func_ent = func_ref.ent()
+        contents = func_ent.contents()
+        ok_excepts = []
+
+        # check if there is a noexcept(true) specification but an exception is thrown in the function
+        if re.search(r"noexcept\s?(\(true\))?\s?{", contents) and re.search(r"\s+throw\s+", contents):
+            check.violation(func_ent, file, func_ref.line(), func_ref.column(), "Function declared as non-throwing, but throw is directly found")
+
+        # if no exception thrown directly, walk down call tree looking for throw
+        elif re.search(r"noexcept\s?(\(true\))?\s?{", contents):
+            seen = {}
+
+            calls = func_ent.refs("call ~inactive", "function ~unknown ~unresolved", True)
+            if calls:
+                call_tree(func_ent, seen, check, file, func_ref)
+            
+
+
+        # otherwise check function for any exception specifications (we only care if it has them) and make sure the specification(s) is/are obeyed
+        else:
+            except_specs_found = False
+            # walk with lexer until beginning of function body to look for throw specs
+            lexeme = lexer.lexeme(func_ref.line(), func_ref.column())
+            body_lex = lexeme
+            while lexeme and (lexeme.text() != "{") and (lexeme.token() != "Newline"):
+                if lexeme.text() == "throw":
+                    except_specs_found = True
+
+                    # grab the names of the exceptions
+                    temp_lex = lexeme
+                    while temp_lex and temp_lex.token() != "Newline":
+                        if temp_lex.token() == "Identifier":
+                            ok_excepts.append(temp_lex.text())
+
+                        temp_lex = temp_lex.next()
+
+                lexeme = lexeme.next()
+
+            if except_specs_found == True:
+                # look for a throw of a different kind, even indirectly
+                # search body of function to find thrown exceptions that are not in ok_excepts
+                while body_lex and body_lex.text() != "{":
+                    body_lex = body_lex.next()
+
+                end_lex = findClose(body_lex)
+                end_lex_line = end_lex.line_begin()
+                end_lex_column = end_lex.column_begin()
+
+                while body_lex and not ((body_lex.line_begin() == end_lex_line) and (body_lex.column_begin() == end_lex_column)):
+                    # look for throw or function that performs a throw and check that ref
+                    if body_lex.ent():
+                        inner_func = body_lex.ent()
+                        for call_ref in inner_func.refs("C Call"):
+                            if call_ref.ent().name() in ok_excepts:
+                                pass
+                            else:
+                                # check that inner func isn't in a try block, otherwise flag it
+                                inside_try_block = False
+                                name = inner_func.name()
+                                contents = func_ent.contents()
+                                if re.search(r'try\s*{\s*([^}]*\b' + name + r'\b[^}]*)\s*}', contents):
+                                    inside_try_block = True
+
+                                if inside_try_block == False:
+                                    check.violation(inner_func, file, body_lex.line_begin(), body_lex.column_begin(), "Function may throw an unspecified exception")
+
+                    body_lex = body_lex.next()
+
+
+
+
+
+

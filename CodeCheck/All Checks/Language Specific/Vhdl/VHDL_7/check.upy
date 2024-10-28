@@ -1,0 +1,118 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 9-18-2023
+
+# The ID for the check
+def id():
+    return 'VHDL_7'
+
+# The short name of the check
+def name():
+    return "All Checks/Language Specific/Vhdl/VHDL_7" +  ' Multiple drivers'
+
+
+def tags(id):
+    return {
+        'VHDL_7': [
+            'Language: VHDL',
+            'Processes',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Multiple drivers.'
+
+# The long description of the check
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Multiple Drivers</p>
+
+<p><b>Description</b></p>
+<p>
+Identifying multiple drivers in VHDL code is essential to maintain the 
+clarity, correctness, and reliability of your digital designs. It is an 
+integral part of good design practices and contributes to the successful 
+simulation, synthesis, and debugging of digital circuits.
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="VHDL">\
+entity MultipleAssignment is
+    Port ( clk : in STD_LOGIC;
+           rst : in STD_LOGIC;
+           data_in : in STD_LOGIC;
+           data_out : out STD_LOGIC);
+end MultipleAssignment;
+
+architecture Behavioral of MultipleAssignment is
+    signal my_signal : STD_LOGIC;
+begin
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            my_signal &lt;= '0';  -- First assignment
+        elsif rising_edge(clk) then
+            my_signal &lt;= data_in;  -- Second assignment
+            my_signal &lt;= not my_signal;  -- Third assignment
+        end if;
+    end process;
+
+    data_out &lt;= my_signal;
+end Behavioral;
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>None</p>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'VHDL'
+
+def check(check, file):
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        # find process starting point
+        assignment_count = 0
+        if lexeme.text() == "process" and lexeme.token() == "Keyword" and not (lexeme.previous(True,True).text() == "end" and lexeme.previous(True,True).token() == "Keyword"):
+            proc_ent = lexeme.ent()
+            proc_start = lexeme.line_begin()
+            temp_lex = lexeme
+
+            while temp_lex:
+                if temp_lex.text() == "process" and temp_lex.token() == "Keyword" and temp_lex.previous(True,True).text() == "end" and temp_lex.previous(True,True).token() == "Keyword":
+                    proc_end = temp_lex.line_begin()
+                    proc_range = range(proc_start, proc_end, 1)
+
+                    # process beginning and end found, now check each signal's refs for multiple assignments in this sequential process block
+                    for sig_ref in file.filerefs("Define, Declare", "Signal", True):
+                        sig_ent = sig_ref.ent()
+                        for sig_set_ref in sig_ent.refs("Vhdl Setby"):
+                            sig_set_ref_line = sig_set_ref.line()
+
+                            if sig_set_ref_line in proc_range:
+                                assignment_count += 1
+
+
+                temp_lex = temp_lex.next(True,True)
+
+        if assignment_count > 1:
+            check.violation(sig_ent, file, sig_set_ref.line(), sig_set_ref.column(), "Duplicate assignments of signal '%1' within same sequential block of process '%2'", sig_ent, proc_ent)
+            break
+
+        lexeme = lexeme.next(True, True)

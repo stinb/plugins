@@ -1,0 +1,165 @@
+ERR1 = 'Output parameters shall not be used.'
+
+
+# The ID for the check
+def ids():
+    return ('A8-4-8', 'CPP_T036')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A8-4-8': 'Published Standards/AUTOSAR/Output parameters shall not be used.',
+        'CPP_T036': 'All Checks/Language Specific/C and C++/Types/Output parameters shall not be used.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A8-4-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T036': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rule</b></p>
+
+<p>Output parameters shall not be used.</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Output parameters are passed to a function as non-const references or pointers that can denote either in-out or out-only parameter. Using return value prevents from possible misuse of such a parameter.
+</p>
+
+<p>
+Note: Prefer returning non-value types (i.e. types in a inheritance hierarchy) as std::shared_ptr or std::unique_ptr.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A8-4-8.cpp 306164 2018-02-01 15:04:53Z christof.meerwald $
+
+#include &lt;iostream&gt;
+#include &lt;vector&gt;
+// Compliant, return value
+std::vector&lt;int&gt; SortOutOfPlace(const std::vector&lt;int&gt;& inVec);
+
+// Non-compliant: return value as an out-parameter
+void FindAll(const std::vector&lt;int&gt;& inVec, std::vector&lt;int&gt;& outVec);
+
+struct B
+{
+};
+
+struct BB
+{
+    B GetB() const& { return obj; }
+    B&& GetB() && { return std::move(obj); }
+
+    B obj;
+};
+
+// Non-compliant: returns a dangling reference
+BB&& MakeBb1()
+{
+    return std::move(BB());
+}
+
+// Compliant: uses compiler copy-ellision
+BB MakeBb2()
+{
+    return BB();
+}
+
+int main()
+{
+    BB x = MakeBb2();
+
+    auto cpd = x.GetB(); // copied value
+    auto mvd = MakeBb2().GetB(); // moved value
+
+    return 0;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• C++ Core Guidelines [11]: F.20: For "out" output values, prefer return values to output parameters.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(_ref):
+        check.violation(_ref.ent(), file, _ref.line(), _ref.column(), ERR1)
+
+    for func_ref in file.filerefs("Define, Declare ~Implicit ~Using", "Function ~Lambda ~Macro"):
+        if func_ref.ent().type() == "void":
+            for param_ref in func_ref.ent().refs("Define, Declare", "Parameter"):
+                param_type = param_ref.ent().type()
+                if ((param_type is not None) and ("const" not in param_type) and ("&" in param_type or "*" in param_type)):
+                    check_violation(func_ref)
+                    break
+        elif func_ref.ent().type() and ("&" in func_ref.ent().type()):
+            if not is_copy(func_ref, file) and not func_ref.ent().ref("Define, Declare", "Parameter"):
+                check_violation(func_ref)
+
+
+def is_copy(_ref, _file):
+    lexer = _file.lexer(False, 8, False, False)
+    lex = lexer.lexeme(_ref.line(), _ref.column())
+
+    while lex and lex.text() != "(":
+        lex = lex.next(ignore_whitespace=True,
+                       ignore_comments=True)
+        
+    if not lex:
+        return False
+
+    in_param = 1
+    lex = lex.next(ignore_whitespace=True,
+                   ignore_comments=True)
+
+    while in_param:
+        if lex.text() == ")":
+            in_param -= 1
+        elif lex.text() == "(":
+            in_param += 1
+
+        lex = lex.next(ignore_whitespace=True,
+                       ignore_comments=True)
+
+    if lex.text() == "&&" and lex.token() == "Operator":
+        return True
+
+    return False

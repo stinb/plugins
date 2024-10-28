@@ -1,0 +1,106 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/17/21
+import re
+
+ERR1 = 'Minimize casting.'
+
+# The ID for the check
+def id():
+    return 'EFFECTIVECPP_27'
+
+# The short name of the check
+def name():
+    return "Published Standards\\Effective C++ (3rd Edition) Scott Meyers\\27. Minimize casting"
+
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_27': [
+            'Language: C',
+            'Language: C++',
+            'Standard: Effective C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Avoid casts whenever practical, especially dynamic_casts in
+performance-sensitive code. If a design requires casting, try to develop a
+cast-free alternative. When casting is necessary, try to hide it inside a
+function. Clients can then call the function instead of putting casts in
+their own code. Prefer C++-style casts to old-style casts. They are easier to
+see, and they are more specific about what they do."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>The rules of C++ are designed to guarantee that type errors are impossible.
+In theory, if your program compiles cleanly, it’s not trying to perform any
+unsafe or nonsensical operations on any objects. This is a valuable guarantee.
+You don’t want to forgo it lightly.</p>
+<p>Unfortunately, casts subvert the type system. That can lead to all kinds of
+trouble, some easy to recognize, some extraordinarily subtle. If you’re
+coming to C++ from C, Java, or C#, take note, because casting in those
+languages is more necessary and less dangerous than in C++. But C++ is not C.
+It’s not Java. It’s not C#. In this language, casting is a feature you want to
+approach with great respect.</p>
+<p>C++ also offers four new cast forms (often called new-style or C++-style
+casts):</p>
+<pre><code language="C++">    const_cast&lt;T&gt;(expression)
+    dynamic_cast&lt;T&gt;(expression)
+    reinterpret_cast&lt;T&gt;(expression)
+    static_cast&lt;T&gt;(expression)
+</code></pre>
+<p>The old-style casts continue to be legal, but the new forms are preferable.
+First, they’re much easier to identify in code (both for humans and for tools
+like grep), thus simplifying the process of finding places in the code where
+the type system is being subverted. Second, the more narrowly specified
+purpose of each cast makes it possible for compilers to diagnose usage
+errors. For example, if you try to cast away constness using a new-style
+cast other than const_cast, your code won’t compile.</p>
+"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+
+    # Gather assignby refs
+    refs = file.filerefs('assignby', 'object')
+    for ref in refs:
+        # check if what is being assigned is the same type as what it is being
+        # assigned to
+        if ref.ent().type() != ref.scope().type():
+            if re.search(r'enum', ref.ent().kindname().lower()):
+                entKind = 'int'
+            else:
+                entKind = ref.ent().type()
+            if re.search(r'enum', ref.scope().kindname().lower()):
+                scopeKind = 'int'
+            else:
+                scopeKind = ref.scope().type()
+
+            if entKind == scopeKind:
+                continue
+
+            if not lexer:
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            prevLex = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+            nextLex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+            # skip references and bools preceding the '?' operator
+            if prevLex.text() == '&' or nextLex.text() == '?' or re.search(r'&|\*', ref.ent().type() + ref.scope().type()) or (prevLex.text() == '[' and nextLex.text() == ']'):
+                continue
+            check.violation(ref.scope(), file, ref.line(), ref.column(), ERR1)

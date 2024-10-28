@@ -1,0 +1,101 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6-29-2022
+
+import re
+ERR1 = '%1 was used before it was initialized'
+
+DEF_NAME = "Do not read uninitialized memory"
+
+# The ID for the check
+def id():
+    return ('EXP33-C')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'EXP33-C': "Published Standards/SEI Cert Standards/C/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP33-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Do not read uninitialized memory</p>
+<p><b>Risk Assessment</b></p>
+<p>Local, automatic variables assume unexpected values if they are read before
+they are initialized. When local, automatic variables are stored on the program
+stack, for example, their values default to whichever values are currently
+stored in stack memory. Additionally, some dynamic memory allocation functions
+do not initialize the contents of the memory they allocate.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/c/EXP33-C.+Do+not+read+uninitial\
+ized+memory</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">int a;
+fun(&a);
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.option().checkbox('globals', 'Include Globals (Enabling this may cause false positives)', False)
+
+def check(check, file):
+    lexer = None
+    if check.option().lookup('globals'):
+        refs = file.filerefs('Define', 'Object')
+    else:
+        refs = file.filerefs('Define', 'Object ~Global ~Member')
+
+    # Go through definition refs
+    for ref in refs:
+        # Skip if initialized in definition
+        if ref.ent().ref('Setby Init') or ref.ent().ref('Inactive'):
+            continue
+
+        # Go through the rest of the refs of the variable
+        oRefs = ref.ent().refs()
+        for oRef in oRefs:
+            # Break if variable is set or assigned a value
+            if re.search(r'set|assign', str(oRef.kind()).lower()):
+                break
+
+            # Violation if ran into a use
+            if re.search(r'use', str(oRef.kind()).lower()):
+                if not lexer:
+                    lexer = file.lexer()
+                lexeme = lexer.lexeme(oRef.line(), oRef.column())
+                if lexeme and lexeme.previous(True, True):
+                    lexeme = lexeme.previous(True, True).previous(True, True)
+                    if lexeme and lexeme.text() == 'sizeof' and lexeme.token() == 'Keyword':
+                        continue
+                check.violation(oRef.scope(), oRef.file(), oRef.line(), oRef.column(), ERR1, ref.ent().name())
+
+

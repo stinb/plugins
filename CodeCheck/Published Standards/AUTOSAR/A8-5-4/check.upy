@@ -1,0 +1,141 @@
+ERR1 = 'Class has other constructor besides the one that takes the parameter type std::initializer_list'
+
+
+# The ID for the check
+def ids():
+    return ('A8-5-4', 'CPP_C049')
+
+def name(id):
+    return {
+        'A8-5-4': """\
+Published Standards/AUTOSAR/Class Constructor with Parameter Type \
+std::initializer_list""",
+        'CPP_C049': """\
+All Checks/Language Specific/C and C++/Constructors/Class Constructor with \
+Parameter Type std::initializer_list"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A8-5-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Constructors',
+        ],
+        'CPP_C049': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>If a class has a user-declared constructor that takes a parameter of type
+std::initializer_list, then it shall be the only constructor apart from special
+member function constructors.</p>
+<p><b>Rationale</b></p>
+<p>If an object is initialized using {} braced-initialization, the compiler strongly prefers
+constructor taking parameter of type std::initializer_list to other constructors.
+Thus, if it is defined in the class, it is initially a sole member of the candidate set of
+the two-phase overload resolution. Only if no viable std::initializer_list is found,
+the rest of constructors are considered in the second overload resolution.</p>
+<p>Such a case can be non-intuitive for developers and can lead to reviewers’ confusion
+on which constructor was intended to be called.</p>
+<p>If other constructors (besides the std::initializer_list one and special member
+functions) are declared in a class, then it is suggested to use, e.g. the std::vector&lt;int&gt;( {1,1} ) syntax instead of std::vector&lt;int&gt; v{1, 1}, which makes the intent clear.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A8-5-4.cpp 319328 2018-05-15 10:30:25Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 #include &lt;initializer_list&gt;
+4 #include &lt;vector&gt;
+5
+6 #include &lt;iostream&gt;
+7
+8 //non-compliant, there are other constructors
+9 //apart from initializer_list one defined
+10 class A
+11 {
+12 public:
+13 A() = default;
+14 A(std::size_t num1, std::size_t num2) : x{num1}, y{num2} {}
+15 A(std::initializer_list&lt;std::size_t&gt; list) : x{list.size()}, y{list.size()} {
+}
+16 private:
+17 std::size_t x;
+18 std::size_t y;
+19 };
+20
+21 class B
+22 {
+23 public:
+24 B() = default;
+25 B(std::initializer_list&lt;std::size_t&gt; list) : collection{list} { }
+26
+27 private:
+28 std::vector&lt;std::size_t&gt; collection;
+29 };
+30
+31 void F1() noexcept
+32 {
+33 A a1{}; // Calls A::A()
+34 A a2{{}}; // Calls A::A(std::initializer_list&lt;std::size_t&gt;)
+35 A a3{0, 1}; // Calls A::A(std::initializer_list&lt;std::size_t&gt;), not
+recommended
+36 A a4({0, 1});// Calls A::A(std::initializer_list&lt;std::size_t&gt;), recommended
+37 A a5(0, 1); // Calls A::A(std::size_t, std::size_t), compliant with A8-5-2
+by exception
+38 }
+39 void F2() noexcept
+40 {
+41 B b1{}; // Calls B::B()
+42 B b2{{}}; // Calls B::B(std::initializer_list&lt;std::size_t&gt;)
+43 B b3{1, 2}; // Calls B::B(std::initializer_list&lt;std::size_t&gt;), not
+recommended
+44 B b4({1, 2}); // Calls B::B(std::initializer_list&lt;std::size_t&gt;),
+recommended
+45 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• Effective Modern C++ [13]: Item 7. Distinguish between () and {} when creating
+objects.</p>
+<p>• ISO/IEC 14882:2014 [3]: 13.3.1.7: [over.match.list]</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        constructor = 0
+        constructor_initializer = 0
+
+        for func_ref in class_ref.ent().refs("Define ~Default ~Implicit", "Member Function"):
+
+            if (func_ref.ent().name() == class_ref.ent().name()) and ("initializer_list" in func_ref.ent().parameters()):
+                constructor_initializer += 1
+                constructor += 1
+            elif (func_ref.ent().name() == class_ref.ent().name()):
+                constructor += 1
+
+        if constructor_initializer and constructor > 1:
+            check.violation(class_ref.ent(), file,
+                            class_ref.line(), class_ref.column(), ERR1)

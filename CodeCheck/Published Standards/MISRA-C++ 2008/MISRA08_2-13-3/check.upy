@@ -1,0 +1,197 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 12-21-21
+
+
+import re
+
+
+ERR1 = '"U" or "u" suffix not applied to integer constant %1'
+
+
+def ids():
+    return ('MISRA08_2-13-3', 'M2-13-3', 'CPP_E029', 'MISRA23_5.13.4')
+
+
+def name(id):
+    return {
+        'MISRA08_2-13-3': 'Published Standards/MISRA-C++ 2008/2-13-3 A "U" suffix shall be applied to all octal or hexadecimal integer literals of unsigned type.',
+        'M2-13-3': 'Published Standards/AUTOSAR/A "U" suffix shall be applied to all octal or hexadecimal integer literals of unsigned type.',
+        'CPP_E029': 'All Checks/Language Specific/C and C++/Expressions/A "U" suffix shall be applied to all octal or hexadecimal integer literals of unsigned type.',
+        'MISRA23_5.13.4': 'Published Standards/MISRA C++ 2023/5.13.4 Unsigned integer literals shall be appropriately suffixed',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_2-13-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Expressions',
+        ],
+        'M2-13-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E029': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+        'MISRA23_5.13.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+def description():
+    return 'A "U" suffix shall be applied to all octal or hexadecimal integer literals of unsigned type.'
+
+
+def detailed_description(id):
+    if id == 'MISRA23_5.13.4':
+        return '''
+<p><b>Amplification</b></p>
+<p>This rule applies to any integer-literal that exists after preprocessing. It does not apply to user-defined-integer-literals. </p>
+<p>An unsigned integer-suffix is required when the type of the integer literal, as specified by the C++
+Standard in [lex.icon], is unsigned.</p>
+<p>Note: this rule does not depend on the context in which a literal is used; promotion and other
+conversions that may be applied to the value are not relevant in determining compliance with this rule.</p>
+
+<p><b>Rationale</b></p>
+<p>The type of an integer literal is a potential source of confusion, because it is dependent on a complex
+combination of factors including:</p>
+• The magnitude of the constant;<br>
+• The implemented sizes of the integer types;<br>
+• The presence of any suffixes;<br>
+• The number base that is used.<br>
+
+<p>For example, the decimal integer literal 32768 always has signed type. However, the integer literal
+0x8000 is of type unsigned int in a 16-bit environment, but of type signed int in a 32-bit
+environment. Adding a U or u suffix to the integer literal makes the signedness of the value explicit on
+a 16-bit platform.</p>
+
+<p>Note: compliance checks against this rule will only be valid if an analysis tool has been con9gured with
+the same integer sizes as the compiler that is being used within the project.</p>
+
+<p><b>Example</b></p>
+<p>The following examples assume that int is 16 bits: </p>
+<pre><code language="C++">auto x = 32768; // Compliant - signed type
+auto y = 0x8000; // Non-compliant - unsigned type
+uint16_t z = 123; // Compliant - 'u' is not required as '123' is signed
+void f( uint16_t ); // #1
+void f( int16_t ); // #2
+void b()
+{
+ f( 0x8000 ); // Non-compliant - calls #1 as 0x8000 is unsigned
+ f( 0x8000u ); // Compliant - calls #1
+ f( 0x7FFF ); // Compliant - calls #2 as 0x7FFF is signed
+ f( 0x7FFFu ); // Compliant - calls #1
+}
+</code></pre>
+        '''
+
+    return '''
+<p><b>Rationale</b></p>
+The type of an integer is dependent on a complex combination of factors including:<br>
+• The magnitude of the constant;<br>
+• The implemented sizes of the integer types;<br>
+• The presence of any suffixes;<br>
+• The number base in which the value is expressed (i.e. decimal, octal or hexadecimal).
+</p>
+
+<p>
+For example, the value 0x8000 is of type <i>unsigned int</i> in a 16-bit environment, but of type (<i>signed</i>)
+<i>int</i> in a 32-bit environment. If an overload set includes candidates for an <i>unsigned int</i> and an <i>int</i>,
+then the overload that would be matched by 0x8000 is therefore dependent on the implemented
+integer size. Adding a "U" suffix to the value specifies that it is unsigned.
+</p>
+
+<p>
+Note that the usage context may also require the use of suffixes, as shown in Section 6.5.0.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">  template &lt;typename T&gt;
+  void f ( T );
+  template &lt;&gt;
+  void f &lt; unsigned int &gt; ( unsigned int );
+  template &lt;&gt;
+  void f &lt; int &gt; ( int );
+  void b ( )
+  {
+    unsigned int u16a = 0U; // Compliant
+    f ( 0x8000 ); // Non-compliant on a 16-bit platform.
+    u16a = u16a + 0x8000; // Non-compliant as context is unsigned.
+  }
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.option().integer('int', 'Integer size in bits', 16)
+
+
+def check(check, file):
+
+    intSize = 2 ** check.option().lookup('int')
+    twoToTheFifteen = 2 ** 15
+
+    lexer = file.lexer(False)
+    if not lexer:
+        return
+
+    octalOrHexadecimal = re.compile('(^0[0-7]+$)|(^0x[0-9a-fA-F]+$)')
+
+    for lexeme in lexer.lexemes():
+
+        ok = False
+
+        # Must be a literal octal or hexadecimal
+        if lexeme.token() != 'Literal':
+            continue
+        if not re.match(octalOrHexadecimal, lexeme.text()):
+            continue
+
+        # Convert string to a number
+        base = 8
+        if lexeme.text()[1] == 'x':
+            base = 16
+        val = int(lexeme.text(), base)
+
+        if base == 8:
+
+            if val < intSize / 2:
+                ok = True
+
+        else:
+
+            if val < intSize / 2 or val < twoToTheFifteen:
+                ok = True
+
+        if not ok:
+            check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text())

@@ -1,0 +1,129 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 5-7-2021
+import re
+
+ERR1 = 'A blank line does not precede this %1 construct'
+ERR2 = 'A blank line does not succeed this %1 construct'
+
+# The ID for the check
+def ids():
+    return ('CPP_ST008')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_ST008':  "All Checks/Language Specific/C and C++/Styling/Blank lines should be used to separate distinct algorithmic parts"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_ST008': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Blank lines should be used to make code more readable. Blank lines should
+be used to separate distinct algorithmic parts.</p>
+<p>An if/if-else construct, a case construct, a loop construct, or a group
+of assignment constructs can be an algorithmic part.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+        
+    lexemes = lexer.lexemes()
+
+    for lexeme in lexemes:
+        if re.match(r'^(if|case|switch|default|for|while)$', lexeme.text()):
+
+            prevLex = lexeme
+            nextLex = lexeme
+
+            # Check for a blank line before
+            if prevLex and prevLex.previous(ignore_whitespace=True) and (prevLex.previous(ignore_whitespace=True).line_begin() == (prevLex.line_begin() - 1)):
+                violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text())
+                replace = prevLex.previous(ignore_whitespace=True)
+                while replace and replace.token() != 'Newline':
+                    replace = replace.next()
+                violation.add_fixit_hint(replace.line_begin(), replace.column_begin(), replace.line_begin(), replace.column_begin(), '\n')
+
+
+            # Find end of construct
+            while nextLex and not re.match(r'{|:|;', nextLex.text()):
+                if nextLex.text() == '(':
+                    nextLex = findClose(nextLex)
+                    if not nextLex:
+                        break
+                nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+
+
+            if nextLex and re.match(r'{|:|;', nextLex.text()):
+                if nextLex and nextLex.text() == '{':
+                    nextLex = findClose(nextLex)
+                    if not nextLex:
+                        continue
+
+
+                elif nextLex and nextLex.text() == ':':
+                    while nextLex and not re.match(r'case|default|}', nextLex.text()):
+                        nextLex = nextLex.next(ignore_whitespace=True,ignore_comments=True)
+
+                    if nextLex:
+                        nextLex = nextLex.previous(ignore_whitespace=True)
+
+
+                nextLex1 = nextLex
+                while nextLex and nextLex1 and (nextLex1.line_begin() == nextLex.line_begin()):
+                    nextLex1 = nextLex1.next(ignore_whitespace=True)
+
+                # Check blank line after
+                if nextLex and nextLex1 and ((nextLex1.line_begin() - 1) == nextLex.line_begin()):
+                    violation = check.violation(file, file, nextLex.line_begin(), nextLex.column_begin(), ERR2, lexeme.text())
+                    while nextLex1 and nextLex1.token() != 'Newline':
+                        nextLex1 = nextLex1.previous()
+                    violation.add_fixit_hint(nextLex1.line_begin(), nextLex1.column_begin(), nextLex1.line_begin(), nextLex1.column_begin(), '\n')
+
+
+
+
+
+# Find the closing curly brace or closing parenthesis of the given open curly
+# brace or open parenthesis
+def findClose(lexeme):
+    open = 0
+    nextLex = lexeme
+
+    if lexeme.text() == '{':
+        close = '}'
+    elif lexeme.text() == '(':
+        close = ')'
+    else:
+        return None
+
+    while nextLex and not (nextLex.text() == close and open == 0):
+        if nextLex and nextLex.text() == lexeme.text():
+            open += 1
+
+        nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+
+        if nextLex and nextLex.text() == close:
+            open -= 1
+
+    return nextLex
+
+

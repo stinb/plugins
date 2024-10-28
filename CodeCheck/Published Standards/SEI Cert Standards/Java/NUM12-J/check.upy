@@ -1,0 +1,195 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 12-14-2022
+
+import re
+
+DEF_NAME = """\
+Ensure conversions of numeric types to narrower types do not result in lost or
+misinterpreted data"""
+
+
+# The ID for the check
+def ids():
+    return ('NUM12-J', 'JAVA_NUM12')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'NUM12-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_NUM12': "All Checks/Language Specific/Java/Numeric Types and Operations/" + DEF_NAME,
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'NUM12-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_NUM12': [
+            'Language: Java',
+            'Numeric Types and Operations',
+        ],
+    }.get(id)
+
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Ensure that threads performing blocking operations can be terminated
+</p>
+<p><b>Risk Assessment</b></p>
+<p>Conversions of numeric types to narrower types can result in lost or
+misinterpreted data if the value of the wider type is outside the range of
+values of the narrower type. Consequently, all narrowing conversions must be
+guaranteed safe by range-checking the value before conversion.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/NUM12-J.+Ensure+conversions\
++of+numeric+types+to+narrower+types+do+not+result+in+lost+or+misinterpreted+data</i>
+</p>
+<p>While byte to char isn't listed in this standard, it is listed in the
+Javadocs that it combines widening and narrowing primitive conversions.</p>
+<p><b>Noncompliant Code Example (Integer Narrowing)</b></p>
+<p>In this noncompliant code example, a value of type int is converted to a
+value of type byte without range checking:</p>
+<pre><code language="Java">class CastAway {
+  public static void main(String[] args) {
+    int i = 128;
+    workWith(i);
+  }
+
+  public static void workWith(int i) {
+    byte b = (byte) i;  // b has value -128
+    // Work with b
+  }
+}</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def define_options(check):
+    check.option().checkbox('byteToChar', 'Include byte to char conversions as violations.')
+
+
+def check(check, file):
+    lexer = None
+    # Keep track of what types can't be converted to
+    byte = ['char']
+    short = ['byte', 'char']
+    char = ['byte', 'short']
+    int = ['byte', 'short', 'char']
+    long = ['byte', 'short', 'char', 'int']
+    float = ['byte', 'short', 'char', 'int', 'long']
+    double = ['byte', 'short', 'char', 'int', 'long', 'float']
+    if check.option().lookup('byteToChar'):
+        types = ['byte', 'short', 'char', 'int', 'long', 'float', 'double']
+    else:
+        types = ['short', 'char', 'int', 'long', 'float', 'double']
+    lowerTypes = None
+
+    refs = file.filerefs('Define', 'Variable, Parameter')
+
+    # Look for use refs of type in 'types'
+    for ref in refs:
+        if re.search(r'\[.*\]', str(ref.ent().type())):
+            continue
+        ok = True
+        aok = False
+        for type in types:
+            if re.search(type, str(ref.ent().type()).lower()):
+                if not lexer:
+                    if file.lexer():
+                        lexer = file.lexer()
+
+                # Mark which list to use
+                if type == 'byte':
+                    lowerTypes = byte
+                if type == 'short':
+                    lowerTypes = short
+                elif type == 'char':
+                    lowerTypes = char
+                elif type == 'int':
+                    lowerTypes = int
+                elif type == 'long':
+                    lowerTypes = long
+                elif type == 'float':
+                    lowerTypes = float
+                elif type == 'double':
+                    lowerTypes = double
+
+
+
+                useRefs = ref.ent().refs('Useby')
+                for useRef in useRefs:
+                    thisOk = True
+                    min = False
+                    max = False
+                    lexeme = lexer.lexeme(useRef.line(), useRef.column())
+                    prevLex = lexeme
+
+                    equals = False
+                    while prevLex and not re.match(r';|{|}|if', prevLex.text()):
+                        # Throw violation if type is casted to smaller type
+                        if prevLex.text().lower() in lowerTypes and not equals:
+                            thisOk = False
+
+                        if prevLex.text() == '=':
+                            equals = True
+
+                        if prevLex.text() == 'MIN_VALUE':
+                            min = True
+                        if prevLex.text() == 'MAX_VALUE':
+                            max = True
+
+                        if equals and prevLex.ent():
+                            for s in lowerTypes:
+                                # Throw violation if type is casted to smaller type
+                                if s in str(prevLex.ent().type()).lower():
+                                    thisOk = False
+                        prevLex = prevLex.previous(True, True)
+
+                    if not thisOk and ((prevLex and prevLex.text() != 'if') or not prevLex):
+                        ok = False
+                        entRef = useRef
+
+
+
+
+
+                    if prevLex and prevLex.text() == 'if':
+                        if min and max:
+                            aok = True
+                            break
+                        nextLex = lexeme
+                        while nextLex and not re.match(r';|{', nextLex.text()):
+                            if nextLex.text() == 'MIN_VALUE':
+                                min = True
+                            if nextLex.text() == 'MAX_VALUE':
+                                max = True
+
+                            nextLex = nextLex.next(True, True)
+
+                        if min and max:
+                            aok = True
+                            break
+
+
+                    if not aok and not ok:
+                        check.violation(entRef.scope(), file, entRef.line(), entRef.column(), DEF_NAME)
+
+                break
+

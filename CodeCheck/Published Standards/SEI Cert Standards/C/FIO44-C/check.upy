@@ -1,0 +1,115 @@
+ERR1 = 'Only use values for fsetpos() that are returned from fgetpos().'
+
+
+# The ID for the check
+def id():
+    return ('FIO44-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO44-C': 'Published Standards/SEI Cert Standards/C/Only use values for fsetpos() that are returned from fgetpos()',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO44-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Only use values for fsetpos() that are returned from fgetpos()'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Only use values for fsetpos() that are returned from fgetpos()</p>
+<p><b>Risk Assessment</b></p>
+<p>Misuse of the fsetpos() function can position a file position indicator to an unintended location in the file.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/pages/viewpage.action?pageId=87152071</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">##include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int opener(FILE *file) {
+  int rc;
+  fpos_t offset;
+
+  memset(&offset, 0, sizeof(offset));
+
+  if (file == NULL) {
+    return -1;
+  }
+
+  /* Read in data from file */
+
+  rc = fsetpos(file, &offset);
+  if (rc != 0 ) {
+    return rc;
+  }
+
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        fget_pos = []
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda x: x.line()):
+            if call_ref.ent().name() in ["fgetpos", "fsetpos"]:
+                is_get = True if call_ref.ent().name() == "fgetpos" else False
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and lex.ent() and lex.ent().type() == "fpos_t":
+                        if is_get:
+                            fget_pos.append(lex.ent().id())
+                        elif lex.ent().id() not in fget_pos:
+                            check.violation(
+                                call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True)

@@ -1,0 +1,117 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 02-08-2023
+
+import re
+
+DEF_NAME = "Production code must not contain debugging entry points"
+
+# The ID for the check
+def ids():
+    return ('ENV06-J', 'JAVA_ENV06')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'ENV06-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_ENV06': "All Checks/Language Specific/Java/Runtime Environment/" + DEF_NAME,
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'ENV06-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P18',
+            'Level: L1',
+        ],
+        'JAVA_ENV06': [
+            'Language: Java',
+            'Runtime Environment',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Production code must not contain debugging entry points</p>
+<p><b>Risk Assessment</b></p>
+<p>According to J2EE Bad Practices: Leftover Debug Code [Hewlett-Packard 2015]:</p>
+<p>A common development practice is to add "back door" code specifically
+designed for debugging or testing purposes that is not intended to be shipped or
+deployed with the application. When this sort of debug code is accidentally left
+in the application, the application is open to unintended modes of interaction.
+These back door entry points create security risks because they are not
+considered during design or testing and fall outside of the expected operating
+conditions of the application.</p>
+<p>The most common example of forgotten debug code is a main() method appearing
+in a web application. Although this is an acceptable practice during product
+development, classes that are part of a production J2EE application should not
+define a main().</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/ENV06-J.+Production+code+mu\
+st+not+contain+debugging+entry+points</i>
+</p>
+<p><b>Noncompliant Code Example</b></p><p>
+<p>In this noncompliant code example, the Stuff class has a main() function that
+tests its methods. Although useful for debugging, if this function is left in
+production code (for a web application, for example), an attacker can invoke
+Stuff.main() directly, gaining access to Stuff's test methods.</p>
+<pre><code language="Java">class Stuff {
+  private static final bool DEBUG = False;
+  // Other fields and methods
+  public static void main(String args[]) {
+    Stuff.DEBUG = True;
+    Stuff stuff = new Stuff();
+    // Test stuff
+  }
+}
+</code></pre>
+<p><b>Developer's note</b></p>
+<p>This check will flag main methods that occur in servlets and EJBs</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    # Skip if the word main isn't found in file
+    if not re.search(r'main', file.contents()):
+        return
+
+    mRefs = file.filerefs('Define', 'Method')
+    mainRef = None
+    # Find main ref
+    for mRef in mRefs:
+        if mRef.ent().name() == 'main':
+            mainRef = mRef
+            break
+
+    # Go to next file if no main reference found
+    if not mainRef:
+        return
+
+    # Check if EJB is used
+    refs = file.filerefs('import')
+    for ref in refs:
+        if re.search(r'javax.ejb', ref.ent().longname()):
+            check.violation(mainRef.ent(), file, mainRef.line(), mainRef.column(), DEF_NAME)
+            return
+
+    # Check if servlet is used
+    refs = file.filerefs('Define', 'Class')
+    for ref in refs:
+        if re.search(r'extends.*servlet', str(ref.ent().type()).lower()):
+            check.violation(mainRef.ent(), file, mainRef.line(), mainRef.column(), DEF_NAME)
+            return

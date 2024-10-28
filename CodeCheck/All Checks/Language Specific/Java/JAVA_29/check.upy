@@ -1,0 +1,134 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 5-5-22
+
+
+import re
+
+
+ERR1 = 'Braces not used with control flow "%1"'
+
+def ids():
+    return ('JAVA_29')
+
+def name(id):
+    return {
+        'JAVA_29': '''All Checks/Language Specific/Java/\
+Braces shall be used for all control structures, even if there is only one statement. \
+''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_29': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>
+Braces shall be used for all control structures, even if there is only one\
+ statement.
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Braces are used around all statements, even single statements, when they are part of a control structure, such as an if-else or for statement. This makes it easier to add statements without accidentally introducing bugs due to forgetting to add braces.
+</p>
+
+<p>
+See 7.2 Compound Statements:
+<i>
+https://www.oracle.com/java/technologies/javase/codeconventions-statements.html
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">int x = 1;
+for (int i = 0; i &lt; 5; i++)
+    x *= i;
+</code></pre>
+
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+controlFlow = {'if', 'else', 'for', 'while', 'do'}
+
+
+def checkControlFlow(check, file, lex):
+    start = lex
+    lex = lex.next(True, True)
+
+    openParen = 0
+    openBraces = 0
+
+    while lex:
+        text = lex.text()
+
+        # Recursively parse
+        if text in controlFlow:
+            return checkControlFlow(check, file, lex)
+        # Parse the start of the control flow
+        elif text == '(':
+            openParen += 1
+        elif text == ')':
+            openParen -= 1
+        elif text == '{':
+            openBraces += 1
+        elif text == '}':
+            openBraces -= 1
+            if openBraces == 0:
+                return lex
+        # No brace, but there probably should be
+        elif openParen == 0 and openBraces == 0:
+            # If it's an "else if" statement, change the text for clarity
+            startText = start.text()
+            if startText == 'if':
+                prev = start.previous(True, True)
+                if prev and prev.text() == 'else':
+                    startText = 'else if'
+
+            # If not the "while" of the "do-while" statement, mark a violation
+            doWhile = False
+            if startText == 'while' and text == ';':
+               doWhile = True
+            if not doWhile:
+                check.violation(file, file, start.line_begin(), start.column_begin(), ERR1, startText)
+
+            # Go to the end of the control flow
+            while lex and text != ';':
+                lex = lex.next(True, True)
+                text = lex.text()
+
+            return lex
+
+        lex = lex.next(True, True)
+
+    return lex
+
+
+def check(check, file):
+    lex = file.lexer().first()
+
+    while lex:
+        if lex.text() in controlFlow:
+            lex = checkControlFlow(check, file, lex)
+            continue
+
+        lex = lex.next(True, True)

@@ -1,0 +1,114 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 11-17-2020
+
+import re
+
+ERR1 = "Switch case needs explanatory comment or break"
+ERR2 = "Switch case comment needs explanation"
+
+def id():
+    return 'CPP_CF001'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Control Flow/All cases in a switch statement shall have a break or it shall be well \
+commented"""
+
+
+def tags(id):
+    return {
+        'CPP_CF001': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+When a case is intended to fall through, it shall be well commented."""
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b><</p>
+<p>70.1</p>
+<p>The break statement is used inside a switch to terminate a statement
+sequence. If omitted, execution will continue on into the next case. To prevent
+undefined behavior, unless a fall-through is intended all cases in the switch
+should include a break.</p>
+<p>70.2</p>
+<p>When a switch case must match multiple conditions, intentional fall-throughs
+allow the program to match the multiple conditions to the same set of
+statements. If this is the intent of the programmer, they must leave a comment
+explaining the fall-through to prevent confusion.</p>
+Example:
+<pre><code language="C++">/* Below, case 'X' and case 'q' are violations - they are intentional
+fall-throughs with no explanatory comment regarding them */
+switch(input)
+{
+    case 'x':
+        // this comment explains that case 'x' is meant to exit program as well
+    case 'X':
+    case 'q':
+    case 'Q':
+        /* exit the program */
+}</code></pre>"""
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.options().checkbox('violateCommentsWithoutKeywords', 'Violate Comments Without Keywords', True)
+    check.options().text('commentKeywords', 'Comment Keywords (Separated by Spaces)', 'intended intent purpose because so since')
+
+def explanation(text, keywords):
+    text = text.lower()
+    keywords = keywords.lower().split()
+    for keyword in keywords:
+        if keyword in text:
+            return True
+    return False
+
+def check(check, file):
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+    lexeme = lexer.first()
+
+    while lexeme:
+        # stop if we hit a switch statement
+        if lexeme.token() == "Keyword" and lexeme.text() == "switch":
+
+            # proceed to opening brace
+            while lexeme and lexeme.next() and lexeme.previous() and lexeme.previous().text() != "{":
+                lexeme = lexeme.next()
+
+            # evaluate statements until corresponding switch closing brace is found
+            while lexeme and lexeme.text() != "}":
+                # evaluate all 'case' and 'default's
+                if lexeme and lexeme.next(ignore_whitespace=True, ignore_comments=True) and \
+                    lexeme.token() == "Keyword" and (lexeme.text() == "case" or lexeme.text() == "default"):
+
+                    # parse each case with a temp lexeme
+                    temp_lex = lexeme
+
+                    while temp_lex.token() != "Operator" and temp_lex.text() != ":":
+                        temp_lex = temp_lex.next()
+
+                    # if next useful token is another case or default and the next lexeme is not an explanatory comment, flag it
+                    if temp_lex.next(ignore_whitespace=True, ignore_comments=True).text() in {"case", "default"}:
+                        next_lex = temp_lex.next(ignore_whitespace=True)
+                        if next_lex.token() != "Comment":
+                            check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                        elif check.options().lookup('violateCommentsWithoutKeywords'):
+                            if not explanation(next_lex.text(), check.options().lookup('commentKeywords')):
+                                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR2)
+
+                lexeme = lexeme.next()
+
+        lexeme = lexeme.next()

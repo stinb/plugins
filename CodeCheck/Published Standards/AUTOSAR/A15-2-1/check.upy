@@ -1,0 +1,147 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-12-2021
+import re
+
+ERR1 = """\
+Constructor is not noexcept and was evoked before program startup"""
+
+def ids():
+    return ('A15-2-1', 'CPP_C051')
+
+def name(id):
+    return {
+        'A15-2-1': 'Published Standards/AUTOSAR/Constructors that are not noexcept shall not be invoked before program startup',
+        'CPP_C051': 'All Checks/Language Specific/C and C++/Constructors/Constructors that are not noexcept shall not be invoked before program startup',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A15-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Constructors',
+        ],
+        'CPP_C051': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Before the program starts executing the body of main function, it is in a start-up phase,
+constructing and initializing static objects. There is nowhere an exception handler can
+be placed to catch exceptions thrown during this phase, so if an exception is thrown it
+leads to the program being terminated in an implementation-defined manner.</p>
+<p>Such errors may be more difficult to find because an error message can not be logged,
+due to lack of exception handling mechanism during static initialization.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  //% $Id: A15-2-1.cpp 271927 2017-03-24 12:01:35Z piotr.tanski $
+2  #include &lt;cstdint&gt;
+3  #include &lt;stdexcept&gt;
+4  class A
+5  {
+6  public:
+7    A() noexcept : x(0)
+8    {
+9      // ...
+10   }
+11   explicit A(std::int32_t n) : x(n)
+12   {
+13     // ...
+14     throw std::runtime_error("Unexpected error");
+15   }
+16   A(std::int32_t i, std::int32_t j) noexcept : x(i + j)
+17   {
+18     try
+19     {
+20       // ...
+21       throw std::runtime_error("Error");
+22       // ...
+23     }
+24
+25     catch (std::exception& e)
+26     {
+27     }
+28   }
+29
+30 private:
+31   std::int32_t x;
+32 };
+33 static A a1; // Compliant - default constructor of type A is noexcept
+34 static A a2(5); // Non-compliant - constructor of type A throws, and the
+35 // exception will not be caught by the handler in main function
+36 static A a3(5, 10); // Compliant - constructor of type A is noexcept, it
+37 // handles exceptions internally
+38 int main(int, char**)
+39 {
+40   try
+41   {
+42     // program code
+43   }
+44   catch (...)
+45   {
+46     // Handle exceptions
+47   }
+48
+49   return 0;
+50 }
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    classRefs = file.filerefs('Define', 'Class')
+
+    for classRef in classRefs:
+        constructorRefs = classRef.ent().refs('Define', 'Member Function')
+
+        # Check all constructors
+        for constructorRef in constructorRefs:
+            if constructorRef.ent().name() != classRef.ent().name():
+                continue
+
+            noexcept = False
+            if not lexer:
+                lexer = file.lexer(lookup_ents=False)
+
+            lexeme = lexer.lexeme(constructorRef.line(), constructorRef.column())
+            # Skip if noexcept
+            while lexeme and lexeme.text() != '{':
+                if lexeme.text() == 'noexcept':
+                    noexcept = True
+                    break
+                lexeme = lexeme.next(True, True)
+
+            if noexcept:
+                continue
+
+
+            constructorCalls = constructorRef.ent().refs('Callby')
+
+            for constructorCall in constructorCalls:
+
+                lexeme = lexer.lexeme(constructorCall.line(), constructorCall.column())
+
+                while lexeme and not re.search(r';|}', lexeme.text()):
+                    # throw violation if static
+                    if lexeme.text() == 'static':
+                        check.violation(file, constructorCall.ent(), constructorCall.line(), constructorCall.column(), ERR1)
+
+                    lexeme = lexeme.previous(True, True)
+

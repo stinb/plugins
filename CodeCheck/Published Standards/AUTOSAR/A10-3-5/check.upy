@@ -1,0 +1,150 @@
+import re
+
+ERR1 = 'Assignment operator shall not be virtual'
+OPERATOR_NAME = r'operator[\+\-\*/%<=>!&\|~\^]{1,2}'
+
+
+# The ID for the check
+def ids():
+    return ('A10-3-5', 'CPP_D056')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A10-3-5': 'Published Standards/AUTOSAR/User-defined assignment operator shall not be virtual',
+        'CPP_D056': 'All Checks/Language Specific/C and C++/Declarations and Definitions/User-defined assignment operator shall not be virtual',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A10-3-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions'
+        ],
+        'CPP_D056': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p>If an overloaded operator is declared virtual in a base class A, then in its subclasses
+B and C identical arguments list needs to be provided for the overriders. This allows
+to call an assignment operator of class B that takes an argument of type C which may
+lead to undefined behavior.</p>
+<p>Note that this rule applies to all assignment operators, as well to copy and move
+assignment operators.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A10-3-4.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 class A
+3 {
+4 public:
+5 virtual A& operator=(A const& oth) = 0; // Non-compliant
+6 virtual A& operator+=(A const& rhs) = 0; // Non-compliant
+7 };
+8 class B : public A
+9 {
+10 public:
+11 B& operator=(A const& oth) override // It needs to take an argument of type
+12 // A& in order to override
+13 {
+14 return *this;
+15 }
+16 B& operator+=(A const& oth) override // It needs to take an argument of
+17 // type A& in order to override
+18 {
+19 return *this;
+20 }
+21 B& operator-=(B const& oth) // Compliant
+22 {
+23 return *this;
+24 }
+25 };
+26 class C : public A
+27 {
+28 public:
+29 C& operator=(A const& oth) override // It needs to take an argument of type
+30 // A& in order to override
+31 {
+32 return *this;
+33 }
+34 C& operator+=(A const& oth) override // It needs to take an argument of
+35 // type A& in order to override
+36 {
+37 return *this;
+38 }
+39 C& operator-=(C const& oth) // Compliant
+40 {
+41 return *this;
+42 }
+43 };
+44 // class D : public A
+45 //{
+46 // public:
+47 // D& operator=(D const& oth) override // Compile time error - this method
+48 // does not override because of different
+49 // signature
+50 // {
+51 // return *this;
+52 // }
+53 // D& operator+=(D const& oth) override // Compile time error - this method
+54 // does not override because of different
+55 // signature
+56 // {
+57 // return *this;
+58 // }
+59 //};
+60 void Fn() noexcept
+61 {
+62 B b;
+63 C c;
+64 b = c; // Calls B::operator= and accepts an argument of type C
+65 b += c; // Calls B::operator+= and accepts an argument of type C
+66 c = b; // Calls C::operator= and accepts an argument of type B
+67 c += b; // Calls C::operator+= and accepts an argument of type B
+68 // b -= c; // Compilation error, because of types mismatch. Expected
+69 // behavior
+70 // c -= b; // Compilation error, because of types mismatch. Expected
+71 // behavior
+72
+73 B b2;
+74 C c2;
+75 b -= b2;
+76 c -= c2;
+77 }
+</code></pre>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(OPERATOR_NAME, file.contents()):
+        return
+
+    for ref in file.filerefs("Declare", "Virtual Function"):
+        if re.match(OPERATOR_NAME, str(ref.ent())):
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

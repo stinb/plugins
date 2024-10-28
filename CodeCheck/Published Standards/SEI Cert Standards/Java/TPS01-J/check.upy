@@ -1,0 +1,256 @@
+import re
+
+
+ERR1 = 'Do not execute interdependent tasks in a bounded thread pool.'
+
+
+# The ID for the check
+def ids():
+    return ('TPS01-J', 'JAVA_TPS01')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'TPS01-J': 'Published Standards/SEI Cert Standards/Java/Do not execute interdependent tasks in a bounded thread pool',
+        'JAVA_TPS01': 'All Checks/Language Specific/Java/Thread Pools/Do not execute interdependent tasks in a bounded thread pool',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'TPS01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_TPS01': [
+            'Language: Java',
+            'Thread Pools',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not execute interdependent tasks in a bounded thread pool'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not execute interdependent tasks in a bounded thread pool</p>
+<p><b>Risk Assessment</b></p>
+<p>Executing interdependent tasks in a thread pool can lead to denial of service.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TPS01-J.+Do+not+execute+interdependent+tasks+in+a+bounded+thread+pool</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class ValidationService {
+  private final ExecutorService pool;
+
+  public ValidationService(int poolSize) {
+    pool = Executors.newFixedThreadPool(poolSize);
+  }
+
+  public void shutdown() {
+    pool.shutdown();
+  }
+
+  public StringBuilder fieldAggregator(String... inputs)
+      throws InterruptedException, ExecutionException {
+
+    StringBuilder sb = new StringBuilder();
+    // Stores the results
+    Future&lt;String&gt;[] results = new Future[inputs.length];
+
+    // Submits the tasks to thread pool
+    for (int i = 0; i &lt; inputs.length; i++) {
+      results[i] = pool.submit(
+        new ValidateInput&lt;String&gt;(inputs[i], pool));
+    }
+
+    for (int i = 0; i &lt; inputs.length; i++) { // Aggregates the results
+      sb.append(results[i].get());
+    }
+    return sb;
+  }
+}
+
+public final class ValidateInput&lt;V&gt; implements Callable&lt;V&gt; {
+  private final V input;
+  private final ExecutorService pool;
+
+  ValidateInput(V input, ExecutorService pool) {
+    this.input = input;
+    this.pool = pool;
+  }
+
+  @Override public V call() throws Exception {
+    // If validation fails, throw an exception here
+    // Subtask
+    Future&lt;V&gt; future = pool.submit(new SanitizeInput&lt;V&gt;(input));
+    return (V) future.get();
+  }
+}
+
+public final class SanitizeInput&lt;V&gt; implements Callable&lt;V&gt; {
+  private final V input;
+
+  SanitizeInput(V input) {
+    this.input = input;
+  }
+
+  @Override public V call() throws Exception {
+    // Sanitize input and return
+    return (V) input;
+  }
+}
+
+
+public final class BrowserManager {
+  private final ExecutorService pool = Executors.newFixedThreadPool(10);
+  private final int numberOfTimes;
+  private static AtomicInteger count = new AtomicInteger(); // count = 0
+
+  public BrowserManager(int n) {
+    numberOfTimes = n;
+  }
+
+  public void perUser() {
+    methodInvoker(numberOfTimes, "perProfile");
+    pool.shutdown();
+  }
+
+  public void perProfile() {
+    methodInvoker(numberOfTimes, "perTab");
+  }
+
+  public void perTab() {
+    methodInvoker(numberOfTimes, "doSomething");
+  }
+
+  public void doSomething() {
+    System.out.println(count.getAndIncrement());
+  }
+
+  public void methodInvoker(int n, final String method) {
+    final BrowserManager manager = this;
+    Callable&lt;Object&gt; callable = new Callable&lt;Object&gt;() {
+      @Override public Object call() throws Exception {
+        Method meth = manager.getClass().getMethod(method);
+        return meth.invoke(manager);
+      }
+    };
+
+    Collection&lt;Callable&lt;Object&gt;&gt; collection =
+        Collections.nCopies(n, callable);
+    try {
+      Collection&lt;Future&lt;Object&gt;&gt; futures = pool.invokeAll(collection);
+    } catch (InterruptedException e) {
+      // Forward to handler
+      Thread.currentThread().interrupt(); // Reset interrupted status
+    }
+    // ...
+  }
+
+  public static void main(String[] args) {
+    BrowserManager manager = new BrowserManager(5);
+    manager.perUser();
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    for class_ref in file.filerefs("Define", "Class"):
+        for mem_ref in class_ref.ent().refs("Define", "Member Variable"):
+            mem_type = mem_ref.ent().type()
+            init_value = mem_ref.ent().freetext("InitText")
+            shared = None
+            callerrunspolicy = False
+            synchronous = True if init_value and (
+                "SynchronousQueue" in init_value) else False
+
+            if mem_type and re.search(r"ExecutorService|ThreadPoolExecutor", mem_type):
+                for use_ref in mem_ref.ent().refs("Useby Deref Partial"):
+                    lex = lexer.lexeme(use_ref.line(), use_ref.column())
+
+                    while lex:
+                        if lex.text() == ".":
+                            if lex.next().text() == "submit":
+                                on_param = 0
+
+                                while lex:
+                                    et = lex.ent().type() if lex.ent() else None
+
+                                    if lex.text() == "(":
+                                        on_param += 1
+                                    elif lex.text() == ")":
+                                        on_param -= 1
+
+                                        if not on_param:
+                                            break
+                                    elif et and re.search(r"Callable|Runnable", et):
+                                        for meth_ref in lex.ent().refs("Define", "Method Member"):
+                                            if re.search(r"call|run", meth_ref.ent().name()):
+                                                for call_ref in meth_ref.ent().refs("Call", "Abstract Generic Method Default Member"):
+                                                    if call_ref.ent().name() == "submit":
+                                                        check.violation(use_ref.scope(), use_ref.file(
+                                                        ), use_ref.line(), use_ref.column(), ERR1)
+
+                                    lex = lex.next(ignore_whitespace=True)
+                            elif "invoke" in lex.next().text():
+                                call_ctr = 0
+
+                                for ref in use_ref.ent().refs("Callby", "Method Member"):
+                                    if ref.ent().parent().id() == use_ref.ent().parent().id():
+                                        call_ctr += 1
+
+                                        if call_ctr > 1:
+                                            shared = use_ref
+                                            break
+                            elif lex.next().text() == "setRejectedExecutionHandler":
+                                on_param = 0
+
+                                while lex:
+                                    et = lex.ent().type() if lex.ent() else None
+
+                                    if lex.text() == "(":
+                                        on_param += 1
+                                    elif lex.text() == ")":
+                                        on_param -= 1
+
+                                        if not on_param:
+                                            break
+                                    elif lex.text() == "CallerRunsPolicy" and lex.ref() and lex.ref().kind().check("Create"):
+                                        callerrunspolicy = True
+
+                                    lex = lex.next(ignore_whitespace=True)
+
+                            break
+                        lex = lex.next(ignore_whitespace=True)
+
+            if shared and not callerrunspolicy and not synchronous:
+                check.violation(shared.scope(), shared.file(),
+                                shared.line(), shared.column(), ERR1)

@@ -1,0 +1,206 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/15/21
+import re
+import Modules
+
+ERR1 = 'Upper limit %1 was modified in the for loop.'
+ERR2 = 'Upper limit %1 was passed by reference to a function.'
+ERR3 = 'Upper limit %1 was modified in the while loop.'
+
+# The ID for the check
+def id():
+    return 'RECOMMENDED_17'
+
+# The short name of the check
+def name():
+    return "SciTools' Recommended Checks\\Upper limit shall not be modified within the bounds of the loop"
+
+
+
+def tags(id):
+    return {
+        'RECOMMENDED_17': [
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Ensure the upper limit of a for loop or while loop is not modified within the loop including
+passing the variable by reference."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>The upper limit of a for loop or while loop should not be modified within the loop.
+Examples of this include:</p>
+<pre><code language="C++">int max = 10;
+for(int i = 0; i &lt; max; i++) {
+    max = 9;                          // UndCC_Violation
+    ++max;                            // UndCC_Violation
+    func(max);                        // UndCC_Violation because passed by reference
+}
+func(int& max);
+</code></pre>
+"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        # Look for 'for' loops
+        if lexeme.token() == 'Keyword' and lexeme.text() == 'for':
+            checkForLoop(file, check, lexer, lexeme)
+        # Look for 'while' loops
+        elif lexeme.token() == 'Keyword' and lexeme.text() == 'while':
+            checkWhileLoop(file, check, lexer, lexeme)
+
+        if lexeme:
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+def checkForLoop(file, check, lexer, lexeme):
+    startingLine = lexeme.line_begin()
+    # Counter for semicolons
+    semicolon = 0
+    start = None
+    closeParen = None
+
+    # Gather the variables in the for loop
+    while lexeme and semicolon < 2 and lexeme.text() != '{':
+        if lexeme.text() == '(':
+            closeParen = Modules.findClose(lexeme)
+        if closeParen and lexeme.line_begin() == closeParen.line_begin() and lexeme.column_begin() == closeParen.column_begin():
+            break
+        if lexeme.text() == ';':
+            semicolon += 1
+        if lexeme.ent() and semicolon == 0:
+            start = lexeme.text()
+        # Gather the setby, modifyby, and useby refs of the upper limit variable
+        if lexeme.ent() and semicolon == 1 and lexeme.text() != start:
+            name = lexeme.text()
+            setRefs = lexeme.ent().refs('setby ~init, modifyby')
+            abRefs = lexeme.ent().refs('assignby ref')
+
+
+            while lexeme and lexeme.text() != '{':
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+            if lexeme:
+                close = Modules.findClose(lexeme)
+                if close:
+                    # Look for setby or modifyby refs in the for loop
+                    for ref in setRefs:
+                        if ref.line() > startingLine and ref.line() < close.line_begin():
+                            check.violation(ref.scope(), file, ref.line(), ref.column(), ERR1, name)
+
+                    # Look for usedby refs in the for loop and check if
+                    # it was used to pass by reference
+                    for ref in abRefs:
+                        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR2, name)
+
+
+            return
+
+
+
+
+
+        if lexeme:
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+def checkWhileLoop(file, check, lexer, lexeme):
+    startingLine = lexeme.line_begin()
+    start = None
+    modLeft = False
+    modRight = False
+    right = False
+    close = None
+    closeParen = None
+
+    # Gather the limits in the while loop
+    while lexeme and lexeme.text() != '{':
+        if lexeme.text() == '(':
+            closeParen = Modules.findClose(lexeme)
+        if closeParen and lexeme.line_begin() == closeParen.line_begin() and lexeme.column_begin() == closeParen.column_begin():
+            break
+        
+        if lexeme.token() == 'Operator' and re.match(r'&&|\|\|', lexeme.text()):
+            modLeft = False
+            modRight = False
+            right = False
+
+        if lexeme.token() == 'Operator' and re.match(r'==|!=|<|>|<=|>=', lexeme.text()):
+            right = True
+
+
+        if lexeme.ent():
+            name = lexeme.text()
+            setRefs = lexeme.ent().refs('setby ~init, modifyby')
+            abRefs = lexeme.ent().refs('assignby ref')
+
+
+            if not close:
+                nextLex = lexeme
+                while nextLex and nextLex.text() != '{':
+                    nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+
+                if not nextLex:
+                    return
+                close = Modules.findClose(nextLex)
+                if not close:
+                    return
+                nextLex.next(ignore_whitespace=True, ignore_comments=True)
+                if not nextLex:
+                    return
+            # Look for setby or modifyby refs in the for loop
+            for ref in setRefs:
+                if ref.line() >= nextLex.line_begin() and ref.line() < close.line_begin():
+                    if right:
+                        modRight = True
+                    else:
+                        modLeft = True
+
+            # Look for usedby refs in the while loop and check if an upper
+            # limit it was used to pass by reference
+            for ref in abRefs:
+                if right:
+                    modRight = True
+                else:
+                    modLeft = True
+
+            # Throw violation if both limits are modified within the bounds of
+            # the while loop
+            if modRight and modLeft:
+                check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR3, name)
+
+
+
+
+
+
+
+
+        if lexeme:
+            lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+

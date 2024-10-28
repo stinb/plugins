@@ -1,0 +1,138 @@
+ERR1 = 'Do not use an instance lock to protect shared static data.'
+
+
+# The ID for the check
+def ids():
+    return ('LCK06-J', 'JAVA_LCK06')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'LCK06-J': 'Published Standards/SEI Cert Standards/Java/Do not use an instance lock to protect shared static data',
+        'JAVA_LCK06': 'All Checks/Language Specific/Java/Locking/Do not use an instance lock to protect shared static data',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'LCK06-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_LCK06': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not use an instance lock to protect shared static data'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use an instance lock to protect shared static data</p>
+<p><b>Risk Assessment</b></p>
+<p>Using an instance lock to protect static shared data can result in nondeterministic behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/LCK06-J.+Do+not+use+an+instance+lock+to+protect+shared+static+data</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class CountBoxes implements Runnable {
+  private static volatile int counter;
+  // ...
+  private final Object lock = new Object();
+
+  @Override public void run() {
+    synchronized (lock) {
+      counter++;
+      // ...
+    }
+  }
+
+  public static void main(String[] args) {
+    for (int i = 0; i &lt; 2; i++) {
+    new Thread(new CountBoxes()).start();
+    }
+  }
+}
+
+
+public final class CountBoxes implements Runnable {
+  private static volatile int counter;
+  // ...
+
+  public synchronized void run() {
+    counter++;
+    // ...
+  }
+  // ...
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class Type"):
+        for static_ref in class_ref.ent().refs("Define", "Static Member Variable"):
+            for mod_ref in static_ref.ent().refs("Modifyby", "Method"):
+                lex = lexer.lexeme(mod_ref.line(), mod_ref.column())
+                scope_bracket = 0
+                compliant = False
+
+                while lex:
+                    if lex.text() == "{":
+                        scope_bracket += 1
+                    elif lex.text() == "}":
+                        scope_bracket -= 1
+                    elif lex.text() == "synchronized" and lex.token() == "Keyword" and ((scope_bracket % 2) != 0):
+                        sync_lex = lex
+                        sync_lock = None
+
+                        while sync_lex.text() != ")":
+                            if sync_lex.token() == "Identifier" and sync_lex.ref() and sync_lex.ref().kind().check("Useby"):
+                                sync_lock = sync_lex.ent()
+                                break
+                            sync_lex = sync_lex.next(
+                                ignore_whitespace=True)
+
+                        if sync_lock and sync_lock.kind().check("Static Final"):
+                            compliant = True
+
+                        break
+                    elif lex.text() == mod_ref.ent().name() and lex.ref() and lex.ref().kind().check("Definein"):
+                        break
+
+                    lex = lex.previous(
+                        ignore_whitespace=True, ignore_comments=True)
+
+                if not compliant:
+                    check.violation(mod_ref.scope(), file,
+                                    mod_ref.line(), mod_ref.column(), ERR1)

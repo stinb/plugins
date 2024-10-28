@@ -1,0 +1,180 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-08-22
+
+
+import re
+
+from understand import Ent, Ref
+
+
+ERR1 = 'Bit-field type is not explicitly "signed", "unsigned", or "bool"'
+
+
+def ids():
+    return ('MISRA08_9-6-2', 'CPP_B000')
+
+
+def name(id):
+    return {
+        'MISRA08_9-6-2': '''Published Standards/MISRA-C++ 2008/\
+9-6-2 Bool, Unsigned, or Signed Bit-fields''',
+        'CPP_B000': '''All Checks/Language Specific/C and C++/Bit-fields/\
+Bool, Unsigned, or Signed Bit-fields''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_9-6-2': [
+            'Bit-fields',
+            'Types',
+            'Language: C',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+        ],
+        'CPP_B000': [
+            'Bit-fields',
+            'Types',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+<p>Bit-fields shall be either <i>bool</i> type or an explicitly <i>unsigned</i>
+or <i>signed</i> integral type.</p>
+
+<p><b>Rationale</b></p>
+<p>Using <i>int</i> is <i>implementation-defined</i> because bit-fields of type
+<i>int</i> can be either <i>signed</i> or <i>unsigned</i>.</p>
+<p>The use of <i>wchar_t</i> as a bit-field type is prohibited as ISO/IEC
+14882:2003 [1] does not explicitly define the underlying representation as
+signed or unsigned.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">\
+struct S
+{
+     signed int   a : 2;   // Compliant
+   unsigned int   b : 2;   // Compliant
+            char  c : 2;   // Non-compliant
+     signed char  d : 2;   // Compliant
+   unsigned char  e : 2;   // Compliant
+            short f : 2;   // Non-compliant
+     signed short g : 2;   // Compliant
+   unsigned short h : 2;   // Compliant
+            int   i : 2;   // Non-compliant
+            bool  j : 2;   // Compliant
+         wchar_t  k : 2;   // Non-compliant
+        uint32_t  l : 2;   // Compliant
+          int8_t  m : 2;   // Compliant
+};
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Define', 'Member Object'):
+        ent = ref.ent()
+
+        if ent.freetext('Bitfield') == None:
+            continue
+
+        # Skip if the parent type is dicarded, and therefore the bit-field
+        # cannot be accessed. This is used with anonymous structs in sizeof()
+        # in the Linux kernel.
+        parent = ent.parent()
+        if parent and parent.kind().check('Unnamed') and not parent.ref('Typedby'):
+            continue
+
+        # Skip if the type of the ent is okay
+        if explicitly_signed(ent):
+            continue
+
+        # Skip if the type of the original typedef ent is okay
+        t = original_type_ent(ent)
+        if t and explicitly_signed(t):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+
+def explicitly_signed(ent: Ent) -> bool:
+    t = ent.freetext('UnderlyingType')
+    if t and re.search(r'\b(signed|unsigned|bool|_Bool)\b', t):
+        return True
+
+    if explicitly_signed_lexeme(ent):
+        return True
+
+    return False
+
+
+def explicitly_signed_lexeme(ent: Ent) -> bool:
+    ref = ent.ref('Definein')
+    if not ref:
+        return False
+
+    lex = ref.file().lexer(False).lexeme(ref.line(), ref.column())
+    if not lex:
+        return False
+
+    # Type declaration with the `using` syntax
+    if ent.kind().check('Type Alias'):
+        lex = lex.next(True, True)
+        if lex:
+            lex = lex.next(True, True)
+        while lex and lex.token() == 'Keyword':
+            if lex.text() in {'unsigned', 'signed'}:
+                return True
+            lex = lex.next(True, True)
+    # Other declarations like a `typedef` or object declaration
+    else:
+        lex = lex.previous(True, True)
+        # Multiple assignments with a comma
+        if lex and lex.text() == ',':
+            while lex and lex.text() not in {';', '{', '}'}:
+                lex = lex.previous(True, True)
+            if lex:
+                lex = lex.next(True, True)
+            while lex and lex.token() == 'Keyword':
+                lex = lex.next(True, True)
+            if lex:
+                lex = lex.previous(True, True)
+        # Find the keyword in the declaration
+        while lex and lex.token() == 'Keyword':
+            if lex.text() in {'unsigned', 'signed'}:
+                return True
+            lex = lex.previous(True, True)
+
+    return False
+
+
+def original_type_ent(obj: Ent) -> Ent | None:
+    seen = set()
+    ent = obj
+
+    while ent not in seen:
+        seen.add(ent)
+        parents = ent.ents('Typed')
+        if len(parents) != 1:
+            return ent if ent != obj else None
+        ent = parents[0]
+
+    return ent if ent != obj else None

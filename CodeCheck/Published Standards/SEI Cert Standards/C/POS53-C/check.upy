@@ -1,0 +1,244 @@
+ERR1 = 'Do not use more than one mutex for concurrent waiting operations on a condition variable.'
+
+
+# The ID for the check
+def id():
+    return ('POS53-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'POS53-C': 'Published Standards/SEI Cert Standards/C/Do not use more than one mutex for concurrent waiting operations on a condition variable',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'POS53-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+            'Threads',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not use more than one mutex for concurrent waiting operations on a condition variable'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use more than one mutex for concurrent waiting operations on a condition variable</p>
+<p><b>Risk Assessment</b></p>
+<p>Waiting on the same condition variable with two different mutexes could cause a thread to be signaled and resume execution with the wrong mutex locked. It could lead to unexpected program behavior if the same shared data were simultaneously accessed by two threads.</p>
+<p>The severity is medium because improperly accessing shared data could lead to data integrity violation. Likelihood is probable because in such an implementation, an error code would not be returned, and remediation cost is high because detection and correction of this problem are both manual.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/POS53-C.+Do+not+use+more+than+one+mutex+for+concurrent+waiting+operations+on+a+condition+variable</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;pthread.h&gt;
+#include &lt;assert.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;errno.h&gt;
+
+pthread_mutex_t mutex1;
+pthread_mutex_t mutex2;
+pthread_mutexattr_t attr;
+pthread_cond_t cv;
+
+void *waiter1();
+void *waiter2();
+void *signaler();
+
+int count1 = 0, count2 = 0;
+#define COUNT_LIMIT 5
+
+int main() {
+  int ret;
+  pthread_t thread1, thread2, thread3;
+
+  if ((ret = pthread_mutexattr_init( &attr)) != 0) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_ERRORCHECK)) != 0) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_mutex_init( &mutex1, &attr)) != 0) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_mutex_init( &mutex2, &attr)) != 0) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_cond_init( &cv, NULL)) != 0) {
+    /* handle error */
+  }
+
+  if ((ret = pthread_create( &thread1, NULL, &waiter1, NULL))) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_create( &thread2, NULL, &waiter2, NULL))) {
+    /* handle error */
+  }
+
+  if ((ret = pthread_create( &thread3, NULL, &signaler, NULL))) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_join( thread1, NULL)) != 0) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_join( thread2, NULL)) != 0) {
+    /* Handle error */
+  }
+
+  if ((ret = pthread_join( thread3, NULL)) != 0) {
+    /* Handle error */
+  }
+
+  return 0;
+}
+
+
+void *waiter1() {
+  int ret;
+  while (count1 &lt; COUNT_LIMIT) {
+    if ((ret = pthread_mutex_lock(&mutex1)) != 0) {
+      /* Handle error */
+    }
+
+    if ((ret = pthread_cond_wait(&cv, &mutex1)) != 0) {
+      /* Handle error */
+    }
+
+    printf("count1 = %d\n", ++count1);
+
+    if ((ret = pthread_mutex_unlock(&mutex1)) != 0) {
+      /* Handle error */
+    }
+  }
+
+  return NULL;
+}
+
+void *waiter2() {
+  int ret;
+  while (count2 &lt; COUNT_LIMIT) {
+    if ((ret = pthread_mutex_lock(&mutex2)) != 0) {
+      /* Handle error */
+    }
+
+    if ((ret = pthread_cond_wait(&cv, &mutex2)) != 0) {
+      /* Handle error */
+    }
+
+    printf("count2 = %d\n", ++count2);
+
+    if ((ret = pthread_mutex_unlock(&mutex2)) != 0) {
+      /* Handle error */
+    }
+  }
+
+  return NULL;
+}
+
+void *signaler() {
+  int ret;
+  while ((count1 &lt; COUNT_LIMIT) || (count2 &lt; COUNT_LIMIT)) {
+    sleep(1);
+    printf("signaling\n");
+    if ((ret = pthread_cond_signal(&cv)) != 0) {
+      /* Handle error */
+    }
+  }
+
+  return NULL;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        waiting_mutex_id = None
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == "pthread_create":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                param_ctr = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and (lex.text() == ","):
+                        param_ctr += 1
+                    elif (param_ctr == 2) and lex.ent() and (lex.ent().kind().check("Function")):
+                        for ref in lex.ent().refs("Call", "Unresolved Function"):
+                            if ref.ent().name() in {"pthread_cond_wait", "pthread_cond_timedwait"}:
+                                wait_lex = lexer.lexeme(
+                                    ref.line(), ref.column())
+                                wait_on_param = 0
+                                wait_param_ctr = 0
+
+                                while wait_lex:
+                                    if wait_lex.text() == "(":
+                                        wait_on_param += 1
+                                    elif wait_lex.text() == ")":
+                                        wait_on_param -= 1
+
+                                        if not wait_on_param:
+                                            break
+                                    elif (wait_on_param == 1) and (wait_lex.text() == ","):
+                                        wait_param_ctr += 1
+                                    elif (wait_param_ctr == 1) and wait_lex.ent() and (wait_lex.ent().type() == "pthread_mutex_t"):
+                                        if not waiting_mutex_id:
+                                            waiting_mutex_id = wait_lex.ent().id()
+                                        elif waiting_mutex_id and (waiting_mutex_id == wait_lex.ent().id()):
+                                            pass
+                                        elif waiting_mutex_id:
+                                            check.violation(
+                                                call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                                    wait_lex = wait_lex.next(
+                                        ignore_whitespace=True)
+
+                    lex = lex.next(ignore_whitespace=True)

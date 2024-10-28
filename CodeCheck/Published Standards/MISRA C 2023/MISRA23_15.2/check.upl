@@ -1,0 +1,175 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 1-23-15
+
+
+# Boiler Plate code
+use base ( 'Understand::Codecheck' );
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Goto statement does not jump to a label declared later in the same function';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+
+}
+
+sub checkID { return "MISRA23_15.2";}
+
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA C 2023\\15.2 The goto statement shall jump to a label declared later in the same function";}
+
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2023',
+    'Category: Required',
+    'Control Flow',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return '15.2 ( Required ) The goto statement shall jump to a label declared later in the same function.';
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Rationale</b></p>
+Unconstrained use of goto can lead to programs that are unstructured and extremely difficult to
+understand.
+</p>
+
+<p>
+Restricting the use of goto so that “back” jum ps are prohibited ensures that iteration only occurs if the
+iteration statements provided by the language are used, helping to minimize visual code complexity.
+</p>
+
+<p><b>Example</b></p>
+</p>
+
+<pre><code language="C++">  void f ( void )
+  {
+    int32_t j = 0;
+  L1:
+    ++j;
+    if ( 10 == j )
+    {
+      goto L2;  /* Compliant      */
+    }
+    goto L1;    /* Non-compliant  */
+  L2 :
+    ++j;
+  }
+
+</code></pre>
+
+<p><b>See also</b><br>
+Rule 15.1, Rule 15.3, Rule 15.4
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is run per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is run on the whole project
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options {
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check( 'C File' );
+
+  # Pull a list of all functions that are defined within this file
+  my @functionsDefined = $file->filerefs( 'Define', 'Function' );
+  return unless @functionsDefined;
+
+  # loop through all defined functions
+  foreach my $function (@functionsDefined) {
+
+    # Pull text of function
+    my $text = $function->ent->contents;
+    # Remove any // style comments
+    $text =~ s/\/\/.*?\n/\n/g;
+    # Remove any /* */ style comments
+    $text =~ s/\/\*.*?\*\//\n/gs;
+    # check if a goto statement exists
+    next unless $text =~/\s+goto\s+/;
+
+    #initialize list for label tracking
+    my @gotoSeen;
+
+    # Spin up lexer to find goto statement
+    my $lexeme = $function->lexeme();
+
+    # Check entire function
+    my $end = $function->ent->ref('end')->line;
+    while ( $lexeme->line_begin < $end ) {
+
+      if ( $lexeme->token eq 'Identifier' and $lexeme->ent and $lexeme->ent->kindname eq 'Label' ) {
+
+        if ( lc ( $lexeme->prevUseful->text ) eq 'goto' ) {
+
+          push ( @gotoSeen, $lexeme->text );
+
+        } else {
+
+          my $flag = 0;
+          foreach my $goto ( @gotoSeen ) {
+
+            $flag = 1 if $goto eq $lexeme->text;
+
+          }
+
+          $check->violation( $lexeme->ent, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1 ) if $flag == 0;
+
+        }
+
+        $lexeme = $lexeme->nextUseful;
+
+      } else {
+
+        $lexeme = $lexeme->nextUseful;
+
+      }
+
+    }
+  }
+}

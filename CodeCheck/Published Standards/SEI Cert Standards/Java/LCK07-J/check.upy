@@ -1,0 +1,238 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-2-22
+
+
+import re
+from Modules import findClose, lexemeBefore
+
+
+ERR1 = 'Locks acquired in a different order with synchronized statements'
+ERR2 = 'Locks acquired in a different order compared to other recursive methods'
+
+
+# The ID for the check
+def ids():
+    return ('LCK07-J', 'JAVA_LCK07')
+
+
+def name(id):
+    return {
+        'LCK07-J': 'Published Standards/SEI Cert Standards/Java/Avoid deadlock by requesting and releasing locks in the same order',
+        'JAVA_LCK07': 'All Checks/Language Specific/Java/Locking/Avoid deadlock by requesting and releasing locks in the same order',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'LCK07-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P3',
+            'Level: L3',
+        ],
+        'JAVA_LCK07': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Avoid deadlock by requesting and releasing locks in the same order
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Acquiring and releasing locks in the wrong order can result in deadlock.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/LCK07-J.+Avoid+deadlock+by+requesting+and+releasing+locks+in+the+same+order
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class BankAccount {
+  private double balanceAmount;  // Total amount in bank account
+
+  BankAccount(double balance) {
+    this.balanceAmount = balance;
+  }
+
+  // Deposits the amount from this object instance
+  // to BankAccount instance argument ba
+  private void depositAmount(BankAccount ba, double amount) {
+    synchronized (this) {
+      synchronized (ba) {
+        if (amount &gt; balanceAmount) {
+          throw new IllegalArgumentException(
+               "Transfer cannot be completed"
+          );
+        }
+        ba.balanceAmount += amount;
+        this.balanceAmount -= amount;
+      }
+    }
+  }
+
+  public static void initiateTransfer(final BankAccount first,
+    final BankAccount second, final double amount) {
+
+    Thread transfer = new Thread(new Runnable() {
+        public void run() {
+          first.depositAmount(second, amount);
+        }
+    });
+    transfer.start();
+  }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def getLock(lex):
+    # Match (
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '(':
+        return
+
+    # Match anything and get the lock
+    lex = lex.next(True, True)
+    lock = lex
+    if not lex:
+        return
+
+    # Match )
+    lex = lex.next(True, True)
+    if not lex or lex.text() != ')':
+        return
+
+    return lock
+
+
+def isRecursive(ent):
+    # return True
+    for ref in ent.refs('Call', 'Method', True):
+        if ref.ent() == ent:
+            return True
+    return False
+
+
+def checkMultipleLocks(check, ent, file, locks):
+    # Skip if the locks are all the same
+    allSame = True
+    text = locks[0].text()
+    for lock in locks:
+        if lock.text() != text:
+            allSame = False
+            break
+    if allSame:
+        return
+
+    # Skip if the locks are all defined in this method
+    allDefinedHere = True
+    for lock in locks:
+        lockEnt = lock.ent()
+        if not lockEnt:
+            allDefinedHere = False
+            break
+        defined = lockEnt.ref('Definein')
+        if not defined or defined.ent() != ent:
+            allDefinedHere = False
+            break
+    if allDefinedHere:
+        return
+
+    lastLock = locks.pop()
+    line = lastLock.line_begin()
+    column = lastLock.line_begin()
+    check.violation(ent, file, line, column, ERR1)
+
+
+def checkRecursiveMethod(check, ent, file, incrementingClasses):
+    # Determine the order used for this method
+    incrementing = None
+    for ref in ent.refs('Call', 'Method', True):
+        # Skip if the call isn't direction recursion
+        if ref.ent() != ent:
+            continue
+
+        # Find ++ or -- in the call
+        lex = file.lexer().lexeme(ref.line(), ref.column())
+        lex = lex.next(True, True)
+        close = findClose(lex)
+        while lexemeBefore(lex, close.line_begin(), close.column_begin()):
+            if lex.text() in {'++', '--'}:
+                incrementing = True if lex.text() == '++' else False
+                break
+            lex = lex.next(True, True)
+
+    # Skip if the recursive call doesn't increment/decrement
+    if incrementing == None:
+        return
+
+    # Determine the order used for the class
+    parent = ent.parent()
+    if parent not in incrementingClasses:
+        incrementingClasses[parent] = incrementing
+        return
+
+    # Skip if the method is following the order as others in the class
+    if incrementingClasses[parent] == incrementing:
+        return
+
+    check.violation(ent, file, ref.line(), ref.column(), ERR2)
+
+
+def check(check, file):
+    # Keep track of the order of each class, using the first sync method
+    # { classEnt: incrementingBool, ... }
+    incrementingClasses = dict()
+
+    if not re.search(r'\Wsynchronized\W', file.contents()):
+        return
+
+    for ref in file.filerefs('Define', 'Method'):
+        ent = ref.ent()
+
+        # Get the sync count & lock lexemes of synchronized statements
+        syncs = 0
+        locks = []
+        lex = file.lexer().lexeme(ref.line(), ref.column())
+        end = ent.ref('End')
+        while lex and end and lexemeBefore(lex, end.line(), end.column()):
+            if lex.text() == 'synchronized':
+                syncs += 1
+                lock = getLock(lex)
+                if lock:
+                    locks.append(lock)
+            lex = lex.next(True, True)
+
+        # If there are 2+ locks, check the order
+        if len(locks) >= 2:
+            checkMultipleLocks(check, ent, file, locks)
+
+        # If the method is recursive and has a sync count, compare with others
+        if syncs and isRecursive(ent):
+            checkRecursiveMethod(check, ent, file, incrementingClasses)

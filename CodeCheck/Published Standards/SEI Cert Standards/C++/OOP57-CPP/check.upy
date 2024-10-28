@@ -1,0 +1,202 @@
+import re
+
+
+ERR1 = 'Prefer special member functions and overloaded operators to C Standard Library functions.'
+
+
+# The ID for the check
+def id():
+    return ('OOP57-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'OOP57-CPP': 'Published Standards/SEI Cert Standards/C++/Prefer special member functions and overloaded operators to C Standard Library functions',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Prefer special member functions and overloaded operators to C Standard Library functions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Prefer special member functions and overloaded operators to C Standard Library functions</p>
+<p><b>Risk Assessment</b></p>
+<p>Most violations of this rule will result in abnormal program behavior. However, overwriting implementation details of the object representation can lead to code execution vulnerabilities.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/OOP57-CPP.+Prefer+special+member+functions+and+overloaded+operators+to+C+Standard+Library+functions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;cstring&gt;
+#include &lt;iostream&gt;
+
+class C {
+  int scalingFactor;
+  int otherData;
+
+public:
+  C() : scalingFactor(1) {}
+
+  void set_other_data(int i);
+  int f(int i) {
+    return i / scalingFactor;
+  }
+  // ...
+};
+
+void f() {
+  C c;
+
+  // ... Code that mutates c ...
+
+  // Reinitialize c to its default state
+  std::memset(&c, 0, sizeof(C));
+
+  std::cout &lt;&lt; c.f(100) &lt;&lt; std::endl;
+}
+
+
+#include &lt;cstring&gt;
+
+class C {
+  int *i;
+
+public:
+  C() : i(nullptr) {}
+  ~C() { delete i; }
+
+  void set(int val) {
+    if (i) { delete i; }
+    i = new int{val};
+  }
+
+  // ...
+};
+
+void f(C &c1) {
+  C c2;
+  std::memcpy(&c2, &c1, sizeof(C));
+}
+
+
+#include &lt;cstring&gt;
+
+class C {
+  int i;
+
+public:
+  virtual void f();
+
+  // ...
+};
+
+void f(C &c1, C &c2) {
+  if (!std::memcmp(&c1, &c2, sizeof(C))) {
+    // ...
+  }
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'OOP57-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Functions',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for call_ref in file.filerefs("Call", "Unresolved Function"):
+        if call_ref.ent().name() in call_ref.ent().name() in ["memset", "memcpy", "memmove", "strcpy"]:
+            non_compliant = False
+            lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and lex.ent() and (lex.token() == "Identifier") and (not lex.next().text() in [".", "->"]):
+                    param_ent, t = get_ent_type(lex.ent())
+
+                    if param_ent and param_ent.kind().check("Class ~Template, Struct ~Template"):
+
+                        for func_ref in param_ent.refs("Define", "Function"):
+                            if re.search(f"^~|operator=|{param_ent.name()}", func_ref.ent().name()):
+                                non_compliant = True
+                                break
+
+                        if (param_ent.ref("", "Virtual Function") or (param_ent.ref("Virtual Base", ""))):
+                            non_compliant = True
+
+                        if non_compliant:
+                            check.violation(call_ref.ent(), file,
+                                            call_ref.line(), call_ref.column(), ERR1)
+                            break
+
+                lex = lex.next(ignore_whitespace=True)
+        elif call_ref.ent().name() in ["memcmp", "strcmp"]:
+            lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and lex.ent() and (lex.token() == "Identifier") and (not lex.next().text() in [".", "->"]):
+                    param_ent, t = get_ent_type(lex.ent())
+
+                    if param_ent and param_ent.kind().check("Class ~Template, Struct ~Template"):
+                        if (param_ent.ref("", "Virtual Function") or (param_ent.ref("", "Private Member ~Static") and param_ent.ref("", "Public Member ~Static")) or (param_ent.ref("Virtual Base", ""))):
+                            check.violation(call_ref.ent(), file,
+                                            call_ref.line(), call_ref.column(), ERR1)
+                            break
+
+                lex = lex.next(ignore_whitespace=True)

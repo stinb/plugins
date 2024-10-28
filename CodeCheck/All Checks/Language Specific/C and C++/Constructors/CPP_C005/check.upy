@@ -1,0 +1,220 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2023-02-27
+
+
+import re
+
+from Modules import searchContents
+
+
+ERR1 = 'Function-try-block in constructor or destructor referencing non-static\
+ members from class or base'
+
+
+def ids():
+    return ('MISRA08_15-3-3', 'CPP_C005', 'MISRA23_18.3.3')
+
+
+def name(id):
+    return {
+        'MISRA08_15-3-3': 'Published Standards/MISRA-C++ 2008/\
+15-3-3 Members in function-try-blocks in constructors or destructors',
+        'CPP_C005': 'All Checks/Language Specific/C and C++/Constructors/\
+Members in function-try-blocks in constructors or destructors',
+        'MISRA23_18.3.3': 'Published Standards/MISRA C++ 2023/\
+18.3.3 Handlers for a function-try-block of a constructor or destructor shall not refer to non-static members from their class or its bases',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_15-3-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Constructors',
+        ],
+        'CPP_C005': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+        'MISRA23_18.3.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Constructors',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p>
+Handlers of a function-try-block implementation of a class constructor or
+destructor shall not reference nonstatic members from this class or its bases.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+The effect of accessing a non-static member of a class or a base class in the
+handler (i.e. the <i>catch</i> part) of a <i>function-try-block</i> of a class
+constructor/destructor is undefined.
+</p>
+
+<p>
+For example, if a memory allocation exception is thrown during creation of the
+object, the object will not exist when the handler attempts to access its
+members. Conversely, in the destructor, the object may have been successfully
+destroyed before the exception is handled, so again will not be available to the
+handler.
+</p>
+
+<p>
+By contrast, the lifetime of a static member is greater than that of the object
+itself, so the static member is guaranteed to exist when the handler accesses
+it.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">  class C
+  {
+  public:
+    int32_t x;
+    C ( )
+      try
+      {
+        // Action that may raise an exception
+      }
+      catch ( ... )
+      {
+        if ( 0 == x ) // Non-compliant - x may not exist at this point
+        {
+          // Action dependent on value of x
+        }
+      }
+    ~C ( )
+      try
+      {
+        // Action that may raise an exception
+      }
+      catch ( ... )
+      {
+        if ( 0 == x ) // Non-compliant - x may not exist at this point
+        {
+          // Action dependent on value of x
+        }
+      }
+  };
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 15-3-1, Rule 15-5-1
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    # Loop through each class looking for the try command
+    for funRef in file.filerefs('Define', 'Member Function', True):
+        funEnt = funRef.ent()
+
+        # Skip if not a constructor/destructor
+        classEnt = funRef.scope()
+        if not isCtorOrDtor(classEnt, funEnt):
+            continue
+
+        # Skip if there's no try-catch block
+        if not searchContents(funEnt, r'\Wcatch\W'):
+            continue
+
+        nonStaticMembers = getAllMemberObjects(funEnt)
+
+        # Walk through function
+        lex = file.lexer().lexeme(funRef.line(), funRef.column())
+        end = funEnt.ref('End').line()
+        while lex.line_begin() <= end:
+
+            # Keep track of location relative to catch block with simple counter
+            if lex.text() == 'catch':
+
+                isBlock = 1
+
+                # Move forward so we don't double count
+                while lex.line_begin() <= end:
+                    if lex.text() == '{':
+                        break
+                    lex = lex.next(True, True)
+
+                while isBlock and lex.line_begin() <= end:
+
+                    if lex.text() == '{':
+                        isBlock += 1
+                    elif lex.text() == '}':
+                        isBlock -= 1
+
+                    # Violation if a non-static member is in a catch block
+                    if lex.ent() and lex.ent() in nonStaticMembers:
+                        check.violation(funEnt, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                    lex = lex.next(True, True)
+
+            lex = lex.next(True, True)
+
+
+# Check if ent is a constructor or destructor
+def isCtorOrDtor(classEnt, funEnt):
+    return True if re.match(r'~?' + classEnt.name() + '$', funEnt.name()) else False
+
+
+# Get complete member set
+def getAllMemberObjects(ent):
+    bases   = []
+    members = set()
+
+    # Create a list of all classes and subsequent base classes
+    while ent:
+        bases.append(ent)
+        ent = ent.ents('Base')
+        if ent:
+            ent = ent[0]
+
+    # Add each class' member objects to a list
+    for base in bases:
+        addOtherMemberObjects(members, base)
+
+    return members
+
+
+# Add to the set of member objects that cannot be referenced
+def addOtherMemberObjects(members, ent):
+
+    parent = ent.parent()
+    if not parent:
+        return
+
+    # Get all non static members
+    for ent in parent.ents('Define', 'Member Object ~Static'):
+        members.add(ent)
+
+        # Add any functions that may return those non static members
+        members.update(ent.ents('Return'))

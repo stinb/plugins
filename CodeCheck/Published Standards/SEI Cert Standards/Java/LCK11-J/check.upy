@@ -1,0 +1,297 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-11-15
+
+
+import re
+from Modules import findClose, lexemeBefore, javaImmutableClass as immutable
+
+
+ERR1 = 'Synchronizing on thread-safe instance'
+ERR2 = 'Synchronizing on member of thread-safe superclass'
+
+
+safeClasses = dict()
+
+
+def ids():
+    return ('LCK11-J', 'JAVA_LCK11')
+
+
+def name(id):
+    return {
+        'LCK11-J': '''Published Standards/SEI Cert Standards/Java/\
+Avoid client-side locking when using classes that do not commit to their locking \
+strategy''',
+        'JAVA_LCK11': '''All Checks/Language Specific/Java/Locking/\
+Avoid client-side locking when using classes that do not commit to their locking \
+strategy''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'LCK11-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_LCK11': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''
+<p>
+Avoid client-side locking when using classes that do not commit to their locking
+strategy
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Using client-side locking when the thread-safe class fails to commit to its
+locking strategy can cause data inconsistencies and deadlock.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/LCK11-J.+Avoid+client-side+locking+when+using+classes+that+do+not+commit+to+their+locking+strategy
+</i>
+</p>
+
+<p><b>Noncompliant Code Example (Intrinsic Lock)</b></p>
+<pre><code language="Java">// Client
+public class BookWrapper {
+  private final Book book;
+
+  BookWrapper(Book book) {
+    this.book = book;
+  }
+
+  public void issue(int days) {
+    book.issue(days);
+  }
+
+  public Calendar getDueDate() {
+    return book.getDueDate();
+  }
+
+  public void renew() {
+    synchronized(book) {
+      if (book.getDueDate().before(Calendar.getInstance())) {
+        throw new IllegalStateException("Book overdue");
+      } else {
+        book.issue(14); // Issue book for 14 days
+      }
+    }
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Class Extension and Accessible Member Lock)</b></p>
+<pre><code language="Java">// This class could change its locking policy in the future,
+// for example, if new non-atomic methods are added
+class IPAddressList {
+  private final List&lt;InetAddress&gt; ips =
+      Collections.synchronizedList(new ArrayList&lt;InetAddress&gt;());
+
+  public List&lt;InetAddress&gt; getList() {
+    return ips; // No defensive copies required
+                // as visibility is package-private
+  }
+
+  public void addIPAddress(InetAddress address) {
+    ips.add(address);
+  }
+}
+
+class PrintableIPAddressList extends IPAddressList {
+  public void addAndPrintIPAddresses(InetAddress address) {
+    synchronized (getList()) {
+      addIPAddress(address);
+      InetAddress[] ia =
+          (InetAddress[]) getList().toArray(new InetAddress[0]);
+      // ...
+    }
+  }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('skipUnknown', 'Skip unknown/unresolved types', True)
+
+
+def getLock(lex):
+    # Match (
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '(':
+        return
+
+    # Get the last entity before the close
+    close = findClose(lex)
+    lock = None
+    while lex and lexemeBefore(lex, close.line_begin(), close.column_begin()):
+        if lex.ent():
+            lock = (lex, lex.ent())
+        lex = lex.next(True, True)
+
+    if lock:
+        return lock
+
+
+def synchronizedMethod(ref):
+    lex = ref.file().lexer(False).lexeme(define.line(), define.column())
+    name = ref.ent().name()
+    while lex and lex.text() != name:
+        if lex.text() == 'synchronized':
+            return True
+        lex = lex.next(True, True)
+    return False
+
+
+def synchronizedClass(ent):
+    # Not synchronized if there are non-private class variables
+    if ent.refs('Define', '~Private Variable'):
+        return False
+
+    # Not synchronized if class variables are get/set asynchronously
+    memberVars = set(ent.ents('Define', 'Variable'))
+    for begin in ent.refs('Begin', '~Private Method'):
+        method = begin.ent()
+
+        # See if class variables are get/set
+        getSet = False
+        for var in method.ents('Use Return, Set', 'Variable'):
+            if var in memberVars:
+                getSet = True
+                break
+
+        # Skip if class variables are not get/set
+        if not getSet:
+            continue
+
+        # Not synchronized if the keyword isn't used
+        if not synchronizedMethod:
+            return False
+
+    return True
+
+
+def isSafe(ent):
+    if ent not in safeClasses:
+        if immutable(ent) or synchronizedClass(ent):
+            safeClasses[ent] = True
+        else:
+            safeClasses[ent] = False
+    return safeClasses[ent]
+
+
+def isLock(ent):
+    return not ent.refs('Useby Deref')
+
+
+def check(check, file):
+    skipUnknown = check.options().lookup('skipUnknown')
+
+    # Skip unless the word "synchronized" is found
+    if not re.search(r'\Wsynchronized\W', file.contents()):
+        return
+
+    # Methods
+    for define in file.filerefs('Define', 'Method'):
+        method = define.ent()
+
+        # Get locks of method from synchronized statements using lexer
+        # locks = [ (lex, ent), ... ]
+        locks = []
+        lex = file.lexer().lexeme(define.line(), define.column())
+        end = method.ref('End')
+        while lex and end and lexemeBefore(lex, end.line(), end.column()):
+            if lex.text() == 'synchronized':
+                lock = getLock(lex)
+                if lock:
+                    locks.append(lock)
+            lex = lex.next(True, True)
+
+        # See if any of the locks are thread-safe
+        for lock in locks:
+            lex = lock[0]
+            ent = lock[1]
+
+            var = None
+            superclass = None
+
+            # Get the variable if the lock is a variable
+            if ent.kind().check('Variable, Parameter'):
+                var = ent
+
+            # Get the variable if the ent is a get-method of the superclass
+            elif ent.kind().check('Method'):
+                superclass = ent.parent()
+                if not superclass:
+                    continue
+
+                parent = method.parent()
+                if superclass not in parent.ents('Extend', 'Class Type'):
+                    continue
+
+                returns = ent.ents('Use Return', 'Variable')
+                if len(returns) == 1:
+                    var = returns[0]
+
+            # Skip if the variable wasn't found
+            if not var:
+                continue
+
+            # Skip if the variable is a private final lock of the same parent
+            if var.kind().check('Private Final'):
+                if var.parent() == method.parent() and isLock(var):
+                    continue
+
+            # Test the variable
+            if not superclass:
+                varTypes = var.ents('Typed')
+                varType = varTypes[0] if varTypes else None
+                # Skip if the variable is unknown/unresolved
+                if skipUnknown and varType.kind().check('Unknown, Unresolved'):
+                    continue
+                # Skip if the variable is not thread-safe
+                if not isSafe(varType):
+                    continue
+
+            # Test the superclass
+            else:
+                # Skip if the superclass is unknown/unresolved
+                if skipUnknown and superclass.kind().check('Unknown, Unresolved'):
+                    continue
+                # Skip if the superclass is not thread-safe
+                if not isSafe(superclass):
+                    continue
+
+            line, column = lex.line_begin(), lex.column_begin()
+            if not superclass:
+                check.violation(var, file, line, column, ERR1)
+            else:
+                check.violation(var, file, line, column, ERR2)

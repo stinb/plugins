@@ -1,0 +1,173 @@
+import re
+
+
+ERR1 = 'A std::weak_ptr shall be used to represent temporary shared ownership'
+
+
+# The ID for the check
+def ids():
+    return ('A20-8-7', 'CPP_P032')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A20-8-7': 'Published Standards/AUTOSAR/Cyclic Structure of std::shared_ptr',
+        'CPP_P032': 'All Checks/Language Specific/C and C++/Pointers/Cyclic Structure of std::shared_ptr',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A20-8-7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Pointers',
+        ],
+        'CPP_P032': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'A std::weak_ptr shall be used to represent temporary shared ownership.'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A std::weak_ptr shall be used to represent temporary shared ownership.</p>
+<p><b>Rationale</b></p>
+<p>A cyclic structure of std::shared_ptr results in reference counting mechanism never
+dropping to zero, which prevents from pointed object deallocation. Breaking such cycles is done using std::weak_ptr which must be converted to std::shared_ptr in order
+to access the referenced object.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A20-8-7.cpp 308795 2018-02-23 09:27:03Z michal.szczepankiewicz $
+2
+3 #include &lt;memory&gt;
+4
+5 template &lt;template &lt;typename&gt; class T, typename U&gt;
+6 struct Base
+7 {
+8 T&lt;U&gt; sp;
+9 };
+10
+11 template &lt;typename T&gt;
+12 using Shared = Base&lt;std::shared_ptr, T&gt;;
+13
+14 template &lt;typename T&gt;
+15 using Weak = Base&lt;std::weak_ptr, T&gt;;
+16
+17 struct SBarSFoo;
+18 struct SFooSBar : public Shared&lt;SBarSFoo&gt; {};
+19 struct SBarSFoo : public Shared&lt;SFooSBar&gt; {};
+20
+21 struct A : public Shared&lt;A&gt; {};
+22
+23 struct WBarSFoo;
+24 struct SFooWBar : public Shared&lt;WBarSFoo&gt; {};
+25 struct WBarSFoo : public Weak&lt;SFooWBar&gt; {};
+26
+27 int main()
+28 {
+29 std::shared_ptr&lt;SFooSBar&gt; f = std::make_shared&lt;SFooSBar&gt;();
+30 std::shared_ptr&lt;SBarSFoo&gt; b = std::make_shared&lt;SBarSFoo&gt;();
+31 f-&gt;sp = b;
+32 b-&gt;sp = f;
+33 //non-compliant, both f and b have ref_count() == 2
+34 //destructors of f and b reduce ref_count() to 1,
+35 //destructors of underlying objects are never called,
+36 //so destructors of shared_ptrs sp are not called
+37 //and memory is leaked
+38
+39 std::shared_ptr&lt;A&gt; a = std::make_shared&lt;A&gt;();
+40 a-&gt;sp = a;
+41 //non-compliant, object 'a' destructor does not call
+42 //underlying memory destructor
+43
+44 std::shared_ptr&lt;SFooWBar&gt; f2 = std::make_shared&lt;SFooWBar&gt;();
+45 std::shared_ptr&lt;WBarSFoo&gt; b2 = std::make_shared&lt;WBarSFoo&gt;();
+46 f2-&gt;sp = b2;
+47 b2-&gt;sp = f2;
+48 //compliant, b2-&gt;sp holds weak_ptr to f2, so f2 destructor
+49 //is able to properly destroy underlying object
+50
+51 return 0;
+52 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• C++ Core Guidelines [11]: R.24: Use std::weak_ptr to break cycles of
+shared_ptrs</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if lexer and re.search(r"shared_ptr", file.contents()):
+        for func_ref in file.filerefs("Define", "Function"):
+            shared_ptrs = {}
+
+            for obj_ref in func_ref.ent().refs("Define", "Object"):
+                is_weak = False
+                is_shared = False
+
+                for type_ref in obj_ref.ent().refs("Typed"):
+                    if type_ref.kind().check("TemplateArgument"):
+                        for parent_ref in type_ref.ent().refs("Base"):
+                            for typed_ref in parent_ref.ent().refs("Typed TemplateArgument"):
+                                if typed_ref.ent().name() == "weak_ptr":
+                                    is_weak = True
+                    elif type_ref.ent().name() == "shared_ptr":
+                        is_shared = True
+
+                if is_shared and obj_ref.ent().name() not in shared_ptrs:
+                    shared_ptrs[obj_ref.ent().name()] = is_weak
+
+            if shared_ptrs:
+                for deref_set in func_ref.ent().refs("Deref Set"):
+                    ent_name = deref_set.ent().name()
+
+                    if ent_name not in shared_ptrs or (ent_name in shared_ptrs and shared_ptrs[ent_name]):
+                        continue
+
+                    if deref_set.scope().id() == func_ref.ent().id():
+                        lex = lexer.lexeme(
+                            deref_set.line(), deref_set.column())
+                        is_set = False
+
+                        while lex and lex.text() != ";":
+                            if lex.text() == "=" and lex.token() == "Operator":
+                                is_set = True
+                            elif is_set:
+                                lex_ent = lex.ent().name() if lex.ent() else None
+
+                                if lex_ent and lex_ent in shared_ptrs and not shared_ptrs[lex_ent]:
+                                    check.violation(
+                                        deref_set.ent(), file, deref_set.line(), deref_set.column(), ERR1)
+
+                                break
+
+                            lex = lex.next(ignore_whitespace=True,
+                                           ignore_comments=True)

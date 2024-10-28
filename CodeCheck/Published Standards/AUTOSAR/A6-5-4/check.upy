@@ -1,0 +1,129 @@
+import re
+
+ERR1 = 'For-init-statement and expression should not perform actions other than loop-counter initialization and modification'
+
+# The ID for the check
+def ids():
+    return ('A6-5-4', 'CPP_C042')
+
+# The short name of the check
+def name(id):
+    return {
+        'A6-5-4': 'Published Standards/AUTOSAR/For-init-statement and expression should not perform actions other than loop-counter initialization and modification',
+        'CPP_C042': 'All Checks/Language Specific/C and C++/Control Flow/For-init-statement and expression should not perform actions other than loop-counter initialization and modification',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A6-5-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C042': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+If only a loop-counter is used in the for-init-statement and expression, it increases readability and it is easier to understand and maintain code.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A6-5-4.cpp 305629 2018-01-29 13:29:25Z piotr.serwa $
+#include &lt;cstdint&gt;
+
+void Fn() noexcept
+{
+    for (std::int32_t x = 0, MAX=10; x &lt; MAX; x++) // compliant with A6-5-2, but non-compliant with advisory A6-5-4
+    {
+        // ...
+    }
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 198: The initialization expression in a for loop will perform no actions other than to initialize the value of a single for loop parameter.
+</p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 199: The increment expression in a for loop will perform no action other than to change a single loop parameter to the next value for the loop.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check_for_statement(lex, file, check):
+    is_valid = True
+    lex_temp = lex
+    return_lex = None
+    #go to end of for-loop statement
+    while lex_temp and (lex_temp.text() != ")" and lex_temp.text() != "{"):
+        lex_temp = lex_temp.next(ignore_whitespace=True, ignore_comments=True)
+
+    return_lex = lex_temp
+    #travel back to validate
+    ent = None
+    #loop modification
+    while lex_temp and lex_temp.text() != ";":
+        if ent == None and lex_temp.ent() and lex_temp.text() != ";":
+            #ent used in loop modification
+            ent = lex_temp.ent()
+        elif ent != None and lex_temp.ent():
+            is_valid = False
+        lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
+
+    #loop condition
+    if lex_temp and is_valid:
+        lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
+        while lex_temp and lex_temp.text() != ";":
+            lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
+
+    #loop init
+    if lex_temp and is_valid:
+        while lex_temp and lex_temp.text() != "(":
+            if lex_temp.ent() and lex_temp.ent().kind().check("Object") and lex_temp.ent().ref("Init"):
+                if ent != lex_temp.ent():
+                    is_valid = False
+            lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
+
+    #validation
+    if not is_valid:
+        check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+    return return_lex
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+    while lex:
+        if lex.text() == "for" and lex.token() == "Keyword":
+            lex = check_for_statement(lex, file, check)
+        else:
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)

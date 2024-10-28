@@ -1,0 +1,114 @@
+ERR1 = "Do not modify the collection's elements during an enhanced for statement."
+
+
+# The ID for the check
+def ids():
+    return ('DCL02-J', 'JAVA_DCL02')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'DCL02-J': "Published Standards/SEI Cert Standards/Java/Do not modify the collection's elements during an enhanced for statement",
+        'JAVA_DCL02': "All Checks/Language Specific/Java/Declarations and Definitions/Do not modify the collection's elements during an enhanced for statement",
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'DCL02-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+        ],
+        'JAVA_DCL02': [
+            'Language: Java',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return "Do not modify the collection's elements during an enhanced for statement"
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not modify the collection's elements during an enhanced for statement</p>
+<p><b>Risk Assessment</b></p>
+<p>Assignments to the loop variable of an enhanced for loop (for-each idiom) fail to affect the overall iteration order, lead to programmer confusion, and can leave data in a fragile or inconsistent state.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/DCL02-J.+Do+not+modify+the+collection%27s+elements+during+an+enhanced+for+statement</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">List&lt;Integer&gt; list = Arrays.asList(new Integer[] {13, 14, 15});
+boolean first = true;
+
+System.out.println("Processing list...");
+for (Integer i: list) {
+  if (first) {
+    first = false;
+    i = new Integer(99);
+  }
+  System.out.println(" New item: " + i);
+  // Process i
+}
+
+System.out.println("Modified list?");
+for (Integer i: list) {
+  System.out.println("List item: " + i);
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+    on_for = False
+    on_for_body = 0
+    on_for_statement = 0
+    enhance_for_ent = None
+
+    while lex:
+        if lex.text() == "for" and lex.token() == "Keyword":
+            on_for = True
+        elif on_for and lex.text() == "(":
+            on_for_statement += 1
+        elif on_for and lex.text() == ")":
+            on_for_statement -= 1
+        elif on_for and not on_for_statement and lex.text() == "{":
+            on_for_body += 1
+        elif on_for and not on_for_statement and lex.text() == "{":
+            on_for_body -= 1
+
+            if not on_for_body:
+                on_for = False
+                enhance_for_ent = None
+        elif on_for_statement and lex.text() == ":" and lex.token() == "Operator":
+            enhance_for_ent = lex.previous(ignore_whitespace=True).ent()
+        elif on_for_body and lex.ent() and enhance_for_ent and lex.ent().id() == enhance_for_ent.id() and lex.ref() and lex.ref().kind().check("Setby, Assignby, Modifyby"):
+            check.violation(lex.ent(), file, lex.line_begin(),
+                            lex.column_begin(), ERR1)
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)

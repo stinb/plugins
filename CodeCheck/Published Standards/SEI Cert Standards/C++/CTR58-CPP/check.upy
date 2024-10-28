@@ -1,0 +1,173 @@
+ERR1 = 'Predicate function objects should not be mutable.'
+
+
+# The ID for the check
+def id():
+    return ('CTR58-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CTR58-CPP': 'Published Standards/SEI Cert Standards/C++/Predicate function objects should not be mutable',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Predicate function objects should not be mutable'
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Title</b></p>
+<p>Predicate function objects should not be mutable</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Using a predicate function object that contains state can produce unexpected values.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR58-CPP.+Predicate+function+objects+should+not+be+mutable'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR58-CPP.+Predicate+function+objects+should+not+be+mutable</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">
+#include &lt;algorithm&gt;
+#include &lt;functional&gt;
+#include &lt;iostream&gt;
+#include &lt;iterator&gt;
+#include &lt;vector&gt;
+  
+class MutablePredicate : public std::unary_function&lt;int, bool&gt; {
+  size_t timesCalled;
+public:
+  MutablePredicate() : timesCalled(0) {}
+
+  bool operator()(const int &) {
+    return ++timesCalled == 3;
+  }
+};
+ 
+template &lt;typename Iter&gt;
+void print_container(Iter b, Iter e) {
+  std::cout &lt;&lt; "Contains: ";
+  std::copy(b, e, std::ostream_iterator&lt;decltype(*b)&gt;(std::cout, " "));
+  std::cout &lt;&lt; std::endl;
+}
+ 
+void f() {
+  std::vector&lt;int&gt; v{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  print_container(v.begin(), v.end());
+
+  v.erase(std::remove_if(v.begin(), v.end(), MutablePredicate()), v.end());
+  print_container(v.begin(), v.end());
+}
+
+
+#include &lt;algorithm&gt;
+#include &lt;iostream&gt;
+#include &lt;iterator&gt;
+#include &lt;vector&gt;
+  
+template &lt;typename Iter&gt;
+void print_container(Iter b, Iter e) {
+  std::cout &lt;&lt; "Contains: ";
+  std::copy(b, e, std::ostream_iterator&lt;decltype(*b)&gt;(std::cout, " "));
+  std::cout &lt;&lt; std::endl;
+}
+ 
+void f() {
+  std::vector&lt;int&gt; v{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  print_container(v.begin(), v.end());
+
+  int timesCalled = 0;
+  v.erase(std::remove_if(v.begin(), v.end(), [timesCalled](const int &) mutable { return ++timesCalled == 3; }), v.end());
+  print_container(v.begin(), v.end());
+}
+</code></pre>
+'''
+
+
+def tags(id):
+    return {
+        'CTR58-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P3',
+            'Level: L3'
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        funcs = class_ref.ent().refs("Define", "Function")
+
+        for func_ref in funcs:
+            if func_ref.ent().name() == "operator()":
+                utype = func_ref.ent().freetext("UnderlyingType")
+
+                if not (func_ref.ent().ref("Modify, Assign, Set", "~Static Member") and (utype == "bool")):
+                    continue
+
+                for func in funcs:
+                    if func.ent().name() == class_ref.ent().name():
+                        for call_ref in func.ent().refs("Callby ~Implicit"):
+                            check.violation(
+                                call_ref.scope(), file, call_ref.line(), call_ref.column(), ERR1)
+
+    for lfunc_ref in file.filerefs("Define", "Lambda Function"):
+        captured_ids = []
+        for cap_ref in lfunc_ref.ent().refs("Capture"):
+            captured_ids.append(cap_ref.ent().id())
+
+        lex = file.lexer().lexeme(lfunc_ref.line(), lfunc_ref.column())
+        on_body = 0
+
+        while lex:
+            if lex.text() == "{":
+                on_body += 1
+            elif lex.text() == "}":
+                on_body -= 1
+
+                if not on_body:
+                    break
+            elif on_body and (lex.text() == "return") and (lex.token() == "Keyword"):
+                is_bool = False
+                mutable = False
+
+                while lex.text() != ";":
+                    if (lex.token() == "Operator") and (lex.text() in ["==", "!=", ">", "<", ">=", "<="]):
+                        is_bool = True
+                    elif lex.ent() and (lex.ent().id() in captured_ids):
+                        for mod_ref in lex.ent().refs("Modifyby, Setby, Assignby"):
+                            if (mod_ref.line() == lex.line_begin()) and (mod_ref.column() == lex.column_begin()):
+                                mutable = True
+
+                    lex = lex.next(True, True)
+
+                if mutable and is_bool:
+                    check.violation(lfunc_ref.ent(), file,
+                                    lfunc_ref.line(), lfunc_ref.column(), ERR1)
+
+                break
+
+            lex = lex.next(True, True)

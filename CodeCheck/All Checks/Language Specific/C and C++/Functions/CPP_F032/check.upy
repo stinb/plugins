@@ -1,0 +1,182 @@
+import re
+
+
+ERR1 = 'Address of this object is assigned to another object that may persist after this object has ceased to exist.'
+
+
+# The ID for the check
+def ids():
+    return ('A7-5-1', 'CPP_F032')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A7-5-1': 'Published Standards/AUTOSAR/A function shall not return a reference or a pointer to a parameter that is passed by reference to const.',
+        'CPP_F032': 'All Checks/Language Specific/C and C++/Functions/A function shall not return a reference or a pointer to a parameter that is passed by reference to const.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A7-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions',
+        ],
+        'CPP_F032': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p>
+If a function receives a const reference, then it should not return a reference or pointer to it.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+"[...] Where a parameter is of const reference type a temporary object is introduced if needed (7.1.6, 2.13, 2.13.5, 8.3.4, 12.2)." [C++14 Language Standard [3]]
+</p>
+
+<p>
+Any attempt to dereferencing an object which outlived its scope will lead to undefined behavior.
+</p>
+
+<p>
+References to const bind to both lvalues and rvalues, so functions that accept parameters passed by reference to const should expect temporary objects too.
+</p>
+
+<p>
+Returning a pointer or a reference to such an object leads to undefined behavior on accessing it.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A7-5-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+class A
+{
+  public:
+    explicit A(std::uint8_t n) : number(n) {}
+    ~A() { number = 0U; }
+    // Implementation
+
+  private:
+    std::uint8_t number;
+};
+const A &Fn1(const A &ref) noexcept // Non-compliant - the function returns a
+                                    // reference to const reference parameter
+                                    // which may bind to temporary objects.
+                                    // According to C++14 Language Standard, it
+// is undefined whether a temporary object is introduced for const
+// reference
+// parameter
+{
+    // ...
+    return ref;
+}
+const A &Fn2(A &ref) noexcept // Compliant - non-const reference parameter does
+                              // not bind to temporary objects, it is allowed
+                              // that the function returns a reference to such
+                              // a parameter
+{
+    // ...
+    return ref;
+}
+const A *Fn3(const A &ref) noexcept // Non-compliant - the function returns a
+// pointer to const reference parameter
+// which may bind to temporary objects.
+// According to C++14 Language Standard, it
+// is undefined whether a temporary object is introduced for const
+// reference
+// parameter
+{
+    // ...
+    return &ref;
+}
+template &lt;typename T&gt;
+T &Fn4(T &v) // Compliant - the function will not bind to temporary objects
+{
+    // ...
+    return v;
+}
+void F() noexcept
+{
+    A a{5};
+    const A &ref1 = Fn1(a); // fn1 called with an lvalue parameter from an
+                            // outer scope, ref1 refers to valid object
+    const A &ref2 = Fn2(a); // fn2 called with an lvalue parameter from an
+                            // outer scope, ref2 refers to valid object
+    const A *ptr1 = Fn3(a); // fn3 called with an lvalue parameter from an
+                            // outer scope, ptr1 refers to valid object
+    const A &ref3 = Fn4(a); // fn4 called with T = A, an lvalue parameter from
+                            // an outer scope, ref3 refers to valid object
+
+    const A &ref4 = Fn1(A{10}); // fn1 called with an rvalue parameter
+                                // (temporary), ref3 refers to destroyed object
+                                // A const& ref5 = fn2(A{10}); // Compilation
+                                // error - invalid initialization of non-const
+                                // reference
+    const A *ptr2 = Fn3(A{15}); // fn3 called with an rvalue parameter
+                                // (temporary), ptr2 refers to destroyted
+                                // object
+    // const A& ref6 = fn4(A{20}); // Compilation error - invalid
+    // initialization of non-const reference
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• MISRA C++ 2008 [7]: A function shall not return a reference or a pointer to a parameter that is passed by reference or const reference.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function ~Lambda"):
+        func_type = func_ref.ent().type()
+
+        if func_type and not re.search(r"const .+ [*&]{1}", func_type):
+            continue
+
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            param_type = param_ref.ent().type()
+            if func_type and param_type and re.search(r"const .+ &", param_type):
+                compliant = False
+                func = list(func_type.split(" "))
+                param = list(param_type.split(" "))
+
+                for ind, val in enumerate(param[:-1]):
+                    if val != func[ind]:
+                        compliant = True
+                        break
+
+                if not compliant:
+                    check.violation(func_ref.ent(), file,
+                                    func_ref.line(), func_ref.column(), ERR1)

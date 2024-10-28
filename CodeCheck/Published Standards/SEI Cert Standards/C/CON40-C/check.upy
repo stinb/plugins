@@ -1,0 +1,105 @@
+import re
+
+
+ERR1 = 'Do not refer to an atomic variable twice in an expression.'
+
+
+# The ID for the check
+def id():
+    return ('CON40-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON40-C': 'Published Standards/SEI Cert Standards/C/Do not refer to an atomic variable twice in an expression',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'CON40-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not refer to an atomic variable twice in an expression'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not refer to an atomic variable twice in an expression</p>
+<p><b>Risk Assessment</b></p>
+<p>When operations on atomic variables are assumed to be atomic, but are not atomic, surprising data races can occur, leading to corrupted data and invalid control flow.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/CON40-C.+Do+not+refer+to+an+atomic+variable+twice+in+an+expression</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdatomic.h&gt;
+#include &lt;stdbool.h&gt;
+
+static atomic_bool flag = ATOMIC_VAR_INIT(false);
+
+void init_flag(void) {
+  atomic_init(&flag, false);
+}
+
+void toggle_flag(void) {
+  bool temp_flag = atomic_load(&flag);
+  temp_flag = !temp_flag;
+  atomic_store(&flag, temp_flag);
+}
+
+bool get_flag(void) {
+  return atomic_load(&flag);
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Set Init", "Object"):
+        obj_type = obj_ref.ent().freetext("UnderlyingType")
+        lines_referred = []
+
+        if obj_type and re.search(r"^_Atomic", obj_type):
+            for ref in obj_ref.ent().refs("~Init ~Definein ~Typed ~Assignby"):
+                if ref.line() not in lines_referred:
+                    lines_referred.append(ref.line())
+                else:
+                    check.violation(ref.scope(), file,
+                                    ref.line(), ref.column(), ERR1)
+
+            for assign_ref in obj_ref.ent().refs("Assignby"):
+                lines_referred.clear()
+
+                for ref in assign_ref.ent().refs("Setby, Useby"):
+                    if ref.line() not in lines_referred:
+                        lines_referred.append(ref.line())
+                    else:
+                        check.violation(ref.scope(), file,
+                                        ref.line(), ref.column(), ERR1)

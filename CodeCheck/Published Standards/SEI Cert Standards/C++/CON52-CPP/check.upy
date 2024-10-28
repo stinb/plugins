@@ -1,0 +1,105 @@
+ERR1 = 'Prevent data races when accessing bit-fields from multiple threads.'
+
+
+# The ID for the check
+def id():
+    return ('CON52-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON52-CPP': 'Published Standards/SEI Cert Standards/C++/Prevent data races when accessing bit-fields from multiple threads',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Prevent data races when accessing bit-fields from multiple threads'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Prevent data races when accessing bit-fields from multiple threads</p>
+<p><b>Risk Assessment</b></p>
+<p>Although the race window is narrow, an assignment or an expression can evaluate improperly because of misinterpreted data resulting in a corrupted running state or unintended information disclosure.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/CON52-CPP.+Prevent+data+races+when+accessing+bit-fields+from+multiple+threads</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+struct MultiThreadedFlags {
+  unsigned int flag1 : 2;
+  unsigned int flag2 : 2;
+};
+ 
+MultiThreadedFlags flags;
+ 
+void thread1() {
+  flags.flag1 = 1;
+}
+ 
+void thread2() {
+  flags.flag2 = 2;
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'CON52-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2'
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class, Struct"):
+        bitset_func = None
+        set_refs = []
+        non_compliant = False
+
+        for mem_ref in class_ref.ent().refs("Define", "Member Object"):
+            if mem_ref.ent().freetext("BitField"):
+                for set_ref in mem_ref.ent().refs("Setby, Modifyby, Assignby", "Function"):
+                    set_refs.append(set_ref)
+                    has_lock = False
+
+                    for call_ref in set_ref.ent().refs("Call"):
+                        if (call_ref.line() < set_ref.line()) and (call_ref.ent().name() == "lock_guard"):
+                            has_lock = True
+                            break
+
+                    if has_lock or non_compliant:
+                        continue
+
+                    if bitset_func and (set_ref.ent().id() != bitset_func):
+                        non_compliant = True
+                        continue
+                    else:
+                        bitset_func = set_ref.ent().id()
+
+        if non_compliant:
+            for set_ref in set_refs:
+                check.violation(set_ref.scope(), file,
+                                set_ref.line(), set_ref.column(), ERR1)

@@ -1,0 +1,296 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-3-22
+
+
+import re
+from Modules import findClose, lexemeEquals
+
+
+ERR1 = 'File operation possibly in a shared directory'
+
+
+fileOperations = {
+    'java.io.FileInputStream.FileInputStream',
+    'java.io.FileOutputStream.FileOutputStream', 'java.nio.file.Files.copy',
+    'java.nio.file.Files.createDirectories',
+    'java.nio.file.Files.createDirectory', 'java.nio.file.Files.createFile',
+    'java.nio.file.Files.createLink', 'java.nio.file.Files.createSymbolicLink',
+    'java.nio.file.Files.createTempDirectory',
+    'java.nio.file.Files.createTempFile', 'java.nio.file.Files.delete',
+    'java.nio.file.Files.deleteIfExists', 'java.nio.file.Files.move',
+    'java.nio.file.Files.newBufferedReader',
+    'java.nio.file.Files.newBufferedWriter',
+    'java.nio.file.Files.newByteChannel',
+    'java.nio.file.Files.newDirectoryStream',
+    'java.nio.file.Files.newInputStream', 'java.nio.file.Files.newOutputStream',
+    'java.nio.file.Files.readAllBytes', 'java.nio.file.Files.readAllLines',
+    'java.nio.file.Files.setAttribute',
+    'java.nio.file.Files.setLastModifiedTime', 'java.nio.file.Files.setOwner',
+    'java.nio.file.Files.setPosixFilePermissions', 'java.nio.file.Files.write',
+}
+
+
+# The ID for the check
+def ids():
+    return ('FIO00-J', 'JAVA_FIO00')
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO00-J': "Published Standards/SEI Cert Standards/Java/Do not operate on files in shared directories",
+        'JAVA_FIO00': "All Checks/Language Specific/Java/Input Output/Do not operate on files in shared directories",
+    }[id]
+
+
+def tags(id):
+    return {
+        'FIO00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_FIO00': [
+            'Language: Java',
+            'Input Output',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Do not operate on files in shared directories
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Performing operations on files in shared directories can result in DoS attacks.
+If the program has elevated privileges, privilege escalation exploits are
+possible.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/FIO00-J.+Do+not+operate+on+files+in+shared+directories
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+<p><i>
+FIO00-J-EX0: Programs that operate on single-user systems or on systems that
+have no shared directories or no possibility of file system vulnerabilities do
+not need to ensure that files are maintained in secure directories before
+operating on them.
+</i></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">String file = /* Provided by user */;
+InputStream in = null;
+try {
+  in = new FileInputStream(file);
+  // ...
+} finally {
+  try {
+    if (in !=null) { in.close();}
+  } catch (IOException x) {
+    // Handle error
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>isRegularFile()</code>)</b></p>
+<pre><code language="Java">String filename = /* Provided by user */;
+Path path = new File(filename).toPath();
+try (InputStream in = Files.newInputStream(path)) {
+  // Read file
+} catch (IOException x) {
+  // Handle error
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>NOFOLLOW_LINKS</code>)</b></p>
+<pre><code language="Java">String filename = /* Provided by user */;
+Path path = new File(filename).toPath();
+try {
+  BasicFileAttributes attr = Files.readAttributes(
+      path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+
+  // Check
+  if (!attr.isRegularFile()) {
+    System.out.println("Not a regular file");
+    return;
+  }
+  // Other necessary checks
+
+  // Use
+  try (InputStream in = Files.newInputStream(path)) {
+    // Read file
+  };
+} catch (IOException x) {
+  // Handle error
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (POSIX: Check-Use-Check)</b></p>
+<pre><code language="Java">String filename = /* Provided by user */;
+Path path = new File(filename).toPath();
+try {
+  BasicFileAttributes attr = Files.readAttributes(
+      path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+  Object fileKey = attr.fileKey();
+
+  // Check
+  if (!attr.isRegularFile()) {
+    System.out.println("Not a regular file");
+    return;
+  }
+  // Other necessary checks
+
+  // Use
+  try (InputStream in = Files.newInputStream(path)) {
+
+    // Check
+    BasicFileAttributes attr2 = Files.readAttributes(
+        path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS
+    );
+    Object fileKey2 = attr2.fileKey();
+    if (!fileKey.equals(fileKey2)) {
+      System.out.println("File has been tampered with");
+    }
+
+    // Read file
+  };
+} catch (IOException x) {
+  // Handle error
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Because the implementation of a compliant Path validator method can differ
+widely, simply enter the name of your method. This method should be similar to
+<code>isInSecureDir</code> as defined in the full standard.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().text('validator', 'Path validator method name', 'isInSecureDir')
+
+
+def getParametersFromMethod(lex):
+    parameters = []
+
+    # Find start of method call
+    while lex and lex.text() != '(':
+        lex = lex.next(True, True)
+
+    # Find close of method call
+    close = findClose(lex)
+
+    # Get all parameters
+    while lex:
+        atClose = lexemeEquals(lex, close.line_begin(), close.column_begin())
+        if lex.text() == ',' or atClose:
+            prev = lex.previous(True, True)
+            if prev.ent():
+                parameters.append(prev.ent())
+            if atClose:
+                break
+        lex = lex.next(True, True)
+
+    return parameters
+
+
+def getMethodFromParameter(lex):
+    # Find ( in the same statement
+    while lex and lex.text() != '(':
+        if lex.text() in {'{', '}', ';'}:
+            return
+        lex = lex.previous(True, True)
+
+    # Match anything
+    lex = lex.previous(True, True)
+    if not lex:
+        return
+
+    return lex.ent()
+
+
+def check(check, file):
+    validator = check.options().lookup('validator')
+
+    pathsValidated = set()
+
+    for call in file.filerefs('Call', 'Method'):
+        method = call.ent()
+
+        # Skip unless the function is a file stream opening or a file operation
+        if method.longname() not in fileOperations:
+            continue
+
+        # Get the Path object parameters
+        lexer = file.lexer()
+        lex = lexer.lexeme(call.line(), call.column())
+        parameters = getParametersFromMethod(lex)
+        paths = []
+        for param in parameters:
+            if param.type() == 'Path':
+                paths.append(param)
+
+        # Check if the Path objects are validated to be secure
+        for path in paths:
+            # Skip if the Path object is already validated
+            if path in pathsValidated:
+                continue
+
+            thisPathValidated = False
+
+            # Every usage of a Path object
+            for usebyMethod in path.refs('Useby'):
+                # Get the method that the Path parameter is used by
+                lex = lexer.lexeme(usebyMethod.line(), usebyMethod.column())
+                methodUsingPath = getMethodFromParameter(lex)
+                if not methodUsingPath:
+                    continue
+
+                # Skip method unless it is file I/O
+                if methodUsingPath.longname() in fileOperations:
+                    continue
+
+                # Stop looking at methods if the path is validated
+                if methodUsingPath.name() == validator:
+                    thisPathValidated = True
+                    pathsValidated.add(path)
+                    break
+
+            # Skip if the Path object was validated
+            if thisPathValidated:
+                continue
+
+            # Violation for each file I/O, for each unvalidated Path object
+            check.violation(path, file, call.line(), call.column(), ERR1)
+
+        # Skip if there are Path objects in the file operation method call
+        if paths:
+            continue
+
+        # Violation for each file I/O without a Path object
+        check.violation(method, file, call.line(), call.column(), ERR1)

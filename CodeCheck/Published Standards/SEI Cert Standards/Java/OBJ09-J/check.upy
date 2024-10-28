@@ -1,0 +1,455 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 3/31/2022
+
+ERR1 = 'Do not compare class names'
+
+ERR2 = 'Do not compare class namesm - via variable'
+
+ERR3 = 'Do not compare class names - via parameter'
+
+ERR4 = 'Do not compare class names - via parameter as variable'
+
+DEF_NAME = "Compare classes and not class names"
+
+CP = ["class", "getClass"]
+
+# The ID for the check
+def ids():
+    return ('OBJ09-J', 'JAVA_OBJ09')
+
+# The short name of the check
+def name(id):
+    return {
+        'OBJ09-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_OBJ09': "All Checks/Language Specific/Java/Object Orientation/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'OBJ09-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P9',
+            'Level: L2',
+        ],
+        'JAVA_OBJ09': [
+            'Language: Java',
+            'Object Orientation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Compare classes and not class names</p>
+<p><b>Risk Assessment</b></p>
+<p>Comparing classes solely using their names can allow a malicious class to bypass security checks and gain access to protected resources.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/OBJ09-J.+Compare+classes+and+not+class+names</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">// Determine whether object auth has required/expected class object
+ if (auth.getClass().getName().equals(
+      "com.application.auth.DefaultAuthenticationHandler")) {
+   // ...
+}</code></pre>
+<p><i>Developer Notes: </i>Variables and parameters that are not final cannot have their values guaranteed at the time of comparison so they cannot be flagged. An option is available to flag these, but it may lead to false positives.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox("poten", "Check for potential variables and parameters", False)
+
+def check(check, file):
+
+    pot = check.option().lookup('poten')
+
+    #find all uses of getName
+    for var in file.filerefs("Call", "Method"):
+
+        if(var.ent().name() == "getName"):
+
+            #see if their caller is a class
+            (eLex, strOrder) = get_caller_ent_order(var)
+            isB = False
+
+            #len 1 then check for class
+            if len(strOrder) == 1:
+                if is_class(eLex.ent()):
+                    isB = True
+
+            #if item before is correct
+            elif strOrder[-2] in CP:
+                isB = True
+
+            #check for compare?
+            if isB:
+
+                #default
+                if is_compared(var, eLex):
+                    pm(ERR1, check, eLex.ent(), var.file(), var.line(), var.column())
+
+                #passed as param
+                dParam = passed_as_param(var)
+                if dParam[0] > -1:
+                    if "Unknown" not in dParam[1].kindname():#need to check that it isnt a built in
+                        params = get_params(dParam[1].ref())
+                        p = params[dParam[0]]
+                        if "final" in p[0] or pot:
+                            compare = False
+                            for useofpar in p[1].ent().refs("Useby ~Use"):
+                                if var_is_compared(useofpar):
+                                    compare = True
+                                    break
+                            if compare:
+                                pm(ERR3, check, var.ent(), var.file(), var.line(), var.column())
+
+                #variable stuff
+                varr = is_variable(var, eLex, check)
+                if varr:
+                    varEnt = varr.ent()
+                    isOk =  (pot and "Variable" in varEnt.kindname()) or ("Final" in varEnt.kindname() and "Variable" in varEnt.kindname())
+                    if isOk:
+                        #now go to all uses
+                        for useof in varEnt.refs("Useby ~Use"):
+                            if var_is_compared(useof):
+                                pm(ERR2, check, varEnt, useof.file(), useof.line(), useof.column())
+
+                            #check if we are used as a param
+                            param = passed_as_param(useof)
+                            if param[0] > -1:
+                                if "Unknown" not in dParam[1].kindname():#need to check that it isnt a built in
+                                    params = get_params(param[1].ref())
+                                    p = params[param[0]]
+                                    if "final" in p[0] or pot:
+                                        compare = False
+                                        for useofpar in p[1].ent().refs("Useby ~Use"):
+                                            if var_is_compared(useofpar):
+                                                compare = True
+                                                break
+                                        if compare:
+                                            pm(ERR4, check, varEnt, useof.file(), useof.line(), useof.column())
+
+
+def is_variable(ref, eLex, check):
+    varEnt = None
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return None
+
+    pCount = 0
+    lexemeR = lexer.lexeme(ref.line(), ref.column())
+
+    while lexemeR and not (pCount == 0 and lexemeR.text() == ")"):
+
+        lexemeR = lexemeR.next(True, True)
+
+        if lexemeR.text() == ")":
+            pCount -= 1
+
+        if lexemeR.text() == "(":
+            pCount += 1
+
+    lexemeR = lexemeR.next(True, True)
+    if lexemeR and lexemeR.text() == ";":
+        #right side is good
+        lexemeL = eLex.previous(True, True)
+        if lexemeL and lexemeL.text() == "=":
+            varEnt = lexemeL.previous(True, True)
+
+    return varEnt
+
+
+
+def is_class(e):
+    if e is None:
+        return False
+    if "Class" in e.kindname():
+        return True
+
+#returns -1 if not, else returns param (index, user)
+def passed_as_param(ref):
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return False
+
+    #get the lexemes to the left and right
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+
+    lexemeLeft = lexeme.previous(True, True)
+    lexemeRight = lexeme.next(True, True)
+
+    #check left
+    user = None
+    index = 0
+    leftOkay = False
+    rightOkay = False
+
+    badText = [";","{", "}", "!=", "==", "<", "<=", ">", ">=", "=", "-", "+", "*", "/", "%"]
+
+    pCount = 0
+    lCount = 0
+
+    #check left
+    while lexemeLeft and not (pCount == 0 and lexemeLeft.text() in badText):
+        if lexemeLeft.text() == "(":
+            pCount += 1
+
+        if lexemeLeft.text() == ")":
+            pCount -= 1
+
+        if lexemeLeft.text() == "<":
+            lCount += 1
+
+        if lexemeLeft.text() == ">":
+            lCount -= 1
+
+        if pCount == 1:
+            leftOkay = True
+            break
+
+        if lexemeLeft.text() == "," and pCount == 0 and lCount == 0:
+            index += 1
+
+        lexemeLeft = lexemeLeft.previous(True, True)
+
+    #get our user
+    lexemeLeft = lexemeLeft.previous(True, True)
+    if lexemeLeft:
+        user = lexemeLeft.ent()
+
+    #check right
+    pCount = 0
+    lCount = 0
+    fIndex = 0
+
+    while lexemeRight and not (pCount == 0 and lexemeRight.text() in badText):
+        if lexemeRight.text() == "(":
+            pCount += 1
+
+        if lexemeRight.text() == ")":
+            pCount -= 1
+
+        if lexemeRight.text() == "<":
+            lCount += 1
+
+        if lexemeRight.text() == ">":
+            lCount -= 1
+
+        if pCount == -1:
+            rightOkay = True
+            break
+
+        if lexemeLeft.text() == "," and pCount == 0 and lCount == 0:
+            fIndex += 1
+
+        #sending at
+        if fIndex == 0 and lexemeRight.text() == "." and pCount == 0 and lCount == 0:
+            break
+
+        lexemeRight = lexemeRight.next(True, True)
+
+    if not leftOkay or not rightOkay or user is None:
+        index = -1
+
+    return (index,user)
+
+def is_compared(ref, eLex):
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return False
+
+    lexemeE = lexer.lexeme(ref.line(), ref.column())
+
+    #check if it uses .equal()
+
+    eqText = ["equals", "contentEquals"]
+
+    while lexemeE is not None and lexemeE.text() != ")":
+        lexemeE = lexemeE.next(True, True)
+
+    if lexemeE is not None and lexemeE.next(True, True).text() == "." and lexemeE.next(True, True).next(True, True).text() in eqText:
+        return True
+
+    #check == on either side
+    badText = [";", ","]
+    opText = ["==", "!="]
+
+    #check left
+    lexemeL = eLex
+    if lexemeL.previous(True, True).text() in opText:
+        return True
+
+    #check right
+    pCount = 0
+    lexemeR = lexer.lexeme(ref.line(), ref.column())
+
+    while lexemeR and not (pCount == 0 and lexemeR.text() in badText):
+
+        if lexemeR.text() == ")":
+            pCount -= 1
+            if pCount < 0:
+                break
+
+        if lexemeR.text() == "(":
+            pCount += 1
+
+        if pCount == 0:
+            if lexemeR.text() in opText:
+                return True
+
+        lexemeR = lexemeR.next(True, True)
+
+    return False
+
+#checks to the left and right for operations
+def var_is_compared(ref):
+
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return False
+
+    #get the lexemes to the left and right
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+
+    lexemeLeft = lexeme.previous(True, True)
+    lexemeRight = lexeme.next(True, True)
+
+    if lexemeLeft is None or lexemeRight is None:
+        return False
+
+    #special case
+    while lexemeLeft.text() == "(" and lexemeRight.text() == ")":
+        lexemeLeft = lexemeLeft.previous(True, True)
+        lexemeRight = lexemeRight.next(True, True)
+
+        if lexemeLeft is None or lexemeRight is None:
+            return False
+
+    if lexemeLeft is None or lexemeRight is None:
+        return False
+
+    BAD_OPERATORS = ["!=", "=="]
+    eqText = ["equals", "contentEquals"]
+
+    #addition, check for equals
+    if lexemeRight.text() == "." and lexemeRight.next(True, True).text() in eqText:
+        return True
+
+    if lexemeLeft.text() not in BAD_OPERATORS and lexemeRight.text() not in BAD_OPERATORS:
+        return False
+
+    return True
+
+def get_caller_ent_order(ref):
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return None
+
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    lastLexeme = lexeme
+
+    pCount = 0
+    badText = ["(", "return", "{", "}"]
+    strOrder = []
+    ct = ""
+    while lexeme and lexeme.token() != "Operator" and not (pCount == 0 and lexeme.text() in badText):
+
+        if lexeme.text() == ")":
+            pCount += 1
+
+        if pCount == 0:
+            if lexeme.text() == ".":
+                strOrder.insert(0, ct)
+                ct = ""
+            else:
+                ct = lexeme.text() + ct
+
+        if lexeme.text() == "(":
+            pCount -= 1
+
+        lastLexeme = lexeme
+        lexeme = lexeme.previous(True, True)
+
+    return (lastLexeme, strOrder)
+
+# get the types of a param since we cant get final via api
+def get_params(ref):
+
+    par = []
+    if not ref.file() or not ref.file().lexer():
+        return
+    lexer = ref.file().lexer()
+
+    if lexer is None:
+        return par
+
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if lexeme is None:
+        return par
+
+    currentType = ""
+    pCount = 0
+    lCount = 0
+    previousLex = lexeme
+
+    while True:
+        previousLex = lexeme
+        lexeme = lexeme.next(True, True)
+        if lexeme is None:
+            break
+
+        if lexeme.text() == "(":
+            pCount += 1
+            if pCount == 1:
+                continue
+
+        if lexeme.text() == ")":
+            pCount -= 1
+            if pCount == 0:
+                break
+
+        if lexeme.text() == "<":
+            lCount += 1
+
+        if lexeme.text() == ">":
+            lCount -= 1
+
+        if pCount == 0:
+            break
+
+        if lexeme.text() == "," and pCount == 1 and lCount == 0:
+            par.append((currentType, previousLex))
+            currentType = ""
+            continue
+
+        if currentType == "":
+            currentType += lexeme.text()
+        else:
+            currentType += " " + lexeme.text()
+
+    if not currentType == "":
+        par.append((currentType, previousLex))
+    return par
+
+
+
+def pm(s, check, ent = None, file = None, line = -1, col = -1):
+    check.violation(ent, file, line, col, str(s))

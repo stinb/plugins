@@ -1,0 +1,209 @@
+ERR1 = 'Do not use an empty infinite loop.'
+
+
+# The ID for the check
+def ids():
+    return ('MSC01-J', 'JAVA_MSC01')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MSC01-J': 'Published Standards/SEI Cert Standards/Java/Do not use an empty infinite loop',
+        'JAVA_MSC01': 'All Checks/Language Specific/Java/Miscellaneous/Do not use an empty infinite loop',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MSC01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_MSC01': [
+            'Language: Java',
+            'Miscellaneous',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not use an empty infinite loop'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use an empty infinite loop</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/MSC01-J.+Do+not+use+an+empty+infinite+loop</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public int nop() {
+  while (true) {}
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def empty_infinite_while_loop(while_lex):
+    get_param = True
+    infinite_loop = False
+    empty_loop = True
+    on_body = 0
+    param = ""
+
+    while while_lex:
+        if get_param and while_lex.text() not in {"{", ";"}:
+            param += while_lex.text()
+        elif get_param and while_lex.text() in {"{", ";"}:
+            get_param = False
+
+            if param == "while(true)":
+                infinite_loop = True
+                continue
+
+            if not infinite_loop:
+                return False
+        elif while_lex.text() == "{" and while_lex.token() == "Punctuation":
+            on_body += 1
+        elif while_lex.text() == "}" and while_lex.token() == "Punctuation":
+            on_body -= 1
+
+            if not on_body:
+                break
+        elif on_body and while_lex.text():
+            empty_loop = False
+            break
+
+        while_lex = while_lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+    if empty_loop and infinite_loop:
+        return True
+
+    return False
+
+
+def empty_infinite_for_loop(for_lex):
+    infinite_loop = False
+    empty_loop = True
+    on_param = 0
+    on_body = 0
+    param = ""
+
+    while for_lex:
+        if for_lex.text() == "(" and for_lex.token() == "Punctuation":
+            on_param += 1
+        elif for_lex.text() == ")" and for_lex.token() == "Punctuation":
+            on_param -= 1
+
+            if not on_param and param == ";;":
+                infinite_loop = True
+
+            if not infinite_loop:
+                return False
+        elif on_param:
+            param += for_lex.text()
+        elif for_lex.text() == "{" and for_lex.token() == "Punctuation":
+            on_body += 1
+        elif for_lex.text() == "}" and for_lex.token() == "Punctuation":
+            on_body -= 1
+
+            if not on_body:
+                break
+        elif on_body and for_lex.text():
+            empty_loop = False
+            break
+
+        for_lex = for_lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+    if empty_loop and infinite_loop:
+        return True
+
+    return False
+
+
+def empty_infinite_do_loop(do_lex):
+    infinite_loop = False
+    empty_loop = True
+    get_param = False
+    on_body = 0
+    param = ""
+
+    while do_lex:
+        if do_lex.text() == "{" and do_lex.token() == "Punctuation":
+            on_body += 1
+        elif do_lex.text() == "}" and do_lex.token() == "Punctuation":
+            on_body -= 1
+        elif do_lex.text() == "while" and do_lex.token() == "Keyword":
+            on_body = False
+            get_param = True
+        elif on_body and do_lex.text():
+            empty_loop = False
+            break
+        elif get_param and do_lex.text() != ";":
+            param += do_lex.text()
+        elif get_param and do_lex.text() == ";":
+            if param == "(true)":
+                infinite_loop = True
+
+            break
+
+        do_lex = do_lex.next(ignore_whitespace=True,
+                             ignore_comments=True)
+
+    if empty_loop and infinite_loop:
+        return True
+
+    return False
+
+
+def check(check, file):
+    def check_violation(lex):
+        check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+    on_do = False
+
+    while lex:
+        if lex.text() == "do" and lex.token() == "Keyword":
+            on_do = True
+
+            if empty_infinite_do_loop(lex):
+                check_violation(lex)
+        elif lex.text() == "while" and lex.token() == "Keyword":
+            if on_do:
+                on_do = False
+            elif empty_infinite_while_loop(lex):
+                check_violation(lex)
+        elif lex.text() == "for" and lex.token() == "Keyword":
+            if empty_infinite_for_loop(lex):
+                check_violation(lex)
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)

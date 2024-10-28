@@ -1,0 +1,246 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 10-27-21
+
+
+import re
+
+
+ERR1 = 'Function pointer is cast to another pointer type'
+
+
+def ids():
+    return ('M5-2-6', 'MISRA08_5-2-6', 'MISRA12_11.1', 'CPP_P047', 'MISRA23_11.1')
+
+
+def name(id):
+    return {
+        'M5-2-6': 'Published Standards/AUTOSAR/A cast shall not convert a pointer to a function to any other pointer type, including a pointer to function type',
+        'MISRA08_5-2-6': 'Published Standards/MISRA-C++ 2008/5-2-6 A cast shall not convert a pointer to a function to any other pointer type, including a pointer to function type',
+        'CPP_P047': 'All Checks/Language Specific/C and C++/Pointers/A cast shall not convert a pointer to a function to any other pointer type, including a pointer to function type',
+        'MISRA12_11.1': 'Published Standards/MISRA C 2012/11.1 Conversions shall not be performed between a pointer to a function and any other type',
+        'MISRA23_11.1': 'Published Standards/MISRA C 2023/11.1 Conversions shall not be performed between a pointer to a function and any other type',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-2-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Pointers',
+        ],
+        'MISRA12_11.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Pointers',
+        ],
+        'M5-2-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P047': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+        'MISRA23_11.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description(id):
+    if id in ['MISRA12_11.1', 'MISRA23_11.1']:
+        return """\
+<p><b>Amplification</p></b>
+<p>A pointer to a function shall only be converted into or from a pointer to a
+function with a compatible type.</p>
+<p><b>Rationale</b></p>
+<p>The conversion of a pointer to a function into or from any of:</p>
+<ul><li>Pointer to object;</li>
+<li>Pointer to incomplete;</li>
+<li>void *</li></ul>
+<p>results in undefined behaviour.</p>
+<p>If a function is called by means of a pointer whose type is not compatible
+with the called function, the behaviour is undefi ned. Conversion of a pointer
+to a function into a pointer to a function with a diff erent type is permitted
+by The Standard. Conversion of an integer into a pointer to a function is also
+permitted by The Standard. However, both are prohibited by this rule in order to
+avoid the undefined behaviour that would result from calling a function using an
+incompatible pointer type.</p>
+<p><b>Exception</b></p>
+<ol><li>A null pointer constant may be converted into a pointer to a function;
+</li>
+<li>A pointer to a function may be converted into void;</li>
+<li>A function type may be implicitly converted into a pointer to that function
+type.</li></ol>
+<p>Note: exception 3 covers the implicit conversions described in C90 Section
+6.2.2.1 and C99 Section 6.3.2.1. These conversions commonly occur when:</p>
+<ul><li>A function is called directly, i.e. using a function identifier to
+denote the function to be called;</li>
+<li>A function is assigned to a function pointer.</li></ul>
+<p><b>Example</b></p>
+<pre><code language="C++">typedef void ( *fp16 ) ( int16_t n );
+typedef void ( *fp32 ) ( int32_t n );
+#include <stdlib.h> /* To obtain macro NULL */
+fp16 fp1 = NULL; /* Compliant - exception 1 */
+fp32 fp2 = ( fp32 ) fp1; /* Non-compliant - function
+* pointer into different
+* function pointer */
+if ( fp2 != NULL ) /* Compliant - exception 1 */
+{
+}
+fp16 fp3 = ( fp16 ) 0x8000; /* Non-compliant - integer into
+* function pointer */
+fp16 fp4 = ( fp16 ) 1.0e6F; /* Non-compliant - float into
+* function pointer */</code</pre>
+<p>In the following example, the function call returns a pointer to a function
+type. Casting the return value into void is compliant with this rule.</p>
+<pre><code language="C++">typedef fp16 ( *pfp16 ) ( void );
+pfp16 pfp1;
+( void ) ( *pfp1 ( ) ); /* Compliant - exception 2 - cast function
+* pointer into void */</code></pre>
+<p>The following examples show compliant implicit conversions from a function
+type into a pointer to that function type.</p>
+<pre><code language="C++">extern void f ( int16_t n );
+f ( 1 ); /* Compliant - exception 3 - implicit conversion
+* of f into pointer to function */
+fp16 fp5 = f; /* Compliant - exception 3 */
+</code></pre>"""
+
+    return '''\
+
+<p><b>Rationale</b></p>
+Conversion of a function pointer to a non-function pointer type causes <i>undefined behaviour</i>.
+</p>
+
+<p
+<i>Undefined behaviour</i> may arise if a function call is made using a pointer that is the result of a
+function pointer conversion.
+</p>
+
+<p><b>Example</b><br></p>
+<pre><code language="C++">void f ( int32_t )
+{
+    reinterpret_cast&lt; void (*)( ) &gt;( &f ); // Non-compliant
+    reinterpret_cast&lt; void * &gt;( &f );      // Non-compliant
+}
+</code></pre>
+
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def prevUseful(lexeme):
+    return lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+
+def nextUseful(lexeme):
+    return lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+
+def check(check, file):
+    try:
+        lexer = file.lexer()
+    except:
+        return
+
+    for ref in file.filerefs('Use Ptr', 'Function ~Unresolved'):
+
+        # Go back and see if there is a cast
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        cast = False
+        while lexeme:
+            if lexeme.text() in { 'dynamic_cast', 'reinterpret_cast', 'static_cast', 'const_cast' }:
+                cast = True
+                lexeme = nextUseful(nextUseful(lexeme))
+                break
+            elif lexeme.text() == ';':
+                break
+            lexeme = prevUseful(lexeme)
+
+        if cast:
+            # Get get the type of cast
+            returnType = ''
+            parameterTypes = ''
+            typedef = None
+            function = False
+            unresolved = False
+            while lexeme and lexeme.text() != '>':
+                # Return type
+                if not parameterTypes and lexeme.text() != '(':
+                    if not returnType:
+                        returnType = lexeme.text()
+                        if not typedef and lexeme.ent() and lexeme.ent().kindname() == 'Typedef':
+                            typedef = lexeme.ent()
+                            if 'Unresolved' in lexeme.ent().kind().longname():
+                                unresolved = True
+                    else:
+                        returnType += ' ' + lexeme.text()
+
+                # ( * )
+                elif not parameterTypes and lexeme.text() == '(':
+                    if nextUseful(lexeme).text() == '*' and nextUseful(nextUseful(lexeme)).text() == ')' and nextUseful(nextUseful(nextUseful(lexeme))).text() == '(':
+                        function = True
+                        lexeme = nextUseful(nextUseful(nextUseful(nextUseful(lexeme))))
+                        if lexeme.text() != ')':
+                            parameterTypes = lexeme.text()
+                    else:
+                        break
+
+                # Return type
+                elif lexeme.text() != ')':
+                    parameterTypes += ' ' + lexeme.text()
+                lexeme = nextUseful(lexeme)
+
+            # Compare the type of cast
+            if not function or not ref.ent().type() == returnType or not ref.ent().parameters() == parameterTypes:
+                violation = False
+
+                # Typedef
+                if typedef and not unresolved:
+                    typedefReturn = re.search('(^.*) \\(', typedef.type())
+                    typedefParameters = re.search('\\)\\((.*)\\)', typedef.type())
+
+                    if not typedefReturn or not typedefParameters:
+                        violation = True					
+                    elif typedefReturn and ref.ent().type() != typedefReturn.group(1):
+                        violation = True
+                    elif typedefParameters and ref.ent().parameters() != typedefParameters.group(1):
+                        violation = True
+
+                # Manually typed
+                elif not unresolved:
+                    if ref.ent().type() != returnType:
+                        violation = True
+                    elif ref.ent().parameters() != parameterTypes:
+                        violation = True
+
+                if violation:
+                    check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)

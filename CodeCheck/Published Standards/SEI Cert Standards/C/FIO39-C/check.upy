@@ -1,0 +1,138 @@
+ERR1 = 'Do not alternately input and output from a stream without an intervening flush or positioning call.'
+
+
+# The ID for the check
+def id():
+    return ('FIO39-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'FIO39-C': 'Published Standards/SEI Cert Standards/C/Do not alternately input and output from a stream without an intervening flush or positioning call',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'FIO39-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not alternately input and output from a stream without an intervening flush or positioning call'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not alternately input and output from a stream without an intervening flush or positioning call</p>
+<p><b>Risk Assessment</b></p>
+<p>Alternately inputting and outputting from a stream without an intervening flush or positioning call is undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/FIO39-C.+Do+not+alternately+input+and+output+from+a+stream+without+an+intervening+flush+or+positioning+call</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+enum { BUFFERSIZE = 32 };
+
+extern void initialize_data(char *data, size_t size);
+
+void func(const char *file_name) {
+  char data[BUFFERSIZE];
+  char append_data[BUFFERSIZE];
+  FILE *file;
+
+  file = fopen(file_name, "a+");
+  if (file == NULL) {
+    /* Handle error */
+  }
+
+  initialize_data(append_data, BUFFERSIZE);
+
+  if (fwrite(append_data, 1, BUFFERSIZE, file) != BUFFERSIZE) {
+    /* Handle error */
+  }
+  if (fread(data, 1, BUFFERSIZE, file) &lt; BUFFERSIZE) {
+    /* Handle there not being data */
+  }
+
+  if (fclose(file) == EOF) {
+    /* Handle error */
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref):
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        # key: ent id of file, #value 0 if on write, 1 if on read, 2 if intervening flush
+        file_on_rw = {}
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Unresolved Function"), key=lambda x: x.line()):
+            if call_ref.ent().longname() == "fwrite":
+                file_ent = get_file_ent(call_ref, lexer)
+
+                if file_ent:
+                    if file_ent.id() in file_on_rw and file_on_rw[file_ent.id()] == 1:
+                        check_violation(call_ref)
+                        continue
+
+                    file_on_rw[file_ent.id()] = 0
+            elif call_ref.ent().longname() == "fread":
+                file_ent = get_file_ent(call_ref, lexer)
+
+                if file_ent:
+                    if file_ent.id() in file_on_rw and file_on_rw[file_ent.id()] == 0:
+                        check_violation(call_ref)
+                        continue
+
+                    file_on_rw[file_ent.id()] = 1
+            elif call_ref.ent().longname() in {"fflush", "fseek", "fsetpos", "rewind"}:
+                file_ent = get_file_ent(call_ref, lexer)
+
+                if file_ent:
+                    file_on_rw[file_ent.id()] = 2
+
+
+def get_file_ent(ref, lexer):
+    lex = lexer.lexeme(ref.line(), ref.column())
+
+    while lex and (lex.line_begin() == ref.line()):
+        if lex.ent() and lex.ent().type() == "FILE *":
+            return lex.ent()
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)

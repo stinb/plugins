@@ -1,0 +1,178 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/8/21
+import re
+
+ERR1 = 'Member function %1\'s inheritance name is hidden.'
+
+# The ID for the check
+def id():
+    return 'EFFECTIVECPP_33'
+
+# The short name of the check
+def name():
+    return "Published Standards\\Effective C++ (3rd Edition) Scott Meyers\\33. Avoid hiding inherited names"
+
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_33': [
+            'Language: C',
+            'Language: C++',
+            'Standard: Effective C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Names in derived classes hide names in base classes. Under public inheritance,
+this is never desirable. To make hidden names visible again, employ using
+declarations or forwarding functions."""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>Shakespeare had a thing about names. “What’s in a name?” he asked,
+“A rose by any other name would smell as sweet.” The Bard also
+wrote, “he that filches from me my good name ... makes me poor
+indeed.” Right. Which brings us to inherited names in C++.
+The matter actually has nothing to do with inheritance. It has to do
+with scopes. We all know that in code like this,</p>
+<pre><code language="C++">    int x; // global variable
+    void someFunc()
+    {
+    double x; // local variable
+    std::cin &gt;&gt; x; // read a new value for local x
+    }
+</code></pre>
+<p>the statement reading into x refers to the local variable x instead of the
+global variable x, because names in inner scopes hide (“shadow”)
+names in outer scopes.</p>
+<p>Enter inheritance. We know that when we’re inside a derived class
+member function and we refer to something in a base class (e.g., a
+member function, a typedef, or a data member), compilers can find
+what we’re referring to because derived classes inherit the things
+declared in base classes. The way that actually works is that the scope
+of a derived class is nested inside its base class’s scope. For example:</p>
+<pre><code language="C++">    class Base {
+    private:
+        int x;
+        public:
+        virtual void mf1() = 0;
+        virtual void mf2();
+        void mf3();
+        ...
+    };
+    class Derived: public Base {
+    public:
+        virtual void mf1();
+        void mf4();
+        ...
+    };
+</code></pre>
+<p>The rationale behind this behavior is that it prevents you from accidentally
+inheriting overloads from distant base classes when you create a new derived
+class in a library or application framework. Unfortunately, you typically want
+to inherit the overloads. In fact, if you’re using public inheritance and you
+don’t inherit the overloads, you’re violating the is-a relationship between
+base and derived classes that Item 32 explains is fundamental to public
+inheritance. That being the case, you’ll almost always want to override
+C++’s default hiding of inherited names. You do it with using declarations:</p>
+<pre><code language="C++">    class Base {
+        private:
+        int x;
+        public:
+        virtual void mf1() = 0;
+        virtual void mf1(int);
+        virtual void mf2();
+        void mf3();
+        void mf3(double);
+        ...
+        };
+        class Derived: public Base {
+        public:
+        using Base::mf1;    // make all things in Base named mf1 and mf3
+        using Base::mf3;    // visible (and public) in Derived’s scope
+        virtual void mf1();
+        void mf3();
+        void mf4();
+        ...
+    };
+</code></pre>
+<p>Now inheritance will work as expected:</p>
+<pre><code language="C++">    Derived d;
+    int x;
+    ...
+    d.mf1();    // still fine, still calls Derived::mf1
+    d.mf1(x);   // now okay, calls Base::mf1
+    d.mf2();    // still fine, still calls Base::mf2
+    d.mf3();    // fine, calls Derived::mf3
+    d.mf3(x);   // now okay, calls Base::mf3 (The int x is
+                // implicitly converted to a double so that
+                // the call to Base::mf3 is valid.)
+</code></pre>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    # Gather derive refs
+    refs = file.filerefs('public derive', 'class')
+
+    for ref in refs:
+        # Keep track of member function refs and name refs
+        seen = {}
+        name = []
+        # Gather name refs
+        nameRefs = ref.ent().refs('name')
+        for nameRef in nameRefs:
+            if nameRef.ent().name() != ref.scope().name():
+                continue
+            # Create lexer no more than once per file
+            if not lexer:
+                lexer = file.lexer()
+            # Get the name of the member function used in the name ref to add
+            # it to the array called name
+            lexeme = lexer.lexeme(nameRef.line(), nameRef.column())
+            while lexeme and not (lexeme.token() == 'Operator' and lexeme.text() == '::'):
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+            if lexeme:
+                lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                if lexeme and lexeme.ent() and re.search(r'Member Function', lexeme.ent().kind().longname()):
+                    name.append(lexeme.text())
+
+
+
+        # Gather member functions in class that gets derived and add them to
+        # the dictionary called seen
+        scopeRefs = ref.scope().refs('declare', 'member function')
+        for scopeRef in scopeRefs:
+            if scopeRef.line() == ref.scope().ref('definein').line():
+                continue
+            seen[scopeRef.ent().simplename()] = scopeRef.ent()
+
+        # Gather all the member functions in the derived class and check if
+        # it was in the class that was derived from and didn't have a name ref
+        entRefs = ref.ent().refs('declare', 'member function')
+        if not entRefs:
+            continue
+
+        for entRef in entRefs:
+            if entRef and ref.scope().ref('definein') and entRef.line() == ref.scope().ref('definein').line():
+                continue
+
+            if entRef and entRef.ent().simplename() in seen.keys() and entRef.ent().simplename() not in name:
+                violation = check.violation(entRef.ent(), file, entRef.line(), entRef.column(), ERR1, entRef.ent().simplename())
+                violation.add_fixit_hint(entRef.line(), 1, entRef.line(), 1, f'  using {seen[entRef.ent().simplename()].longname()};\n')

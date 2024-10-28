@@ -1,0 +1,124 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+use constant ERR1 => 'Identifier %1 reused';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA04_5.7";}
+
+
+sub name { return "Published Standards\\MISRA-C 2004\\5.7 No identifier name should be reused";}
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2004',
+    'Category: advisory',
+    'Identifiers',
+  );
+}
+
+sub description { return "5.7 (Global)(Advisory): No identifier name should be reused";}
+
+sub detailed_description { return <<"END_DESC"
+Regardless of scope, no identifier should be re-used across any files in the system. This rule
+incorporates the provisions of Rules 5.2, 5.3, 5.4, 5.5 and 5.6.
+  struct air_speed
+  {
+  uint16_t speed; /* knots */
+  } * x;
+  struct gnd_speed
+  {
+  uint16_t speed; /* mph */
+  /* Not Compliant - speed is in different units */
+  } * y;
+  x-&gt;speed = y-&gt;speed;
+Where an identifier name is used in a header file, and that header file is included in multiple
+source files, this rule is not violated. The use of a rigorous naming convention can support the
+implementation of this rule.
+The 'Exceptions' field can be used to bypass specific entities.  The field can take one entity, 
+or multiple entities separated by a comma ie., ent1,ent2,ent3
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 0;}
+
+sub test_global { return 1;}
+
+sub define_options{
+  my $check = shift;
+    $check->option->text('exceptions','Exceptions(Comma Delimited)','');
+	$check->option->checkbox('overloads','Ignore Overloads','');
+}
+
+sub check {
+  my $check = shift; 
+  my %entNames;
+  my $prevent;
+  my $prevParent;
+  my @fileObjs = $check->get_files;
+  my @files = ();
+  foreach my $f(@fileObjs) {
+    push(@files, $f->longname);
+  }
+  my @ents = $check->db->ents("c ~unknown ~unresolved ~unnamed");
+  my $textList = $check->option->lookup('exceptions');
+  $textList =~ s/\s//g; #Strip whitespace in list;
+  my @exceptions = split(',',$textList);
+  foreach my $ent (sort {$a->name cmp $b->name;} @ents){
+    next if grep {$_ eq $ent->name} @exceptions;
+    next if $ent->library eq "Standard";
+    if ($entNames{$ent->name}){
+	  if($ent->kind("c Function") && $check->option->lookup('overloads')){
+		next if($ent->parent && $ent->parent->id == $prevParent);
+	  }
+      if ($prevent && reference($prevent)){
+        my $ref = reference($prevent);
+        $check->violation($prevent,$ref->file,$ref->line,$ref->column,ERR1,$prevent->name) if checkFile(\@files, $ref->file);
+      }
+      my $ref = reference($ent);
+      if($ref){
+        $check->violation($ent,$ref->file,$ref->line,$ref->column,ERR1,$ent->name) if checkFile(\@files, $ref->file);
+      }
+      else{
+        $check->violation(0,0,-1,-1,ERR1,$ent->name);
+      }
+      $prevent = "";
+    }
+    else {
+      $entNames{$ent->name} = 1;
+	  $prevParent = $ent->parent->id() if $ent->parent;
+      $prevent = $ent;
+    }
+  }
+
+}
+
+sub reference {
+  my $ent = shift;
+  return unless $ent;
+  my $defined = $ent->ref("definein, declarein","c");
+  return $defined if $defined;
+   return $ent->ref if $ent->ref;
+   return;
+}
+
+sub checkFile {
+  my @files = @{$_[0]};
+  my $file = $_[1];
+
+  return 1 if index(join(',', @files), $file->longname) != -1;
+  return 0;
+}
+

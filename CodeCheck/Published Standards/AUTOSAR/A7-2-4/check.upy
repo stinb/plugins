@@ -1,0 +1,152 @@
+# This script is designed to run with Understand - CodeCheck
+# 11-29-21
+# updated October 2023 by Ian Reed to merge CPP_D010, MISRA04_9.3, and MISRA08_8-5-3.
+
+ERR1 = 'Enumerators are initialized incorrectly'
+
+# The ID for the check
+def ids():
+    return ('A7-2-4', 'CPP_T029', 'CPP_D010', "MISRA04_9.3", "MISRA08_8-5-3")
+
+# The short name of the check
+def name(id):
+    return {
+        'A7-2-4': 'Published Standards/AUTOSAR/In an enumeration, either (1) none, (2) the first or (3) all enumerators shall be initialized',
+        'CPP_T029': 'All Checks/Language Specific/C and C++/Types/In an enumeration, either (1) none, (2) the first or (3) all enumerators shall be initialized',
+        'CPP_D010': "All Checks\\Language Specific\\C and C++\\Declarations and Definitions\\= construct in enumerator list shall only be used on either the first item alone, or all items explicitly.",
+        "MISRA04_9.3": "Published Standards\\MISRA-C 2004\\9.3 = construct in enumerator list shall only be used on either the first item alone, or all items explicitly.",
+        "MISRA08_8-5-3": "Published Standards\\MISRA-C++ 2008\\8-5-3 The = construct in enumerator list shall only be used on either the first item alone, or all items explicitly.",
+    }[id]
+
+def tags(id):
+    return {
+        'A7-2-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T029': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+        'CPP_D010': [
+            "Language: C",
+            "Language: C++",
+            "Declarations and Definitions",
+        ],
+        'MISRA04_9.3': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+        ],
+        'MISRA08_8-5-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+Explicit initialization of only some enumerators in an enumeration, and relying on compiler to initialize the remaining ones, may lead to developer's confusion.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">//% $Id: A7-2-4.cpp 271715 2017-03-23 10:13:51Z piotr.tanski $
+#include &lt;cstdint&gt;
+enum class Enum1 : std::uint32_t
+{
+    One,
+    Two = 2, // Non-compliant
+    Three
+};
+enum class Enum2 : std::uint32_t // Compliant (none)
+{
+    One,
+    Two,
+    Three
+};
+enum class Enum3 : std::uint32_t // Compliant (the first)
+{
+    One = 1,
+    Two,
+    Three
+};
+enum class Enum4 : std::uint32_t // Compliant (all)
+{
+    One = 1,
+    Two = 2,
+    Three = 3
+};
+</code></pre>
+
+<p><b>See Also</b></p>
+
+<p>
+• MISRA C++ 2008 [7]: Rule 8-5-3 In an enumerator list, the = construct shall not be used to explicitly initialize members other than the first, unless all items are explicitly initialized.
+</p>
+
+<p>
+• HIC++ v4.0 [9]: 7.2.2 Initialize none, the first only or all enumerators in an enumeration.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    for enum_ref in file.filerefs("Define", "Enum"):
+        enumerators = {}
+
+        enumeratorRefs = enum_ref.ent().refs("Define", "Enumerator")        
+        if not enumeratorRefs:
+            continue
+        for enumerator_ref in enumeratorRefs:
+            enumerators[enumerator_ref.ent().name()] = False
+
+        lex = lexer.lexeme(enum_ref.line(), enum_ref.column())
+        current_enum = None
+
+        while lex and lex.text() != "}":
+            if lex.text() in enumerators:
+                current_enum = lex.text()
+            elif current_enum:
+                if lex.text() == "=" and lex.token() == "Operator":
+                    enumerators[current_enum] = True
+
+                current_enum = None
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+        if list(enumerators.values())[0] and not any(list(enumerators.values())[1:]):
+            continue
+        elif ((list(enumerators.values())[0] and not all(list(enumerators.values())[1:]))
+                or (not list(enumerators.values())[0] and any(list(enumerators.values())[1:]))):
+            check.violation(enum_ref.ent(), file,
+                            enum_ref.line(), enum_ref.column(), ERR1)

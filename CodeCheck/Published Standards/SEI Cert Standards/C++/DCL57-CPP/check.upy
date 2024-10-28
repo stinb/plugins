@@ -1,0 +1,141 @@
+import re
+
+
+ERR1 = 'Do not let exceptions escape from destructors or deallocation functions.'
+
+
+# The ID for the check
+def id():
+    return ('DCL57-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'DCL57-CPP': 'Published Standards/SEI Cert Standards/C++/Do not let exceptions escape from destructors or deallocation functions',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not let exceptions escape from destructors or deallocation functions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not let exceptions escape from destructors or deallocation functions</p>
+<p><b>Risk Assessment</b></p>
+<p>Attempting to throw exceptions from destructors or deallocation functions can result in undefined behavior, leading to resource leaks or denial-of-service attacks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/DCL57-CPP.+Do+not+let+exceptions+escape+from+destructors+or+deallocation+functions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdexcept&gt;
+  
+class S {
+  bool has_error() const;
+  
+public:
+  ~S() noexcept(false) {
+    // Normal processing
+    if (has_error()) {
+      throw std::logic_error("Something bad");
+    }
+  }
+};
+
+
+#include &lt;exception&gt;
+#include &lt;stdexcept&gt;
+  
+class S {
+  bool has_error() const;
+  
+public:
+  ~S() noexcept(false) {
+    // Normal processing
+    if (has_error() && !std::uncaught_exception()) {
+      throw std::logic_error("Something bad");
+    }
+  }
+};
+
+
+class Bad {
+  ~Bad() noexcept(false);
+};
+
+class SomeClass {
+  Bad bad_member;
+public:
+  ~SomeClass()
+  try {
+    // ...
+  } catch(...) {
+    // Handle the exception thrown from the Bad destructor.
+  }
+};
+
+
+
+#include &lt;stdexcept&gt;
+  
+bool perform_dealloc(void *);
+  
+void operator delete(void *ptr) noexcept(false) {
+  if (perform_dealloc(ptr)) {
+    throw std::logic_error("Something bad");
+  }
+}
+</code></pre>
+"""
+
+def tags(id):
+    return {
+        'DCL57-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        if re.search(r"^~|operator delete", func_ref.ent().name()):
+            func_contents = func_ref.ent().contents()
+
+            if "noexcept(false)" in func_contents:
+                check.violation(func_ref.ent(), file,
+                                func_ref.line(), func_ref.column(), ERR1)
+
+                for call_ref in func_ref.ent().refs("Callby Implicit"):
+                    if re.search(r"^~", call_ref.ent().name()):
+                        call_contents = call_ref.ent().contents()
+
+                        if "return" not in call_contents:
+                            def_ref = call_ref.ent().ref("Definein")
+
+                            check.violation(call_ref.ent(), def_ref.file(
+                            ), def_ref.line(), def_ref.column(), ERR1)

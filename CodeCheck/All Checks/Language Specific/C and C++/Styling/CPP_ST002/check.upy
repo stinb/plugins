@@ -1,0 +1,125 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 12-7-2020
+
+import re
+
+# The ID for the check
+def ids():
+    return ('CPP_ST002')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_ST002':  "All Checks/Language Specific/C and C++/Styling/Equal signs should be aligned when they occur in a series of assignment operators"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_ST002': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return """\
+Equal signs should be aligned when they occur in a series of assignment operators"""
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p>Equal signs should be aligned when they occur in a series of
+assignment operators. This is to enhance readability. For
+example,</p>
+
+<pre><code language="C++">ptr\t= node-&gt;next;
+type\t= file_data & TYPE_MASK;
+name_length\t= strlen(path_name);
+/* Note that this is a separate series because of the blank line. */
+status = get_file_info();
+i      += 2;</code></pre>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_global():
+    return False
+
+# Options for the check
+def define_options(check):
+   return
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file): 
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+        
+    lexeme = lexer.first()
+    if lexeme.token() == 'Comment':
+        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+    while lexeme:
+
+        # Iterate through series of assignment operators
+        if re.search(r'=', lexeme.text()):
+            if len(lexeme.text()) == 2 or len(lexeme.text()) == 1:
+                column = lexeme.column_end()
+            else:
+                # check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'ERROR1')
+                break
+
+            while re.search(r'=', lexeme.text()):
+                if re.match(r'==', lexeme.text()) or re.match(r'!=', lexeme.text()) or re.match(r'<=', lexeme.text()) or re.match(r'>=', lexeme.text()):
+                    break
+                # Go to next line
+                line = lexeme.line_begin()
+                while lexeme.line_begin() == line:
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                    if not lexeme:
+                        return
+                  
+                # Break if empty line
+                if lexeme.line_begin() - line != 1:
+                    break
+
+                line = lexeme.line_begin()
+
+                while lexeme.line_begin() == line and not re.search(r'=', lexeme.text()):
+                    lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                    if not lexeme:
+                        return
+
+                if lexeme.line_begin() == line:
+                    # Break if relational operator
+                    if re.match(r'==', lexeme.text()) or re.match(r'!=', lexeme.text()) or re.match(r'<=', lexeme.text()) or re.match(r'>=', lexeme.text()):
+                        break
+
+                    # Throw violation if lexeme is not lined up 
+                    if lexeme.column_end() != column:
+                        violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Series of equal signs are not aligned with each other')
+                        if lexeme.column_end() < column:
+                            # Add space for fix it hint
+                            violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_end(), lexeme.column_begin() + len(lexeme.text()), (column - lexeme.column_end()) * ' ' + lexeme.text())
+                        else:
+                            # Take away space for fix it hint if enough space is available
+                            prevLex = lexeme.previous()
+                            if prevLex.token() == 'Whitespace':
+                                if len(prevLex.text()) > (lexeme.column_begin() - column):
+                                    spaces = (len(prevLex.text()) - (lexeme.column_end() - column)) * ' '
+                                    violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), prevLex.line_end(), prevLex.column_begin() + len(prevLex.text()), spaces)
+
+
+
+
+        lexeme = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+

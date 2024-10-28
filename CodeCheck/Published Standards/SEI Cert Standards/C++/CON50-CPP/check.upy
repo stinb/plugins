@@ -1,0 +1,110 @@
+ERR1 = 'Do not destroy a mutex while it is locked.'
+
+
+# The ID for the check
+def id():
+    return ('CON50-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON50-CPP': 'Published Standards/SEI Cert Standards/C++/Do not destroy a mutex while it is locked',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not destroy a mutex while it is locked'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not destroy a mutex while it is locked</p>
+<p><b>Risk Assessment</b></p>
+<p>Destroying a mutex while it is locked may result in invalid control flow and data corruption.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/CON50-CPP.+Do+not+destroy+a+mutex+while+it+is+locked</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;mutex&gt;
+#include &lt;thread&gt;
+ 
+const size_t maxThreads = 10;
+ 
+void do_work(size_t i, std::mutex *pm) {
+  std::lock_guard&lt;std::mutex&gt; lk(*pm);
+ 
+  // Access data protected by the lock.
+}
+ 
+void start_threads() {
+  std::thread threads[maxThreads];
+  std::mutex m;
+ 
+  for (size_t i = 0; i &lt; maxThreads; ++i) {
+    threads[i] = std::thread(do_work, i, &m);
+  }
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'CON50-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+            'Threads',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        mutex_passed = []
+        has_join = False
+
+        for call_ref in sorted(func_ref.ent().refs("Call ~Implicit"), key=lambda x: x.line()):
+            if call_ref.ent().name() == "thread":
+                lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and lex.ent().kind().check("Local") and lex.ent().type() and (lex.ent().type() in ["std::mutex", "mutex"]):
+                        mutex_passed.append(lex)
+
+                    lex = lex.next(ignore_whitespace=True)
+            elif mutex_passed and (call_ref.ent().name() == "join"):
+                has_join = True
+
+        if mutex_passed and not has_join:
+            for mutex in mutex_passed:
+                check.violation(mutex.ent(), file,
+                                mutex.line_begin(), mutex.column_begin(), ERR1)

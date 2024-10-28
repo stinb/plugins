@@ -1,0 +1,102 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use Understand::VariableTracker;
+use strict;
+
+
+use constant ERR1 => 'Potential Const: %1';
+
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "EFFECTIVECPP_03";}
+
+sub name { return "Published Standards\\Effective C++ (3rd Edition) Scott Meyers\\3. Use Const whenever possible";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Standard: Effective C++',
+    'Types',
+  );
+}
+
+sub description { return "3. Use Const whenever possible";}
+
+sub detailed_description { return <<"END_DESC"
+Report objects and parameters that are not const but are only modified once.
+Objects used as pass-by-reference parameters are considered modfied.
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; # Handles C and C++
+}
+
+sub test_entity { return 1;}
+sub test_global { return 0;}
+sub define_options{}
+
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file");
+  my @objDefs = $file->filerefs("define","object ~member, parameter",1);
+  return unless @objDefs;
+
+  my %lexers;
+  foreach my $def (@objDefs){
+
+    next if $def->ent->name =~ /^_[A-Z]{1}.*$/;
+    next if $def->ent->name =~ /^__.*$/;
+
+    my $parameter = 1 if $def->ent->kind->check("parameter");
+    next if $def->ent->type =~ /\*?\s*\bconst\b[^\*]*$/;
+    next if $def->ent->kind->check("templateparameter");
+    my @sets = $def->ent->refs("Setby, Modifyby, Addr Useby");
+    my @uses = $def->ent->refs("useby");
+
+    # open lexer to check uses
+    foreach my $useRef (@uses) {
+      my $lexer = $lexers{$useRef->file->id()};
+      if (!$lexer) {
+        $lexer = $useRef->file->lexer;
+        $lexers{$useRef->file->id()} = $lexer;
+        next unless $lexer;
+      }
+      my $lexeme = $lexer->lexeme($useRef->line,$useRef->column);
+      next unless $lexeme;
+
+      # handle member calls and sets
+      $lexeme = $lexeme->next;
+      if ($lexeme && $lexeme->text eq ".") {
+        $lexeme = $lexeme->next;
+        if ($lexeme && $lexeme->ref && $lexeme->ref->kind->check("Callby, Setby")) {
+          push @sets, $useRef;
+          next;
+        }
+      }
+
+      # add pass by reference uses to sets
+      $lexeme = $lexer->lexeme($useRef->line,$useRef->column);
+      $lexeme=$lexeme->previous;
+      while ($lexeme && $lexeme->token =~ /Whitespace|Newline/) {
+        $lexeme=$lexeme->previous;
+      }
+      return unless $lexeme;
+      if ($lexeme->text eq "&" && $lexeme->token eq "Operator") {
+        push @sets, $useRef;
+      }
+    }
+
+    if (($parameter && ! @sets) ||( !$parameter && @sets == 1)) {
+      $check->violation($def->ent,$file,$def->line,$def->column,ERR1,$def->ent->longname);
+    }
+  }
+}

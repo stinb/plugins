@@ -1,0 +1,165 @@
+ERR1 = 'Template constructor shall not participate in overload resolution'
+
+
+# The ID for the check
+def ids():
+    return ('A14-5-1', 'CPP_F047')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A14-5-1': 'Published Standards/AUTOSAR/A template constructor shall not participate in overload resolution for a single argument of the enclosing class type',
+        'CPP_F047': 'All Checks/Language Specific/C and C++/Functions/A template constructor shall not participate in overload resolution for a single argument of the enclosing class type',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A14-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Functions'
+        ],
+        'CPP_F047': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A template constructor shall not participate in overload resolution for a
+single argument of the enclosing class type.</p>
+<p><b>Rationale</b></p>
+<p>A template constructor is never a copy or move constructor and therefore doesn't
+prevent the implicit definition of a copy or move constructor even if the template
+constructor looks similar and might easily be confused.</p>
+<p>At the same time, copy or move operations do not necessarily only use a copy or move
+constructor, but go through the normal overload resolution process to find the best
+matching function to use.</p>
+<p>This can cause confusion in the following cases:
+<br>• a template constructor that looks like a copy/move constructor is not selected for a
+copy/move operation because the compiler has generated an implicit copy/move
+constructor as well</br>
+<br>• a template constructor is selected in preference over a copy/move constructor
+because the template constructor is a better match</br></p>
+<p>To avoid these confusing situations, template constructors shall not participate in
+overload resolution for a single argument of the enclosing class type to avoid a template
+constructor being selected for a copy/move operation. It also makes it clear that the
+constructor is not a copy/move constructor and that it does not prevent the implicit
+generation of copy/move constructors.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A14-5-1.cpp 309903 2018-03-02 12:54:18Z christof.meerwald $
+2 #include &lt;cstdint&gt;
+3 #include &lt;type_traits&gt;
+4
+5 class A
+6 {
+7 public:
+8 // Compliant: template constructor does not participate in overload
+9 // resolution for copy/move operations
+10 template&lt;typename T,
+11 std::enable_if_t&lt;! std::is_same&lt;std::remove_cv_t&lt;T&gt;, A&gt;::value&gt; * =
+nullptr&gt;
+12 A(const T &value)
+13 : m_value { value }
+14 { }
+15
+16 private:
+17 std::int32_t m_value;
+18 };
+19
+20 void Foo(A const &a)
+21 {
+22 A myA { a }; // will use the implicit copy ctor, not the template converting
+ctor
+23
+24 A a2 { 2 }; // will use the template converting ctor
+25 }
+26
+27 class B
+28 {
+29 public:
+30 B(const B &) = default;
+31 B(B &&) = default;
+32
+33 // Compliant: forwarding constructor does not participate in overload
+34 // resolution for copy/move operations
+35 template&lt;typename T,
+36 std::enable_if_t&lt;! std::is_same&lt;std::remove_cv_t&lt;std::
+remove_reference_t&lt;T&gt;&gt;, B&gt;::value&gt; * = nullptr&gt;
+37 B(T &&value);
+38 };
+39
+40 void Bar(B b)
+41 {
+42 B myB { b }; // will use the copy ctor, not the forwarding ctor
+43 }
+44
+45 class C
+46 {
+47 public:
+48 C(const C &) = default;
+49 C(C &&) = default;
+50
+51 // Non-Compliant: unconstrained template constructor
+52 template&lt;typename T&gt;
+53 C(T &);
+54 };
+55
+56 void Bar(C c)
+57 {
+58 C myC { c }; // will use template ctor instead of copy ctor
+59 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• MISRA C++ 2008 [7]: M14-5-2: A copy constructor shall be declared when there
+is a template constructor with a single parameter that is a generic parameter.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for temp_ref in file.filerefs("Declare, Define", "Template Function"):
+        temp_ent = temp_ref.ent()
+        temp_param = temp_ent.parameters()
+
+        if temp_ent.name() != temp_ent.parent().name() or "," in temp_param or "T" not in temp_param:
+            continue
+
+        compliant = False
+
+        for param_ref in temp_ref.ent().refs("Define", "TemplateParameter"):
+            for param_type in param_ref.ent().refs("Typed", "Alias Template"):
+                if param_type.ent().name() == "enable_if_t":
+                    compliant = True
+                    break
+
+            if compliant:
+                break
+
+        if not compliant:
+            check.violation(temp_ref.ent(), file,
+                            temp_ref.line(), temp_ref.column(), ERR1)

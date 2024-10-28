@@ -1,0 +1,127 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 10-20-2020
+
+def id():
+    return 'CPP_V027'
+
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Variables/Globals in header files shall \
+be ifdef'd"""
+
+
+def tags(id):
+    return {
+        'CPP_V027': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+
+    }.get(id)
+
+def description():
+    return """\
+If global variables are included in header files, the globals shall be ifdef’d so that they are only defined by one module."""
+
+def detailed_description():
+    return """\
+<p>Developer's Note: For this check to work properly, the user must go to 
+'Project -&gt; Configure Project -&gt; C++' and ensure that the option 'Create 
+references in inactive code' is checked.</p>"""
+
+def test_entity(file):
+    return file.kind().check('header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+	# keep a list of macro class objects we encounter
+	macros = []
+
+	for mac in file.filerefs('c use', 'macro', True):
+		# find end line
+		lexer = file.lexer()
+		lexeme = lexer.lexeme(mac.line(), mac.column())
+
+		# we are only interested in include guards
+		if lexeme.previous(ignore_whitespace=True).text() == "ifdef" or lexeme.previous(ignore_whitespace=True).text() == "ifndef":
+			while lexeme and lexeme.text() != "endif":
+				lexeme = lexeme.next()
+
+			# create a new macro object with all information about it
+			tempMacro = Macro(mac.line(), lexeme.line_begin(), mac.ent().name(), False)
+			# add new macro object to list
+			macros.append(tempMacro)	
+
+	# collect all globals that have been defined or declared
+	globals_defined = file.filerefs('define, declare', 'global object', True)
+
+	for glb in globals_defined:
+		glb_name = glb.ent().simplename()
+		glb_line = glb.line()
+
+		# if global is not within an include guard, flag it
+		if not glb.ent().refs("inactive useby"):
+			check.violation(glb.ent(), file, glb.line(), glb.column(), 'Violation: global %1 is not protected by an include guard', glb_name)
+		else:
+			# global is within an include guard, so loop through list of Macro objects to find which one is guarding the global and mark it used=True
+			for macr in macros:
+				if glb_line > macr.start_line and glb_line < macr.end_line:
+					macr.used = True
+
+
+	# loop through all macros in the file again, check against list of macro objects that are protecting globals, and make sure they are all undef'd
+	for mac in file.filerefs('c use', 'macro', True):
+		mac_name = mac.ent().name()
+		for macr in macros:
+			if macr.used == True and macr.name == mac_name:
+				# if it has not been undef'd, flag it
+				if not mac.ent().refs("c setby"):
+					check.violation(mac.ent(),file,macr.start_line,mac.column(),"Violation: macro %1 is guarding a global but is never undef'd", macr.name)
+				elif mac.ent().refs("c setby"):
+					set_refs = mac.ent().refs("c setby")
+					ref = set_refs[-1]
+					lexer = file.lexer()
+					lexeme = lexer.lexeme(ref.line(), ref.column())
+
+					if lexeme.previous(ignore_whitespace=True) and lexeme.previous(ignore_whitespace=True).text() != "undef":
+						check.violation(mac.ent(),file,macr.start_line,mac.column(),"Violation: macro %1 is guarding a global but is never undef'd", macr.name)
+
+	# loop through macros in file again, flag if the macro has been used after being undef'd
+	for mac in file.filerefs('c use', 'macro', True):
+		mac_name = mac.ent().name()
+		for macr in macros:
+			# attempt to remove duplicate flags
+			macro_flagged = []
+			if macr.name in macro_flagged:
+				pass
+			else:
+				if macr.used == True and macr.name == mac_name:
+					# if it has been undef'd but used afterward flag it
+					if mac.ent().refs("c setby"):
+						# find last setby ref
+						set_refs = mac.ent().refs("c setby")
+						ref = set_refs[-1]
+						# find last useby ref
+						use_refs = mac.ent().refs("c useby")
+						use_ref = use_refs[-1]
+
+						lexer = file.lexer()
+						lexeme = lexer.lexeme(ref.line(), ref.column())
+
+						# if the line the macro was undef'd on is lower (higher up in file) than where it was last used, flag it
+						if lexeme.previous(ignore_whitespace=True) and lexeme.previous(ignore_whitespace=True).text() == "undef" and (lexeme.line_begin() < use_ref.line()):
+							check.violation(mac.ent(),file,use_ref.line(),use_ref.column(),"Violation: macro %1 is used after it is undef'd", macr.name)
+							macro_flagged.append(macr.name)
+						
+
+
+class Macro():
+    def __init__(self, start_line=0, end_line=0, name='', used=False):
+        self.start_line = start_line
+        self.end_line = end_line
+        self.name = name
+        self.used = used

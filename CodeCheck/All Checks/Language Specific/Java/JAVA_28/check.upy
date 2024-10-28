@@ -1,0 +1,148 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 5-26-22
+
+
+import re
+
+
+ERR1 = 'New instance of java.lang.Exception created'
+ERR2 = 'New instance of java.lang.Exception thrown'
+ERR3 = 'New instance of java.lang.Exception thrown through "%1"'
+
+def ids():
+    return ('JAVA_28')
+
+def name(id):
+    return {
+        'JAVA_28': '''All Checks/Language Specific/Java/\
+A new instance of java.lang.Exception shall not be thrown. \
+''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_28': [
+            'Language: Java',
+            'Exception Handling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>
+A new instance of java.lang.Exception shall not be thrown.
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Most programs throw and catch objects that derive from the Exception class.
+</p>
+
+<p>
+See Exception Class:
+<i>
+https://docs.oracle.com/javase/tutorial/essential/exceptions/throwing.html
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public void example() throws Exception{
+    if(error){
+        throw new
+        Exception("message");
+    }
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def define_options(check):
+    check.options().checkbox('violateIfCreated', 'Violate only if a new java.lang.Exception instance is created (faster)', False)
+
+
+def directlyThrown(lex):
+    lex = lex.previous(True, True)
+    if not lex or lex.text() != 'new':
+        return False
+
+    lex = lex.previous(True, True)
+    if not lex or lex.text() != 'throw':
+        return False
+
+    return True
+
+
+def indirectlyThrown(lex):
+    lex = lex.previous(True, True)
+    if not lex or lex.text() != 'throw':
+        return False
+
+    return True
+
+
+def check(check, file):
+    lexer = None
+
+    for ref in file.filerefs('Create', 'Class Type Public'):
+        ent = ref.ent()
+
+        # Skip other instance types
+        if ent.longname() != 'java.lang.Exception':
+            continue
+
+        # Faster: violate if created
+        if check.options().lookup('violateIfCreated'):
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+        # Slower: violated if thrown
+        else:
+            # Get the lexeme
+            if not lexer:
+                if not file.lexer(lookup_ents=False):
+                    return
+                lexer = file.lexer(lookup_ents=False)
+            lex = lexer.lexeme(ref.line(), ref.column())
+
+            # Directly thrown
+            if directlyThrown(lex):
+                check.violation(ent, file, ref.line(), ref.column(), ERR2)
+
+    # Indirectly thrown through a variable or parameter
+    if not check.options().lookup('violateIfCreated'):
+        for objRef in file.filerefs('Define', 'Variable, Parameter'):
+            objEnt = objRef.ent()
+
+            # Get the type
+            normalException = False
+            for clsRef in objEnt.refs('Typed', 'Class Type Public'):
+                clsEnt = clsRef.ent()
+                if clsEnt.longname() == 'java.lang.Exception':
+                    normalException = True
+                    break
+
+            # Skip other instance types
+            if not normalException:
+                continue
+
+            # Get every usage of the variable
+            for useRef in objEnt.refs('Useby'):
+                # Get the lexeme
+                if not lexer:
+                    if not file.lexer(lookup_ents=False):
+                        return
+                    lexer = file.lexer(lookup_ents=False)
+                lex = lexer.lexeme(useRef.line(), useRef.column())
+                if indirectlyThrown(lex):
+                    name = objEnt.name()
+                    check.violation(clsEnt, file, useRef.line(), useRef.column(), ERR3, name)

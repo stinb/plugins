@@ -1,0 +1,177 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 12-21-21
+
+ERR1 = 'Function declared at block scope'
+ERR2 = 'Object declared using parentheses'
+
+
+def ids():
+    return ('M3-1-2', 'MISRA08_3-1-2', 'CPP_D037', 'MISRA23_6.0.1')
+
+
+def name(id):
+    return {
+        'M3-1-2': 'Published Standards/AUTOSAR/Functions shall not be declared at block scope',
+        'MISRA08_3-1-2': 'Published Standards/MISRA-C++ 2008/3-1-2 Functions shall not be declared at block scope',
+        'CPP_D037': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Functions shall not be declared at block scope',
+        'MISRA23_6.0.1': 'Published Standards/MISRA C++ 2023/6.0.1 Block scope declarations shall not be visually ambiguous',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_3-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M3-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D037': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_6.0.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def description():
+    return 'Functions shall not be declared at block scope.'
+
+
+def detailed_description(id):
+    if id == 'MISRA23_6.0.1':
+        return '''
+<p><b>Amplification</b></p>
+<p>A block scope declaration is visually ambiguous when:<p>
+<p>● It declares a function; or</p>
+<p>● It declares an object with redundant parentheses surrounding the object’s name.</p>
+<p>Note: this rule does not apply to Lambda expressions as they are not function declarations.</p>
+
+<p><b>Rationale</b></p>
+<p>
+Due to the syntactic similarity of function declarations and object definitions that use parentheses for
+initialization, it is possible that a declaration may be misinterpreted by the developer. For example, a
+function declaration may be interpreted as an object de9nition, which is sometimes referred to as
+the most-vexing parse. 
+</p>
+
+<p>
+The C++ grammar allows for redundant parentheses around a declarator, where what appears to be
+the construction of an object with a single argument to the constructor is actually the declaration of
+an object of that “argument” name and a call to the default constructor.
+</p>
+
+<p>
+Note: using braces instead of parentheses for object initialization, where possible, avoids the most-vexing parse.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class A
+{
+};
+void b1 ( )
+{
+    void f1 ();    // Non-compliant - declaring a function in block scope
+    A a ();        // Non-compliant - appears to declare an object with no
+                   // arguments to constructor, but it too declares a
+                   // function 'a' returning type 'A' and taking no
+                   // parameters.
+}
+
+int32_t j;
+void f3()
+{
+ int32_t ( j ); // Non-compliant - declares 'j' (using redundant parentheses)
+ int32_t { j }; // Compliant with this rule, but violates "See also"
+} // - Creates a temporary object with value 'j'.
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 9.2.1</p>
+        '''
+
+    return '''
+<p><b>Rationale</b></p>
+A function declared at block scope will refer to a member of the enclosing namespace, and so the declaration should be explicitly placed at the namespace level.
+</p>
+
+<p>
+Additionally, where a declaration statement could either declare a function or an object, the compiler will choose to declare the function. To avoid potential developer confusion over the meaning of a declaration, functions should not be declared at block scope.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class A
+{
+};
+void b1 ( )
+{
+    void f1 ();    // Non-compliant - declaring a function in block scope
+    A a ();        // Non-compliant - appears to declare an object with no
+                   // arguments to constructor, but it too declares a
+                   // function 'a' returning type 'A' and taking no
+                   // parameters.
+}
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('includeObj', 'Include object declaration that uses parentheses', False)
+
+
+def check(check, file):
+
+    refs = file.filerefs('Declare', 'Function ~Member')
+    for ref in refs:
+
+        if ref.scope() == file:
+            continue
+        if not ref.ent().parent() or ref.ent().parent().kind() != 'Namespace':
+            continue
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+
+    defineRefs = file.filerefs('Define', 'Function ~Member')
+    for defined in defineRefs:
+
+        declareIn = defined.ent().refs('Declare', 'Function ~Member')
+        for declare in declareIn:
+            check.violation(declare.ent(), file, declare.line(), declare.column(), ERR1)
+
+    if check.options().lookup('includeObj'):
+        for obj_ref in file.filerefs("Define, Declare", "Local Object, Parameter"):
+            lex = file.lexer().lexeme(obj_ref.line(), obj_ref.column())
+            
+            if lex.previous().text() == "(" and lex.next().text() == ")":
+                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR2)

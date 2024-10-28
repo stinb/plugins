@@ -1,0 +1,161 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 2/10/2022
+
+ERR1 = "A non-type specifier shall be placed before a type specifier in a declaration."
+
+DEF_NAME = "A non-type specifier shall be placed before a type specifier in a declaration."
+
+NON_TYPE_SPECIFIERS = ["typedef", "friend", "constexpr", "register", "static", "extern",
+"thread_local", "mutable", "inline", "virtual", "explicit"]
+
+SKIP_CHAR = ["*", "&", "~"]
+
+KIND_NAMES = ["Type Alias", "Typedef", "Template Parameter"]
+
+DEF_TOKEN = ["Keyword", "Identifier"]
+
+# The ID for the check
+def ids():
+    return ('A7-1-8', 'CPP_D051')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+     'A7-1-8': f'Published Standards/AUTOSAR/{DEF_NAME}',
+     'CPP_D051': f'All Checks/Language Specific/C and C++/Declarations and Definitions/{DEF_NAME}',
+    }[id]
+
+def tags(id):
+    return {
+        'A7-1-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D051': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """ <p><b>Rationale</b></p>
+<p> Placing a non-type specifier, i.e. typedef, friend, constexpr, register, static, extern,
+thread_local, mutable, inline, virtual, explicit, before type specifiers makes the source
+code more readable. </p>
+<p><b>Example</b></p>
+<br>
+<pre><code language="C++">#include &lt;cstdint&gt;
+
+typedef std::int32_t int1; // Compliant
+std::int32_t typedef int2; // Non-compliant
+
+class C
+{
+public:
+    virtual inline void F1(); // Compliant
+    inline virtual void F2(); // Compliant
+    void virtual inline F3(); // Non-compliant
+private:
+    std::int32_t mutable x; // Non-compliant
+    mutable std::int32_t y; // Compliant
+};</code></pre>
+<p><b>See also</b></p>
+<p>HIC++ v4.0 [9]: 7.1.3 Do not place type specifiers before non-type specifiers in a declaration.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox("parametersOption", "Parameters", True)
+
+def check(check, file):
+    parametersOption = check.option().lookup('parametersOption')
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    types = "~Class"
+    if not parametersOption: #param option
+        types += " ~Parameter"
+
+    for fileRef in file.filerefs("Declare, Define, Friend", types):
+        lexeme = lexer.lexeme(fileRef.line(), fileRef.column())
+
+        if not fileRef.ent() or not lexeme or fileRef.ent().name() != lexeme.text():#gets rid of bw
+            continue
+
+        if "Macro" in fileRef.ent().kindname(): # get rid of macros
+            continue
+
+        #now get specifiers
+        specifiers = []
+        name = lexeme
+
+        while lexeme and ( lexeme.token() in DEF_TOKEN or is_start(lexeme, name)):
+            if lexeme.token() == "Identifier" and not is_start(lexeme, name):
+                #make sure its a type def
+                if (not lexeme.ent() or lexeme.ent().kindname() not in KIND_NAMES) and (lexeme.text() not in NON_TYPE_SPECIFIERS):
+                    break
+
+            specifiers.insert(0, lexeme)
+            lexeme = lexeme.previous(True, True)
+
+            if lexeme and lexeme.text() == "::":
+                lexeme = lexeme.previous(True, True)
+                if  lexeme:
+                    lexeme = lexeme.previous(True, True)
+
+            if lexeme and lexeme.text() in SKIP_CHAR:
+                lexeme = lexeme.previous(True, True)
+
+        if check_out_of_order(specifiers):
+            pm(ERR1, check, fileRef.ent(), file, fileRef.line(), fileRef.column())
+
+def remove_items_from_lex_list(list, remove):
+    nList = []
+    for l in list:
+        if l.text() not in remove:
+            nList.append(l)
+    return nList
+
+def lex_list_to_string_list(list):
+    nList = []
+    for l in list:
+        nList.append(l.text())
+    return nList
+
+def check_out_of_order(list):
+    seenType = False
+    for l in list:
+        if list.index(l) == len(list) -1:#this is our last item / the var itself so skip it
+            continue
+
+        if seenType and l.text() in NON_TYPE_SPECIFIERS:
+            return True
+
+        if l.text() not in NON_TYPE_SPECIFIERS:
+            seenType = True
+
+    return False
+
+def is_start(lexeme, startName):
+    if lexeme and lexeme.text() == startName.text() and lexeme.line_begin() == startName.line_begin() and lexeme.column_begin() == startName.column_begin():
+        return True
+    return False
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

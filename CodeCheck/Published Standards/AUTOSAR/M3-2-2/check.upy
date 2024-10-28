@@ -1,0 +1,182 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2021-12-01
+
+
+import re
+
+from understand import Ent, Ref
+
+
+ERR1 = 'Already defined differently in %1'
+
+
+def ids():
+    return ('M3-2-2', 'MISRA08_3-2-2', 'CPP_D041')
+
+
+def name(id):
+    return {
+        'M3-2-2': 'Published Standards/AUTOSAR/The One Definition Rule',
+        'MISRA08_3-2-2': 'Published Standards/MISRA-C++ 2008/3-2-2 The One Definition Rule',
+        'CPP_D041': 'All Checks/Language Specific/C and C++/Declarations and Definitions/The One Definition Rule',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_3-2-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M3-2-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D041': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>The <i>One Definition Rule</i> shall not be violated.</b></p>
+
+<p><b>Rationale</b></p>
+<p>Violation of the <i>One Definition Rule</i> ([1] §3.2) leads to
+<i>undefined behaviour</i>. In general, this means that the program shall
+contain exactly one definition of every non-inline function or object.</p>
+
+<p>Additionally:
+<ul>
+<li>The definitions of a type shall consist of the same sequence of tokens,
+and;</li>
+<li>The definitions of a template shall consist of the same sequence of tokens,
+and;</li>
+<li>The definitions of an inline function shall consist of the same sequence of
+tokens.</li>
+</ul></p>
+
+<p>Note that for the purposes of this rule, <i>typedefs</i> shall be treated as
+types.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">\
+// File a.cpp
+struct S1
+{
+  int32_t i;
+};
+struct S2
+{
+  int32_t i;
+};
+// File b.cpp
+struct S1
+{
+  int64_t i;
+}; // Non-compliant - token sequence different
+struct S2
+{
+  int32_t i;
+  int32_t j;
+}; // Non-compliant - token sequence different\
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def locationString(file, ref):
+    return file.name() + ': line ' + str(ref.line())
+
+
+# Information about the first entity defined with this longname
+class EntInfo:
+    def __init__(self, location: str, ent: Ent, ref: Ref):
+        # Location of the first found definition
+        self.location: str  = location
+        # The first found entity
+        self.ent: Ent = ent
+        # The first found definition, or None once cleared
+        self.ref: Ref | None = ref
+
+
+# Ent longname to EntInfo
+defined: dict[str, EntInfo] = {}
+
+
+def check(check, file):
+    lexer = None
+
+    # Definitions of types, templates, and inline functions
+    for ref in file.filerefs('Define', '~Unnamed ~TemplateParameter Type, ~Unnamed Function'):
+        ent = ref.ent()
+
+        # Ignore macros
+        if not lexer:
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        if lexeme.text() != ent.name():
+            continue
+
+        # Ignore non-inline functions
+        if 'Function' in ent.kindname() and not ent.freetext('inline'):
+            continue
+
+        # First definition of this identifier
+        if ent.longname() not in defined:
+            defined[ent.longname()] = EntInfo(locationString(file, ref), ent, ref)
+
+        # Already defined
+        else:
+            entInfo: EntInfo = defined[ent.longname()]
+            definedLocation = entInfo.location
+            definedEnt = entInfo.ent
+
+            # Ignore same location
+            if locationString(file, ref) == definedLocation:
+                continue
+
+            # Ignore different kinds
+            if ent.kindname() != definedEnt.kindname():
+                continue
+
+            # Ignore different parameters (to allow parametric polymorphism)
+            if ent.parameters() != definedEnt.parameters():
+                continue
+
+            # Ignore same token sequence
+            if ent.contents() and ent.contents() == definedEnt.contents():
+                continue
+
+            # Create a violation for additional definitions
+            check.violation(ent, file, ref.line(), ref.column(), ERR1, definedLocation)
+
+            # Create a violation for the first definition found
+            if entInfo.ref:
+                secondLocation = locationString(file, ref)
+                ent = entInfo.ent
+                ref = entInfo.ref
+                check.violation(ent, ref.file(), ref.line(), ref.column(), ERR1, secondLocation)
+                entInfo.ref = None

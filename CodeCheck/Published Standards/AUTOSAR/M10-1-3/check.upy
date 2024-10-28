@@ -1,0 +1,158 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 11-17-21
+
+
+import re
+
+
+ERR1 = 'Class %1 has a base class that is both virtual and non-virtual in its hierarchy'
+
+
+def ids():
+	return ('M10-1-3', 'MISRA08_10-1-3', 'CPP_D000', 'MISRA23_13.1.2')
+
+def name(id):
+	return {
+		'M10-1-3': """\
+Published Standards/AUTOSAR/An accessible base class shall not be both virtual \
+and non-virtual in the same hierarchy""",
+		'MISRA08_10-1-3': """\
+Published Standards/MISRA-C++ 2008/10-1-3 An accessible base class shall not be \
+both virtual and non-virtual in the same hierarchy""",
+		'CPP_D000': """\
+All Checks/Language Specific/C and C++/Declarations and Definitions/An \
+accessible base class shall not be both virtual and non-virtual in the same \
+hierarchy""",
+		'MISRA23_13.1.2': """\
+Published Standards/MISRA C++ 2023/13.1.2 An accessible base class shall not be \
+both virtual and non-virtual in the same hierarchy""",
+	}[id]
+
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_10-1-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M10-1-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D000': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+		'MISRA23_13.1.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def detailed_description():
+	return '''\
+
+<p><b>Rationale</b></p>
+If a base class is both virtual and non-virtual in a multiple inheritance hierarchy then there will be at least two copies of the base class sub-object in the derived object. This may not be consistent with developer expectations.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class A {};
+class B1: public virtual A {};
+class B2: public virtual A {};
+class B3: public A {};
+class C: public B1, B2, B3 {}; // Non-compliant -
+                               // C has two A sub-objects
+</code></pre>
+
+'''
+
+
+def test_language(language):
+	return language == 'C++'
+
+
+def test_entity(file):
+	return True
+
+
+def test_global():
+	return False
+
+
+# This finds the parent class
+def findParent(check, classRef, firstPass):
+	classEnt = classRef.ent()
+
+	# Get that class' base classes
+	myBaseClasses = classEnt.refs('Base')
+
+	# Recursively check all parent classes
+	if myBaseClasses:
+		for base in myBaseClasses:
+			findParent(check, base, firstPass)
+
+	# Add this class to the global hash
+	else:
+
+		# Use the flag to determine if we are looking for duplicates or not
+		if firstPass:
+			globalBaseClasses[classEnt.uniquename()] = 1
+		else:
+
+			# Test if the key exists, if so mark it
+			if classEnt.uniquename() in globalBaseClasses:
+				globalBaseClasses[classEnt.uniquename()] = 2
+
+
+def check(check, file):
+
+	# Pull a list of all classes that are defined within this file
+	classesDefined = file.filerefs('Define', 'Class')
+	if not classesDefined:
+		return
+
+	# Loop through each defined class
+	for classRef in classesDefined:
+		classEnt = classRef.ent()
+
+		# Pull all the bases for this class
+		publicBases = classEnt.refs('Public Base')
+		privateBases = classEnt.refs('Private Base')
+
+		# Move on if we don't have both public and private bases
+		if not (publicBases and privateBases):
+			continue
+
+		# Empty our global hash
+		global globalBaseClasses
+		globalBaseClasses = {}
+
+		# Put all base classes into our global hash
+		for public in publicBases:
+			findParent(check, public, True)
+	
+		# Check all private classes against the public classes
+		for private in privateBases:
+			findParent(check, private, False)
+
+		# Check the hash for any detected violations
+		for count in globalBaseClasses.values():
+			if count > 1:
+				check.violation(classEnt, file, classRef.line(), classRef.column(), ERR1, classEnt.name())

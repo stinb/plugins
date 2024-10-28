@@ -1,0 +1,241 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 1-19-22
+
+
+import re
+
+
+ERR1 = 'Loop counter not modified by constant value'
+ERR2 = 'Loop counter inappropriately modified'
+
+
+def ids():
+    return ('M6-5-4', 'MISRA08_6-5-4', 'CPP_C021')
+
+
+def name(id):
+    return {
+        'M6-5-4': 'Published Standards/AUTOSAR/The loop-counter shall be modified by one of: --, ++, -= n, or += n; where n remains constant for the duration of the loop',
+        'MISRA08_6-5-4': 'Published Standards/MISRA-C++ 2008/6-5-4 The loop-counter shall be modified by one of: --, ++, -= n, or += n; where n remains constant for the duration of the loop',
+        'CPP_C021': 'All Checks/Language Specific/C and C++/Control Flow/The loop-counter shall be modified by one of: --, ++, -= n, or += n; where n remains constant for the duration of the loop',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-5-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'M6-5-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C021': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+This helps to ensure deterministic loop termination. The other <i>for</i> loop rules mean that the modification can only take place within <i>expression</i>.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">for ( x = 0; x &lt; 10; ++x )            // Compliant
+for ( T x = thing.start( );
+    x != thing.end( );
+    ++x )                             // Compliant
+for ( x = 0; x &lt; 10; x += 1 )         // Compliant
+for ( x = 0; x &lt; 10; x += n )         // Compliant if n is not modified
+                                      // within the body of the loop.
+for ( x = 0; x &lt; 10; x += fn ( ) )    // Non-compliant
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('header file, code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # Pull a list of all functions that are defined within this file
+    functionsDefined = file.filerefs('Define', 'Function')
+
+    lexer = None
+
+
+    # Loop through all defined functions
+    for function in functionsDefined:
+
+        # Pull text of function
+        text = function.ent().contents()
+        # Remove any // style comments
+        text = re.sub(r'\/\/.*?\n','\n', text)
+        # Remove any /* */ style comments
+        text = re.sub(r'\/\*[\s\S]*?\*\/','\n', text)
+        # Check if a for loop exists
+        if not re.search(r'for\s*\(', text):
+            continue
+
+        # Spin up lexer and find for loop
+        if not lexer:
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(function.line(), function.column())
+
+        # Check entire function
+        end = function.ent().ref('end').line()
+        while lexeme and lexeme.line_begin() < end:
+            # Flag to go to next line
+            nextLine = False
+
+            if lexeme.token() == 'Keyword' and lexeme.text() == 'for':
+
+                # Mark start of for loop and create list for later testing
+                forLoopStartPoint = lexeme.line_begin()
+                toTestLater = []
+
+                # Move into for loop structure
+                lexeme = lexeme.next(True, True).next(True, True)
+
+                # Check the first parameter to the for loop
+                init = []
+                while lexeme.text() != ';':
+
+                    if lexeme.text() == ':' and lexeme.next().text() != ':':
+                        nextLine = True
+                        break
+                    if lexeme.token() == 'Identifier':
+                        if lexeme.ref() and lexeme.ref().kindname() in {'Set', 'Init'}:
+                            init.append(lexeme)
+                    lexeme = lexeme.next(True, True)
+
+                if nextLine:
+                    continue
+
+                count = 1
+
+                # Check the rest of the for loop instantiation
+                while lexeme and not (count == 1 and lexeme.text() == ')'):
+
+                    if lexeme.text() == '(':
+                        count += 1
+                    elif lexeme.text() == ')':
+                        count -= 1
+
+                    if lexeme.token() != 'Identifier':
+                        lexeme = lexeme.next(True, True)
+                        continue
+
+                    if lexeme.ref() and lexeme.ref().kindname() in {'Set', 'Modify'}:
+
+                        for term in init:
+
+                            if lexeme.ent().name() == term.ent().name():
+
+                                if lexeme.previous(True, True).text() in {'--', '++'}:
+                                    continue
+                                if lexeme.next(True, True).text() in {'--', '++'}:
+                                    continue
+
+                                if lexeme.next(True, True).text() in {'+=', '-='}:
+                                    if lexeme.next(True, True).next(True, True).token() == 'Identifier':
+                                        toTestLater.append(lexeme.next(True, True).next(True, True))
+                                    continue
+
+                                check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR2)
+
+                    lexeme = lexeme.next(True, True)
+
+                endForLoop = ''
+                count = 1
+
+                # There is no for loop block
+                if lexeme and lexeme.next(True, True).text() != '{':
+
+                    endForLoop = ';'
+                    lexeme = lexeme.next(True, True)
+
+                # There is a standard loop block
+                elif lexeme:
+
+                    endForLoop = '}'
+                    lexeme = lexeme.next(True, True).next(True, True)
+
+                # Copy the lexeme to look at the body of the for loop without losing place in the function
+                lexemeBody = lexeme
+                forLoopEndPoint = 0
+
+                while lexemeBody and not (count == 1 and lexemeBody.text() == endForLoop):
+
+                    if lexemeBody.text() == '{':
+                        count += 1
+                    elif lexemeBody.text() == '}':
+                        count -= 1
+
+                    if lexemeBody.token() != 'Identifier':
+                        lexemeBody = lexemeBody.next(True, True)
+                        continue
+
+                    if lexemeBody.ref() and lexemeBody.ref().kindname() in {'Set', 'Modify'}:
+
+                        for term in init:
+
+                            if lexemeBody.ent().name() == term.ent().name():
+
+                                if lexemeBody.previous(True, True).text() in {'--', '++'}:
+                                    continue
+                                if lexemeBody.next(True, True).text() in {'--', '++'}:
+                                    continue
+
+                                if lexemeBody.next(True, True).text() in {'+=', '-='}:
+                                    if lexemeBody.next(True, True).next(True, True).token() == 'Identifier':
+                                        toTestLater.append(lexemeBody.next(True, True).next(True, True))
+                                    continue
+
+                                check.violation(lexemeBody.ent(), file, lexemeBody.line_begin(), lexemeBody.column_begin(), ERR2)
+
+                    forLoopEndPoint = lexemeBody.line_begin()
+                    lexemeBody = lexemeBody.next(True, True)
+
+                for toTest in toTestLater:
+
+                    if toTest.ent().kind().check('Macro'):
+                        continue
+
+                    refs = toTest.ent().refs('Setby, Modifyby')
+                    if not refs:
+                        check.violation(toTest.ent(), file, toTest.line_begin(), toTest.column_begin(), ERR1)
+
+                    for ref in refs:
+                        if ref.line() >= forLoopStartPoint and ref.line() <= forLoopEndPoint:
+                            check.violation(toTest.ent(), file, toTest.line_begin(), toTest.column_begin(), ERR1)
+
+            else:
+
+                lexeme = lexeme.next(True, True)

@@ -1,0 +1,617 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2023-02-23
+
+
+import re
+
+
+ERR1 = 'Declaration or definition is not compatible with another declaration or definition in file %1 at %2:%3'
+
+
+checkedEnts = set()
+
+
+def ids():
+    return ('MISRA04_8.3', 'MISRA12_8.3', 'CPP_DD014', 'MISRA23_8.3')
+
+
+def name(id):
+    return {
+        'MISRA04_8.3': '''Published Standards/MISRA-C 2004/\
+8.3 For each function parameter the type given in the declaration and\
+ definition shall be identical, and the return types shall also be identical''',
+        'MISRA12_8.3': '''Published Standards/MISRA C 2012/\
+8.3 All declarations of an object or function shall use the same names and type\
+ qualifiers''',
+        'CPP_DD014': '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+Use the same parameter names and type qualifiers for all declarations and definitions''',
+        'MISRA23_8.3': '''Published Standards/MISRA C 2023/\
+8.3 All declarations of an object or function shall use the same names and type\
+ qualifiers''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_8.3': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'MISRA04_8.3': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Declarations and Definitions',
+        ],
+        'CPP_DD014': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_8.3': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA04_8.3': '''\
+<p>
+[Undefined 24; Koenig 59-62]
+</p>
+
+<p>
+The types of the parameters and return values in the prototype and the
+definition must match. This requires identical types including <i>typedef</i>
+names and qualifiers, and not just identical base types.
+</p>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+Due to complexity, declarations with macros or multi-line object declarations
+are not compared.
+</p>
+''',
+        'MISRA12_8.3': '''\
+<p><b>Amplification</b></p>
+
+<p>
+Storage class specifiers are not included within the scope of this rule.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Using types and qualifiers consistently across declarations of the same object
+or function encourages stronger typing.
+</p>
+
+<p>
+Specifying parameter names in function prototypes allows the function definition
+to be checked for interface consistency with its declarations.
+</p>
+
+<p><b>Exception</b></p>
+
+<p>
+Compatible versions of the same basic type may be used interchangeably. For
+example, <i>int</i>, <i>signed</i> and <i>signed int</i> are all equivalent.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">extern void f ( signed int );
+       void f (        int );   /* Compliant     - Exception */
+extern void g ( int * const );
+       void g ( int *       );  /* Non-compliant - type qualifiers */
+</code></pre>
+
+<p>
+<i>Note</i>: all the above are not compliant with Dir 4.6.
+</p>
+
+<pre><code language="C++">extern int16_t func ( int16_t num, int16_t den );
+
+/* Non-compliant - parameter names do not match */
+int16_t func ( int16_t den, int16_t num )
+{
+  return num / den;
+}
+</code></pre>
+
+<p>
+In this example the definition of <code>area</code> uses a different type name
+for the parameter <code>h</code> from that used in the declaration. This does
+not comply with the rule even though <code>width_t</code> and
+<code>height_t</code> are the same basic type.
+</p>
+
+<pre><code language="C++">typedef uint16_t width_t;
+typedef uint16_t height_t;
+typedef uint32_t area_t;
+
+extern area_t area ( width_t w, height_t h );
+
+area_t area ( width_t w, width_t h )
+{
+  return ( area_t ) w * h;
+}
+</code></pre>
+
+<p>
+This rule does not require that a function pointer declaration use the same
+names as a function declaration. The following example is therefore compliant.
+</p>
+
+<pre><code language="C++">extern void f1 ( int16_t x );
+extern void f2 ( int16_t y );
+
+void f ( bool_t b )
+{
+  void ( *fp1 ) ( int16_t z ) = b ? f1 : f2;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 8.4
+</p>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+Due to complexity, declarations with macros or multi-line object declarations
+are not compared.
+</p>
+''',
+        'CPP_DD014': '''\
+<p><b>Amplification</b></p>
+
+<p>
+Storage class specifiers are not included within the scope of this rule.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Using types and qualifiers consistently across declarations of the same object
+or function encourages stronger typing.
+</p>
+
+<p>
+Specifying parameter names in function prototypes allows the function definition
+to be checked for interface consistency with its declarations.
+</p>
+
+<p><b>Exception</b></p>
+
+<p>
+Compatible versions of the same basic type may be used interchangeably. For
+example, <i>int</i>, <i>signed</i> and <i>signed int</i> are all equivalent.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">extern void f ( signed int );
+       void f (        int );   /* Compliant     - Exception */
+extern void g ( int * const );
+       void g ( int *       );  /* Non-compliant - type qualifiers */
+</code></pre>
+
+<pre><code language="C++">extern int16_t func ( int16_t num, int16_t den );
+
+/* Non-compliant - parameter names do not match */
+int16_t func ( int16_t den, int16_t num )
+{
+  return num / den;
+}
+</code></pre>
+
+<p>
+In this example the definition of <code>area</code> uses a different type name
+for the parameter <code>h</code> from that used in the declaration. This does
+not comply with the rule even though <code>width_t</code> and
+<code>height_t</code> are the same basic type.
+</p>
+
+<pre><code language="C++">typedef uint16_t width_t;
+typedef uint16_t height_t;
+typedef uint32_t area_t;
+
+extern area_t area ( width_t w, height_t h );
+
+area_t area ( width_t w, width_t h )
+{
+  return ( area_t ) w * h;
+"""  """}
+</code></pre>
+
+<p>
+This rule does not require that a function pointer declaration use the same
+names as a function declaration. The following example is therefore compliant.
+</p>
+
+<pre><code language="C++">extern void f1 ( int16_t x );
+extern void f2 ( int16_t y );
+
+void f ( bool_t b )
+{
+  void ( *fp1 ) ( int16_t z ) = b ? f1 : f2;
+}
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+Due to complexity, declarations with macros or multi-line object declarations
+are not compared.
+</p>
+''',
+        'MISRA23_8.3': '''\
+<p><b>Amplification</b></p>
+
+<p>
+Storage class specifiers are not included within the scope of this rule.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Using types and qualifiers consistently across declarations of the same object
+or function encourages stronger typing.
+</p>
+
+<p>
+Specifying parameter names in function prototypes allows the function definition
+to be checked for interface consistency with its declarations.
+</p>
+
+<p><b>Exception</b></p>
+
+<p>
+1. Compatible versions of the same basic type may be used interchangeably. For
+example, <i>int</i>, <i>signed</i> and <i>signed int</i> are all equivalent.
+</p>
+
+<p>
+2. The naming requirements of this rule do not apply to unnamed function parameters. This is
+covered by Rule 8.2.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">extern void f ( signed int a );
+void f ( int a ); /* Compliant - Exception 1 */
+extern void g ( signed int b );
+extern void g ( signed int ); /* Compliant - Exception 2 */
+extern void h ( int * const c );
+extern void h ( int * c ); /* Non-compliant - mis-matched type qualifiers */
+extern void j ( int d );
+extern void j ( int e ); /* Non-compliant - mis-matched parameter names */
+
+</code></pre>
+
+<p>
+<i>Note</i>: all the above are not compliant with Dir 4.6; example g() is also not compliant with Rule 8.2.
+</p>
+
+<pre><code language="C++">extern int16_t func ( int16_t num, int16_t den );
+
+/* Non-compliant - parameter names do not match */
+int16_t func ( int16_t den, int16_t num )
+{
+  return num / den;
+}
+</code></pre>
+
+<p>
+In this example the definition of <code>area</code> uses a different type name
+for the parameter <code>h</code> from that used in the declaration. This does
+not comply with the rule even though <code>width_t</code> and
+<code>height_t</code> are the same basic type.
+</p>
+
+<pre><code language="C++">typedef uint16_t width_t;
+typedef uint16_t height_t;
+typedef uint32_t area_t;
+
+extern area_t area ( width_t w, height_t h );
+
+area_t area ( width_t w, width_t h )
+{
+  return ( area_t ) w * h;
+}
+</code></pre>
+
+<p>
+This rule does not require that a function pointer declaration use the same
+names as a function declaration. The following example is therefore compliant.
+</p>
+
+<pre><code language="C++">extern void f1 ( int16_t x );
+extern void f2 ( int16_t y );
+
+void f ( bool_t b )
+{
+  void ( *fp1 ) ( int16_t z ) = b ? f1 : f2;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 8.2, Rule 8.4
+</p>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+Due to complexity, declarations with macros or multi-line object declarations
+are not compared.
+</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    skipUnnamed = True if (check.id() == 'MISRA23_8.3') else False
+
+    check.options().checkbox('compatibleBasicTypes', 'Use compatible basic types interchangeably (example: int = signed = signed int)', check.id() != 'MISRA04_8.3')
+    check.options().checkbox('violationForFirst', 'Violation for first declaration/definition found', False)
+    check.options().checkbox('skipUnnamed', 'Skip function declaration with an unnamed parameter', skipUnnamed)
+
+
+def getObjectSignatureParts(ref):
+    sig = []
+
+    # Lexer with ents to check for macros
+    lex = ref.file().lexer(True).lexeme(ref.line(), ref.column())
+
+    # Move the lexeme back until we see the previous statement or extern
+    while lex:
+        # Remove 'extern' from the signature
+        if lex.text() == 'extern':
+            lex = lex.next(True, True)
+            break
+
+        # If we see a macro first, abort
+        if lex.token() == 'Identifier' and lex.ent() and lex.ent().kind().check('Macro'):
+            return None
+
+        # Stop at the previous statement (new line for simplicity)
+        prev = lex.previous(ignore_comments=True)
+        if prev and prev.token() == 'Newline':
+            break
+
+        lex = lex.previous(True, True)
+
+    if not lex:
+        return None
+
+    # Build the signature
+    name = ref.scope().name()
+    while lex and lex.text() != name:
+        # If there is comma-separated declaration of multiple objects
+        if lex.text() == ',':
+            # Remove identifier of the other object
+            if sig:
+                sig.pop()
+            # Remove asterisks if that object was a pointer
+            while sig and sig[-1] == '* ':
+                sig.pop()
+        else:
+            sig.append(lex.text() + ' ')
+
+        lex = lex.next(True, True)
+
+    return sig
+
+
+def getFunctionSignatureParts(ref):
+    sig = []
+
+    # Lexer with ents to check for macros
+    lex = ref.file().lexer(True).lexeme(ref.line(), ref.column())
+    if not lex:
+        return sig
+
+    # Skip identifier and closed parenthesis if it looks like (identifier)
+    l = lex.previous(True, True)
+    r = lex.next(True, True)
+    if l and l.text() == '(' and r and r.text() == ')':
+        lex = lex.next(True, True).next(True, True)
+
+    # Build the signature
+    paren = 0
+    while lex and lex.text() != '{' and not (lex.text() == ')' and paren == 1):
+
+        if lex.text() == '(':
+            paren += 1
+        elif lex.text() == ')':
+            paren -= 1
+
+        # There is a strange scenario I encountered with many function macros
+        # that would break this check wide open. I could not find a solution.
+        # This is a special case to try and not check those instances.
+        if paren < 0:
+            return None
+
+        # This is another case of function macros being used to build
+        # definitions and declarations that needs to be ignored.
+        if lex.token() == 'Identifier' and lex.ent() and lex.ent().kind().check('Macro'):
+            return None
+
+        if lex.token() == 'Keyword':
+            sig.append(lex.text() + ' ')
+        else:
+            sig.append(lex.text())
+
+        lex = lex.next(True, True)
+
+    return sig
+
+
+def simplifyTypes(string):
+    # Convert unsigned long longs
+    string = re.sub(r'\bunsigned\slong\slong\sint\b', 'ulli', string)
+    string = re.sub(r'\bunsigned\slong\slong\b', 'ulli', string)
+
+    # Convert long longs
+    string = re.sub(r'\bsigned\slong\slong\sint\b', 'slli', string)
+    string = re.sub(r'\bsigned\slong\slong\b', 'slli', string)
+    string = re.sub(r'\blong\slong\sint\b', 'slli', string)
+    string = re.sub(r'\blong\slong\b', 'slli', string)
+
+    # Convert unsigned longs
+    string = re.sub(r'\bunsigned\slong\sint\b', 'uli', string)
+    string = re.sub(r'\bunsigned\slong\b', 'uli', string)
+
+    # Convert longs
+    string = re.sub(r'\bsigned\slong\sint\b', 'sli', string)
+    string = re.sub(r'\bsigned\slong\b', 'sli', string)
+    string = re.sub(r'\blong\sint\b', 'sli', string)
+    string = re.sub(r'\blong\b', 'sli', string)
+
+    # Convert unsigned shorts
+    string = re.sub(r'\bunsigned\sshort\sint\b', 'usi', string)
+    string = re.sub(r'\bunsigned\sshort\b', 'usi', string)
+
+    # Convert shorts
+    string = re.sub(r'\bsigned\sshort\sint\b', 'ssi', string)
+    string = re.sub(r'\bsigned\sshort\b', 'ssi', string)
+    string = re.sub(r'\bshort\sint\b', 'ssi', string)
+    string = re.sub(r'\bshort\b', 'ssi', string)
+
+    # Convert unsigned int
+    string = re.sub(r'\bunsigned\sint\b', 'ui', string)
+    string = re.sub(r'\bunsigned\b', 'ui', string)
+
+    # Convert int
+    string = re.sub(r'\bsigned\sint\b', 'si', string)
+    string = re.sub(r'\bint\b', 'si', string)
+    string = re.sub(r'\bsigned\b', 'si', string)
+
+    return string
+
+
+def getSignature(ref, compatibleBasicTypes):
+    # Create the signature with the lexer
+    if ref.scope().kind().check('Object'):
+        sig = getObjectSignatureParts(ref)
+    else:
+        sig = getFunctionSignatureParts(ref)
+
+    if not sig:
+        return None
+
+    # Simplify the signature
+    sig = ''.join(sig).strip()
+    if compatibleBasicTypes:
+        sig = simplifyTypes(sig)
+
+    return sig
+
+
+def check(check, file):
+    compatibleBasicTypes = check.options().lookup('compatibleBasicTypes')
+    violationForFirst = check.options().lookup('violationForFirst')
+    skipUnnamed = check.options().lookup('skipUnnamed')
+
+    for ref in file.filerefs('Declare, Define', 'Object Global, Function ~Member', True):
+        ent = ref.ent()
+
+        # Skip if entity already checked
+        if ent in checkedEnts:
+            continue
+        checkedEnts.add(ent)
+
+        # Function
+        if ent.kind().check('Function'):
+            # Skip built-in functions
+            if re.match(r'__', ent.name()):
+                continue
+            # Init
+            firstRef = None
+            firstSig = None
+            allRefs = ent.refs('Declarein ~Using, Definein')
+        # Object
+        else:
+            # Skip objects without a type
+            if not ent.type():
+                continue
+            # Init
+            firstRef = ent.ref('Definein')
+            # Skip objects without a definition
+            if not firstRef:
+                continue
+            # Init
+            firstSig = getSignature(firstRef, compatibleBasicTypes)
+            # Skip objects if the definition signature wasn't properly created
+            if not firstSig:
+                continue
+            # Init
+            allRefs = ent.refs('Declarein')
+
+        # Get declarations/definitions
+        if not allRefs:
+            continue
+
+        # Violation for each non-matching subsequent declaration/definition
+        firstFlagged = False
+        for otherRef in allRefs:
+            has_unnamed = False
+
+            for param_ref in otherRef.scope().refs("", "Parameter"):
+                lex = param_ref.file().lexer().lexeme(param_ref.line(), param_ref.column())
+
+                if (param_ref.line() == otherRef.line()) and (lex.text() != param_ref.ent().name()) and (lex.token() != "Identifier"):
+                    has_unnamed = True
+                    break
+            
+            if skipUnnamed and has_unnamed:
+                continue
+
+            otherSig = getSignature(otherRef, compatibleBasicTypes)
+
+            # Skip if the signature wasn't properly created
+            if not otherSig:
+                continue
+
+            # Skip if this is the first signature properly created
+            if not firstRef:
+                firstRef = otherRef
+                firstSig = otherSig
+                continue
+
+            # Skip if the signatures match
+            if otherSig == firstSig:
+                continue
+
+            # Violation for first signature
+            if violationForFirst and not firstFlagged:
+                check.violation(ent, firstRef.file(), firstRef.line(), firstRef.column(), ERR1, otherRef.file(), otherRef.line(), otherRef.column())
+                violationForFirst = True
+
+            # Violation for this other signature
+            check.violation(ent, otherRef.file(), otherRef.line(), otherRef.column(), ERR1, firstRef.file(), firstRef.line(), firstRef.column())

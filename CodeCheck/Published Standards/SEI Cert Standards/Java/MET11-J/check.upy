@@ -1,0 +1,196 @@
+ERR1 = 'Ensure that keys used in comparison operations are immutable.'
+ERR2 = 'The key index used in Hashtable did not override the hashCode() method.'
+
+
+# The ID for the check
+def ids():
+    return ('MET11-J', 'JAVA_MET11')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MET11-J': 'Published Standards/SEI Cert Standards/Java/Ensure that keys used in comparison operations are immutable',
+        'JAVA_MET11': 'All Checks/Language Specific/Java/Methods/Ensure that keys used in comparison operations are immutable',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MET11-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_MET11': [
+            'Language: Java',
+            'Methods',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Ensure that keys used in comparison operations are immutable'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure that keys used in comparison operations are immutable</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to ensure that the keys used in a comparison operation are immutable can lead to nondeterministic behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/MET11-J.+Ensure+that+keys+used+in+comparison+operations+are+immutable</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">// Mutable class Employee
+class Employee {
+  private String name;
+  private double salary;
+
+  Employee(String empName, double empSalary) {
+    this.name = empName;
+    this.salary = empSalary;
+  }
+
+  public void setEmployeeName(String empName) {
+    this.name = empName;
+  }
+
+  public void setSalary(double empSalary) {
+    this.salary = empSalary;
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (!(o instanceof Employee)) {
+      return false;
+    }
+
+    Employee emp = (Employee)o;
+    return emp.name.equals(name);
+  }
+
+  public int hashCode() {/* ... */}
+
+}
+
+// Client code
+Map&lt;Employee, Calendar&gt; map =
+  new ConcurrentHashMap&lt;Employee, Calendar&gt;();
+// ...
+
+
+
+
+class MyKey implements Serializable {
+  // Does not override hashCode()
+}
+
+class HashSer {
+  public static void main(String[] args)
+                     throws IOException, ClassNotFoundException {
+    Hashtable&lt;MyKey,String&gt; ht = new Hashtable&lt;MyKey, String&gt;();
+    MyKey key = new MyKey();
+    ht.put(key, "Value");
+    System.out.println("Entry: " + ht.get(key));
+    // Retrieve using the key, works
+
+    // Serialize the Hashtable object
+    FileOutputStream fos = new FileOutputStream("hashdata.ser");
+    ObjectOutputStream oos = new ObjectOutputStream(fos);
+    oos.writeObject(ht);
+    oos.close();
+
+    // Deserialize the Hashtable object
+    FileInputStream fis = new FileInputStream("hashdata.ser");
+    ObjectInputStream ois = new ObjectInputStream(fis);
+    Hashtable&lt;MyKey, String&gt; ht_in =
+        (Hashtable&lt;MyKey, String&gt;)(ois.readObject());
+    ois.close();
+
+    if (ht_in.contains("Value"))
+      // Check whether the object actually exists in the hash table
+      System.out.println("Value was found in deserialized object.");
+
+    if (ht_in.get(key) == null) // Gets printed
+      System.out.println(
+          "Object was not found when retrieved using the key.");
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    def check_violation(ref, err):
+        check.violation(ref.ent(), file, ref.line(), ref.column(), err)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        for member_ref in class_ref.ent().refs("Define", "Variable Member ~Final"):
+            is_mutable = False
+            used_in_comparison = False
+            comparison_ref = None
+
+            for ref in member_ref.ent().refs("Setby, Useby"):
+                if ref.ent().parent().id() != member_ref.ent().parent().id():
+                    continue
+                elif ref.kind().check("Setby") and (ref.ent().name() != ref.ent().parent().name()):
+                    is_mutable = True
+                elif ref.kind().check("Useby") and ref.ent().name() in {"equals", "compareTo", "hashCode"}:
+                    used_in_comparison = True
+                    comparison_ref = ref
+
+            if is_mutable and used_in_comparison:
+                check_violation(comparison_ref, ERR1)
+
+    for hashtable_ref in file.filerefs("Create"):
+        if hashtable_ref.ent().name() == "Hashtable":
+            lex = lexer.lexeme(hashtable_ref.line(), hashtable_ref.column())
+            get_index = False
+            index_ent = None
+
+            while lex and lex.text() != ";":
+                if lex.text() == "<" and lex.token() == "Operator":
+                    get_index = True
+                elif get_index:
+                    index_ent = lex.ent()
+                    break
+
+                lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+            if index_ent and index_ent.kind().check("Class Type"):
+                define_in_ref = index_ent.ref("Definein", "File")
+                overridden_hashcode = False
+
+                if define_in_ref is not None:
+                    for method_ref in define_in_ref.scope().refs("Define", "Method Member"):
+                        if method_ref.ent().name() == "hashCode":
+                            overridden_hashcode = True
+                            break
+
+                    if not overridden_hashcode:
+                        check_violation(hashtable_ref, ERR2)

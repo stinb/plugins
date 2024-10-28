@@ -1,0 +1,162 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-20-2021
+import re
+
+ERR1 = """\
+Pointer %1 that is pointing to an element of an array of objects is passed to
+smart pointer %2 which is of single object type"""
+
+def ids():
+    return ('A18-1-4', 'CPP_P046')
+
+def name(id):
+    return {
+        'A18-1-4': """\
+Published Standards/AUTOSAR/A pointer pointing to an element of an array of \
+objects shall not be passed to a smart pointer of single object type""",
+        'CPP_P046': """\
+All Checks/Language Specific/C and C++/Pointers/A pointer pointing to an element \
+of an array of objects shall not be passed to a smart pointer of single object \
+type"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-1-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P046': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>A dynamically allocated array of objects needs a corresponding deallocation
+function, e.g. allocation by new[] requires deallocation by delete[], see also
+rule A18-5-3 in section 6.18.5. Smart pointers of a single object type, e.g.
+std::unique_ptr &lt;T&gt; and std::shared_ptr&lt;T&gt;, by default have a
+deleter associated with them which is only capable of deleting a single object.
+Therefore, it is undefined behavior if a pointer pointing to an element of an
+array of objects is passed to such a smart pointer. With the standard library
+smart pointer templates std::unique_ptr and std::shared_ptr, this is possible
+when calling the constructor or the reset function.</p>
+<p>Note that the standard library provides a specialization of the
+std::unique_ptr template for array types, std::unique_ptr&lt;T[]&gt;, and
+corresponding overloads for std::make_unique. Usage of these features is
+conforming to this rule.</p>
+<p>Note that corresponding features for std::shared_ptr are only available in
+C++17 (usage of std::shared_ptr&lt;T[]&gt; with C++11 and C++14 will lead to
+compilation errors). The overloads for std::make_shared will only be available
+in C++20.</p>
+<p>Furthermore, note that it is possible to create a smart pointer of single
+object type with a custom deleter handling an array of objects. This is well
+behaving as long as this smart pointer is actually managing an array of objects.
+However, such a use is errorprone, since the smart pointer can be assigned a
+single object again in the reset function; it may no longer be possible in C++17
+(moving a std::unique_ptr&lt;T[]&gt; into a std::shared_ptr&lt;T&gt; is no
+longer allowed); and it is superseded by better alternatives in C++17
+(availability of std:shared_ptr&lt;T[]&gt;). Therefore such usage is considered
+not compliant to this rule.</p>
+<p>In many cases, using a container such as std::array or std::vector or a
+smart pointer to a container, e.g. std::shared_ptr&lt;std::vector&lt;T&gt;&gt;,
+is a better alternative than a smart pointer to an array of objects.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">1 // $Id: A18-1-4.cpp 313638 2018-03-26 15:34:51Z jan.babst $
+2 #include &lt;memory&gt;
+3 class A
+4 {
+5 };
+6 void F1()
+7 {
+8   // Create a dynamically allocated array of 10 objects of type A.
+9   auto up1 = std::make_unique&lt;A[]&gt;(10); // Compliant
+10
+11  std::unique_ptr<A> up2{up1.release()}; // Non-compliant
+12 }
+13 void F2()
+14 {
+15  auto up1 = std::make_unique&lt;A[]&gt;(10); // Compliant
+16
+17  std::unique_ptr<A> up2;
+18  up2.reset(up1.release()); // Non-compliant
+19 }
+20 void F3()
+21 {
+22  auto up = std::make_unique&lt;A[]&gt;(10); // Compliant
+23
+24  std::shared_ptr<A> sp{up.release()}; // Non-compliant
+25 }
+26 void F4()
+27 {
+28  auto up = std::make_unique&lt;A[]&gt;(10); // Compliant
+29
+30  std::shared_ptr<A> sp;
+31  sp.reset(up.release()); // Non-compliant
+32 }
+33 void F5()
+34 {
+35  auto up = std::make_unique&lt;A[]&gt;(10); // Compliant
+36
+37  // sp will obtain its deleter from up, so the array will be correctly
+38  // deallocated. However, this is no longer allowed in C++17.
+39  std::shared_ptr<A> sp{std::move(up)}; // Non-compliant
+40  sp.reset(new A{}); // leads to undefined behavior
+41 }
+42 void F6()
+43 {
+44  auto up = std::make_unique&lt;A[]&gt;(10); // Compliant
+45
+46  // Well behaving, but error-prone
+47  std::shared_ptr<A> sp{up.release(),
+48  std::default_delete&lt;A[]&gt;{}}; // Non-compliant
+49  sp.reset(new A{}); // leads to undefined behavior
+50 }
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    objectRefs = file.filerefs('Define', 'Object')
+    lexer = None
+
+    for objRef in objectRefs:
+        if not re.search(r'unique_ptr|shared_ptr', str(objRef.ent().type())):
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(objRef.line(), objRef.column())
+        prevLex = lexeme
+
+        # Look for smart pointer
+        while prevLex and not re.search(r';|}|{', prevLex.text()):
+            if re.match(r'unique_ptr|shared_ptr', prevLex.text()):
+                break
+            prevLex = prevLex.previous(True, True)
+        if prevLex and re.match(r'unique_ptr|shared_ptr', prevLex.text()):
+
+            while lexeme and not re.search(r';|}', lexeme.text()):
+                # Throw violation if it points to an array
+                if lexeme.ent() and re.search(r'<.*\[\]>', str(lexeme.ent().type())):
+                    check.violation(objRef.ent(), file, objRef.line(), objRef.column(), ERR1)
+                lexeme = lexeme.next(True, True)
+
+

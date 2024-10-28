@@ -1,0 +1,118 @@
+ERR1 = 'Non-constant operands to a binary bitwise operator shall have the same underlying type'
+BITWISE_OPERATORS = {"&", "|", "^", "<<", ">>", "&=", "|=", "^=", "<<=", ">>="}
+TYPE_QUALIFIERS = ["const", "constexpr", "restrict", "volatile", "_Atomic"]
+
+import re
+
+
+# The ID for the check
+def ids():
+    return ('M5-0-20', 'MISRA08_5-0-20', 'CPP_T039')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M5-0-20': 'Published Standards/AUTOSAR/Non-constant operands to a binary bitwise operator shall have the same underlying type',
+        'MISRA08_5-0-20': 'Published Standards/MISRA-C++ 2008/5-0-20 Non-constant operands to a binary bitwise operator shall have the same underlying type',
+        'CPP_T039': 'All Checks/Language Specific/C and C++/Types/Non-constant operands to a binary bitwise operator shall have the same underlying type',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-20': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'M5-0-20': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T039': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+Using operands of the same <i>underlying type</i> documents that it is the number of bits in the final (promoted and balanced) type that are used, and not the number of bits in the original types of the expression.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">uint8_t mask = ~(0x10);
+uint16_t value;
+value ^= mask; // Non-compliant
+</code></pre>
+
+<p>
+The intent may have been to invert all bits except for bit 5, but the top 8 bits will not have been inverted.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, True, True)
+
+    if lexer:
+        lex = lexer.first()
+
+        while lex:
+            if lex.token() == "Operator" and lex.text() in BITWISE_OPERATORS:
+                rho = lex.next(ignore_whitespace=True)
+                lho = lex.previous(ignore_whitespace=True)
+
+                if not (rho.token() == "Literal" or lho.token() == "Literal") and (lho.token() == "Identifier"):
+                    rho_ent = rho.ent()
+
+                    if rho_ent and rho_ent.type() and ("&" not in rho_ent.type()):
+                        rho_type = rho_ent.freetext("UnderlyingType")
+
+                        lho_ent = lho.ent()
+                        lho_type = lho_ent.freetext(
+                            "UnderlyingType") if lho_ent else None
+
+                        # ignore vector declarations and ofstream writes
+                        if rho_type and (re.search(r"vector", rho_type) or re.search(r"string", rho_type)):
+                            pass
+                        elif rho_type and lho_type:
+                            for tq in TYPE_QUALIFIERS:
+                                rho_type = rho_type.replace(tq, '')
+                                lho_type = lho_type.replace(tq, '')
+
+                            rho_type = rho_type.strip()
+                            lho_type = lho_type.strip()                            
+                            
+                            if rho_type != lho_type:
+                                check.violation(
+                                    None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)

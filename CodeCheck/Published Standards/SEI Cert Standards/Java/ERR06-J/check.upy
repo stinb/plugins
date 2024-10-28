@@ -1,0 +1,540 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-12-13
+
+
+import re
+from Modules import refBetweenNodes, javaAncestorOfIdExists as isAncestorId, javaAncestorOfLongnameExists as ancestorLongname
+
+
+ERR1 = 'Undeclared checked exception "%1" is thrown by this method from constructor "%2"'
+ERR2 = 'Undeclared checked exception "%1" is thrown by this method'
+ERR3 = 'Undeclared checked exception "%1 extends %2" is thrown by this method'
+
+
+translationUnitCache = dict()
+
+castsAndThrows = dict() # { ent: bool, ... }
+
+
+def ids():
+    return ('ERR06-J', 'JAVA_ERR06')
+
+
+def name(id):
+    return {
+        'ERR06-J': '''Published Standards/SEI Cert Standards/Java/\
+Do not throw undeclared checked exceptions''',
+        'JAVA_ERR06': '''All Checks/Language Specific/Java/Exceptional Behavior/\
+Do not throw undeclared checked exceptions''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'ERR06-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: High',
+            'Priority: P1',
+            'Level: L3',
+        ],
+        'JAVA_ERR06': [
+            'Language: Java',
+            'Exceptional Behavior',
+        ],
+
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'ERR06-J': '''\
+<p>
+Do not throw exceptions which are not declared with <code>throws</code>
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to document undeclared checked exceptions can result in checked
+exceptions that the caller is unprepared to handle, consequently violating the
+safety property.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/ERR06-J.+Do+not+throw+undeclared+checked+exceptions
+</i>
+</p>
+
+<p><b>Noncompliant Code Example (<code>Class.newInstance()</code>)</b></p>
+<pre><code language="Java">public class NewInstance {
+  private static Throwable throwable;
+
+  private NewInstance() throws Throwable {
+    throw throwable;
+  }
+
+  public static synchronized void undeclaredThrow(Throwable throwable) {
+    // These exceptions should not be passed
+    if (throwable instanceof IllegalAccessException ||
+        throwable instanceof InstantiationException) {
+      // Unchecked, no declaration required
+      throw new IllegalArgumentException();
+    }
+
+    NewInstance.throwable = throwable;
+    try {
+      // Next line throws the Throwable argument passed in above,
+      // even though the throws clause of class.newInstance fails
+      // to declare that this may happen
+      NewInstance.class.newInstance();
+    } catch (InstantiationException e) { /* Unreachable */
+    } catch (IllegalAccessException e) { /* Unreachable */
+    } finally { // Avoid memory leak
+      NewInstance.throwable = null;
+    }
+  }
+}
+
+public class UndeclaredException {
+  public static void main(String[] args) {
+    // No declared checked exceptions
+    NewInstance.undeclaredThrow(
+        new Exception("Any checked exception"));
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>Class.newInstance()</code> Workarounds)</b></p>
+<pre><code language="Java">public static void main(String[] args) {
+  try {
+    NewInstance.undeclaredThrow(
+        new IOException("Any checked exception"));
+  } catch (Throwable e) {
+    if (e instanceof IOException) {
+      System.out.println("IOException occurred");
+    } else if (e instanceof RuntimeException) {
+      throw (RuntimeException) e;
+    } else {
+      // Forward to handler
+    }
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>sun.misc.Unsafe</code>)</b></p>
+<pre><code language="Java">import java.io.IOException;
+import java.lang.reflect.Field;
+import sun.misc.Unsafe;
+
+public class UnsafeCode {
+  public static void main(String[] args)
+      throws SecurityException, NoSuchFieldException,
+             IllegalArgumentException, IllegalAccessException {
+    Field f = Unsafe.class.getDeclaredField("theUnsafe");
+    f.setAccessible(true);
+    Unsafe u = (Unsafe) f.get(null);
+    u.throwException(new IOException("No need to declare this checked exception"));
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Generic Exception)</b></p>
+<pre><code language="Java">interface Thr&lt;EXC extends Exception&gt; {
+  void fn() throws EXC;
+}
+
+public class UndeclaredGen {
+  static void undeclaredThrow() throws RuntimeException {
+    @SuppressWarnings("unchecked")  // Suppresses warnings
+    Thr&lt;RuntimeException&gt; thr = (Thr&lt;RuntimeException&gt;)(Thr)
+      new Thr&lt;IOException&gt;() {
+        public void fn() throws IOException {
+          throw new IOException();
+    }
+      };
+    thr.fn();
+  }
+
+  public static void main(String[] args) {
+    undeclaredThrow();
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>Thread.stop(Throwable)</code>)</b></p>
+<pre><code language="Java">static void sneakyThrow(Throwable t) {
+  Thread.currentThread().stop(t);
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+The various strategies listed in the full standard under "Noncompliant Code
+Example (Bytecode Manipulation)" are not checked for. Additionally, when
+indirection is used for a class (stored as a variable, in an array, etc.), the
+class is not checked.
+</p>
+''',
+        'JAVA_ERR06': '''\
+<p>
+Do not throw exceptions which are not declared with <code>throws</code>
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Failure to document undeclared checked exceptions can result in checked
+exceptions that the caller is unprepared to handle, consequently violating the
+safety property.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/java/ERR06-J.+Do+not+throw+undeclared+checked+exceptions
+</i>
+</p>
+
+<p><b>Noncompliant Code Example (<code>Class.newInstance()</code>)</b></p>
+<pre><code language="Java">public class NewInstance {
+  private static Throwable throwable;
+
+  private NewInstance() throws Throwable {
+    throw throwable;
+  }
+
+  public static synchronized void undeclaredThrow(Throwable throwable) {
+    // These exceptions should not be passed
+    if (throwable instanceof IllegalAccessException ||
+        throwable instanceof InstantiationException) {
+      // Unchecked, no declaration required
+      throw new IllegalArgumentException();
+    }
+
+    NewInstance.throwable = throwable;
+    try {
+      // Next line throws the Throwable argument passed in above,
+      // even though the throws clause of class.newInstance fails
+      // to declare that this may happen
+      NewInstance.class.newInstance();
+    } catch (InstantiationException e) { /* Unreachable */
+    } catch (IllegalAccessException e) { /* Unreachable */
+    } finally { // Avoid memory leak
+      NewInstance.throwable = null;
+    }
+  }
+}
+
+public class UndeclaredException {
+  public static void main(String[] args) {
+    // No declared checked exceptions
+    NewInstance.undeclaredThrow(
+        new Exception("Any checked exception"));
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>Class.newInstance()</code> Workarounds)</b></p>
+<pre><code language="Java">public static void main(String[] args) {
+  try {
+    NewInstance.undeclaredThrow(
+        new IOException("Any checked exception"));
+  } catch (Throwable e) {
+    if (e instanceof IOException) {
+      System.out.println("IOException occurred");
+    } else if (e instanceof RuntimeException) {
+      throw (RuntimeException) e;
+    } else {
+      // Forward to handler
+    }
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>sun.misc.Unsafe</code>)</b></p>
+<pre><code language="Java">import java.io.IOException;
+import java.lang.reflect.Field;
+import sun.misc.Unsafe;
+
+public class UnsafeCode {
+  public static void main(String[] args)
+      throws SecurityException, NoSuchFieldException,
+             IllegalArgumentException, IllegalAccessException {
+    Field f = Unsafe.class.getDeclaredField("theUnsafe");
+    f.setAccessible(true);
+    Unsafe u = (Unsafe) f.get(null);
+    u.throwException(new IOException("No need to declare this checked exception"));
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (Generic Exception)</b></p>
+<pre><code language="Java">interface Thr&lt;EXC extends Exception&gt; {
+  void fn() throws EXC;
+}
+
+public class UndeclaredGen {
+  static void undeclaredThrow() throws RuntimeException {
+    @SuppressWarnings("unchecked")  // Suppresses warnings
+    Thr&lt;RuntimeException&gt; thr = (Thr&lt;RuntimeException&gt;)(Thr)
+      new Thr&lt;IOException&gt;() {
+        public void fn() throws IOException {
+          throw new IOException();
+    }
+      };
+    thr.fn();
+  }
+
+  public static void main(String[] args) {
+    undeclaredThrow();
+  }
+}
+</code></pre>
+
+<p><b>Noncompliant Code Example (<code>Thread.stop(Throwable)</code>)</b></p>
+<pre><code language="Java">static void sneakyThrow(Throwable t) {
+  Thread.currentThread().stop(t);
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+The various strategies listed in the full standard under "Noncompliant Code
+Example (Bytecode Manipulation)" are not checked for. Additionally, when
+indirection is used for a class (stored as a variable, in an array, etc.), the
+class is not checked.
+</p>
+''',
+    }[id]
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+
+def test_global():
+    return False
+
+
+# Match backwards in a list of strings or Nones (any)
+def getFirstLexemeAfterMatching(lex, texts):
+    lex = lex.previous(True, True)
+    for i in range(len(texts) - 1, -1, -1):
+        # None if lexeme didn't match a string
+        if not lex or (texts[i] and lex.text() != texts[i]):
+            return None
+
+        # Lexeme if all matched
+        if i == 0:
+            return lex
+
+        lex = lex.previous(True, True)
+
+
+# Match forwards in a list of strings or Nones (any)
+def getLastLexemeAfterMatching(lex, texts):
+    lex = lex.next(True, True)
+    for i in range(len(texts)):
+        # None if lexeme didn't match a string
+        if not lex or (texts[i] and lex.text() != texts[i]):
+            return None
+
+        # Lexeme if all matched
+        if i == len(texts) - 1:
+            return lex
+
+        lex = lex.next(True, True)
+
+
+def getThrownTypes(method):
+    return method.ents('Throw')
+
+
+def getCatchNodes(method, ref):
+    catchNodes = []
+
+    cfg = method.control_flow_graph()
+    if not cfg:
+        return catchNodes
+
+    # Get try & catch nodes
+    for tryNode in cfg.nodes():
+        if tryNode.kind() != 'try':
+            continue
+        for catchNode in tryNode.children():
+            if catchNode.kind() != 'try-catch':
+                continue
+
+            # See if the ref is between them
+            if refBetweenNodes(tryNode, ref, catchNode):
+                catchNodes.append(catchNode)
+
+    return catchNodes
+
+
+def getCaughtTypes(catchNodes, lexer):
+    types = []
+
+    for node in catchNodes:
+        lex = lexer.lexeme(node.line_begin(), node.column_begin())
+        lex = getLastLexemeAfterMatching(lex, ['(', None])
+        if lex and lex.ent():
+            types.append(lex.ent())
+
+    return types
+
+
+def getType(ent):
+    throwableType = ent.ents('Typed')
+    if throwableType:
+        return throwableType[0]
+
+
+def isDeclaredThrowable(throwableType, method):
+    # Each declared throwable
+    for declaredThrowableType in method.ents('Throw'):
+        # Recurcisvely see if the declared is an ancestor of this throwable
+        if isAncestorId(throwableType, declaredThrowableType.id()):
+            return True
+
+    return False
+
+
+def isCaughtThrowable(throwableType, caughtTypes):
+    # Each declared throwable
+    for caughtThrowableType in caughtTypes:
+        # Recurcisvely see if the caught is an ancestor of this throwable
+        if isAncestorId(throwableType, caughtThrowableType.id()):
+            return True
+
+    return False
+
+
+def isThrowable(typeEnt):
+    return ancestorLongname(typeEnt, r'java\.lang\.Throwable', translationUnitCache)
+
+
+def getThrowableFromTypeVariable(typeVariable):
+    for extended in typeVariable.ents('Constrains Couple'):
+        if isThrowable(extended):
+            return extended
+
+
+def check(check, file):
+    # Throw through a call
+    for call in file.filerefs('Call', 'Method'):
+        scope       = call.scope()
+        method      = call.ent()
+        catchNodes  = None
+        caughtTypes = None
+
+        # See if the method casts and throws
+        if method not in castsAndThrows:
+            castsAndThrows[method] = True if method.ref('Use Cast') and method.ref('Throw') else False
+
+        # Throw from constructor via Class.newInstance()
+        if method.longname() == 'java.lang.Class.newInstance':
+
+            # Get the class
+            lexer = file.lexer()
+            lex = lexer.lexeme(call.line(), call.column())
+            lex = getFirstLexemeAfterMatching(lex, [None, '.', 'class', '.'])
+            if not lex or not lex.ent():
+                continue
+            classType = lex.ent()
+
+            # Each constructor
+            for constructor in classType.ents('Define', 'Constructor'):
+
+                # Each thrown type of the constructor
+                for thrown in getThrownTypes(constructor):
+
+                    # Get caught types
+                    if catchNodes == None:
+                        catchNodes  = getCatchNodes(scope, call)
+                        caughtTypes = getCaughtTypes(catchNodes, lexer)
+
+                    # Skip if the call is outside of a try block
+                    if not catchNodes:
+                        continue
+
+                    # Skip if the thrown type is caught with 'catch'
+                    if isCaughtThrowable(thrown, caughtTypes):
+                        continue
+
+                    # Skip if the thrown type is declared with 'throws'
+                    if isDeclaredThrowable(thrown, scope):
+                        continue
+
+                    check.violation(method, file, call.line(), call.column(), ERR1, thrown.name(), constructor.name())
+
+        # Throw from Unsafe.throwException()
+        elif method.longname() == 'sun.misc.Unsafe.throwException':
+
+            callLex = file.lexer().lexeme(call.line(), call.column())
+            thrown = None
+
+            # Get the thrown type from a new object expression
+            lex = getLastLexemeAfterMatching(callLex, ['(', 'new', None])
+            if lex and lex.ent():
+                thrown = lex.ent()
+
+            # Get the thrown type from a variable
+            if not thrown:
+                lex = getLastLexemeAfterMatching(callLex, ['(', None])
+                if lex and lex.ent():
+                    thrown = getType(lex.ent())
+
+            if not thrown:
+                continue
+
+            check.violation(method, file, call.line(), call.column(), ERR2, thrown.name())
+
+        # Throw from method which casts throwables
+        elif castsAndThrows[method]:
+
+            castThrowable = None
+
+            # See if a type variable throwable is cast
+            for typeVariable in method.ents('Use Cast', 'TypeVariable, GenericParameter'):
+                castThrowable = getThrowableFromTypeVariable(typeVariable)
+                if castThrowable:
+                    break
+
+            # See if a generic throwable is cast
+            if not castThrowable:
+                for generic in method.ents('Use Cast', 'TypeVariable, Generic'):
+                    for typeVariable in generic.ents('Define', 'TypeVariable, GenericParameter'):
+                        castThrowable = getThrowableFromTypeVariable(typeVariable)
+                        if castThrowable:
+                            break
+                    if castThrowable:
+                        break
+
+            # Skip if a throwable is not cast
+            if not castThrowable:
+                continue
+
+            check.violation(method, file, call.line(), call.column(), ERR3, typeVariable.name(), castThrowable.name())
+
+        # Throw from Thread.stop()
+        elif method.longname() == 'java.lang.Thread.stop':
+
+            # Get the thrown type
+            lex = file.lexer().lexeme(call.line(), call.column())
+            lex = getLastLexemeAfterMatching(lex, ['(', None])
+            if not lex or not lex.ent():
+                continue
+            thrown = getType(lex.ent())
+            if not thrown:
+                continue
+
+            check.violation(method, file, call.line(), call.column(), ERR2, thrown.name())

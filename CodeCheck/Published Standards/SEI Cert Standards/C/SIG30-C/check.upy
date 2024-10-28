@@ -1,0 +1,249 @@
+import re
+
+
+ERR1 = 'Call only asynchronous-safe functions within signal handlers.'
+ASYNC_SAFE_FUNCS = {'_Exit', 'fexecve', 'posix_trace_event', 'sigprocmask', '_exit', 'fork', 'pselect', 'sigqueue', 'abort', 'fstat', 'pthread_kill', 'sigset', 'accept', 'fstatat', 'pthread_self', 'sigsuspend', 'access', 'fsync', 'pthread_sigmask', 'sleep', 'aio_error', 'ftruncate', 'raise', 'sockatmark', 'aio_return', 'futimens', 'read', 'socket', 'aio_suspend', 'getegid', 'readlink', 'socketpair', 'alarm', 'geteuid', 'readlinkat', 'stat', 'bind', 'getgid', 'recv', 'symlink', 'cfgetispeed', 'getgroups', 'recvfrom', 'symlinkat', 'cfgetospeed', 'getpeername', 'recvmsg', 'tcdrain', 'cfsetispeed', 'getpgrp', 'rename', 'tcflow', 'cfsetospeed', 'getpid', 'renameat', 'tcflush', 'chdir', 'getppid', 'rmdir', 'tcgetattr', 'chmod', 'getsockname', 'select', 'tcgetpgrp', 'chown', 'getsockopt',
+                    'sem_post', 'tcsendbreak', 'clock_gettime', 'getuid', 'send', 'tcsetattr', 'close', 'kill', 'sendmsg', 'tcsetpgrp', 'connect', 'link', 'sendto', 'time', 'creat', 'linkat', 'setgid', 'timer_getoverrun', 'dup', 'listen', 'setpgid', 'timer_gettime', 'dup2', 'lseek', 'setsid', 'timer_settime', 'execl', 'lstat', 'setsockopt', 'times', 'execle', 'mkdir', 'setuid', 'umask', 'execv', 'mkdirat', 'shutdown', 'uname', 'execve', 'mkfifo', 'sigaction', 'unlink', 'faccessat', 'mkfifoat', 'sigaddset', 'unlinkat', 'fchdir', 'mknod', 'sigdelset', 'utime', 'fchmod', 'mknodat', 'sigemptyset', 'utimensat', 'fchmodat', 'open', 'sigfillset', 'utimes', 'fchown', 'openat', 'sigismember', 'wait', 'fchownat', 'pause', 'signal', 'waitpid', 'fcntl', 'pipe', 'sigpause', 'write', 'fdatasync', 'poll', 'sigpending'}
+
+
+# The ID for the check
+def id():
+    return ('SIG30-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'SIG30-C': 'Published Standards/SEI Cert Standards/C/Call only asynchronous-safe functions within signal handlers',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'SIG30-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Call only asynchronous-safe functions within signal handlers'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Call only asynchronous-safe functions within signal handlers</p>
+<p><b>Risk Assessment</b></p>
+<p>Invoking functions that are not asynchronous-safe from within a signal handler is undefined behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/SIG30-C.+Call+only+asynchronous-safe+functions+within+signal+handlers</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;signal.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+
+enum { MAXLINE = 1024 };
+char *info = NULL;
+
+void log_message(void) {
+  fputs(info, stderr);
+}
+
+void handler(int signum) {
+  log_message();
+  free(info);
+  info = NULL;
+}
+
+int main(void) {
+  if (signal(SIGINT, handler) == SIG_ERR) {
+    /* Handle error */
+  }
+  info = (char *)malloc(MAXLINE);
+  if (info == NULL) {
+    /* Handle Error */
+  }
+
+  while (1) {
+    /* Main loop program code */
+
+    log_message();
+
+    /* More program code */
+  }
+  return 0;
+}
+
+
+
+#include &lt;setjmp.h&gt;
+#include &lt;signal.h&gt;
+#include &lt;stdlib.h&gt;
+
+enum { MAXLINE = 1024 };
+static jmp_buf env;
+
+void handler(int signum) {
+  longjmp(env, 1);
+}
+
+void log_message(char *info1, char *info2) {
+  static char *buf = NULL;
+  static size_t bufsize;
+  char buf0[MAXLINE];
+
+  if (buf == NULL) {
+    buf = buf0;
+    bufsize = sizeof(buf0);
+  }
+
+  /*
+   * Try to fit a message into buf, else reallocate
+   * it on the heap and then log the message.
+   */
+
+  /* Program is vulnerable if SIGINT is raised here */
+
+  if (buf == buf0) {
+    buf = NULL;
+  }
+}
+
+int main(void) {
+  if (signal(SIGINT, handler) == SIG_ERR) {
+    /* Handle error */
+  }
+  char *info1;
+  char *info2;
+
+  /* info1 and info2 are set by user input here */
+
+  if (setjmp(env) == 0) {
+    while (1) {
+      /* Main loop program code */
+      log_message(info1, info2);
+      /* More program code */
+    }
+  } else {
+    log_message(info1, info2);
+  }
+
+  return 0;
+}
+
+
+#include &lt;signal.h&gt;
+#include &lt;stdlib.h&gt;
+
+void term_handler(int signum) {
+  /* SIGTERM handler */
+}
+
+void int_handler(int signum) {
+  /* SIGINT handler */
+  if (raise(SIGTERM) != 0) {
+    /* Handle error */
+  }
+}
+
+int main(void) {
+  if (signal(SIGTERM, term_handler) == SIG_ERR) {
+    /* Handle error */
+  }
+  if (signal(SIGINT, int_handler) == SIG_ERR) {
+    /* Handle error */
+  }
+
+  /* Program code */
+  if (raise(SIGINT) != 0) {
+    /* Handle error */
+  }
+  /* More code */
+
+  return EXIT_SUCCESS;
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check will flag signal handlers that call functions not listed on the document and user-defined asynchronous-signal-safe functions.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        signals = []
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == "signal":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and (lex.token() == "Identifier") and re.search(r"^SIG", lex.text()):
+                        signals.append(lex.text())
+                    elif on_param and (lex.token() == "Identifier") and lex.ent() and lex.ent().kind().check("Function"):
+                        for ref in lex.ent().refs("Call", "Function"):
+                            if ref.ent().name() not in ASYNC_SAFE_FUNCS or (ref.ent().name() == "raise"):
+                                compliant = False
+
+                                ref_lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+                                ref_param = 0
+
+                                while ref_lex:
+                                    if ref_lex.text() == "(":
+                                        ref_param += 1
+                                    elif ref_lex.text() == ")":
+                                        ref_param -= 1
+
+                                        if not ref_param:
+                                            break
+                                    elif ref_param and (ref_lex.token() == "Identifier") and (ref_lex.text() in signals):
+                                        if ref.ent().name() == "raise":
+                                            break
+
+                                        compliant = True
+                                        break
+
+                                    ref_lex = ref_lex.next(
+                                        ignore_whitespace=True)
+
+                                if not compliant:
+                                    check.violation(
+                                        call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                                break
+
+                    lex = lex.next(ignore_whitespace=True)

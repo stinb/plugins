@@ -1,0 +1,146 @@
+ERR1 = 'Beware of race conditions when using fork and file descriptors.'
+
+
+# The ID for the check
+def id():
+    return ('POS38-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'POS38-C': 'Published Standards/SEI Cert Standards/C/Beware of race conditions when using fork and file descriptors',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'POS38-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Miscellaneous',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Beware of race conditions when using fork and file descriptors'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Beware of race conditions when using fork and file descriptors</p>
+<p><b>Risk Assessment</b></p>
+<p>Because race conditions in code are extremely hard to find, this problem might not appear during standard debugging stages of development. However, depending on what file is being read and how important the order of read operations is, this problem can be particular dangerous.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/POS38-C.+Beware+of+race+conditions+when+using+fork+and+file+descriptors</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">char c;
+pid_t pid;
+
+int fd = open(filename, O_RDWR);
+if (fd == -1) {
+  /* Handle error */
+}
+read(fd, &c, 1);
+printf("root process:%c\n",c);
+
+pid = fork();
+if (pid == -1) {
+  /* Handle error */
+}
+
+if (pid == 0) { /*child*/
+  read(fd, &c, 1);
+  printf("child:%c\n",c);
+}
+else { /*parent*/
+  read(fd, &c, 1);
+  printf("parent:%c\n",c);
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        fd_ent_ids = []
+        has_fork = False
+
+        call_refs = sorted(func_ref.ent().refs(
+            "Call", "Unresolved Function"), key=lambda x: x.line())
+
+        for call_ref in call_refs:
+            if call_ref.ent().name() in {"open", "creat", "fileno"}:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                get_fd = False
+
+                while lex and (lex.line_begin() == call_ref.line()):
+                    if lex.text() == "=" and lex.token() == "Operator":
+                        get_fd = True
+                    elif get_fd and (lex.token() == "Identifier") and lex.ent():
+                        fd_ent_ids.append(lex.ent().id())
+
+                    lex = lex.previous(ignore_whitespace=True)
+            elif call_ref.ent().name() == "fork":
+                has_fork = True
+            elif call_ref.ent().name() == "close":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                has_fork = False  # reset fork
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and (lex.token() == "Identifier") and lex.ent() and (lex.ent().id() in fd_ent_ids):
+                        fd_ent_ids.remove(lex.ent().id())
+
+                    lex = lex.next(ignore_whitespace=True)
+            elif call_ref.ent().name() in {"read", "write", "fcntl", "fstat", "lseek", "dup", "dup2", "pipe"}:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and (lex.token() == "Identifier") and lex.ent() and lex.ent().id() in fd_ent_ids and has_fork:
+                        check.violation(call_ref.ent(), file,
+                                        call_ref.line(), call_ref.column(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True)

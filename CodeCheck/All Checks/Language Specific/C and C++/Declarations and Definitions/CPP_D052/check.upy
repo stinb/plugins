@@ -1,0 +1,208 @@
+ERR1 = 'New parameter identifier "%1" different from original "%2"'
+
+
+# The ID for the check
+def ids():
+    return ('M8-4-2', 'MISRA08_8-4-2', 'CPP_D052', 'MISRA23_13.3.3')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M8-4-2': 'Published Standards/AUTOSAR/The identifiers used for the parameters in a re-declaration of a function shall be identical to those in the declaration.',
+        'MISRA08_8-4-2': 'Published Standards/MISRA-C++ 2008/8-4-2 Use the same identifier in definition and declaration of functions.',
+        'CPP_D052': 'All Checks/Language Specific/C and C++/Declarations and Definitions/Use the same identifier in definition and declaration of functions.',
+        'MISRA23_13.3.3': 'Published Standards/MISRA C++ 2023/13.3.3 The parameters in all declarations or overrides of a function shall either be unnamed or have identical names',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_8-4-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M8-4-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D052': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA23_13.3.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_13.3.3':
+        return '''
+<p><b>Rationale</b></p>
+
+<p>
+The name given to a parameter helps document the purpose of the parameter. If a function parameter
+is renamed in a subsequent declaration, then having different names for the same object may lead to
+developer confusion.
+</p>
+
+<p><b>Example</b></p>
+<p>The following example is compliant:</p>
+<pre><code language="C++">void fn1( int32_t a );
+void fn1( int32_t );
+</code></pre>
+
+<p>The following example is non-compliant as the parameter names have been swapped: </p>
+<pre><code language="C++">void CreateRectangle( uint32_t Height, uint32_t Width );
+void CreateRectangle( uint32_t Width, uint32_t Height );
+</code></pre>
+
+<p>The following example is non-compliant as the named parameters are different:</p>
+<pre><code language="C++">void fn2( int32_t a );
+void fn2( int32_t b ) { }
+</code></pre>
+
+<p>The following example is non-compliant as the parameter name in the override differs from the
+parameter name in the overridden function:</p>
+<pre><code language="C++">class Shape
+{
+ virtual void draw( Canvas & destination ) = 0;
+};
+class Rectangle : public Shape
+{
+ void draw( Canvas & canvas ) override;
+};
+</code></pre>
+
+<p>The rule does not apply to the following example as the specialization is a different declaration (note
+that this example is non-compliant with Rule 17.8.1):</p>
+<pre><code language="C++">template&lt; class T &gt; void f( T t );
+template&lt;&gt; void f< int32_t >( int32_t i );
+</code></pre>
+        '''
+
+    return '''
+<p>When re-declaring a function, do not change the identifiers of the parameters.</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+The name given to a parameter helps document the purpose of the parameter within the function body. If a function parameter is renamed in a subsequent re-declaration, then having different names for the same object will probably lead to developer confusion.
+</p>
+
+<p>Note that the rule also applies to any overriding set.</p>
+
+<p><b>Exception</b></p>
+
+<p>It is not a violation of this rule if the declaration or re-declaration contains an unnamed parameter.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// File1
+void CreateRectangle ( uint32_t Height, uint32_t Width );
+// File2
+// Non-compliant
+void CreateRectangle ( uint32_t Width, uint32_t Height );
+void fn1 ( int32_t a );
+void fn2 ( int32_t   );
+void fn1 ( int32_t b )   // Non-compliant
+{
+}
+void fn2 ( int32_t b )   // Compliant
+{
+}
+</code></pre>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('ignoreAdditionalForSameFunction', 'Ignore additional violations for the same function', False)
+
+
+def normal_identifier(lexeme):
+    if not lexeme or lexeme.token() != 'Identifier' or (lexeme.ent() and not lexeme.ent().kind().check('Parameter')):
+        return False
+    return True
+
+
+def check(check):
+    for func_ent in check.db().ents('Function ~Lambda'):
+        param_count = len(func_ent.refs('Declare, Define', 'Parameter', True))
+        param_refs = func_ent.refs('Declare, Define', 'Parameter', False)
+
+        # Get original parameters
+        original_params = []
+        for i in range(0, param_count):
+            param_ref = param_refs[i]
+
+            lexeme = param_ref.file().lexer().lexeme(param_ref.line(), param_ref.column())
+            if normal_identifier(lexeme):
+                original = lexeme.text()
+            else:
+                original = '[unnamed]'
+
+            original_params.append(original)
+
+        # Compare next parameters
+        for i in range(param_count, len(param_refs)):
+            param_ref = param_refs[i]
+
+            lexeme = param_ref.file().lexer().lexeme(param_ref.line(), param_ref.column())
+            if not normal_identifier(lexeme):
+                continue
+
+            original = original_params[i % param_count]
+            current = lexeme.text()
+
+            if current != original and original != '[unnamed]':
+                check.violation(func_ent, param_ref.file(), param_ref.line(), param_ref.column(), ERR1, current, original)
+                if check.options().lookup('ignoreAdditionalForSameFunction'):
+                    break
+
+        # Overrides
+        for over_ref in func_ent.refs("Overriddenby"):
+            oparam_refs = over_ref.ent().refs('Declare, Define', 'Parameter', True)
+
+            for i in range(0, param_count):
+                oparam_ref = oparam_refs[i]
+
+                lexeme = oparam_ref.file().lexer().lexeme(oparam_ref.line(), oparam_ref.column())
+                if not normal_identifier(lexeme):
+                    continue
+
+                original = original_params[i]
+                current = lexeme.text()
+
+                if current != original and original != '[unnamed]':
+                    check.violation(func_ent, oparam_ref.file(), oparam_ref.line(), oparam_ref.column(), ERR1, current, original)
+                    if check.options().lookup('ignoreAdditionalForSameFunction'):
+                        break

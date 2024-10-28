@@ -1,0 +1,146 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10/22/24
+
+import re
+import Modules
+
+ERR1 = 'Cast between pointer to object type and a pointer to a different object type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_11.4', 'MISRA23_11.4', 'CPP_E081')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_11.4': 'Published Standards/MISRA C 2012/' + """\
+11.4 A conversion should not be performed between a pointer to object and an integer type""",
+        'MISRA23_11.4': 'Published Standards/MISRA C 2023/' + """\
+11.4 A conversion should not be performed between a pointer to object and an integer type""",
+        'CPP_E081': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+ A conversion should not be performed between a pointer to object and an integer type""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_11.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_11.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E081': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>A pointer should not be converted into an integer.</p>
+<p>An integer should not be converted into a pointer.</p>
+<p><b>Rationale</b></p>
+<p>Conversion of an integer into a pointer to object may result in a pointer
+that is not correctly aligned, resulting in undefined behaviour.</p>
+<p>Conversion of a pointer to object into an integer may produce a value that
+cannot be represented in the chosen integer type resulting in undefined
+behaviour.</p>
+<p>Note: the C99 types intptr_t and uintptr_t, declared in <stdint.h>, are
+respectively signed and unsigned integer types capable of representing pointer
+values. Despite this, conversions between a pointer to object and these types is
+not permitted by this rule because their use does not avoid the undefined
+behaviour associated with misaligned pointers.</p>
+<p>Casting between a pointer and an integer type should be avoided where
+possible, but may be necessary when addressing memory mapped registers or other
+hardware specific features. If casting between integers and pointers is used,
+care should be taken to ensure that any pointers produced do not give rise to
+the undefined behaviour discussed under Rule 11.3.</p>
+<p><b>Exception</b></p>
+<p>A null pointer constant that has integer type may be converted into a pointer
+to object.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">uint8_t *PORTA = ( uint8_t * ) 0x0002; /* Non-compliant */
+uint16_t *p;
+int32_t addr = ( in t32_t ) &p; /* Non-compliant */
+uint8_t *q = ( uint8_t * ) addr; /* Non-compliant */
+bool_t b = ( bool_t ) p; /* Non-compliant */
+enum etag { A, B } e = ( enum etag ) p; /* Non-compliant */</pre></code>
+"""
+    return {
+        'MISRA12_11.4': desc,
+        'MISRA23_11.4': desc,
+        'CPP_E081': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    intTypes = r'int|bool|short|long|char'
+    refs = file.filerefs('Define', 'Object')
+    for ref in refs:
+        refType = str(ref.ent().type()).lower()
+        setRefs = ref.ent().refs('Setby ~Deref')
+
+        for setRef in setRefs:
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(setRef.line(), setRef.column())
+            # Find '='
+            while lexeme and not re.match(r'=|;|{|}', lexeme.text()):
+                lexeme = lexeme.next(True, True,)
+
+            if lexeme and lexeme.text() == '=':
+                while lexeme and not re.match(r';|{|}', lexeme.text()):
+                    if lexeme.text() == '(' or lexeme.text() == '[':
+                        lexeme = Modules.findClose(lexeme)
+                        if not lexeme:
+                            break
+                    # Look for ents
+                    elif lexeme.ent():
+                        nextLex = lexeme.next(True, True)
+                        if nextLex and nextLex.text() == '->':
+                            lexeme = nextLex
+                            continue
+                        lexType = str(lexeme.ent().type()).lower()
+                        # Skip if neither ents are a pointer or integer type
+                        if '*' not in (refType + lexType) or not re.search(intTypes, refType + lexType):
+                            lexeme = lexeme.next(True, True)
+                            continue
+                        # Throw violation if one is pointer and the other is integer type
+                        if '*' not in refType:
+                            if re.search(intTypes, refType):
+                                check.violation(ref.ent(), file, setRef.line(), setRef.column(), ERR1)
+                        elif '*' not in lexType:
+                            if re.search(intTypes, lexType) and not lexeme.text().lower() in lexType:
+                                check.violation(ref.ent(), file, setRef.line(), setRef.column(), ERR1)
+                    lexeme = lexeme.next(True, True)
+

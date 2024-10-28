@@ -1,0 +1,135 @@
+import re
+
+ERR1 = 'NULL is thrown explicitly'
+
+# The ID for the check
+
+
+def ids():
+    return ('M15-1-2', 'CPP_E054')
+
+def name(id):
+    return {
+        'M15-1-2': """\
+Published Standards/AUTOSAR/NULL Throw""",
+        'CPP_E054': """\
+All Checks/Language Specific/C and C++/Exception Handling/NULL Throw"""
+
+    }[id]
+
+
+
+
+
+
+# The long description of the check
+
+
+
+def tags(id):
+    return {
+        'M15-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Exception Handling',
+        ],
+        'CPP_E054': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p>throw(NULL) (equivalent to throw(0)) is never a throw of the <i>null-pointer-constant</i> and so is
+only ever caught by an integer handler. This may be inconsistent with developer expectations,
+particularly if the program only has handlers for pointer-to-type exceptions.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">try
+{
+ throw ( NULL ); // Non-compliant
+}
+catch ( int32_t i ) // NULL exception handled here
+{
+ // ...
+}
+catch ( const char_t * ) // Developer may expect it to be caught here
+{
+ // ...
+}
+char_t * p = NULL;
+try
+{
+ throw ( static_cast &lt; const char_t * &gt; ( NULL ) ); // Compliant,
+ // but breaks
+ // Rule 15-0-2
+ throw ( p ); // Compliant
+}
+catch ( int32_t i )
+{
+ // ...
+}
+catch ( const char_t * ) // Both exceptions handled here
+{
+ // ...
+}
+</code></pre>
+<p>See MISRA C++ 2008 [7]</p>
+"""
+
+# Tests the type of file
+
+
+def test_entity(file):
+    return file.kind().check('file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"throw", file.contents()):
+        return
+
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for lex in lexer.lexemes():
+        if lex.text() == "throw" and lex.token() == "Keyword" and lex.next().text() != ";":
+            next_lex = lex.next(ignore_whitespace=True)
+
+            while next_lex and next_lex.text() != ")":
+
+                if next_lex.token() == "Keyword":
+                    break
+                elif next_lex.ent() and next_lex.token() == "Identifier":
+                    macro_ref = next_lex.ent().ref("Use Macrodefine")
+
+                    while macro_ref:
+                        _ref = macro_ref
+
+                        macro_ref = macro_ref.ent().ref("Use Macrodefine")
+                        if not macro_ref:
+                            macro_ref = _ref
+                            break
+
+                    if ((not macro_ref and next_lex.ent().type() == "__null")
+                            or (not macro_ref and next_lex.ent().type() == "0")
+                            or (macro_ref and macro_ref.ent().type() == "__null")
+                            or (macro_ref and macro_ref.ent().type() == "0")):
+                        check.violation(
+                            lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                next_lex = next_lex.next(ignore_whitespace=True)

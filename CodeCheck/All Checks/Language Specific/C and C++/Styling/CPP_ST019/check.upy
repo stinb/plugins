@@ -1,0 +1,104 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-6-2020
+
+import re
+
+# The ID for the check
+def id():
+    return 'CPP_ST019'
+
+# The short name of the check
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/Statements under case labels shall be indented one level"""
+
+
+def tags(id):
+    return {
+        'CPP_ST019': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Statements under case labels shall be indented one level'
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Developer's Note:</b></p> 
+<p>Tab indentations should not be mixed with space indentations 
+when running this check. Doing so may lead to false positives, as
+the length of the whitespace could be calculated incorrectly.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+def test_global():
+    return False
+
+# Options for the check
+def define_options(check):
+   return
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file): 
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    lexeme = lexer.first()
+
+    first = True
+    indent = 0
+    caseIndent = 0
+
+    while lexeme:
+        if first and lexeme and lexeme.next() and lexeme.next().token() != 'Comment' and lexeme.column_begin() == 0 and lexeme.token() == 'Whitespace':
+            indent = len(lexeme.text())
+            first = False
+
+        # Find case label
+        if lexeme and lexeme.text() == 'case':
+            line = lexeme.line_begin()
+            prevLex = lexeme
+            while line == prevLex.line_begin():
+                prevLex = prevLex.previous()
+
+            prevLex = prevLex.next()
+            # Get indent before the case label
+            if prevLex and prevLex.token() == 'Whitespace':
+                caseIndent = len(prevLex.text())
+
+                if first:
+                    indent = len(prevLex.text())
+
+                line = lexeme.line_begin()
+                while line == lexeme.line_begin():
+                    lexeme = lexeme.next()
+
+                # Get indent before the statement under the case label
+                if lexeme and lexeme.next() and lexeme.token() == 'Whitespace' and lexeme.next(ignore_whitespace=True).text() != "case" and \
+                    lexeme.next(ignore_whitespace=True).text() != "}" and \
+                    lexeme.next(ignore_whitespace=True).text() != "{" and \
+                    lexeme.next(ignore_whitespace=True).text() != "default":
+                    if first:
+                        indent = len(lexeme.text())
+
+                    if len(lexeme.text()) > (indent + caseIndent):
+                        violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Statements under case label were indented more one level.')
+                        violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_begin(), lexeme.column_begin() + len(lexeme.text()), (indent + caseIndent) * ' ')
+
+                    elif len(lexeme.text()) < (indent + caseIndent):
+                        violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), 'Statements under case label were indented less than one level.')
+                        violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_begin(), lexeme.column_begin() + len(lexeme.text()), (indent + caseIndent) * ' ')
+        lexeme = lexeme.next(ignore_comments=True)

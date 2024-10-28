@@ -1,0 +1,2 @@
+-- This test file is empty
+-- Please test this check against AdaCore VSS Sample Project, where package coupling can be demonstrated on a real scale

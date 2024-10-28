@@ -1,0 +1,165 @@
+ERR1 = 'Detect and handle POSIX library errors.'
+
+
+# The ID for the check
+def id():
+    return ('POS54-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'POS54-C': 'Published Standards/SEI Cert Standards/C/Detect and handle POSIX library errors',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'POS54-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Detect and handle POSIX library errors'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Detect and handle POSIX library errors</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to detect error conditions can lead to unpredictable results, including abnormal program termination and denial-of-service attacks or, in some situations, could even allow an attacker to run arbitrary code.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/POS54-C.+Detect+and+handle+POSIX+library+errors</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+
+int main(int argc, char *argv[]) {
+  FILE *out;
+  FILE *in;
+  size_t size;
+  char *ptr;
+
+  if (argc != 2) {
+    /* Handle error */
+  }
+
+  in = fmemopen(argv[1], strlen(argv[1]), "r");
+  /* Use in */
+
+  out = open_memstream(&ptr, &size);
+  /* Use out */
+
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in ["fmemopen", "open_memstream", "posix_memalign"]:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_set = False
+                error_handle = False
+
+                if lex.previous(ignore_whitespace=True).text() != "=":
+                    continue
+
+                while lex:
+                    if lex.text() == "=":
+                        on_set = True
+                    elif on_set:
+                        for use_ref in sorted(lex.ent().refs("Useby, Setby"), key=lambda x: x.line()):
+                            if use_ref.line() > call_ref.line():
+                                use_lexes = lexer.lexemes(
+                                    use_ref.line(), use_ref.line())
+                                on_cond = 0
+                                on_if = False
+                                comparison = False
+                                null_check = False
+
+                                for use_lex in use_lexes:
+                                    if (use_lex.text() == "if") and (use_lex.token() == "Keyword"):
+                                        on_if = True
+                                    elif on_if and (use_lex.text() == "("):
+                                        on_cond += 1
+                                    elif on_if and (use_lex.text() == ")"):
+                                        on_cond -= 1
+
+                                        if not on_cond:
+                                            break
+                                    elif on_if and (use_lex.text() in ["==", "!="]):
+                                        comparison = True
+                                    elif on_if and (use_lex.text() in ["NULL", "0"]):
+                                        null_check = True
+
+                                if not (comparison and null_check):
+                                    check.violation(lex.ent(), use_ref.file(
+                                    ), use_ref.line(), use_ref.column(), ERR1)
+                                else:
+                                    error_handle = True
+
+                                break
+                        break
+
+                    lex = lex.previous(ignore_whitespace=True)
+
+                if not error_handle and call_ref.ent().name() == "posix_memalign":
+                    lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                    memptr = None
+                    on_param = 0
+
+                    while lex:
+                        if lex.text() == "(":
+                            on_param += 1
+                        elif lex.text() == ")":
+                            on_param -= 1
+
+                            if not on_param:
+                                break
+                        elif on_param and lex.ent() and "**" in lex.ent().type():
+                            memptr = lex.ent()
+                            break
+
+                        lex = lex.next(ignore_whitespace=True)
+
+                    if not memptr:
+                        continue
+
+                    for use_ref in sorted(memptr.refs("Useby, Setby"), key=lambda x: x.line()):
+                        if use_ref.line() > call_ref.line():
+                            check.violation(memptr, use_ref.file(
+                            ), use_ref.line(), use_ref.column(), ERR1)
+                            break

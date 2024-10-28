@@ -1,0 +1,86 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 11-16-2020
+
+import re
+
+def ids():
+    return ('CPP_M012')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_M012':  "All Checks/Language Specific/C and C++/Memory Allocation/The delete[] operator shall be called in the destructor for all member pointers in an object that are pointing to memory that was dynamically allocated by that object"
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'CPP_M012': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+
+    }.get(id)
+
+def description():
+    return 'The delete[] operator shall be called in the destructor for all member pointers in an object that are pointing to memory that was \
+dynamically allocated by that object.'
+
+def detailed_description():
+    return """\
+<p>An object's destructor always invokes the destructors of its member objects,
+except for member variables that are pointers to objects. To delete member 
+pointers, an explicit destructor deleting this pointer must be invoked.
+</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+	# find all class definitions in the file
+	for class_ref in file.filerefs('define', 'class', True):
+
+		# find all member objects defined in this class, filter out non-pointers
+		members_defined = class_ref.ent().refs('define', 'member object', True)
+		mem_pointers = []
+		use_list = []
+
+		for mem in members_defined:
+			if is_ptr(mem):
+				mem_pointers.append(mem.ent().name())
+		
+		# if we have member pointers, look for presence of an explicit destructor
+		if mem_pointers:
+			explicit_destruct = False
+			destruct_name = "~" + class_ref.ent().simplename()
+
+			mem_functions = class_ref.ent().refs('define', 'member function', True)
+
+			for mem_func in mem_functions:
+				if mem_func.ent().name() == destruct_name:
+					explicit_destruct = True
+
+					# check the destructor for use of the pointers
+					use_refs = mem_func.ent().refs('use', 'member object')
+
+					for use in use_refs:
+						use_list.append(use.ent().name())
+					for ptr in mem_pointers:
+						if ptr not in use_list:
+							check.violation(mem_func.ent(), file, mem_func.line(), mem_func.column(), "Explicit destructor '%1' does not delete pointer '%2'", mem_func.ent(), ptr)
+
+			# if no explicit destructor, flag violation
+			if not explicit_destruct:
+				check.violation(class_ref.ent(), file, class_ref.line(), class_ref.column(), "Class '%1' contains member pointer(s) but no explicit destructor to delete them", class_ref.ent())
+
+
+
+
+def is_ptr(ref):
+	return re.search(r"\*", ref.ent().type())

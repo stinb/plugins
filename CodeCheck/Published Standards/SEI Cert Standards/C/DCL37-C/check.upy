@@ -1,0 +1,748 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-05-03
+
+
+import re
+
+
+ERR  = 'Reserved identifier declared/defined'
+ERR1 = f'{ERR} (keyword)'
+ERR2 = f'{ERR} (starting with two underscores)'
+ERR3 = f'{ERR} (starting with an underscore and a capital letter)'
+ERR4 = f'{ERR} (starting with INT ending in _MAX or _MIN)'
+ERR5 = f'{ERR} (file scope, ordinary/tag name space)'
+ERR6 = f'{ERR} (externally linked, defined by standard library)'
+ERR7 = f'{ERR} (externally linked, starting with an underscore)'
+ERR8 = f'{ERR} (externally linked, pattern reserved by standard library)'
+
+RESERVED_UND     = r'^_'
+RESERVED_UND_UND = r'^__'
+RESERVED_UND_CAP = r'^_[A-Z]'
+RESERVED_INT     = r'^INT[a-z,A-Z,\d,_]*_M(AX|IN)'
+
+RESERVED_KEY = { 'alignas', 'alignof', 'auto', 'bool', 'break', 'case',
+'char', 'const', 'constexpr', 'continue', 'default', 'do', 'double', 'else',
+'enum', 'extern', 'false', 'float', 'for', 'goto', 'if', 'inline', 'int',
+'long', 'nullptr', 'register', 'restrict', 'return', 'short', 'signed',
+'sizeof', 'static', 'static_assert', 'struct', 'switch', 'thread_local', 'true',
+'typedef', 'typeof', 'typeof_unqual', 'union', 'unsigned', 'void', 'volatile',
+'while', '_Alignas', '_Alignof', '_Atomic', '_BitInt', '_Bool', '_Complex',
+'_Decimal128', '_Decimal32', '_Decimal64', '_Generic', '_Imaginary',
+'_Noreturn', '_Static_assert', '_Thread_local' }
+
+RESERVED_STD_ALL = {'ATOMIC_BOOL_LOCK_FREE', 'ATOMIC_CHAR16_T_LOCK_FREE',
+'ATOMIC_CHAR32_T_LOCK_FREE', 'ATOMIC_CHAR_LOCK_FREE', 'ATOMIC_FLAG_INIT',
+'ATOMIC_INT_LOCK_FREE', 'ATOMIC_LLONG_LOCK_FREE', 'ATOMIC_LONG_LOCK_FREE',
+'ATOMIC_POINTER_LOCK_FREE', 'ATOMIC_SHORT_LOCK_FREE', 'ATOMIC_VAR_INIT',
+'ATOMIC_WCHAR_T_LOCK_FREE', 'BUFSIZ', 'CHAR_BIT', 'CHAR_MAX', 'CHAR_MIN',
+'CLOCKS_PER_SEC', 'DBL_DECIMAL_DIG', 'DBL_DIG', 'DBL_EPSILON',
+'DBL_HAS_SUBNORM', 'DBL_MANT_DIG', 'DBL_MAX', 'DBL_MAX_10_EXP', 'DBL_MAX_EXP',
+'DBL_MIN', 'DBL_MIN_10_EXP', 'DBL_MIN_EXP', 'DBL_TRUE_MIN', 'DECIMAL_DIG',
+'E2BIG', 'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAFNOSUPPORT', 'EAGAIN',
+'EALREADY', 'EBADF', 'EBADMSG', 'EBUSY', 'ECANCELED', 'ECHILD', 'ECONNABORTED',
+'ECONNREFUSED', 'ECONNRESET', 'EDEADLK', 'EDESTADDRREQ', 'EDOM', 'EEXIST',
+'EFAULT', 'EFBIG', 'EHOSTUNREACH', 'EIDRM', 'EILSEQ', 'EINPROGRESS', 'EINTR',
+'EINVAL', 'EIO', 'EISCONN', 'EISDIR', 'ELOOP', 'EMFILE', 'EMLINK', 'EMSGSIZE',
+'ENAMETOOLONG', 'ENETDOWN', 'ENETRESET', 'ENETUNREACH', 'ENFILE', 'ENOBUFS',
+'ENODATA', 'ENODEV', 'ENOENT', 'ENOEXEC', 'ENOLCK', 'ENOLINK', 'ENOMEM',
+'ENOMSG', 'ENOPROTOOPT', 'ENOSPC', 'ENOSR', 'ENOSTR', 'ENOSYS', 'ENOTCONN',
+'ENOTDIR', 'ENOTEMPTY', 'ENOTRECOVERABLE', 'ENOTSOCK', 'ENOTSUP', 'ENOTTY',
+'ENXIO', 'EOF', 'EOPNOTSUPP', 'EOVERFLOW', 'EOWNERDEAD', 'EPERM', 'EPIPE',
+'EPROTO', 'EPROTONOSUPPORT', 'EPROTOTYPE', 'ERANGE', 'EROFS', 'ESPIPE', 'ESRCH',
+'ETIME', 'ETIMEDOUT', 'ETXTBSY', 'EWOULDBLOCK', 'EXDEV', 'EXIT_FAILURE',
+'EXIT_SUCCESS', 'FE_ALL_EXCEPT', 'FE_DFL_ENV', 'FE_DIVBYZERO', 'FE_DOWNWARD',
+'FE_INEXACT', 'FE_INVALID', 'FE_OVERFLOW', 'FE_TONEAREST', 'FE_TOWARDZERO',
+'FE_UNDERFLOW', 'FE_UPWARD', 'FILE', 'FILENAME_MAX', 'FLT_DECIMAL_DIG',
+'FLT_DIG', 'FLT_EPSILON', 'FLT_EVAL_METHOD', 'FLT_HAS_SUBNORM', 'FLT_MANT_DIG',
+'FLT_MAX', 'FLT_MAX_10_EXP', 'FLT_MAX_EXP', 'FLT_MIN', 'FLT_MIN_10_EXP',
+'FLT_MIN_EXP', 'FLT_RADIX', 'FLT_ROUNDS', 'FLT_TRUE_MIN', 'FOPEN_MAX',
+'FP_ILOGB0', 'FP_ILOGBNAN', 'FP_INFINITE', 'FP_NAN', 'FP_NORMAL',
+'FP_SUBNORMAL', 'FP_ZERO', 'HUGE_VAL', 'HUGE_VALF', 'HUGE_VALL', 'I',
+'INFINITY', 'INT16_C', 'INT16_MAX', 'INT16_MIN', 'INT32_C', 'INT32_MAX',
+'INT32_MIN', 'INT64_C', 'INT64_MAX', 'INT64_MIN', 'INT8_C', 'INT8_MAX',
+'INT8_MIN', 'INTMAX_C', 'INTMAX_MAX', 'INTMAX_MIN', 'INTPTR_MAX', 'INTPTR_MIN',
+'INT_FAST16_MAX', 'INT_FAST16_MIN', 'INT_FAST32_MAX', 'INT_FAST32_MIN',
+'INT_FAST64_MAX', 'INT_FAST64_MIN', 'INT_FAST8_MAX', 'INT_FAST8_MIN',
+'INT_LEAST16_MAX', 'INT_LEAST16_MIN', 'INT_LEAST32_MAX', 'INT_LEAST32_MIN',
+'INT_LEAST64_MAX', 'INT_LEAST64_MIN', 'INT_LEAST8_MAX', 'INT_LEAST8_MIN',
+'INT_MAX', 'INT_MIN', 'LC_ALL', 'LC_COLLATE', 'LC_CTYPE', 'LC_MONETARY',
+'LC_NUMERIC', 'LC_TIME', 'LDBL_DECIMAL_DIG', 'LDBL_DIG', 'LDBL_EPSILON',
+'LDBL_HAS_SUBNORM', 'LDBL_MANT_DIG', 'LDBL_MAX', 'LDBL_MAX_10_EXP',
+'LDBL_MAX_EXP', 'LDBL_MIN', 'LDBL_MIN_10_EXP', 'LDBL_MIN_EXP', 'LDBL_TRUE_MIN',
+'LLONG_MAX', 'LLONG_MIN', 'LONG_MAX', 'LONG_MIN', 'L_tmpnam', 'MATH_ERREXCEPT',
+'MATH_ERRNO', 'MB_CUR_MAX', 'MB_LEN_MAX', 'NAN', 'NDEBUG', 'NSIG', 'NULL',
+'PRIX16', 'PRIX32', 'PRIX64', 'PRIX8', 'PRIXFAST16', 'PRIXFAST32', 'PRIXFAST64',
+'PRIXFAST8', 'PRIXLEAST16', 'PRIXLEAST32', 'PRIXLEAST64', 'PRIXLEAST8',
+'PRIXMAX', 'PRIXPTR', 'PRId16', 'PRId32', 'PRId64', 'PRId8', 'PRIdFAST16',
+'PRIdFAST32', 'PRIdFAST64', 'PRIdFAST8', 'PRIdLEAST16', 'PRIdLEAST32',
+'PRIdLEAST64', 'PRIdLEAST8', 'PRIdMAX', 'PRIdPTR', 'PRIi16', 'PRIi32', 'PRIi64',
+'PRIi8', 'PRIiFAST16', 'PRIiFAST32', 'PRIiFAST64', 'PRIiFAST8', 'PRIiLEAST16',
+'PRIiLEAST32', 'PRIiLEAST64', 'PRIiLEAST8', 'PRIiMAX', 'PRIiPTR', 'PRIo16',
+'PRIo32', 'PRIo64', 'PRIo8', 'PRIoFAST16', 'PRIoFAST32', 'PRIoFAST64',
+'PRIoFAST8', 'PRIoLEAST16', 'PRIoLEAST32', 'PRIoLEAST64', 'PRIoLEAST8',
+'PRIoMAX', 'PRIoPTR', 'PRIu16', 'PRIu32', 'PRIu64', 'PRIu8', 'PRIuFAST16',
+'PRIuFAST32', 'PRIuFAST64', 'PRIuFAST8', 'PRIuLEAST16', 'PRIuLEAST32',
+'PRIuLEAST64', 'PRIuLEAST8', 'PRIuMAX', 'PRIuPTR', 'PRIx16', 'PRIx32', 'PRIx64',
+'PRIx8', 'PRIxFAST16', 'PRIxFAST32', 'PRIxFAST64', 'PRIxFAST8', 'PRIxLEAST16',
+'PRIxLEAST32', 'PRIxLEAST64', 'PRIxLEAST8', 'PRIxMAX', 'PRIxPTR', 'PTRDIFF_MAX',
+'PTRDIFF_MIN', 'RAND_MAX', 'SCHAR_MAX', 'SCHAR_MIN', 'SCNd16', 'SCNd32',
+'SCNd64', 'SCNd8', 'SCNdFAST16', 'SCNdFAST32', 'SCNdFAST64', 'SCNdFAST8',
+'SCNdLEAST16', 'SCNdLEAST32', 'SCNdLEAST64', 'SCNdLEAST8', 'SCNdMAX', 'SCNdPTR',
+'SCNi16', 'SCNi32', 'SCNi64', 'SCNi8', 'SCNiFAST16', 'SCNiFAST32', 'SCNiFAST64',
+'SCNiFAST8', 'SCNiLEAST16', 'SCNiLEAST32', 'SCNiLEAST64', 'SCNiLEAST8',
+'SCNiMAX', 'SCNiPTR', 'SCNo16', 'SCNo32', 'SCNo64', 'SCNo8', 'SCNoFAST16',
+'SCNoFAST32', 'SCNoFAST64', 'SCNoFAST8', 'SCNoLEAST16', 'SCNoLEAST32',
+'SCNoLEAST64', 'SCNoLEAST8', 'SCNoMAX', 'SCNoPTR', 'SCNu16', 'SCNu32', 'SCNu64',
+'SCNu8', 'SCNuFAST16', 'SCNuFAST32', 'SCNuFAST64', 'SCNuFAST8', 'SCNuLEAST16',
+'SCNuLEAST32', 'SCNuLEAST64', 'SCNuLEAST8', 'SCNuMAX', 'SCNuPTR', 'SCNx16',
+'SCNx32', 'SCNx64', 'SCNx8', 'SCNxFAST16', 'SCNxFAST32', 'SCNxFAST64',
+'SCNxFAST8', 'SCNxLEAST16', 'SCNxLEAST32', 'SCNxLEAST64', 'SCNxLEAST8',
+'SCNxMAX', 'SCNxPTR', 'SEEK_CUR', 'SEEK_END', 'SEEK_SET', 'SHRT_MAX',
+'SHRT_MIN', 'SIGABRT', 'SIGFPE', 'SIGILL', 'SIGINT', 'SIGSEGV', 'SIGTERM',
+'SIG_ATOMIC_MAX', 'SIG_ATOMIC_MIN', 'SIG_DFL', 'SIG_ERR', 'SIG_IGN', 'SIZE_MAX',
+'TIME_UTC', 'TMP_MAX', 'UCHAR_MAX', 'UINT16_C', 'UINT16_MAX', 'UINT32_C',
+'UINT32_MAX', 'UINT64_C', 'UINT64_MAX', 'UINT8_C', 'UINT8_MAX', 'UINTMAX_C',
+'UINTMAX_MAX', 'UINTPTR_MAX', 'UINT_FAST16_MAX', 'UINT_FAST32_MAX',
+'UINT_FAST64_MAX', 'UINT_FAST8_MAX', 'UINT_LEAST16_MAX', 'UINT_LEAST32_MAX',
+'UINT_LEAST64_MAX', 'UINT_LEAST8_MAX', 'UINT_MAX', 'ULLONG_MAX', 'ULONG_MAX',
+'USHRT_MAX', 'WCHAR_MAX', 'WCHAR_MIN', 'WEOF', 'WINT_MAX', 'WINT_MIN', 'abort',
+'abs', 'acos', 'acosf', 'acosh', 'acoshf', 'acoshl', 'acosl', 'alignas',
+'alignof', 'and', 'and_eq', 'asctime', 'asin', 'asinf', 'asinh', 'asinhf',
+'asinhl', 'asinl', 'assert', 'atan', 'atan2', 'atan2f', 'atan2l', 'atanf',
+'atanh', 'atanhf', 'atanhl', 'atanl', 'atexit', 'atof', 'atoi', 'atol', 'atoll',
+'atomic_bool', 'atomic_char', 'atomic_char16_t', 'atomic_char32_t',
+'atomic_compare_exchange_strong', 'atomic_compare_exchange_strong_explicit',
+'atomic_compare_exchange_weak', 'atomic_compare_exchange_weak_explicit',
+'atomic_exchange', 'atomic_exchange_explicit', 'atomic_fetch_add',
+'atomic_fetch_add_explicit', 'atomic_fetch_and', 'atomic_fetch_and_explicit',
+'atomic_fetch_or', 'atomic_fetch_or_explicit', 'atomic_fetch_sub',
+'atomic_fetch_sub_explicit', 'atomic_fetch_xor', 'atomic_fetch_xor_explicit',
+'atomic_flag', 'atomic_flag_clear', 'atomic_flag_clear_explicit',
+'atomic_flag_test_and_set', 'atomic_flag_test_and_set_explicit', 'atomic_init',
+'atomic_int', 'atomic_int_fast16_t', 'atomic_int_fast32_t',
+'atomic_int_fast64_t', 'atomic_int_fast8_t', 'atomic_int_least16_t',
+'atomic_int_least32_t', 'atomic_int_least64_t', 'atomic_int_least8_t',
+'atomic_intmax_t', 'atomic_intptr_t', 'atomic_is_lock_free', 'atomic_llong',
+'atomic_load', 'atomic_load_explicit', 'atomic_long', 'atomic_ptrdiff_t',
+'atomic_schar', 'atomic_short', 'atomic_signal_fence', 'atomic_size_t',
+'atomic_store', 'atomic_store_explicit', 'atomic_thread_fence', 'atomic_uchar',
+'atomic_uint', 'atomic_uint_fast16_t', 'atomic_uint_fast32_t',
+'atomic_uint_fast64_t', 'atomic_uint_fast8_t', 'atomic_uint_least16_t',
+'atomic_uint_least32_t', 'atomic_uint_least64_t', 'atomic_uint_least8_t',
+'atomic_uintmax_t', 'atomic_uintptr_t', 'atomic_ullong', 'atomic_ulong',
+'atomic_ushort', 'atomic_wchar_t', 'bitand', 'bitor', 'bool', 'bsearch',
+'btowc', 'cabs', 'cabsf', 'cabsl', 'cacos', 'cacosf', 'cacosh', 'cacoshf',
+'cacoshl', 'cacosl', 'calloc', 'carg', 'cargf', 'cargl', 'casin', 'casinf',
+'casinh', 'casinhf', 'casinhl', 'casinl', 'catan', 'catanf', 'catanh',
+'catanhf', 'catanhl', 'catanl', 'cbrt', 'cbrtf', 'cbrtl', 'ccos', 'ccosf',
+'ccosh', 'ccoshf', 'ccoshl', 'ccosl', 'ceil', 'ceilf', 'ceill', 'cexp', 'cexpf',
+'cexpl', 'cimag', 'cimagf', 'cimagl', 'clearerr', 'clock', 'clock_t', 'clog',
+'clogf', 'clogl', 'compl', 'complex', 'conj', 'conjf', 'conjl', 'copysign',
+'copysignf', 'copysignl', 'cos', 'cosf', 'cosh', 'coshf', 'coshl', 'cosl',
+'cpow', 'cpowf', 'cpowl', 'cproj', 'cprojf', 'cprojl', 'creal', 'crealf',
+'creall', 'csin', 'csinf', 'csinh', 'csinhf', 'csinhl', 'csinl', 'csqrt',
+'csqrtf', 'csqrtl', 'ctan', 'ctanf', 'ctanh', 'ctanhf', 'ctanhl', 'ctanl',
+'ctime', 'dev_t', 'difftime', 'div', 'div_t', 'double_t', 'ecvt', 'erf', 'erfc',
+'erfcf', 'erfcl', 'erff', 'erfl', 'errno', 'exit', 'exp', 'exp2', 'exp2f',
+'exp2l', 'expf', 'expl', 'expm1', 'expm1f', 'expm1l', 'fabs', 'fabsf', 'fabsl',
+'false', 'fclose', 'fcvt', 'fdim', 'fdimf', 'fdiml', 'fdopen', 'feclearexcept',
+'fegetenv', 'fegetexceptflag', 'fegetround', 'feholdexcept', 'fenv_t', 'feof',
+'feraiseexcept', 'ferror', 'fesetenv', 'fesetexceptflag', 'fesetround',
+'fetestexcept', 'feupdateenv', 'fexcept_t', 'fflush', 'fgetc', 'fgetpos',
+'fgets', 'fgetwc', 'fgetws', 'fileno', 'float_t', 'floor', 'floorf', 'floorl',
+'fma', 'fmaf', 'fmal', 'fmax', 'fmaxf', 'fmaxl', 'fmin', 'fminf', 'fminl',
+'fmod', 'fmodf', 'fmodl', 'fopen', 'fpclassify', 'fpos_t', 'fprintf', 'fputc',
+'fputs', 'fputwc', 'fputws', 'fread', 'free', 'freopen', 'frexp', 'frexpf',
+'frexpl', 'fscanf', 'fseek', 'fsetpos', 'ftell', 'fwide', 'fwprintf', 'fwrite',
+'fwscanf', 'gcvt', 'getc', 'getchar', 'getenv', 'getw', 'getwc', 'getwchar',
+'gmtime', 'hypot', 'hypotf', 'hypotl', 'ilogb', 'ilogbf', 'ilogbl', 'imaxabs',
+'imaxdiv', 'imaxdiv_t', 'int16_t', 'int32_t', 'int64_t', 'int8_t',
+'int_fast16_t', 'int_fast32_t', 'int_fast64_t', 'int_fast8_t', 'int_least16_t',
+'int_least32_t', 'int_least64_t', 'int_least8_t', 'intmax_t', 'intptr_t',
+'isalnum', 'isalpha', 'isascii', 'isblank', 'iscntrl', 'isdigit', 'isfinite',
+'isgraph', 'isgreater', 'isgreaterequal', 'isinf', 'isless', 'islessequal',
+'islessgreater', 'islower', 'isnan', 'isnormal', 'isprint', 'ispunct',
+'isspace', 'isunordered', 'isupper', 'iswalnum', 'iswalpha', 'iswblank',
+'iswcntrl', 'iswctype', 'iswdigit', 'iswgraph', 'iswlower', 'iswprint',
+'iswpunct', 'iswspace', 'iswupper', 'iswxdigit', 'isxdigit', 'j0', 'j1',
+'jmp_buf', 'jn', 'kill_dependency', 'labs', 'lconv', 'ldexp', 'ldexpf',
+'ldexpl', 'ldiv', 'ldiv_t', 'lgamma', 'lgammaf', 'lgammal', 'llabs', 'lldiv',
+'lldiv_t', 'llrint', 'llrintf', 'llrintl', 'llround', 'llroundf', 'llroundl',
+'localeconv', 'localtime', 'log', 'log10', 'log10f', 'log10l', 'log1p',
+'log1pf', 'log1pl', 'log2', 'log2f', 'log2l', 'logb', 'logbf', 'logbl', 'logf',
+'logl', 'longjmp', 'lrint', 'lrintf', 'lrintl', 'lround', 'lroundf', 'lroundl',
+'malloc', 'math_errhandling', 'max_align_t', 'mblen', 'mbrlen', 'mbrtowc',
+'mbsinit', 'mbsrtowcs', 'mbstate_t', 'mbstowcs', 'mbtowc', 'memccpy', 'memchr',
+'memcmp', 'memcpy', 'memmove', 'memory_order', 'memory_order_acq_rel',
+'memory_order_acquire', 'memory_order_consume', 'memory_order_relaxed',
+'memory_order_release', 'memory_order_seq_cst', 'memset', 'mktime', 'modf',
+'nan', 'nearbyint', 'nearbyintf', 'nearbyintl', 'nextafter', 'nextafterf',
+'nextafterl', 'nexttoward', 'nexttowardf', 'nexttowardl', 'noreturn', 'not',
+'not_eq', 'off_t', 'or', 'or_eq', 'perror', 'pow', 'powf', 'powl', 'printf',
+'putc', 'putchar', 'putenv', 'puts', 'putw', 'putwc', 'putwchar', 'qsort',
+'raise', 'rand', 'realloc', 'remainder', 'remainderf', 'remainderl', 'remove',
+'remquo', 'remquof', 'remquol', 'rename', 'rewind', 'rint', 'rintf', 'rintl',
+'round', 'roundf', 'roundl', 'scalbln', 'scalblnf', 'scalblnl', 'scalbn',
+'scalbnf', 'scalbnl', 'scanf', 'setbuf', 'setjmp', 'setlocale', 'setvbuf',
+'sig_atomic_t', 'signal', 'signbit', 'sin', 'sinf', 'sinh', 'sinhf', 'sinhl',
+'sinl', 'size_t', 'snprintf', 'sprintf', 'sqrt', 'sqrtf', 'sqrtl', 'srand',
+'sscanf', 'stderr', 'stdin', 'stdout', 'strcat', 'strchr', 'strcmp', 'strcoll',
+'strcpy', 'strcspn', 'strdup', 'strerror', 'strftime', 'strlen', 'strncat',
+'strncmp', 'strncpy', 'strnlen', 'strpbrk', 'strrchr', 'strspn', 'strstr',
+'strtod', 'strtof', 'strtoimax', 'strtok', 'strtol', 'strtold', 'strtoll',
+'strtoul', 'strtoull', 'strtoumax', 'strxfrm', 'swprintf', 'swscanf',
+'sys_errlist', 'sys_nerr', 'system', 'tan', 'tanf', 'tanh', 'tanhf', 'tanhl',
+'tanl', 'tempnam', 'tgamma', 'tgammaf', 'tgammal', 'time', 'time_t', 'timespec',
+'timespec_get', 'tm', 'tmpfile', 'tmpnam', 'toascii', 'tolower', 'toupper',
+'towctrans', 'towlower', 'towupper', 'true', 'trunc', 'truncf', 'truncl',
+'tzset', 'uint16_t', 'uint32_t', 'uint64_t', 'uint8_t', 'uint_fast16_t',
+'uint_fast32_t', 'uint_fast64_t', 'uint_fast8_t', 'uint_least16_t',
+'uint_least32_t', 'uint_least64_t', 'uint_least8_t', 'uintmax_t', 'uintptr_t',
+'ungetc', 'ungetwc', 'va_arg', 'va_copy', 'va_end', 'va_list', 'va_start',
+'vfprintf', 'vfscanf', 'vfwprintf', 'vfwscanf', 'vprintf', 'vscanf',
+'vsnprintf', 'vsprintf', 'vsscanf', 'vswprintf', 'vswscanf', 'vwprintf',
+'vwscanf', 'wchar_t', 'wcrtomb', 'wcscat', 'wcschr', 'wcscmp', 'wcscoll',
+'wcscpy', 'wcscspn', 'wcsdup', 'wcsftime', 'wcslen', 'wcsncat', 'wcsncmp',
+'wcsncpy', 'wcsnlen', 'wcspbrk', 'wcsrchr', 'wcsrtombs', 'wcsspn', 'wcsstr',
+'wcstod', 'wcstof', 'wcstoimax', 'wcstok', 'wcstol', 'wcstold', 'wcstoll',
+'wcstombs', 'wcstoul', 'wcstoull', 'wcstoumax', 'wcsxfrm', 'wctob', 'wctomb',
+'wctrans', 'wctrans_t', 'wctype', 'wctype_t', 'wint_t', 'wmemchr', 'wmemcmp',
+'wmemcpy', 'wmemmove', 'wmemset', 'wprintf', 'wscanf', 'xor', 'xor_eq', 'y0',
+'y1', 'yn'}
+
+RESERVED_STD_WIN = ['BENIGN_RACE_BEGIN', 'BENIGN_RACE_END', 'CLK_TCK',
+'CONCURRENCYSAL_H', 'CRTDLL', 'CSALCAT1', 'CSALCAT2', 'CW_DEFAULT', 'DBL_RADIX',
+'DBL_ROUNDS', 'DOMAIN', 'EDEADLOCK', 'EM_AMBIGUIOUS', 'EM_AMBIGUOUS',
+'EM_DENORMAL', 'EM_INEXACT', 'EM_INVALID', 'EM_OVERFLOW', 'EM_UNDERFLOW',
+'EM_ZERODIVIDE', 'EOTHER', 'FE_ROUND_MASK', 'FLT_GUARD', 'FLT_NORMALIZE',
+'FPE_DENORMAL', 'FPE_EXPLICITGEN', 'FPE_INEXACT', 'FPE_INVALID', 'FPE_OVERFLOW',
+'FPE_SQRTNEG', 'FPE_STACKOVERFLOW', 'FPE_STACKUNDERFLOW', 'FPE_UNDERFLOW',
+'FPE_UNEMULATED', 'FPE_ZERODIVIDE', 'HUGE', 'IC_AFFINE', 'IC_PROJECTIVE',
+'LC_MAX', 'LC_MIN', 'LDBL_RADIX', 'LDBL_ROUNDS', 'LONG_LONG_MAX',
+'LONG_LONG_MIN', 'L_tmpnam_s', 'MCW_EM', 'MCW_IC', 'MCW_PC', 'MCW_RC',
+'MIDL_PASS', 'MRTDLL', 'NO_COMPETING_THREAD_BEGIN', 'NO_COMPETING_THREAD_END',
+'OVERFLOW', 'PC_24', 'PC_53', 'PC_64', 'PLOSS', 'Q_MOC_RUN', 'RC_CHOP',
+'RC_DOWN', 'RC_INVOKED', 'RC_NEAR', 'RC_UP', 'RSIZE_MAX', 'SETJMP_FLOAT128',
+'SH_DENYNO', 'SH_DENYRD', 'SH_DENYRW', 'SH_DENYWR', 'SIGABRT_COMPAT',
+'SIGBREAK', 'SIG_ACK', 'SIG_GET', 'SIG_SGE', 'SING', 'STRUNCATE', 'SW_DENORMAL',
+'SW_INEXACT', 'SW_INVALID', 'SW_OVERFLOW', 'SW_SQRTNEG', 'SW_STACKOVERFLOW',
+'SW_STACKUNDERFLOW', 'SW_UNDERFLOW', 'SW_UNEMULATED', 'SW_ZERODIVIDE',
+'SYS_OPEN', 'S_IEXEC', 'S_IFCHR', 'S_IFDIR', 'S_IFMT', 'S_IFREG', 'S_IREAD',
+'S_IWRITE', 'TLOSS', 'TMP_MAX_S', 'ULONG_LONG_MAX', 'UNDERFLOW',
+'UNDOCKED_WINDOWS_UCRT', 'WINAPI_FAMILY', 'asctime_s', 'at_quick_exit',
+'bsearch_s', 'c16rtomb', 'c32rtomb', 'char16_t', 'char32_t', 'clear87',
+'clearerr_s', 'clog10', 'clog10f', 'clog10l', 'control87', 'ctime_s', 'environ',
+'errno_t', 'fcloseall', 'fgetchar', 'flushall', 'fopen_s', 'fpreset',
+'fprintf_s', 'fputchar', 'fread_s', 'freopen_s', 'fscanf_s', 'fstat',
+'fwprintf_s', 'fwscanf_s', 'getenv_s', 'gets_s', 'gmtime_s', 'ino_t',
+'is_wctype', 'iscsym', 'iscsymf', 'isleadbyte', 'iswascii', 'itoa', 'lfind',
+'localtime_s', 'long', 'lsearch', 'ltoa', 'matherr', 'max', 'mbrtoc16',
+'mbrtoc32', 'mbsrtowcs_s', 'mbstowcs_s', 'memcpy_s', 'memicmp', 'memmove_s',
+'min', 'modff', 'modfl', 'nanf', 'nanl', 'norm', 'normf', 'norml', 'offsetof',
+'onexit', 'onexit_t', 'printf_s', 'ptrdiff_t', 'qsort_s', 'quick_exit', 'rmtmp',
+'rsize_t', 'scanf_s', 'sprintf_s', 'sscanf_s', 'stat', 'status87', 'strcat_s',
+'strcmpi', 'strcpy_s', 'strerror_s', 'stricmp', 'strlwr', 'strncat_s',
+'strncpy_s', 'strnicmp', 'strnlen_s', 'strnset', 'strrev', 'strset', 'strtok_s',
+'strupr', 'swab', 'swprintf_s', 'swscanf_s', 'tmpfile_s', 'tmpnam_s', 'ultoa',
+'unlink', 'vfprintf_s', 'vfscanf_s', 'vfwprintf_s', 'vfwscanf_s', 'vprintf_s',
+'vscanf_s', 'vsnprintf_s', 'vsprintf_s', 'vsscanf_s', 'vswprintf_s',
+'vswscanf_s', 'vwprintf_s', 'vwscanf_s', 'wcrtomb_s', 'wcscat_s', 'wcscpy_s',
+'wcsicmp', 'wcsicoll', 'wcslwr', 'wcsncat_s', 'wcsncpy_s', 'wcsnicmp',
+'wcsnlen_s', 'wcsnset', 'wcsrev', 'wcsrtombs_s', 'wcsset', 'wcstok_s',
+'wcstombs_s', 'wcsupr', 'wcswcs', 'wctomb_s', 'wmemcpy_s', 'wmemmove_s',
+'wprintf_s', 'wscanf_s']
+
+RESERVED_STD_LIN = ['AIO_PRIO_DELTA_MAX', 'ARG_MAX', 'BC_BASE_MAX',
+'BC_DIM_MAX', 'BC_SCALE_MAX', 'BC_STRING_MAX', 'BIG_ENDIAN', 'BUS_ADRALN',
+'BUS_ADRERR', 'BUS_MCEERR_AO', 'BUS_MCEERR_AR', 'BUS_OBJERR', 'BYTE_ORDER',
+'CHARCLASS_NAME_MAX', 'CLD_CONTINUED', 'CLD_DUMPED', 'CLD_EXITED', 'CLD_KILLED',
+'CLD_STOPPED', 'CLD_TRAPPED', 'CLOCK_BOOTTIME', 'CLOCK_BOOTTIME_ALARM',
+'CLOCK_MONOTONIC', 'CLOCK_MONOTONIC_COARSE', 'CLOCK_MONOTONIC_RAW',
+'CLOCK_PROCESS_CPUTIME_ID', 'CLOCK_REALTIME', 'CLOCK_REALTIME_ALARM',
+'CLOCK_REALTIME_COARSE', 'CLOCK_TAI', 'CLOCK_THREAD_CPUTIME_ID',
+'COLL_WEIGHTS_MAX', 'DELAYTIMER_MAX', 'EADV', 'EBADE', 'EBADFD', 'EBADR',
+'EBADRQC', 'EBADSLT', 'EBFONT', 'ECHRNG', 'ECOMM', 'EDEADLOCK', 'EDOTDOT',
+'EDQUOT', 'EHOSTDOWN', 'EHWPOISON', 'EISNAM', 'EKEYEXPIRED', 'EKEYREJECTED',
+'EKEYREVOKED', 'EL2HLT', 'EL2NSYNC', 'EL3HLT', 'EL3RST', 'ELIBACC', 'ELIBBAD',
+'ELIBEXEC', 'ELIBMAX', 'ELIBSCN', 'ELNRNG', 'EMEDIUMTYPE', 'EMULTIHOP',
+'ENAVAIL', 'ENOANO', 'ENOCSI', 'ENOKEY', 'ENOMEDIUM', 'ENONET', 'ENOPKG',
+'ENOTBLK', 'ENOTNAM', 'ENOTUNIQ', 'EPFNOSUPPORT', 'EREMCHG', 'EREMOTE',
+'EREMOTEIO', 'ERESTART', 'ERFKILL', 'ESHUTDOWN', 'ESOCKTNOSUPPORT', 'ESRMNT',
+'ESTALE', 'ESTRPIPE', 'ETOOMANYREFS', 'EUCLEAN', 'EUNATCH', 'EUSERS', 'EXFULL',
+'EXPR_NEST_MAX', 'FD_CLR', 'FD_ISSET', 'FD_SET', 'FD_SETSIZE', 'FD_ZERO',
+'FPE_CONDTRAP', 'FPE_FLTDIV', 'FPE_FLTINV', 'FPE_FLTOVF', 'FPE_FLTRES',
+'FPE_FLTSUB', 'FPE_FLTUND', 'FPE_FLTUNK', 'FPE_INTDIV', 'FPE_INTOVF',
+'FP_XSTATE_MAGIC1', 'FP_XSTATE_MAGIC2', 'FP_XSTATE_MAGIC2_SIZE',
+'HOST_NAME_MAX', 'ILL_BADIADDR', 'ILL_BADSTK', 'ILL_COPROC', 'ILL_ILLADR',
+'ILL_ILLOPC', 'ILL_ILLOPN', 'ILL_ILLTRP', 'ILL_PRVOPC', 'ILL_PRVREG',
+'LC_ADDRESS', 'LC_ADDRESS_MASK', 'LC_ALL_MASK', 'LC_COLLATE_MASK',
+'LC_CTYPE_MASK', 'LC_GLOBAL_LOCALE', 'LC_IDENTIFICATION',
+'LC_IDENTIFICATION_MASK', 'LC_MEASUREMENT', 'LC_MEASUREMENT_MASK',
+'LC_MESSAGES', 'LC_MESSAGES_MASK', 'LC_MONETARY_MASK', 'LC_NAME',
+'LC_NAME_MASK', 'LC_NUMERIC_MASK', 'LC_PAPER', 'LC_PAPER_MASK', 'LC_TELEPHONE',
+'LC_TELEPHONE_MASK', 'LC_TIME_MASK', 'LINE_MAX', 'LINK_MAX', 'LITTLE_ENDIAN',
+'LOGIN_NAME_MAX', 'L_ctermid', 'MAX_CANON', 'MAX_INPUT', 'MINSIGSTKSZ',
+'MQ_PRIO_MAX', 'M_1_PI', 'M_2_PI', 'M_2_SQRTPI', 'M_E', 'M_LN10', 'M_LN2',
+'M_LOG10E', 'M_LOG2E', 'M_PI', 'M_PI_2', 'M_PI_4', 'M_SQRT1_2', 'M_SQRT2',
+'NAME_MAX', 'NFDBITS', 'NGREG', 'NGROUPS_MAX', 'NR_OPEN', 'ONCE_FLAG_INIT',
+'OPEN_MAX', 'PATH_MAX', 'PDP_ENDIAN', 'PIPE_BUF', 'POLL_ERR', 'POLL_HUP',
+'POLL_IN', 'POLL_MSG', 'POLL_OUT', 'POLL_PRI', 'PTHREAD_DESTRUCTOR_ITERATIONS',
+'PTHREAD_KEYS_MAX', 'PTHREAD_STACK_MIN', 'PTHREAD_THREADS_MAX', 'P_ALL',
+'P_PGID', 'P_PID', 'P_tmpdir', 'RE_DUP_MAX', 'RTSIG_MAX', 'SA_INTERRUPT',
+'SA_NOCLDSTOP', 'SA_NOCLDWAIT', 'SA_NODEFER', 'SA_NOMASK', 'SA_ONESHOT',
+'SA_ONSTACK', 'SA_RESETHAND', 'SA_RESTART', 'SA_SIGINFO', 'SA_STACK',
+'SEGV_ACCADI', 'SEGV_ACCERR', 'SEGV_ADIDERR', 'SEGV_ADIPERR', 'SEGV_BNDERR',
+'SEGV_MAPERR', 'SEGV_PKUERR', 'SEM_VALUE_MAX', 'SIGALRM', 'SIGBUS', 'SIGCHLD',
+'SIGCLD', 'SIGCONT', 'SIGEV_NONE', 'SIGEV_SIGNAL', 'SIGEV_THREAD',
+'SIGEV_THREAD_ID', 'SIGHUP', 'SIGIO', 'SIGIOT', 'SIGKILL', 'SIGPIPE', 'SIGPOLL',
+'SIGPROF', 'SIGPWR', 'SIGQUIT', 'SIGRTMAX', 'SIGRTMIN', 'SIGSTKFLT', 'SIGSTKSZ',
+'SIGSTOP', 'SIGSYS', 'SIGTRAP', 'SIGTSTP', 'SIGTTIN', 'SIGTTOU', 'SIGURG',
+'SIGUSR1', 'SIGUSR2', 'SIGVTALRM', 'SIGWINCH', 'SIGXCPU', 'SIGXFSZ',
+'SIG_BLOCK', 'SIG_SETMASK', 'SIG_UNBLOCK', 'SI_ASYNCIO', 'SI_ASYNCNL',
+'SI_DETHREAD', 'SI_KERNEL', 'SI_MESGQ', 'SI_QUEUE', 'SI_SIGIO', 'SI_TIMER',
+'SI_TKILL', 'SI_USER', 'SSIZE_MAX', 'SS_DISABLE', 'SS_ONSTACK', 'TIMER_ABSTIME',
+'TSS_DTOR_ITERATIONS', 'TTY_NAME_MAX', 'WCONTINUED', 'WEXITED', 'WEXITSTATUS',
+'WIFCONTINUED', 'WIFEXITED', 'WIFSIGNALED', 'WIFSTOPPED', 'WNOHANG', 'WNOWAIT',
+'WSTOPPED', 'WSTOPSIG', 'WTERMSIG', 'WUNTRACED', 'XATTR_LIST_MAX',
+'XATTR_NAME_MAX', 'XATTR_SIZE_MAX', 'a64l', 'aligned_alloc', 'alloca',
+'asctime_r', 'at_quick_exit', 'bcmp', 'bcopy', 'be16toh', 'be32toh', 'be64toh',
+'blkcnt_t', 'blksize_t', 'bzero', 'c16rtomb', 'c32rtomb', 'caddr_t',
+'call_once', 'char16_t', 'char32_t', 'clearenv', 'clearerr_unlocked',
+'clock_getcpuclockid', 'clock_getres', 'clock_gettime', 'clock_nanosleep',
+'clock_settime', 'clockid_t', 'cnd_broadcast', 'cnd_destroy', 'cnd_init',
+'cnd_signal', 'cnd_t', 'cnd_timedwait', 'cnd_wait', 'ctermid', 'ctime_r',
+'daddr_t', 'daylight', 'dprintf', 'drand48', 'drand48_data', 'drand48_r',
+'drem', 'duplocale', 'dysize', 'ecvt_r', 'erand48', 'erand48_r',
+'explicit_bzero', 'fcvt_r', 'fd_mask', 'fd_set', 'feof_unlocked',
+'ferror_unlocked', 'fflush_unlocked', 'ffs', 'ffsl', 'ffsll', 'fgetc_unlocked',
+'fileno_unlocked', 'finite', 'flockfile', 'fmemopen', 'fpregset_t',
+'fputc_unlocked', 'fread_unlocked', 'freelocale', 'fsblkcnt_t', 'fseeko',
+'fsfilcnt_t', 'fsid_t', 'ftello', 'ftrylockfile', 'funlockfile',
+'fwrite_unlocked', 'gamma', 'getc_unlocked', 'getchar_unlocked', 'getdelim',
+'getline', 'getloadavg', 'getsubopt', 'gid_t', 'gmtime_r', 'greg_t',
+'gregset_t', 'gsignal', 'htobe16', 'htobe32', 'htobe64', 'htole16', 'htole32',
+'htole64', 'id_t', 'idtype_t', 'index', 'initstate', 'initstate_r', 'ino_t',
+'isalnum_l', 'isalpha_l', 'isascii_l', 'isblank_l', 'iscntrl_l', 'isdigit_l',
+'isgraph_l', 'islower_l', 'isprint_l', 'ispunct_l', 'isspace_l', 'isupper_l',
+'iswalnum_l', 'iswalpha_l', 'iswblank_l', 'iswcntrl_l', 'iswctype_l',
+'iswdigit_l', 'iswgraph_l', 'iswlower_l', 'iswprint_l', 'iswpunct_l',
+'iswspace_l', 'iswupper_l', 'iswxdigit_l', 'isxdigit_l', 'itimerspec',
+'jrand48', 'jrand48_r', 'key_t', 'kill', 'killpg', 'l64a', 'lcong48',
+'lcong48_r', 'le16toh', 'le32toh', 'le64toh', 'lgamma_r', 'locale_t',
+'localtime_r', 'loff_t', 'lrand48', 'lrand48_r', 'mbrtoc16', 'mbrtoc32',
+'mbsnrtowcs', 'mcontext_t', 'mkdtemp', 'mkstemp', 'mkstemps', 'mktemp',
+'mode_t', 'mrand48', 'mrand48_r', 'mtx_destroy', 'mtx_init', 'mtx_lock',
+'mtx_plain', 'mtx_recursive', 'mtx_t', 'mtx_timed', 'mtx_timedlock',
+'mtx_trylock', 'mtx_unlock', 'nanosleep', 'newlocale', 'nlink_t', 'nrand48',
+'nrand48_r', 'on_exit', 'once_flag', 'open_memstream', 'open_wmemstream',
+'pclose', 'pid_t', 'popen', 'posix_memalign', 'pselect', 'psiginfo', 'psignal',
+'pthread_attr_t', 'pthread_barrier_t', 'pthread_barrierattr_t',
+'pthread_cond_t', 'pthread_condattr_t', 'pthread_key_t', 'pthread_kill',
+'pthread_mutex_t', 'pthread_mutexattr_t', 'pthread_once_t', 'pthread_rwlock_t',
+'pthread_rwlockattr_t', 'pthread_sigmask', 'pthread_spinlock_t', 'pthread_t',
+'putc_unlocked', 'putchar_unlocked', 'qecvt', 'qecvt_r', 'qfcvt', 'qfcvt_r',
+'qgcvt', 'quad_t', 'quick_exit', 'rand_r', 'random', 'random_data', 'random_r',
+'reallocarray', 'realpath', 'register_t', 'renameat', 'rindex', 'rpmatch',
+'sa_handler', 'sa_sigaction', 'scalb', 'seed48', 'seed48_r', 'select',
+'setbuffer', 'setenv', 'setlinebuf', 'setstate', 'setstate_r', 'si_addr',
+'si_addr_lsb', 'si_arch', 'si_band', 'si_call_addr', 'si_fd', 'si_int',
+'si_lower', 'si_overrun', 'si_pid', 'si_pkey', 'si_ptr', 'si_status',
+'si_stime', 'si_syscall', 'si_timerid', 'si_uid', 'si_upper', 'si_utime',
+'si_value', 'sig_t', 'sigaction', 'sigaddset', 'sigaltstack', 'sigblock',
+'sigcontext', 'sigdelset', 'sigemptyset', 'sigev_notify_attributes',
+'sigev_notify_function', 'sigevent', 'sigevent_t', 'sigfillset', 'siggetmask',
+'siginfo_t', 'siginterrupt', 'sigismember', 'sigjmp_buf', 'siglongjmp',
+'sigmask', 'signgam', 'significand', 'sigpending', 'sigprocmask', 'sigqueue',
+'sigreturn', 'sigset_t', 'sigsetjmp', 'sigsetmask', 'sigstack', 'sigsuspend',
+'sigtimedwait', 'sigval', 'sigval_t', 'sigwait', 'sigwaitinfo', 'srand48',
+'srand48_r', 'srandom', 'srandom_r', 'ssignal', 'ssize_t', 'stack_t',
+'static_assert', 'stpcpy', 'stpncpy', 'strcasecmp', 'strcasecmp_l', 'strcoll_l',
+'strerror_l', 'strerror_r', 'strftime_l', 'strncasecmp', 'strncasecmp_l',
+'strndup', 'strsep', 'strsignal', 'strtok_r', 'strtoq', 'strtouq', 'strxfrm_l',
+'suseconds_t', 'sys_siglist', 'thrd_busy', 'thrd_create', 'thrd_current',
+'thrd_detach', 'thrd_equal', 'thrd_error', 'thrd_exit', 'thrd_join',
+'thrd_nomem', 'thrd_sleep', 'thrd_start_t', 'thrd_success', 'thrd_t',
+'thrd_timedout', 'thrd_yield', 'thread_local', 'timegm', 'timelocal',
+'timer_create', 'timer_delete', 'timer_getoverrun', 'timer_gettime',
+'timer_settime', 'timer_t', 'timeval', 'timezone', 'tmpnam_r', 'toascii_l',
+'tolower_l', 'toupper_l', 'towctrans_l', 'towlower_l', 'towupper_l',
+'tss_create', 'tss_delete', 'tss_dtor_t', 'tss_get', 'tss_set', 'tss_t',
+'tzname', 'u_char', 'u_int', 'u_int16_t', 'u_int32_t', 'u_int64_t', 'u_int8_t',
+'u_long', 'u_quad_t', 'u_short', 'ucontext_t', 'uid_t', 'uint', 'ulong',
+'unsetenv', 'uselocale', 'ushort', 'valloc', 'vdprintf', 'wcpcpy', 'wcpncpy',
+'wcscasecmp', 'wcscasecmp_l', 'wcscoll_l', 'wcsncasecmp', 'wcsncasecmp_l',
+'wcsnrtombs', 'wcsxfrm_l', 'wctrans_l', 'wctype_l']
+
+RESERVED_STD_MAC = ['ARG_MAX', 'BADSIG', 'BC_BASE_MAX', 'BC_DIM_MAX',
+'BC_SCALE_MAX', 'BC_STRING_MAX', 'BIG_ENDIAN', 'BUS_ADRALN', 'BUS_ADRERR',
+'BUS_NOOP', 'BUS_OBJERR', 'BYTE_ORDER', 'CAST_USER_ADDR_T',
+'CHARCLASS_NAME_MAX', 'CHILD_MAX', 'CLD_CONTINUED', 'CLD_DUMPED', 'CLD_EXITED',
+'CLD_KILLED', 'CLD_NOOP', 'CLD_STOPPED', 'CLD_TRAPPED', 'CLK_TCK',
+'CLOCK_MONOTONIC', 'CLOCK_MONOTONIC_RAW', 'CLOCK_MONOTONIC_RAW_APPROX',
+'CLOCK_PROCESS_CPUTIME_ID', 'CLOCK_REALTIME', 'CLOCK_THREAD_CPUTIME_ID',
+'CLOCK_UPTIME_RAW', 'CLOCK_UPTIME_RAW_APPROX', 'CMPLX', 'CMPLXF', 'CMPLXL',
+'COLL_WEIGHTS_MAX', 'CPUMON_MAKE_FATAL', 'DOMAIN', 'EAUTH', 'EBADARCH',
+'EBADEXEC', 'EBADMACHO', 'EBADRPC', 'EDEVERR', 'EDQUOT', 'EFTYPE', 'EHOSTDOWN',
+'ELAST', 'EMULTIHOP', 'ENEEDAUTH', 'ENOATTR', 'ENOPOLICY', 'ENOTBLK',
+'EPFNOSUPPORT', 'EPROCLIM', 'EPROCUNAVAIL', 'EPROGMISMATCH', 'EPROGUNAVAIL',
+'EPWROFF', 'EQFULL', 'EQUIV_CLASS_MAX', 'EREMOTE', 'ERPCMISMATCH', 'ESHLIBVERS',
+'ESHUTDOWN', 'ESOCKTNOSUPPORT', 'ESTALE', 'ETOOMANYREFS', 'EUSERS',
+'EXPR_NEST_MAX', 'FE_DENORMALOPERAND', 'FE_DFL_DISABLE_SSE_DENORMS_ENV',
+'FOOTPRINT_INTERVAL_RESET', 'FPE_FLTDIV', 'FPE_FLTINV', 'FPE_FLTOVF',
+'FPE_FLTRES', 'FPE_FLTSUB', 'FPE_FLTUND', 'FPE_INTDIV', 'FPE_INTOVF',
+'FPE_NOOP', 'FP_CHOP', 'FP_FAST_FMA', 'FP_FAST_FMAF', 'FP_FAST_FMAL',
+'FP_PREC_24B', 'FP_PREC_53B', 'FP_PREC_64B', 'FP_QNAN', 'FP_RND_DOWN',
+'FP_RND_NEAR', 'FP_RND_UP', 'FP_SNAN', 'FP_STATE_BYTES', 'FP_SUPERNORMAL',
+'GID_MAX', 'HTONL', 'HTONLL', 'HTONS', 'HUGE', 'ILL_BADSTK', 'ILL_COPROC',
+'ILL_ILLADR', 'ILL_ILLOPC', 'ILL_ILLOPN', 'ILL_ILLTRP', 'ILL_NOOP',
+'ILL_PRVOPC', 'ILL_PRVREG', 'IOPOL_APPLICATION', 'IOPOL_ATIME_UPDATES_DEFAULT',
+'IOPOL_ATIME_UPDATES_OFF', 'IOPOL_DEFAULT', 'IOPOL_IMPORTANT',
+'IOPOL_MATERIALIZE_DATALESS_FILES_DEFAULT',
+'IOPOL_MATERIALIZE_DATALESS_FILES_OFF', 'IOPOL_MATERIALIZE_DATALESS_FILES_ON',
+'IOPOL_NORMAL', 'IOPOL_PASSIVE', 'IOPOL_SCOPE_DARWIN_BG', 'IOPOL_SCOPE_PROCESS',
+'IOPOL_SCOPE_THREAD', 'IOPOL_STANDARD', 'IOPOL_THROTTLE', 'IOPOL_TYPE_DISK',
+'IOPOL_TYPE_VFS_ALLOW_LOW_SPACE_WRITES', 'IOPOL_TYPE_VFS_ATIME_UPDATES',
+'IOPOL_TYPE_VFS_IGNORE_CONTENT_PROTECTION', 'IOPOL_TYPE_VFS_IGNORE_PERMISSIONS',
+'IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES', 'IOPOL_TYPE_VFS_SKIP_MTIME_UPDATE',
+'IOPOL_TYPE_VFS_STATFS_NO_DATA_VOLUME', 'IOPOL_TYPE_VFS_TRIGGER_RESOLVE',
+'IOPOL_UTILITY', 'IOPOL_VFS_ALLOW_LOW_SPACE_WRITES_OFF',
+'IOPOL_VFS_ALLOW_LOW_SPACE_WRITES_ON', 'IOPOL_VFS_CONTENT_PROTECTION_DEFAULT',
+'IOPOL_VFS_CONTENT_PROTECTION_IGNORE', 'IOPOL_VFS_IGNORE_PERMISSIONS_OFF',
+'IOPOL_VFS_IGNORE_PERMISSIONS_ON', 'IOPOL_VFS_SKIP_MTIME_UPDATE_OFF',
+'IOPOL_VFS_SKIP_MTIME_UPDATE_ON', 'IOPOL_VFS_STATFS_FORCE_NO_DATA_VOLUME',
+'IOPOL_VFS_STATFS_NO_DATA_VOLUME_DEFAULT', 'IOPOL_VFS_TRIGGER_RESOLVE_DEFAULT',
+'IOPOL_VFS_TRIGGER_RESOLVE_OFF', 'IOV_MAX', 'KERNEL', 'LC_MESSAGES', 'LINE_MAX',
+'LINK_MAX', 'LITTLE_ENDIAN', 'LONG_BIT', 'LONG_LONG_MAX', 'LONG_LONG_MIN',
+'L_ctermid', 'MAC_OS_VERSION_11_0', 'MAC_OS_VERSION_12_0',
+'MAC_OS_X_VERSION_10_0', 'MAC_OS_X_VERSION_10_1', 'MAC_OS_X_VERSION_10_10',
+'MAC_OS_X_VERSION_10_10_2', 'MAC_OS_X_VERSION_10_10_3',
+'MAC_OS_X_VERSION_10_11', 'MAC_OS_X_VERSION_10_11_2',
+'MAC_OS_X_VERSION_10_11_3', 'MAC_OS_X_VERSION_10_11_4',
+'MAC_OS_X_VERSION_10_12', 'MAC_OS_X_VERSION_10_12_1',
+'MAC_OS_X_VERSION_10_12_2', 'MAC_OS_X_VERSION_10_12_4',
+'MAC_OS_X_VERSION_10_13', 'MAC_OS_X_VERSION_10_13_1',
+'MAC_OS_X_VERSION_10_13_2', 'MAC_OS_X_VERSION_10_13_4',
+'MAC_OS_X_VERSION_10_14', 'MAC_OS_X_VERSION_10_14_1',
+'MAC_OS_X_VERSION_10_14_4', 'MAC_OS_X_VERSION_10_14_6',
+'MAC_OS_X_VERSION_10_15', 'MAC_OS_X_VERSION_10_15_1', 'MAC_OS_X_VERSION_10_16',
+'MAC_OS_X_VERSION_10_2', 'MAC_OS_X_VERSION_10_3', 'MAC_OS_X_VERSION_10_4',
+'MAC_OS_X_VERSION_10_5', 'MAC_OS_X_VERSION_10_6', 'MAC_OS_X_VERSION_10_7',
+'MAC_OS_X_VERSION_10_8', 'MAC_OS_X_VERSION_10_9', 'MAXFLOAT', 'MAX_CANON',
+'MAX_INPUT', 'MB_CUR_MAX_L', 'MINSIGSTKSZ', 'M_1_PI', 'M_2_PI', 'M_2_SQRTPI',
+'M_E', 'M_LN10', 'M_LN2', 'M_LOG10E', 'M_LOG2E', 'M_PI', 'M_PI_2', 'M_PI_4',
+'M_SQRT1_2', 'M_SQRT2', 'NAME_MAX', 'NGROUPS_MAX', 'NL_ARGMAX', 'NL_LANGMAX',
+'NL_MSGMAX', 'NL_NMAX', 'NL_SETMAX', 'NL_TEXTMAX', 'NTOHL', 'NTOHLL', 'NTOHS',
+'NZERO', 'OFF_MAX', 'OFF_MIN', 'OPEN_MAX', 'OVERFLOW', 'PASS_MAX', 'PATH_MAX',
+'PDP_ENDIAN', 'PIPE_BUF', 'PLOSS', 'POLL_ERR', 'POLL_HUP', 'POLL_IN',
+'POLL_MSG', 'POLL_OUT', 'POLL_PRI', 'PRIO_DARWIN_BG', 'PRIO_DARWIN_NONUI',
+'PRIO_DARWIN_PROCESS', 'PRIO_DARWIN_THREAD', 'PRIO_MAX', 'PRIO_MIN',
+'PRIO_PGRP', 'PRIO_PROCESS', 'PRIO_USER', 'PTHREAD_DESTRUCTOR_ITERATIONS',
+'PTHREAD_KEYS_MAX', 'PTHREAD_STACK_MIN', 'P_ALL', 'P_PGID', 'P_PID', 'P_tmpdir',
+'QUAD_MAX', 'QUAD_MIN', 'RENAME_EXCL', 'RENAME_NOFOLLOW_ANY',
+'RENAME_RESERVED1', 'RENAME_SECLUDE', 'RENAME_SWAP', 'RE_DUP_MAX', 'RLIMIT_AS',
+'RLIMIT_CORE', 'RLIMIT_CPU', 'RLIMIT_CPU_USAGE_MONITOR', 'RLIMIT_DATA',
+'RLIMIT_FOOTPRINT_INTERVAL', 'RLIMIT_FSIZE', 'RLIMIT_MEMLOCK', 'RLIMIT_NOFILE',
+'RLIMIT_NPROC', 'RLIMIT_RSS', 'RLIMIT_STACK', 'RLIMIT_THREAD_CPULIMITS',
+'RLIMIT_WAKEUPS_MONITOR', 'RLIM_INFINITY', 'RLIM_NLIMITS', 'RLIM_SAVED_CUR',
+'RLIM_SAVED_MAX', 'RSIZE_MAX', 'RUSAGE_CHILDREN', 'RUSAGE_INFO_CURRENT',
+'RUSAGE_INFO_V0', 'RUSAGE_INFO_V1', 'RUSAGE_INFO_V2', 'RUSAGE_INFO_V3',
+'RUSAGE_INFO_V4', 'RUSAGE_INFO_V5', 'RUSAGE_SELF', 'RU_PROC_RUNS_RESLIDE',
+'SA_64REGSET', 'SA_NOCLDSTOP', 'SA_NOCLDWAIT', 'SA_NODEFER', 'SA_ONSTACK',
+'SA_RESETHAND', 'SA_RESTART', 'SA_SIGINFO', 'SA_USERSPACE_MASK', 'SA_USERTRAMP',
+'SEGV_ACCERR', 'SEGV_MAPERR', 'SEGV_NOOP', 'SIGALRM', 'SIGBUS', 'SIGCHLD',
+'SIGCONT', 'SIGEMT', 'SIGEV_NONE', 'SIGEV_SIGNAL', 'SIGEV_THREAD', 'SIGHUP',
+'SIGINFO', 'SIGIO', 'SIGIOT', 'SIGKILL', 'SIGPIPE', 'SIGPROF', 'SIGQUIT',
+'SIGSTKSZ', 'SIGSTOP', 'SIGSYS', 'SIGTRAP', 'SIGTSTP', 'SIGTTIN', 'SIGTTOU',
+'SIGURG', 'SIGUSR1', 'SIGUSR2', 'SIGVTALRM', 'SIGWINCH', 'SIGXCPU', 'SIGXFSZ',
+'SIG_BLOCK', 'SIG_HOLD', 'SIG_SETMASK', 'SIG_UNBLOCK', 'SING', 'SIZE_T_MAX',
+'SI_ASYNCIO', 'SI_MESGQ', 'SI_QUEUE', 'SI_TIMER', 'SI_USER', 'SSIZE_MAX',
+'SS_DISABLE', 'SS_ONSTACK', 'SV_INTERRUPT', 'SV_NOCLDSTOP', 'SV_NODEFER',
+'SV_ONSTACK', 'SV_RESETHAND', 'SV_SIGINFO', 'TLOSS', 'TRAP_BRKPT', 'TRAP_TRACE',
+'UID_MAX', 'ULONG_LONG_MAX', 'UNDERFLOW', 'UQUAD_MAX', 'USER_ADDR_NULL',
+'USE_ASCII', 'WAIT_ANY', 'WAIT_MYPGRP', 'WAKEMON_DISABLE', 'WAKEMON_ENABLE',
+'WAKEMON_GET_PARAMS', 'WAKEMON_MAKE_FATAL', 'WAKEMON_SET_DEFAULTS',
+'WCONTINUED', 'WCOREDUMP', 'WCOREFLAG', 'WEXITED', 'WEXITSTATUS',
+'WIFCONTINUED', 'WIFEXITED', 'WIFSIGNALED', 'WIFSTOPPED', 'WNOHANG', 'WNOWAIT',
+'WORD_BIT', 'WSTOPPED', 'WSTOPSIG', 'WTERMSIG', 'WUNTRACED', 'W_EXITCODE',
+'W_STOPCODE', 'X_TLOSS', 'a64l', 'aligned_alloc', 'alloca', 'arc4random',
+'arc4random_addrandom', 'arc4random_buf', 'arc4random_stir',
+'arc4random_uniform', 'asctime_r', 'asprintf', 'atexit_b', 'bcmp', 'bcopy',
+'bsd_signal', 'bsearch_b', 'bzero', 'cgetcap', 'cgetclose', 'cgetent',
+'cgetfirst', 'cgetmatch', 'cgetnext', 'cgetnum', 'cgetset', 'cgetstr',
+'cgetustr', 'clearerr_unlocked', 'clock_getres', 'clock_gettime',
+'clock_gettime_nsec_np', 'clock_settime', 'clockid_t', 'ct_rune_t', 'ctermid',
+'ctermid_r', 'ctime_r', 'daemon', 'daylight', 'devname', 'devname_r',
+'digittoint', 'dprintf', 'drand48', 'drem', 'erand48', 'errno_t', 'exception',
+'feof_unlocked', 'ferror_unlocked', 'ffs', 'ffsl', 'ffsll', 'fgetln', 'fgetwln',
+'fileno_unlocked', 'finite', 'flockfile', 'fls', 'flsl', 'flsll', 'fmemopen',
+'fmtcheck', 'fpurge', 'fropen', 'fseeko', 'ftello', 'ftrylockfile',
+'funlockfile', 'funopen', 'fwopen', 'gamma', 'getbsize', 'getc_unlocked',
+'getchar_unlocked', 'getdate', 'getdate_err', 'getdelim', 'getiopolicy_np',
+'getline', 'getloadavg', 'getpriority', 'getprogname', 'getrlimit', 'getrusage',
+'gets', 'getsubopt', 'gmtime_r', 'grantpt', 'heapsort', 'heapsort_b', 'htonl',
+'htonll', 'htons', 'id_t', 'idtype_t', 'index', 'initstate', 'ishexnumber',
+'isideogram', 'isnumber', 'isphonogram', 'isrune', 'isspecial', 'iswascii',
+'iswhexnumber', 'iswideogram', 'iswnumber', 'iswphonogram', 'iswrune',
+'iswspecial', 'jrand48', 'kill', 'killpg', 'l64a', 'lcong48', 'lint',
+'localtime_r', 'longjmperror', 'lrand48', 'mbsnrtowcs', 'mcontext_t', 'memmem',
+'memset_pattern16', 'memset_pattern4', 'memset_pattern8', 'memset_s',
+'mergesort', 'mergesort_b', 'mkstemp', 'mktemp', 'mode_t', 'modff', 'modfl',
+'mrand48', 'nanf', 'nanl', 'nanosleep', 'nextwctype', 'nrand48', 'ntohl',
+'ntohll', 'ntohs', 'offsetof', 'open_memstream', 'open_wmemstream', 'pclose',
+'pid_t', 'popen', 'posix2time', 'posix_memalign', 'posix_openpt',
+'proc_rlimit_control_wakeupmon', 'psignal', 'psort', 'psort_b', 'psort_r',
+'pthread_attr_t', 'pthread_kill', 'pthread_sigmask', 'pthread_t', 'ptrdiff_t',
+'ptsname', 'ptsname_r', 'putc_unlocked', 'putchar_unlocked', 'qsort_b',
+'qsort_r', 'radixsort', 'rand_r', 'random', 'reallocf', 'realpath',
+'register_t', 'renameat', 'renameatx_np', 'renamex_np', 'rindex', 'rinttol',
+'rlim_t', 'rlimit', 'roundtol', 'rpmatch', 'rsize_t', 'ru_first', 'ru_last',
+'rune_t', 'rusage', 'rusage_info_current', 'rusage_info_t', 'rusage_info_v0',
+'rusage_info_v1', 'rusage_info_v2', 'rusage_info_v3', 'rusage_info_v4',
+'rusage_info_v5', 'sa_handler', 'sa_sigaction', 'scalb', 'seed48', 'setbuffer',
+'setenv', 'setiopolicy_np', 'setkey', 'setlinebuf', 'setpriority',
+'setprogname', 'setrlimit', 'setstate', 'sig_t', 'sigaction', 'sigaddset',
+'sigaltstack', 'sigblock', 'sigdelset', 'sigemptyset', 'sigevent', 'sigfillset',
+'sighold', 'sigignore', 'siginfo_t', 'siginterrupt', 'sigismember',
+'sigjmp_buf', 'siglongjmp', 'sigmask', 'signgam', 'significand', 'sigpause',
+'sigpending', 'sigprocmask', 'sigrelse', 'sigset', 'sigset_t', 'sigsetjmp',
+'sigsetmask', 'sigstack', 'sigsuspend', 'sigval', 'sigvec', 'sigwait',
+'sradixsort', 'srand48', 'sranddev', 'srandom', 'srandomdev', 'ssize_t',
+'stack_t', 'static_assert', 'stpcpy', 'stpncpy', 'strcasecmp', 'strcasestr',
+'strerror_r', 'strlcat', 'strlcpy', 'strmode', 'strncasecmp', 'strndup',
+'strnstr', 'strptime', 'strsep', 'strsignal', 'strsignal_r', 'strtok_r',
+'strtonum', 'strtoq', 'strtouq', 'suboptarg', 'sv_onstack', 'swab',
+'sys_siglist', 'sys_signame', 'syscall_arg_t', 'time2posix', 'timegm',
+'timelocal', 'timeval', 'timezone', 'timingsafe_bcmp', 'tzname', 'tzsetwall',
+'u_int16_t', 'u_int32_t', 'u_int64_t', 'u_int8_t', 'ucontext_t', 'uid_t',
+'unlockpt', 'unsetenv', 'user_addr_t', 'user_long_t', 'user_off_t',
+'user_size_t', 'user_ssize_t', 'user_time_t', 'user_ulong_t', 'valloc',
+'vasprintf', 'vdprintf', 'w_coredump', 'w_retcode', 'w_stopsig', 'w_stopval',
+'w_termsig', 'wait', 'wait3', 'wait4', 'waitid', 'waitpid', 'wcpcpy', 'wcpncpy',
+'wcscasecmp', 'wcslcat', 'wcslcpy', 'wcsncasecmp', 'wcsnrtombs', 'wcswidth',
+'wcwidth']
+
+RESERVED_FN = { 'cerf', 'cerfc', 'cexp2', 'cexpm1', 'clog10', 'clog1p', 'clog2',
+'clgamma', 'ctgamma', 'csinpi', 'ccospi', 'ctanpi', 'casinpi', 'cacospi',
+'catanpi', 'ccompoundn', 'cpown', 'cpowr', 'crootn', 'crsqrt', 'cexp10m1',
+'cexp10', 'cexp2m1', 'clog10p1', 'clog2p1', 'clogp1', 'cerff', 'cerfcf',
+'cexp2f', 'cexpm1f', 'clog10f', 'clog1pf', 'clog2f', 'clgammaf', 'ctgammaf',
+'csinpif', 'ccospif', 'ctanpif', 'casinpif', 'cacospif', 'catanpif',
+'ccompoundnf', 'cpownf', 'cpowrf', 'crootnf', 'crsqrtf', 'cexp10m1f', 'cexp10f',
+'cexp2m1f', 'clog10p1f', 'clog2p1f', 'clogp1f', 'cerfl', 'cerfcl', 'cexp2l',
+'cexpm1l', 'clog10l', 'clog1pl', 'clog2l', 'clgammal', 'ctgammal', 'csinpil',
+'ccospil', 'ctanpil', 'casinpil', 'cacospil', 'catanpil', 'ccompoundnl',
+'cpownl', 'cpowrl', 'crootnl', 'crsqrtl', 'cexp10m1l', 'cexp10l', 'cexp2m1l',
+'clog10p1l', 'clog2p1l', 'clogp1l' }
+
+RESERVED_FN_PATTERN = r'^(cr_|(is|to|str|wcs|atomic_|cnd_|mtx_|thrd_|tss_)[a-z])'
+
+RESERVED_TYPE_PATTERN = r'^(u?int.*_t$|(atomic|memory|cnd|mtx|thrd|tss)_[a-z])'
+
+RESERVED_MACRO_PATTERN = r'^(E[\dA-Z]|(FE|DBL|DEC32|DEC64|DEC128|DEC|FLT|LDBL|LC|FP|MATH|SIG|TIME|ATOMIC)_[A-Z]|U?INT.*_(MAX|MIN|WIDTH|C)|(PRI|SCN)[a-zX]|SIG[A-Z])'
+
+RESERVED_ENUM_PATTERN = r'(memory_order|cnd|mtx|thrd|tss)_[a-z]'
+
+ENTS_CHECKED = set()
+
+NAMES_ALLOWED = set()
+
+initialized = False
+
+
+def ids():
+    return ('DCL37-C')
+
+
+def name(id):
+    return {
+        'DCL37-C': '''Published Standards/SEI Cert Standards/C/\
+Do not declare or define a reserved identifier''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'DCL37-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Low',
+            'Priority: P3',
+            'Level: L3',
+            'Identifiers',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'DCL37-C': '''\
+<p>
+Do not declare or define a reserved identifier
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+Using reserved identifiers can lead to incorrect program operation.
+</p>
+
+<p>
+For the full standard:
+<i>
+https://wiki.sei.cmu.edu/confluence/display/c/DCL37-C.+Do+not+declare+or+define+a+reserved+identifier
+</i>
+</p>
+
+<p><b>Exceptions</b></p>
+
+<p><i>
+<b>DCL37-C-EX1:</b> Provided that a library function can be declared without
+reference to any type defined in a header, it is permissible to declare that
+function without including its header provided that declaration is compatible
+with the standard declaration.
+</i></p>
+
+<p><i>
+<b>DCL37-C-EX2:</b> For compatibility with other compiler vendors or language
+standard modes, it is acceptable to create a macro identifier that is the same
+as a reserved identifier so long as the behavior is idempotent.
+</i></p>
+
+<p><i>
+<b>DCL37-C-EX3:</b> As a compiler vendor or standard library developer, it is
+acceptable to use identifiers reserved for your implementation. Reserved
+identifiers may be defined by the compiler, in standard library headers or
+headers included by a standard library header.
+</i></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#ifndef _MY_HEADER_H_
+#define _MY_HEADER_H_
+
+/* Contents of &lt;my_header.h&gt; */
+
+#endif /* _MY_HEADER_H_ */
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+The identifiers made by the standard library were found by analyzing the
+standard libraries on 3 operating systems: Linux, Mac, and Windows. The
+identifiers may differ from your target system.
+</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().choice('os', 'Target operating system', ['Linux', 'Mac', 'Windows'], 'Windows')
+    check.options().text('allowed', 'Names of identifiers to allow (space-separated)', '')
+
+
+def check(check, file):
+    if not initialized:
+        init(check)
+
+    for ref in file.filerefs('Define, Declare', '~Member', True):
+        ent = ref.ent()
+
+        entKind = ent.kind()
+        name = ent.name()
+
+        # Skip entities already checked in another file
+        if ent in ENTS_CHECKED:
+            continue
+        ENTS_CHECKED.add(ent)
+
+        # Exception 1: Skip declarations of functions without definitions
+        if entKind.check('Function'):
+            if not ent.ref('Define'):
+                continue
+        # Exception 2: Skip macros with a value of identifier or __identifier
+        elif entKind.check('Macro'):
+            value = ent.value()
+            if value == name or value == f'__{name}':
+                continue
+        # Exception 3: Skip names that are reserved for your code
+        if name in NAMES_ALLOWED:
+            continue
+
+        # All identifiers
+        if name in RESERVED_KEY:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+        elif re.match(RESERVED_UND_UND, name):
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+        elif re.match(RESERVED_UND_CAP, name):
+            check.violation(ent, file, ref.line(), ref.column(), ERR3)
+        elif re.match(RESERVED_INT, name):
+            check.violation(ent, file, ref.line(), ref.column(), ERR4)
+
+        # File-scoped identifiers in ordinary/tag name space
+        elif isFileScopedOrdinaryOrTag(entKind) and re.match(RESERVED_UND, name):
+            check.violation(ent, file, ref.line(), ref.column(), ERR5)
+
+        # Externally-linked identifiers
+        elif isExternallyLinked(entKind):
+            if name in RESERVED_STD_ALL:
+                check.violation(ent, file, ref.line(), ref.column(), ERR6)
+            elif re.match(RESERVED_UND, name):
+                check.violation(ent, file, ref.line(), ref.column(), ERR7)
+            elif isReservedPattern(entKind, name):
+                check.violation(ent, file, ref.line(), ref.column(), ERR8)
+
+
+def init(check):
+    # Identifiers reserved by the standard library of the operating system
+    os = check.options().lookup('os')
+    identifiersFromOs = []
+    if os == 'Linux':
+        identifiersFromOs = RESERVED_STD_LIN
+    elif os == 'Mac':
+        identifiersFromOs = RESERVED_STD_MAC
+    elif os == 'Windows':
+        identifiersFromOs = RESERVED_STD_WIN
+    RESERVED_STD_ALL.update(identifiersFromOs)
+
+    # Identifiers reserved by the standard library of the operating system
+    NAMES_ALLOWED.update(check.options().lookup('allowed').split())
+
+    initialized = True
+
+
+def isFileScopedOrdinaryOrTag(entKind):
+    # Attributes are not currently entity kinds, so this is enough
+    return entKind.check('~Local ~Member ~Label')
+
+
+def isExternallyLinked(entKind):
+    return entKind.check('~Local ~Member ~Static, ~Local ~Member Static Frominclude')
+
+
+def isReservedPattern(entKind, name):
+    if entKind.check('Function'):
+        if name in RESERVED_FN or re.match(RESERVED_FN_PATTERN, name):
+            return True
+    elif entKind.check('Typedef'):
+        if re.match(RESERVED_TYPE_PATTERN, name):
+            return True
+    elif entKind.check('Macro'):
+        if re.match(RESERVED_MACRO_PATTERN, name):
+            return True
+    elif entKind.check('Enumerator'):
+        if re.match(RESERVED_ENUM_PATTERN, name):
+            return True
+    return False

@@ -1,0 +1,122 @@
+ERR1 = 'Ensure actively held locks are released on exceptional conditions.'
+
+
+# The ID for the check
+def id():
+    return ('CON51-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON51-CPP': 'Published Standards/SEI Cert Standards/C++/Ensure actively held locks are released on exceptional conditions',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Ensure actively held locks are released on exceptional conditions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Ensure actively held locks are released on exceptional conditions</p>
+<p><b>Risk Assessment</b></p>
+<p>If an exception occurs while a mutex is locked, deadlock may result.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/CON51-CPP.+Ensure+actively+held+locks+are+released+on+exceptional+conditions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;mutex&gt;
+ 
+void manipulate_shared_data(std::mutex &pm) {
+  pm.lock();
+ 
+  // Perform work on shared data.
+ 
+  pm.unlock();
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'CON51-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P6',
+            'Level: L2',
+            'Threads',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object, Parameter"):
+            ent_type = obj_ref.ent().type()
+
+            if ent_type and ("mutex" in ent_type) and ("lock_guard" not in ent_type):
+                use_refs = obj_ref.ent().refs("Useby")
+
+                for use_ref in use_refs:
+                    lex = file.lexer().lexeme(use_ref.line(), use_ref.column())
+
+                    if (lex.next().text() == ".") and (lex.next().next().text() == "lock"):
+                        has_catch = False
+                        has_unlock = False
+                        func_cfg = func_ref.ent().control_flow_graph()
+
+                        for node in func_cfg.nodes():
+
+                            if node.kind() in {"try-catch"}:
+                                lex = file.lexer().lexeme(node.line_begin(), node.column_begin())
+                                on_body = 0
+
+                                while lex:
+                                    
+                                    if lex.text() == "{":
+                                        on_body += 1
+                                    elif lex.text() == "}":
+                                        on_body -= 1
+
+                                        if not on_body:
+                                            break
+                                    elif (lex.text() == obj_ref.ent().name()) and (lex.ent()):
+                                        if lex.next().text() == "." and lex.next().next().text() == "unlock":
+                                            has_catch = True
+
+                                    lex = lex.next(ignore_whitespace=True)
+
+                            if has_catch:
+                                break
+
+                        for ref in use_refs:
+                            if ref.line() < lex.line_begin():
+                                continue
+
+                            after_lex = file.lexer().lexeme(ref.line(), ref.column())
+
+                            if (after_lex.next().text() == ".") and (after_lex.next().next().text() == "unlock"):
+                                has_unlock = True
+
+                        if (has_catch and not has_unlock) or not has_catch:
+                            check.violation(
+                                obj_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)

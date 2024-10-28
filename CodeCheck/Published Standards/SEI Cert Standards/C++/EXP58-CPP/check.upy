@@ -1,0 +1,123 @@
+import re
+
+
+ERR1 = 'Pass an object of the correct type to va_start.'
+
+
+# The ID for the check
+def id():
+    return ('EXP58-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP58-CPP': 'Published Standards/SEI Cert Standards/C++/Pass an object of the correct type to va_start',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Pass an object of the correct type to va_start'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Pass an object of the correct type to va_start</p>
+<p><b>Risk Assessment</b></p>
+<p>Passing an object of an unsupported type as the second argument to va_start() can result in undefined behavior that might be exploited to cause data integrity violations.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP58-CPP.+Pass+an+object+of+the+correct+type+to+va_start</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;cstdarg&gt;
+  
+extern "C" void f(float a, ...) {
+  va_list list;
+  va_start(list, a);
+  // ...
+  va_end(list);
+}
+
+
+#include &lt;cstdarg&gt;
+#include &lt;iostream&gt;
+  
+extern "C" void f(int &a, ...) {
+  va_list list;
+  va_start(list, a);
+  if (a) {
+    std::cout &lt;&lt; a &lt;&lt; ", " &lt;&lt; va_arg(list, int);
+    a = 100; // Assign something to a for the caller
+  }
+  va_end(list);
+}
+
+
+#include &lt;cstdarg&gt;
+#include &lt;iostream&gt;
+#include &lt;string&gt;
+  
+extern "C" void f(std::string s, ...) {
+  va_list list;
+  va_start(list, s);
+  std::cout &lt;&lt; s &lt;&lt; ", " &lt;&lt; va_arg(list, int);
+  va_end(list);
+}
+</code></pre>
+"""
+
+
+def tags(id):
+    return {
+        'EXP58-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Types',
+        ],
+    }.get(id)
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == "__builtin_va_start":
+                lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+                param_ctr = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.text() == ",":
+                        param_ctr += 1
+                    elif (on_param == 1) and (param_ctr == 1) and lex.ent() and (lex.token() == "Identifier"):
+                        ent_type = lex.ent().type()
+
+                        if ent_type and re.search(r"&|string|float", ent_type):
+                            check.violation(
+                                call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True)

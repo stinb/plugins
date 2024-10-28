@@ -1,0 +1,176 @@
+# This script is designed to run with Understand - CodeCheck
+# Converted to python by Jason Quinn
+# 12-21-22
+# Ian Reed merged MISRA04_5.3 into this script and changed it to respect check.files().
+# October 2023
+
+import re
+
+ERR1 = "Non unique typedef identifier %1 conflicts with the entity %2 in file %3 on line %4"
+
+def ids():
+    return ('MISRA12_5.6', "MISRA04_5.3", 'MISRA23_5.6')
+
+def name(id):
+    return {
+            'MISRA12_5.6': "Published Standards/MISRA C 2012/5.6 A typedef name shall be a unique identifier",
+            "MISRA04_5.3": "Published Standards\\MISRA-C 2004\\5.3 A typedef name shall be a unique identifier.",
+            'MISRA23_5.6': "Published Standards/MISRA C 2023/5.6 A typedef name shall be a unique identifier",
+            }[id]
+
+def tags(id):
+    return {
+            'MISRA12_5.6': [
+                'Language: C',
+                'Standard: MISRA C 2012',
+                'Category: Required',
+                'Identifiers',
+                ],
+            "MISRA04_5.3": [
+                'Language: C',
+                'Standard: MISRA C 2004',
+                'Category: required',
+                'Identifiers',
+                ],
+            'MISRA23_5.6': [
+                'Language: C',
+                'Standard: MISRA C 2023',
+                'Category: Required',
+                'Identifiers',
+                ],
+            }.get(id)
+
+def detailed_description(id):
+    desc1 = """
+<p><b>Amplification</b></p>
+<p>A typedef name shall be unique across all name spaces and translation units.
+Multiple declarations of the same typedef name are only permitted by this rule if the type definition is made in a header file and that header file is included in multiple source files.</p>
+
+<p><b>Rationale</b></p>
+<p>Reusing a typedef name either as another typedef name or as the name of a
+function, object or enumeration constant, may lead to developer confusion.</p>
+
+<p><b>Exception</b></p>
+<p>The typedef name may be the same as the structure, union or enumeration tag
+name associated with the typedef.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">  void func ( void )
+  {
+  {
+    typedef unsigned char u8_t;
+  }
+  {
+    typedef unsigned char u8_t;   /* Non-compliant - reuse */
+  }
+  }
+
+  typedef float mass;
+
+  void func1 ( void )
+  {
+  float32_t mass = 0.0f;      /* Non-compliant - reuse */
+  }
+
+  typedef struct list
+  {
+  struct list *next;
+  uint16_t element;
+  } list;               /* Compliant - exception */
+
+  typedef struct
+  {
+  struct chain
+  {
+    struct chain *list;
+    uint16_t element;
+  } s1;
+  uint16_t length;
+  } chain;              /* Non-compliant - tag "chain" not
+                   * associated with typedef */
+
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 5.7</p>"""
+    desc2 = "No <i>typedef</i> name shall be reused either as a <i>typedef</i> name or for any other purpose. <i>typedef</i> names shall not be reused anywhere within a program. The same <i>typedef</i> shall not be duplicated anywhere in the source code files even if the declarations are identical. Where the type definition is made in a header file, and that header file is included in multiple source files, this rule is not violated."
+    return {
+          "MISRA12_5.6": desc1,
+          "MISRA04_5.3": desc2,
+          "MISRA23_5.6": desc1,
+          }.get(id)
+
+def test_global():
+      return True
+
+def test_entity(file):
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check):
+    typedefs = set()
+    others = set()
+    skipHeaders = set()
+    for file in check.files():
+        if file.kind().check('Header'):
+            if len(file.refs('Includeby')) > 1:
+                skipHeaders.add(file.name())
+                continue
+
+        refs = file.filerefs("", "Typedef", True)
+        for ref in refs:
+            typedefs.add(ref.ent())
+        otherRefs = file.filerefs('', '~Typedef', True)
+        for ref in otherRefs:
+            others.add(ref.ent())
+
+    patternsSeen = {}
+    for typedef in typedefs:
+        # Pull references
+        defineRefs = typedef.refs('Definein, Declarein')
+        if not defineRefs:
+            continue
+
+        # Throw violation if more than one define or declare
+        if len(defineRefs) > 1:
+            for defineRef in defineRefs[1:]:
+                if defineRefs[0].file().name() not in skipHeaders and defineRef.file().name() not in skipHeaders:
+                    check.violation(typedef, defineRefs[0].file(), defineRefs[0].line(), defineRefs[0].column(), ERR1, typedef.name(), defineRef.scope().name(), defineRef.file().name(), defineRef.line())
+
+        define = defineRefs[0]
+        if not define:
+            continue
+
+        # Throw violation if name has been seen
+        if define.scope().name() in patternsSeen.keys():
+            seenName = patternsSeen[define.scope().name()]
+            if define.file().name() not in skipHeaders and seenName.file().name() not in skipHeaders:
+                check.violation(typedef, define.file(), define.line(), define.column(), ERR1, typedef.name(), seenName.scope().name(), seenName.file().name(), seenName.line())
+
+        # Add name to seen dictionary
+        else:
+            patternsSeen[define.scope().name()] = define
+
+    everythingElse = {}
+    for other in others:
+        define = other.ref('Definein, Declarein')
+        if not define:
+            continue
+        defineScopeName = define.scope().name()
+        if defineScopeName not in everythingElse:
+            everythingElse[defineScopeName] = []
+        everythingElse[defineScopeName].append((other, define))
+    for key in patternsSeen.keys():
+        if key in everythingElse:
+            tuples = everythingElse[key]
+            for (other, define) in tuples:
+                # Check if name is same as tag name
+              seenReference = patternsSeen[key]
+              typedReference = seenReference.scope().ref('Typed')
+              if typedReference and typedReference.ent().longname() == define.scope().longname():
+                  continue
+              if define.file().name() not in skipHeaders and seenReference.file().name() not in skipHeaders:
+                  check.violation(other, define.file(), define.line(), define.column(), ERR1, other.name(), seenReference.scope().name(), seenReference.file().name(), seenReference.line())

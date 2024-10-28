@@ -1,0 +1,121 @@
+ERR1 = 'Tag name shall be a unique identifier.'
+
+
+# The ID for the check
+def id():
+    return ('MISRA04_5.4')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA04_5.4': 'Published Standards/MISRA-C 2004/5.4 A tag name shall be unique.',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA04_5.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2004',
+            'Category: Required',
+            'Identifiers',
+            'Naming Conventions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Title</b></p>
+<p>A tag name shall be a unique identifier.</p>
+
+<p><b>Description</b></p>
+<p>No tag name shall be reused either to define a different tag or for any other
+purpose within the program. ISO/IEC 9899:1990 [2] does not define the behaviour
+when an aggregate declaration uses a tag in different forms of type specifier
+(<i>struct</i> or <i>union</i>). Either all uses of the tag should be in
+structure type specifiers, or all uses should be in union type specifiers.
+For example:</p>
+
+<pre><code language="C++">\
+struct stag { uint16_t a; uint16_t b; };
+
+struct stag a1 = { 0, 0 };      /* Compliant - compatible with above   */
+union stag a2 = { 0, 0 };       /* Not compliant - not compatible with
+                                   previous declarations               */
+
+void foo(void)
+{
+   struct stag { uint16_t a; }; /* Not compliant - tag stag redefined */
+}
+</code></pre>
+
+<p>The same tag definition shall not be duplicated anywhere in the source code
+files even if the definitions are identical. Where the tag definition is made in
+a header file, and that header file is included in multiple source files, this
+rule is not violated.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check):
+    def check_violation(file, ref):
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+    db = check.db()
+    files = db.ents("code file, header file")
+    struct_tags = []
+
+    for file in files:
+
+        try:
+            lexer = file.lexer(True, 8, False, False)
+        except:
+            continue
+
+        if not lexer:
+            continue
+
+        for struct_ref in file.filerefs("Define", "Struct Type"):
+            if struct_ref.ent().name() in struct_tags:
+                check_violation(file, struct_ref)
+            elif struct_ref.ent().kind().check("Unnamed"):
+                lex = lexer.lexeme(struct_ref.line(), struct_ref.column())
+
+                if lex.token() == "Identifier":
+                    struct_tag = lex.text()
+
+                    if lex.ent() and lex.ent().kind().check("Macro"):
+                        continue
+                    elif struct_tag not in struct_tags:
+                        struct_tags.append(struct_tag)
+                    else:
+                        check_violation(file, struct_ref)
+            else:
+                struct_tags.append(struct_ref.ent().name())
+
+        for obj_ref in file.filerefs("Define", "Object"):
+            obj_type = obj_ref.ent().freetext("UnderlyingType")
+            if obj_type is None:
+                continue
+
+            # check that struct_tags is iterable
+            ok = hasattr(struct_tags, '__iter__')
+
+            if ok and "union" in obj_ref.ent().type() and obj_type in struct_tags:
+                check_violation(file, obj_ref)

@@ -1,0 +1,111 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 4-12-2021
+
+import re
+
+ERR1 = 'Typedef %1 is a width-sensitive type (%2), should be placed in a header file'
+ERR2 = 'Object %1 is a width-sensitive type (%2), should be typedef\'d and placed in a header file'
+ERR3 = 'Object %1 is a width-sensitive type (%2), should be typedef\'d'
+
+def ids():
+    return ("CPP_T059")
+
+def name(id):
+    return {
+		"CPP_T059": "All Checks/Language Specific/C and C++/Types/" +
+		"Width-sensitive types should be typedef'd and placed in a header file" \
+	}[id] \
+
+
+def tags(id):
+    return {
+        'CPP_T059': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Commonly used width-sensitive types should be typedef'd and placed in a
+header file.</p>
+<p><b>Example</b></p>
+<p>
+<pre><code language="C++">/* limits.h */
+
+    typedef unsigned char uint_8; /* 8-bit unsigned integer */
+</code></pre></p>
+<p><i>Developer's Note:</i>
+This check will not work for the following width-sensitive data types:
+- ptrdiff_t
+- sig_atomic_t
+- wchar_t
+- wint_t
+The reason for this is that Understand does not currently recognize the
+above data types distinctly, and instead simply treats them as ints.
+
+For a list of all datatypes checked, see:
+https://www.gnu.org/software/libc/manual/html_node/Width-of-Type.html</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+	# initialize some variables
+	is_header = False
+	if file.kind().longname() == "C Header File":
+		is_header = True
+
+
+	# list of all width-sensitive data types in c (that are recognized by Understand)
+	types = {"char",
+			"signed char",
+			"unsigned char",
+			"short",
+			"unsigned short",
+			"int",
+			"unsigned int",
+			"long",
+			"unsigned long",
+			"long long",
+			"unsigned long long",
+			"intptr_t",
+			"uintptr_t",
+			"size_t"}
+
+	# grab all typedefs in the file
+	typedefs = file.filerefs('define', 'c typedef type')
+
+	# check that the typedefs are in a header file if they are a width-sensitive type
+	for typed in typedefs:
+
+		data_type = typed.ent().type()
+
+		# case 1: object IS a typedef but IS NOT in a header file
+		if data_type in types and not is_header:
+			check.violation(typed.ent(), file, typed.line(), typed.column(), ERR1, typed.ent(), typed.ent().type())
+
+	# now grab all global and local objects in the file (handles non-typedefs)
+	objects = file.filerefs('define', 'c object')
+
+	for obj in objects:
+
+		obj_data_type = obj.ent().type()
+
+		# case 2: object IS NOT a typedef AND NOT in a header file
+		if obj_data_type in types and not is_header:
+			check.violation(obj.ent(), file, obj.line(), obj.column(), ERR2, obj.ent(), obj.ent().type())
+
+		# case 3: object IS NOT a typedef but IS in a header file
+		if obj_data_type in types and is_header:
+			check.violation(obj.ent(), file, obj.line(), obj.column(), ERR3, obj.ent(), obj.ent().type())
+
+
+

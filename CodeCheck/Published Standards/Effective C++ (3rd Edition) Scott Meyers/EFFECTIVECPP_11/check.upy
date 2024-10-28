@@ -1,0 +1,293 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2023-03-11
+
+
+import re
+
+from Modules import findClose
+
+
+ERR1 = 'Assignment operator must first compare to the argument to this'
+
+
+def ids():
+    return ('EFFECTIVECPP_11', 'CPP_A003')
+
+
+def name(id):
+    return {
+        'EFFECTIVECPP_11': '''Published Standards/Effective C++ (3rd Edition) Scott Meyers/\
+11. Assignment Operator Self Assignment''',
+        'CPP_A003': '''All Checks/Language Specific/C and C++/Assignment Operators/\
+Assignment Operator Self Assignment''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_11': [
+            'Language: C++',
+            'Assignment Operators',
+            'Standard: Effective C++',
+        ],
+        'CPP_A003': [
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Handle assignment to self in operator=.</p>
+
+<p><b>Description</b></p>
+<p>Report assignment operators that do not check for self assignment. The
+following generalized formats are allowed. Comments and whitespace are allowed
+anywhere, but otherwise, these formats are rigid:</p>
+
+<pre><code language="C++">\
+xxx operator=(xxx C &p) { [return;] }
+xxx operator=(xxx C &p) { if (this != &p) [{]...[}] [return;] }
+xxx operator=(xxx C &p) { if (*this != p) [{]...[}] [return;] }
+xxx operator=(xxx C &p) { if (p != *this) [{]...[}] [return;] }
+xxx operator=(xxx C &p) { if (&p != this) [{]...[}] [return;] }
+xxx operator=(xxx C &p) { if (this == &p) [{] return ...
+xxx operator=(xxx C &p) { if (*this == p) [{] return ...
+xxx operator=(xxx C &p) { if (p == *this) [{] return ...
+xxx operator=(xxx C &p) { if (&p == this) [{] return ...
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Define', 'Function Member ~Static', True):
+        func = ref.ent()
+
+        if func.name() != 'operator=':
+            continue
+
+        begin, end = func.ref('Definein'), func.ref('End')
+        if not begin or not end:
+            continue
+
+        lexer = file.lexer(False)
+        if not lexer:
+            return
+
+        doOneFunction(check, file, func, lexer, begin, end)
+
+
+def matchText(lex, textArray):
+    for text in textArray:
+        if not lex or (lex.text() != text):
+            return
+        lex = lex.next(True, True)
+    return lex
+
+
+def isLexAfter(lex, ref):
+    if lex.line_begin() > ref.line():
+        return True
+    return lex.line_begin() == ref.line() and lex.column_begin() > ref.column()
+
+
+def doOneFunction(check, file, func, lexer, begin, end):
+    def lexViolation(lex):
+        check.violation(func, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+    # Get parameter name
+    params = func.ents('Define', 'Parameter')
+    if not params:
+        return
+    param = params[0].name()
+
+    # Get lexeme
+    lex = lexer.lexeme(begin.line(), begin.column())
+    if not lex:
+        return
+
+    # Find opening curly brace
+    while lex.text() != '{':
+        lex = lex.next(True, True)
+        if not lex or isLexAfter(lex, end):
+            return
+
+    lex = lex.next(True, True)
+    if not lex or isLexAfter(lex, end):
+        return
+
+    # Format 0
+    if lex.text() in {'return', '}'}:
+        return
+
+    # Violation: 'if (' was expected
+    tmp = matchText(lex, ['if', '('])
+    if not tmp or isLexAfter(tmp, end):
+        return lexViolation(lex)
+    lex = tmp
+
+    # Determine which format this is
+    ifStmtFormat = 0
+
+    # Formats 1 and 5
+    if lex.text() == 'this':
+
+        tmp = matchText(lex, ['this'])
+        if not tmp or isLexAfter(tmp, end):
+            return lexViolation(lex)
+        lex = tmp
+
+        # Format 1
+        if lex.text() == '!=':
+            tmp = matchText(lex, ['!=', '&', param, ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 1
+
+        # Format 5
+        elif lex.text() == '==':
+            tmp = matchText(lex, ['==', '&', param, ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 5
+
+        # Violation: '==' or '!=' was expected
+        else:
+            return lexViolation(lex)
+
+    # Formats 2 and 6
+    elif lex.text() == '*':
+
+        tmp = matchText(lex, ['*', 'this'])
+        if not tmp or isLexAfter(tmp, end):
+            return lexViolation(lex)
+        lex = tmp
+
+        # Format 2
+        if lex.text() == '!=':
+            tmp = matchText(lex, ['!=', param, ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 2
+
+        # Format 6
+        elif lex.text() == '==':
+            tmp = matchText(lex, ['==', param, ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 6
+
+        # Violation: '==' or '!=' was expected
+        else:
+            return lexViolation(lex)
+
+    # Formats 3 and 7
+    elif lex.text() == param:
+
+        tmp = matchText(lex, [param])
+        if not tmp or isLexAfter(tmp, end):
+            return lexViolation(lex)
+        lex = tmp
+
+        # Format 3
+        if lex.text() == '!=':
+            tmp = matchText(lex, ['!=', '*', 'this', ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 3
+
+        # Format 7
+        elif lex.text() == '==':
+            tmp = matchText(lex, ['==', '*', 'this', ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 7
+
+        # Violation: '==' or '!=' was expected
+        else:
+            return lexViolation(lex)
+
+    # Formats 4 and 8
+    elif lex.text() == '&':
+
+        tmp = matchText(lex, ['&', param])
+        if not tmp or isLexAfter(tmp, end):
+            return lexViolation(lex)
+        lex = tmp
+
+        # Format 4
+        if lex.text() == '!=':
+            tmp = matchText(lex, ['!=', 'this', ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 4
+
+        # Format 8
+        elif lex.text() == '==':
+            tmp = matchText(lex, ['==', 'this', ')'])
+            if not tmp or isLexAfter(tmp, end):
+                return lexViolation(lex)
+            lex = tmp
+            ifStmtFormat = 8
+
+        # Violation: '==' or '!=' was expected
+        else:
+            return lexViolation(lex)
+
+    # None of the formats
+    else:
+        return lexViolation(lex)
+
+    if not lex or isLexAfter(lex, end):
+        return
+
+    # Allow one statement or compound statement, then optional return
+    if ifStmtFormat >= 1 and ifStmtFormat <= 4:
+        # Skip statement or compound statement
+        if lex.text() == '{':
+            lex = findClose(lex)
+        else:
+            while lex and lex.text() != ';':
+                lex = lex.next(True, True)
+        if not lex or isLexAfter(lex, end):
+            return
+        lex = lex.next(True, True)
+
+        if not lex or isLexAfter(lex, end) or lex.text() in {'return', '}'}:
+            return
+
+        # Violation: code after previous indented statement
+        return lexViolation(lex)
+
+    # Require an immediate return, possibly within curly braces, then anything
+    elif ifStmtFormat >= 5:
+        if lex.text() == '{':
+            lex = lex.next(True, True)
+
+        if not lex or isLexAfter(lex, end) or lex.text() == 'return':
+            return
+
+        # Violation: 'return' was expected
+        return lexViolation(lex)

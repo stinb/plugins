@@ -1,0 +1,159 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 9-28-2022
+import re
+
+ERR1 = 'Unrelated side effects occurred'
+
+def ids():
+    return ('A12-8-1', 'CPP_C056')
+
+def name(id):
+    return {
+        'A12-8-1': """\
+Published Standards/AUTOSAR/Move and copy constructors shall move and \
+respectively copy base classes and data members of a class, without any side \
+effects""",
+        'CPP_C056': """\
+All Checks/Language Specific/C and C++/Constructors/Move and copy constructors \
+shall move and respectively copy base classes and data members of a class, \
+without any side effects"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A12-8-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Constructors'
+        ],
+        'CPP_C056': [
+            'Language: C',
+            'Language: C++',
+            'Constructors',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Move and copy constructors shall move and respectively copy base classes and
+data members of a class, without any side effects.</p>
+<p><b>Rationale</b></p>
+<p>It is expected behavior that the move/copy constructors are only used to
+move/copy the object of the class type and possibly set moved-from object to a
+valid state.</p>
+<p>Move and copy constructors of an object are frequently called by STL
+algorithms and containers, so they are not supposed to provide any performance
+overhead or side effects that could affect moving or copying the object.</p>
+<p>Note: Class members that are not essential for a class invariant may not need
+to be copied (e.g. caches, debug information).</p>
+<p><b>Example</p></b>
+<pre><code language="C++">1  // $Id: A12-8-1.cpp 303582 2018-01-11 13:42:56Z michal.szczepankiewicz $
+2  #include &lt;cstdint&gt;
+3  #include &lt;utility&gt;
+4  class A
+5  {
+6   public:
+7     // Implementation
+8     A(A const& oth) : x(oth.x) // Compliant
+9     {
+10    }
+11
+12  private:
+13    std::int32_t x;
+14 };
+15 class B
+16 {
+17   public:
+18     // Implementation
+19     B(B&& oth) : ptr(std::move(oth.ptr)) // Compliant
+20     {
+21       oth.ptr = nullptr; // Compliant - this is not a side-effect, in this
+22       // case it is essential to leave moved-from object
+23       // in a valid state, otherwise double deletion will
+24       // occur.
+25     }
+26     ~B() { delete ptr; }
+27
+28   private:
+29     std::int32_t* ptr;
+30 };
+31 class C
+32 {
+33   public:
+34     // Implementation
+35     C(C const& oth) : x(oth.x)
+36     {
+37       // ...
+38       x = x % 2; // Non-compliant - unrelated side-effect
+39     }
+40
+41   private:
+42     std::int32_t x;
+43 };
+44
+45 class D
+46 {
+47   public:
+48     explicit D(std::uint32_t a) : a(a), noOfModifications(0) {}
+49     D(const D& d) : D(d.a) {} //compliant, not copying the debug information
+abo    ut number of modifications
+50     void SetA(std::uint32_t aa)
+51     {
+52       ++noOfModifications;
+53       a = aa;
+54     }
+55     std::uint32_t GetA() const noexcept
+56     {
+57       return a;
+58     }
+59
+60   private:
+61     std::uint32_t a;
+62     std::uint64_t noOfModifications;
+63 };
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    # Go through all classes
+    refs = file.filerefs('Define', 'Class')
+
+    for ref in refs:
+        # Go through all member functions of the class
+        cRefs = ref.ent().refs('Define', 'Member Function')
+        for cRef in cRefs:
+            if cRef.ent().name() != ref.ent().name():
+                continue
+
+            # Gather all arguments of the member function
+            arguments = []
+            pRefs = cRef.ent().refs('Define', 'Parameter')
+            for pRef in pRefs:
+                arguments.append(pRef.ent().name())
+
+            # Go through and all objects being set that are not an argument
+            sRefs = cRef.ent().refs('Set ~init', 'Member Object')
+            for sRef in sRefs:
+                if sRef.ent().name() not in arguments:
+                    if not lexer:
+                        lexer = file.lexer(lookup_ents=True)
+                    lexeme = lexer.lexeme(sRef.line(), sRef.column())
+                    if lexeme and lexeme.previous(True, True):
+                        # Flag is not being invoked by an argument
+                        if re.match(r'\.|:|,', lexeme.previous(True, True).text()):
+                            continue
+                    check.violation(sRef.ent(), file, sRef.line(), sRef.column(), ERR1)
+

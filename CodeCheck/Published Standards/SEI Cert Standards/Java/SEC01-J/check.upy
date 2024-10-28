@@ -1,0 +1,125 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 11/08/2022
+
+import re
+
+ERR1 = 'Thread-safe method overriden with method that is not thread-safe'
+
+DEF_NAME = "Do not allow tainted variables in privileged blocks"
+
+# The ID for the check
+def ids():
+    return ('SEC01-J', 'JAVA_SEC01')
+
+# The short name of the check
+def name(id):
+    return {
+        'SEC01-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_SEC01': "All Checks/Language Specific/Java/Platform Security/" + DEF_NAME,
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'SEC01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P27',
+            'Level: L1',
+        ],
+        'JAVA_SEC01': [
+            'Language: Java',
+            'Platform Security',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not allow tainted variables in privileged blocks</p>
+<p><b>Risk Assessment</b></p>
+<p>Allowing tainted inputs in privileged operations can result in privilege escalation attacks.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/SEC01-J.+Do+not+allow+tainted+variables+in+privileged+blocks</i></p>
+<p><b>Exceptions</b></p>
+<p><i>N/A</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">private void privilegedMethod(final String filename)
+                              throws FileNotFoundException {
+  try {
+    FileInputStream fis =
+        (FileInputStream) AccessController.doPrivileged(
+          new PrivilegedExceptionAction() {
+        public FileInputStream run() throws FileNotFoundException {
+          return new FileInputStream(filename);
+        }
+      }
+    );
+    // Do something with the file and then close it
+  } catch (PrivilegedActionException e) {
+    // Forward to handler
+  }
+}
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    # spin up lexer
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    # look for calls to FileInputStream io method
+    public_classes =  file.filerefs("Java Create, Java Call Nondynamic", "Java Class Type Public Member, Java Static Method Public Member", False)
+
+    # grab the argument to the method call
+    for pub_class_ref in public_classes:
+        pub_class = pub_class_ref.ent()
+
+        # find ref lex and move forward twice to arg
+        lexeme = lexer.lexeme(pub_class_ref.line(), pub_class_ref.column())
+        lexeme = lexeme.next().next()
+
+        if lexeme.ent():
+            filename_arg = lexeme.ent()
+        else:
+            continue
+
+        if filename_arg.type() != "String":
+            continue
+        # allow static final variable pathnames to be accepted
+        elif filename_arg.kindname() == "Static Final Variable":
+            continue
+        # look to see if the cleanAFilenameAndPath method was used to get the filename
+        scrubbed = False
+
+        setby_refs = filename_arg.refs("Java Setby")
+        for setby_ref in setby_refs:
+            # find where filename string is set and move forward twice to look for method
+            lex = lexer.lexeme(setby_ref.line(), setby_ref.column())
+            lex = lex.next(True,True).next(True,True)
+            if lex and lex.ent() and re.search(r"clean", lex.ent().longname()):
+                scrubbed = True
+
+        if not scrubbed:
+            check.violation(filename_arg, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+

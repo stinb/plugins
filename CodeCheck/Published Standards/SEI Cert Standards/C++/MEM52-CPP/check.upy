@@ -1,0 +1,139 @@
+ERR1 = 'Detect and handle memory allocation errors.'
+
+
+# The ID for the check
+def id():
+    return ('MEM52-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MEM52-CPP': 'Published Standards/SEI Cert Standards/C++/Detect and handle memory allocation errors',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Detect and handle memory allocation errors'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Detect and handle memory allocation errors</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to detect allocation failures can lead to abnormal program termination and denial-of-service attacks.
+If the vulnerable program references memory offset from the return value, an attacker can exploit the program to read or write arbitrary memory. This vulnerability has been used to execute arbitrary code [VU#159523].</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/MEM52-CPP.+Detect+and+handle+memory+allocation+errors</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;cstring&gt;
+  
+void f(const int *array, std::size_t size) noexcept {
+  int *copy = new int[size];
+  std::memcpy(copy, array, size * sizeof(*copy));
+  // ...
+  delete [] copy;
+}
+
+
+struct A { /* ... */ };
+struct B { /* ... */ }; 
+  
+void g(A *, B *);
+void f() {
+  g(new A, new B);
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'MEM52-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+        on_param = 0
+        noexcept = True
+
+        while lex:
+            if lex.text() == "(":
+                on_param += 1
+            elif lex.text() == ")":
+                on_param -= 1
+            elif not on_param and lex.text() == "{":
+                break
+            elif (lex.text() == "noexcept") and (lex.token() == "Identifier") and lex.next().next().text() == "false":
+                noexcept = False
+
+            lex = lex.next(ignore_whitespace=True)
+
+        if noexcept:
+            try_lines = []
+            func_cfg = func_ref.ent().control_flow_graph()
+
+            if func_cfg:
+                for node in func_cfg.nodes():
+                    if node.kind() in {"try"}:
+                        node_line = node.line_begin()
+
+                        while node_line <= node.end_node().line_end():
+                            try_lines.append(node_line)
+                            node_line += 1
+
+            for call_ref in func_ref.ent().refs("Call"):
+                if "operator new" in call_ref.ent().name():
+                    lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+                    compliant = False
+
+                    if (call_ref.line() in try_lines) and (lex.previous(ignore_whitespace=True).text() == "="):
+                        continue
+
+                    if lex.next(ignore_whitespace=True).text() == "(":
+                        on_new = 0
+
+                        while lex:
+                            if lex.text() == "(":
+                                on_new += 1
+                            elif lex.text() == ")":
+                                on_new -= 1
+
+                                if not on_new:
+                                    break
+                            elif on_new and (lex.text() == "nothrow") and (lex.token() == "Identifier"):
+                                compliant = True
+                                break
+
+                            lex = lex.next(ignore_whitespace=True)
+
+                    if not compliant:
+                        check.violation(call_ref.ent(), file,
+                                        call_ref.line(), call_ref.column(), ERR1)

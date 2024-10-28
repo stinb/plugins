@@ -1,0 +1,148 @@
+import re
+
+ERR1 = 'Ternary conditional operator used as a sub-expression'
+
+line_start = [";","{","=",","]
+operators = ["+","-","/","%","&&","||"]
+eq_rel_ops = ["==","!=","<=",">=","<",">"]
+
+# The ID for the check
+def ids():
+    return ('A5-16-1', 'CPP_E047')
+
+# The short name of the check
+def name(id):
+    return {
+        'A5-16-1': 'Published Standards/AUTOSAR/The ternary conditional operator shall not be used as a sub-expression',
+        'CPP_E047': 'All Checks/Language Specific/C and C++/Expressions/The ternary conditional operator shall not be used as a sub-expression',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A5-16-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E047': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Using the result of the ternary conditional operator as an operand or nesting conditional operators makes the code less readable and more difficult to maintain.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A5-16-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 constexpr bool Fn1(std::int32_t x)
+4 {
+5 return (x &gt; 0); // Compliant
+6 }
+7 std::int32_t Fn2(std::int32_t x)
+8 {
+9 std::int32_t i = (x &gt;= 0 ? x : 0); // Compliant
+10
+11 std::int32_t j =
+12 x + (i == 0 ? (x &gt;= 0 ? x : -x) : i); // Non-compliant - nested
+13 // conditional operator
+14 // and used as a
+15 // sub-expression
+16 return (
+17 i &gt; 0
+18 ? (j &gt; 0 ? i + j : i)
+19 : (j &gt; 0 ? j : 0)); // Non-compliant - nested conditional operator
+20 }
+</code></pre>
+<p><b>See also</b></p>
+<p>HIC++ v4.0 [9]: 5.8.1 Do not use the conditional operator (?:) as a subexpression.
+</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def validate_left(lex):
+    open = False
+    ended = False
+    proceed = True
+    first_operand = False
+    inner = lex
+    while inner and (not inner.text() in line_start) and inner.token() != "Preprocessor" and inner.token() != "Keyword":
+        if not first_operand and inner.text() in eq_rel_ops:
+            first_operand = True
+        if not first_operand and inner.text() == ":":
+            proceed = False
+            break
+        if first_operand and inner.text() == "(":
+            ended = True
+        if ended and inner.text() in operators:
+            proceed = False
+        inner = inner.previous(ignore_whitespace=True, ignore_comments=True)
+    return proceed
+
+def validate_right(lex):
+    true_block = True
+    false_block = False
+    ended = False
+    proceed = True
+    paren = False
+    last = False
+    inner = lex
+    while inner and inner.text() != ";" and inner.text() != "{" and inner.token() != "Keyword" and inner.token() != "Preprocessor":
+        if not last:
+            if true_block and inner.text() == ":":
+                true_block = False
+                false_block = True
+            elif true_block and inner.text() == "?":
+                proceed = False
+                last = True
+            if proceed:
+                if false_block and inner.text() == "(":
+                    paren = True
+                if not paren and false_block and inner.text() == ")":
+                    ended = True
+                    false_block = False
+                elif false_block and inner.text() == "?":
+                    proceed = False
+                    last = True
+                elif ended and inner.text() in operators:
+                    proceed = False
+                    last = True
+        inner = inner.next(ignore_whitespace=True, ignore_comments=True)
+    return proceed, inner.next(ignore_whitespace=True, ignore_comments=True)
+
+def check(check, file):
+    lexer = file.lexer(False, 8, False, False)
+    lex = lexer.first()
+    while lex:
+        next_lex = None
+        if lex.text() == "?" and lex.token() == "Operator":
+            is_valid_l = validate_left(lex)
+            is_valid_r, next_lex = validate_right(lex.next(ignore_whitespace=True, ignore_comments=True))
+
+            if not (is_valid_l and is_valid_r):
+                check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+            if next_lex != None:
+                lex = next_lex
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)

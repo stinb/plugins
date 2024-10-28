@@ -1,0 +1,204 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 4-6-22
+
+
+import re
+
+
+ERR1 = 'Method name not prepended with "set", but sets data member'
+
+
+def ids():
+    return ('JAVA_17')
+
+
+def name(id):
+    return {
+        'JAVA_17': '''All Checks/Language Specific/Java/\
+Prepend method names with "set" if they assign data member values \
+        ''',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'JAVA_17': [
+            'Language: Java',
+            'Functions',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p>
+Any method that sets the value of a data member shall be prepended with the word "set" (e.g., double x = 1.0; c.setVariableName(x);).
+</p>
+
+<p>
+Common method naming prefixes:
+<i>
+https://docs.oracle.com/javase/tutorial/datetime/overview/naming.html
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class Player {
+    private int health;
+
+    public int health(int newHealth) {
+        health = newHealth;
+    }
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+The option "Only check simple set methods" is provided to allow for more complex "set" methods, such as conditional set methods. It is not completely accurate because of the infinite variety of utilization that methods can have.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('onlySimpleSetMethods', 'Only check simple set methods', True)
+
+
+def getCodeBlock(contents):
+    left = None
+    right = None
+    for i in range(len(contents)):
+        c = contents[i]
+        if left == None and c == '{':
+            left = i
+        elif c == '}':
+            right = i
+    if right:
+        return contents[left:right+1]
+    return ''
+
+
+def isSimpleSetMethod(method):
+    # Ignore methods without 1 parameter
+    parameters = method.refs('Define', 'Parameter')
+    if len(parameters) != 1:
+        return False
+
+    # Ignore methods that don't set 1 member
+    sets = method.refs('Set', 'Variable Member', True)
+    if len(sets) != 1:
+        return False
+
+    # Ignore methods that don't use the parameter once
+    uses = method.refs('Use', 'Parameter', True)
+    if len(uses) != 1:
+        return False
+
+    # Ignore methods that have more than the 2 references inside
+    otherRefs = method.refs('~Define ~Definein ~Begin ~Beginby ~End ~Endby')
+    if len(otherRefs) > 2:
+        for otherRef in otherRefs:
+            if otherRef.scope() != method:
+                return False
+
+    contents = method.contents()
+    # Remove any // style comments
+    contents = re.sub(r'\/\/.*?\n','\n', contents)
+    # Remove any /* */ style comments
+    contents = re.sub(r'\/\*[\s\S]*?\*\/','\n', contents)
+
+    # Capture the code block
+    contents = getCodeBlock(contents)
+
+    # See if the code only a Java identifier to another Java identifier
+    if re.match(r'{\s*[a-zA-Z_$][\w$]*\s*=\s*[a-zA-Z_$][\w$]*\s*;\s*}', contents):
+        return True
+    return False
+
+
+def isProbablySetMethod(method):
+    # Ignore methods without 1 parameter
+    parameters = method.refs('Define', 'Parameter')
+    if len(parameters) != 1:
+        return False
+
+    # Ignore methods that don't set 1 member
+    memberSets = method.ents('Set', 'Variable Member')
+    if len(memberSets) != 1:
+        return False
+
+    # Ignore methods that set more than 1 thing
+    allSets = method.ents('Set')
+    if len(allSets) != 1:
+        return False
+
+    # Ignore methods that don't use the parameter once
+    uses = method.ents('Use', 'Parameter')
+    if len(uses) != 1:
+        return False
+
+    # Ignore methods that don't use the parameter and set the variable on the same line
+    memberSets = method.refs('Set', 'Variable Member')
+    uses = method.refs('Use', 'Parameter')
+    linesUsedForMemberSets = set()
+    sameLine = False
+    for memberSet in memberSets:
+        linesUsedForMemberSets.add(memberSet.line())
+    for use in uses:
+        if use.line() in linesUsedForMemberSets:
+            sameLine = True
+            break
+    if not sameLine:
+        return False
+
+    contents = method.contents()
+    # Remove any // style comments
+    contents = re.sub(r'\/\/.*?\n','\n', contents)
+    # Remove any /* */ style comments
+    contents = re.sub(r'\/\*.*?\*\/','\n', contents)
+
+    # Capture the code block
+    contents = getCodeBlock(contents)
+
+    # See if the code only a Java identifier to another Java identifier
+    if re.search(r'{\s*[a-zA-Z_$][\w$]*\s*=\s*[a-zA-Z_$][\w$]*\s*;\s*}', contents):
+        return True
+    return False
+
+
+def check(check, file):
+    onlySimpleSetMethods = check.options().lookup('onlySimpleSetMethods')
+
+    for classRef in file.filerefs('Define', 'Class ~TypeVariable', True):
+        classEnt = classRef.ent()
+
+        # Check if there's a set method
+        for methodRef in classEnt.refs('Define', 'Method ~Implicit', True):
+            methodEnt = methodRef.ent()
+
+            # Skip methods that start with "set"
+            if re.match(r'set', methodEnt.name()):
+                continue
+
+            # Skip methods that do other things besides set a variable member
+            if onlySimpleSetMethods:
+                if not isSimpleSetMethod(methodEnt):
+                    continue
+            else:
+                if not isProbablySetMethod(methodEnt):
+                    continue
+
+            check.violation(methodEnt, file, methodRef.line(), methodRef.column(), ERR1)

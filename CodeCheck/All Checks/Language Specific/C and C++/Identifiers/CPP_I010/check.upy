@@ -1,0 +1,198 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2023-02-21
+
+
+import re
+
+
+ERR1 = "Static identifier '%1' reused"
+
+
+staticIdentifiers = set()
+flagged = set()
+ignoreNames = set()
+
+
+def ids():
+    return ('MISRA04_5.5', 'MISRA08_2-10-5', 'CPP_I010')
+
+
+def name(id):
+    return {
+        'MISRA04_5.5': '''Published Standards/MISRA-C 2004/\
+5.5 No object or function identifier with static storage duration should be reused''',
+        'MISRA08_2-10-5': '''Published Standards/MISRA-C++ 2008/\
+2-10-5 The identifier name of a non-member object or function with static storage duration should not be reused''',
+        'CPP_I010': '''All Checks/Language Specific/C and C++/Identifiers/\
+The identifier name of a non-member object or function with static storage duration should not be reused''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_2-10-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Advisory',
+            'Identifiers',
+        ],
+        'MISRA04_5.5': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: advisory',
+            'Identifiers',
+        ],
+        'CPP_I010': [
+            'Language: C',
+            'Language: C++',
+            'Identifiers',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA04_5.5': '''\
+<p>
+Regardless of scope, no identifier with static storage duration should be
+re-used across any source files in the system. This includes objects or
+functions with external linkage and any objects or functions with the
+<i>static</i> storage class specifier.
+</p>
+
+<p>
+While the compiler can understand this and is in no way confused,
+the possibility exists for the user to incorrectly associate unrelated variables
+with the same name.
+</p>
+
+<p>
+One example of this confusion is having an identifier name with internal linkage
+in one file and the same identifier name with external linkage in another file.
+</p>
+''',
+        'MISRA08_2-10-5': '''\
+<p><b>Rationale</b></p>
+
+<p>
+Regardless of scope, no identifier with static storage duration should be
+re-used across any source files in the <i>project</i>. This includes objects or
+functions with external linkage and any objects or functions with the static
+storage class specifier.
+</p>
+
+<p>
+While the compiler can understand this and is in no way confused, the
+possibility exists for the user to incorrectly associate unrelated variables
+with the same name.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">  namespace NS1
+  {
+     static int32_t global = 0;
+  }
+
+  namespace NS2
+  {
+     void fn ( )
+     {
+        int32_t global;      // Non-compliant
+     }
+  }
+</code></pre>
+''',
+        'CPP_I010': '''\
+<p><b>Rationale</b></p>
+
+<p>
+Regardless of scope, no identifier with static storage duration should be
+re-used across any source files in the <i>project</i>. This includes objects or
+functions with external linkage and any objects or functions with the static
+storage class specifier.
+</p>
+
+<p>
+While the compiler can understand this and is in no way confused, the
+possibility exists for the user to incorrectly associate unrelated variables
+with the same name.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">  namespace NS1
+  {
+     static int32_t global = 0;
+  }
+
+  namespace NS2
+  {
+     void fn ( )
+     {
+        int32_t global;      // Non-compliant
+     }
+  }
+</code></pre>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('ignore', 'Ignore unknown or unresolved non-statics', False)
+    check.options().text('ignoreNames', 'Ignore entities with names (space-separated)', '')
+
+
+def check(check, file):
+    # Get non-static and static ref kinds
+    if check.options().lookup('ignore'):
+        nonStaticRefKinds = 'Function ~Static ~Unknown ~Unresolved, Object ~Static ~Unknown ~Unresolved'
+    else:
+        nonStaticRefKinds = 'Function ~Static, Object ~Static'
+    if not staticIdentifiers:
+        for ent in check.db().ents('Static Function ~Member, Static Object ~Member'):
+            staticIdentifiers.add(ent.name())
+
+    # Set the names to ignore
+    if not ignoreNames:
+        for name in check.options().lookup('ignoreNames').split(' '):
+            ignoreNames.add(name)
+
+    for ref in file.filerefs('', nonStaticRefKinds, True):
+        ent = ref.ent()
+
+        # Skip unique names
+        if ent.name() not in staticIdentifiers:
+            continue
+
+        # Skip names listed in options
+        if ent.name() in ignoreNames:
+            continue
+
+        # Skip if entity already flagged
+        if ent in flagged:
+            continue
+        flagged.add(ent)
+
+        # Get first define/declare ref, or other
+        define = ent.ref('Define, Declare')
+        if define:
+            ref = define
+        else:
+            ref = ent.ref()
+
+        check.violation(ent, ref.file(), ref.line(), ref.column(), ERR1, ent.name())

@@ -1,0 +1,135 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 8-4-2020
+
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Header file reference %1 is not listed on its own line';
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "CPP_H012";}
+
+sub name{ return "All Checks\\Language Specific\\C and C++\\Headers\\" .  "All references to header files shall be listed one per line";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Headers',
+  );
+}
+
+sub description { return "All references to header files shall be listed one per line.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Header files are generally used for three reasons in C and C++ programming - they speed up compilation time, they keep
+your code more organized, and they allow you to separate interface from implementation. Since the compiler "replaces" the header
+file referrence with the actual contents of the header file, it is best practice to list them one per line. This standard also
+increases the readability of your code and decreases the potential for confusion.
+</p>
+
+<p><b>Examples</b><br></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+#include &lt;ctype.h&gt;, &lt;sys/types.h&gt;        /* will flag violation */
+#include &lt;sys/types.h&gt;
+#include &lt;sys/stat.h&gt; #define HEADER_H   /* will flag violation */
+#include "regexp.h"
+#ifndef HEADER_FILE
+#define HEADER_FILE
+#endif
+</code></pre>
+
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub test_global {
+  return 0;
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("C File ~unknown ~unresolved");
+  return unless $file->filerefs("include","file");
+
+  # grab lexemes from the file
+  my $lexer = $file->lexer();
+  return unless $lexer;
+
+  my $lexeme = $lexer->first();
+  my $fixLex;
+   
+  while ($lexeme){
+
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+
+    # look for include directives
+    if($lexeme->token eq "Preprocessor" && ($lexeme->text eq "include" || $lexeme->text eq "define" || $lexeme->text eq "ifndef")) {
+      my $nextLex = $lexeme->nextUseful();
+      my $nextLexText = $nextLex->text();
+
+      my $flagged = 0;
+
+      # skips preprocessor if it does not relate to a header file
+      if ($nextLexText =~ /(\.h|\_h|header)\b/i) {
+        $nextLex = $nextLex->next();
+
+        while ($nextLex && $nextLex->token() ne "Newline") {
+          #if header is followed by anything other than a new line or a comment, flag it
+          if ($nextLex->token() eq "Comment") {
+            # do nothing
+          }
+          elsif ($nextLex->token() eq "Newline" || $nextLex->token() eq "Whitespace" ) {
+            # do nothing
+          }
+          else {
+            $flagged = 1;
+            $fixLex = $nextLex;
+            my $temp = $nextLex;
+            while ($temp && $temp->token() ne "Newline") {
+
+              $temp = $temp->next();
+            }
+            last;
+          }
+
+          $nextLex = $nextLex->next();
+        }
+
+        if ($flagged == 1) {
+          my $violation = $check->violation($file,$file,$nextLex->line_begin,$nextLex->column_begin,ERR1, $nextLexText);
+          if ($fixLex->text eq ",") {
+            $violation->add_fixit_hint($fixLex->line_begin, $fixLex->column_begin, $fixLex->line_begin(), $fixLex->column_begin() + length($fixLex->text), "\n#" . $lexeme->text);
+          }
+          elsif ($fixLex->text eq "#" && $fixLex->next->text =~ /include|define/) {
+            $violation->add_fixit_hint($fixLex->line_begin, $fixLex->column_begin, $fixLex->line_begin(), $fixLex->column_begin(), "\n");
+          }
+        }
+      }
+    }
+
+    $lexeme = $lexeme->next();
+  }  
+}

@@ -1,0 +1,129 @@
+ERR1 = 'Trailing return type syntax shall be used in function templates if the return type depends on the type of parameters.'
+
+
+# The ID for the check
+def ids():
+    return ('A8-2-1', 'CPP_T030')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A8-2-1': 'Published Standards/AUTOSAR/When declaring function templates, the trailing return type syntax shall be used if the return type depends on the type of parameters.',
+        'CPP_T030': 'All Checks/Language Specific/C and C++/Types/When declaring function templates, the trailing return type syntax shall be used if the return type depends on the type of parameters.',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A8-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T030': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+If a function template returns different types, then use the return type syntax with the arrow <code>-&gt;</code>
+
+<p><b>Rationale</b></p>
+
+<p>
+Use of trailing return type syntax avoids a fully qualified return type of a function along with the typename keyword.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// $Id: A8-2-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+template &lt;typename T&gt;
+class A
+{
+  public:
+    using Type = std::int32_t;
+
+    Type F(T const&) noexcept;
+    Type G(T const&) noexcept;
+};
+template &lt;typename T&gt;
+typename A&lt;T&gt;::Type A&lt;T&gt;::F(T const&) noexcept // Non-compliant
+{
+    // Implementation
+}
+template &lt;typename T&gt;
+auto A&lt;T&gt;::G(T const&) noexcept -&gt; Type // Compliant
+{
+    // Implementation
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• HIC++ v4.0 [9]: 7.1.7 Use a trailing return type in preference to type disambiguation using typename.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class Template"):
+        for func_ref in class_ref.ent().refs("Define", "Function"):
+            lex = lexer.lexeme(func_ref.line(), 0)
+            return_type = set()
+            param_type = set()
+            after_identifier = False
+            typename = False
+
+            while lex and lex.token() in {"Whitespace", "Comment", "Indent"}:
+                lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+            if lex and lex.text() == "typename" and lex.token() == "Keyword":
+                typename = True
+
+            while lex and lex.text() != "{":
+                ref_type_return = lex.ref().kind().check("Useby TemplateArgument") if lex.ref() else False
+                ref_type_param = lex.ref().kind().check("Typedby") if lex.ref() else False
+                lex_ent_id = lex.ent().id() if lex.ent() else None
+                ref_ent = lex.ref().ent() if lex.ref() else None
+
+                if ref_type_return and not after_identifier and ref_ent.name() == func_ref.ent().name():
+                    return_type.add(lex.text())
+                elif lex_ent_id == func_ref.ent().id():
+                    after_identifier = True
+                elif ref_type_param and after_identifier:
+                    param_type.add(lex.text())
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if typename and len(return_type.intersection(param_type)) > 0:
+                check.violation(func_ref.ent(), file,
+                                func_ref.line(), func_ref.column(), ERR1)

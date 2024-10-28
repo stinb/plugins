@@ -1,0 +1,146 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-26-2021
+import re
+from Modules import stringIsStd
+
+ERR1 = 'Not clear who is responsible for deleting object %1'
+ERR2 = 'Not clear who is responsible for deleting object'
+
+def ids():
+    return ('A20-8-3', 'CPP_P036')
+
+def name(id):
+    return {
+        'A20-8-3': """\
+Published Standards/AUTOSAR/A std::shared_ptr shall be used to represent shared \
+ownership""",
+        'CPP_P036': """\
+All Checks/Language Specific/C and C++/Pointers/A std::shared_ptr shall be used \
+to represent shared ownership"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A20-8-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P036': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>std::shared_ptr allows to retain shared ownership by keeping multiple std::shared_ptr
+instances pointing at the same object. The object is removed when the last std
+::shared_ptr instance goes out of scope. Although reference counting mechanism
+included brings some overhead over a raw pointer, it clearly states ownership status of
+the object and effectively prevents from possible memory leaks.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  // $Id: A20-8-3.cpp 308507 2018-02-21 13:23:57Z michal.szczepankiewicz $
+2
+3  #include &lt;memory&gt;
+4  #include &lt;cstdint&gt;
+5  #include &lt;thread&gt;
+6
+7  struct A
+8  {
+9    A(std::uint8_t xx, std::uint8_t yy) : x(xx), y(yy) {}
+10   std::uint8_t x;
+11   std::uint8_t y;
+12 };
+13
+14 void Foo(A* obj) { }
+15 void Bar(A* obj) { }
+16
+17 void Foo2(std::shared_ptr&lt;A&gt; obj) { }
+18 void Bar2(std::shared_ptr&lt;A&gt; obj) { }
+19
+20 int main(void)
+21 {
+22   A* a = new A(3,5); //non-compliant with A18-5-2
+23   std::shared_ptr&lt;A&gt; spA = std::make_shared&lt;A&gt;(3,5);
+24
+25   //non-compliant, not clear who is responsible
+26   //for deleting object a
+27   std::thread th1{&Foo, a};
+28   std::thread th2{&Bar, a};
+29
+30   //compliant, object spA gets deleted
+31   //when last shared_ptr gets destructed
+32   std::thread th3{&Foo2, spA};
+33   std::thread th4{&Bar2, spA};
+34
+35   th1.join();
+36   th2.join();
+37   th3.join();
+38   th4.join();
+39
+40   return 0;
+41 }
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Typed', 'Unresolved Class Type')
+
+    for ref in refs:
+        if not stringIsStd(ref.ent().longname(), 'thread'):
+            continue
+
+        ok = False
+        obj = None
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        while lexeme and lexeme.text() != '{':
+            lexeme = lexeme.next(True, True)
+
+        # Look for the function reference passed to the std::thread
+        while lexeme and not re.search(r',|}', lexeme.text()):
+            if lexeme.ent() and lexeme.ent().kindname() == 'Function':
+                defRef = lexeme.ent().ref('Define')
+                beginRef = lexeme.ent().ref('Begin')
+                checkLex = lexer.lexeme(defRef.line(), defRef.column())
+
+                while checkLex and beginRef and not (checkLex.line_begin() == beginRef.line() and checkLex.column_begin() == beginRef.column()):
+
+                    # Check if the parameter of the function uses a shared_ptr
+                    if checkLex.next(True, True) and checkLex.next(True, True).next(True, True):
+                        if checkLex.text() == 'shared_ptr' and checkLex.ent() and stringIsStd(checkLex.ent().longname(), 'shared_ptr'):
+                            ok = True
+                            break
+                    checkLex = checkLex.previous(True, True)
+
+            if lexeme.next(True, True).next(True, True) and lexeme.next(True, True).next(True, True).ent():
+                obj = lexeme.next(True, True).next(True, True).ent()
+
+            lexeme = lexeme.next(True, True)
+
+        if not ok:
+            if obj:
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, obj.name())
+            else:
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR2)

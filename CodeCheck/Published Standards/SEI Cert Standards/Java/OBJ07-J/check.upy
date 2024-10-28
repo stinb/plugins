@@ -1,0 +1,120 @@
+ERR1 = 'Sensitive classes must not let themselves be copied.'
+
+
+# The ID for the check
+def ids():
+    return ('OBJ07-J', 'JAVA_OBJ07')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'OBJ07-J': 'Published Standards/SEI Cert Standards/Java/Sensitive classes must not let themselves be copied',
+        'JAVA_OBJ07': 'All Checks/Language Specific/Java/Object Orientation/Sensitive classes must not let themselves be copied',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'OBJ07-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+        ],
+        'JAVA_OBJ07': [
+            'Language: Java',
+            'Object Orientation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Sensitive classes must not let themselves be copied'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Sensitive classes must not let themselves be copied</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to make sensitive classes noncopyable can permit violations of class invariants and provide malicious subclasses with the opportunity to exploit the code to create new instances of objects, even in the presence of the default security manager (in the absence of custom security checks).</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/OBJ07-J.+Sensitive+classes+must+not+let+themselves+be+copied</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class SensitiveClass {
+  private char[] filename;
+  private Boolean shared = false;
+
+  SensitiveClass(String filename) {
+    this.filename = filename.toCharArray();
+  }
+
+  final void replace() {
+    if (!shared) {
+      for(int i = 0; i &lt; filename.length; i++) {
+        filename[i]= 'x' ;}
+    }
+  }
+
+  final String get() {
+    if (!shared) {
+      shared = true;
+      return String.valueOf(filename);
+    } else {
+      throw new IllegalStateException("Failed to get instance");
+    }
+  }
+
+  final void printFilename() {
+    System.out.println(String.valueOf(filename));
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>In this check, a class is automatically considered a sensitive class if it contains at least one private variable member.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class ~Final"):
+        clonable = True
+
+        for func_ref in class_ref.ent().refs("Define", "Final Method Public Member"):
+            if func_ref.ent().name() == "clone":
+                lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+                while lex and lex.text() != "{":
+                    if lex.text() == "throws" and lex.token() == "Keyword":
+                        lex = lex.next(ignore_whitespace=True)
+                        if lex.text() == "CloneNotSupportedException" and lex.token() == "Identifier":
+                            clonable = False
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+        if clonable and class_ref.ent().ref("Define", "Variable Private Member"):
+            check.violation(class_ref.ent(), file,
+                            class_ref.line(), class_ref.column(), ERR1)

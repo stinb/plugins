@@ -1,0 +1,104 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 08-03-2021
+
+import re
+import Modules
+
+ERR1 = "Bitwise operator %1 used with a Boolean-like operand"
+
+def id():
+    return 'EXP46-C'
+
+def name():
+    return "Published Standards/SEI Cert Standards/C/" +  """\
+Do not use a bitwise operator with a Boolean-like operand"""
+
+
+
+
+def tags(id):
+    return {
+        'EXP46-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Likely',
+            'Remediation Cost: Low',
+            'Priority: P9',
+            'Level: L2',
+            'Expressions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Mixing bitwise and relational operators in the same full expression can be a sign of a logic error in the expression where a logical operator is usually the intended operator. Do not use the bitwise AND (&), bitwise OR (|), or bitwise XOR (^) operators with an operand of type _Bool, or the result of a relational-expression or equality-expression. If the bitwise operator is intended, it should be indicated with use of a parenthesized expression.</p>
+<p>Non-compliant</p>
+<pre><code language="C++">if (!(getuid() & geteuid() == 0)) {
+  /* ... */
+}
+</code></pre>
+<p>Compliant</p>
+<pre><code language="C++">if (!(getuid() && geteuid() == 0)) {
+  /* ... */
+}
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not re.search(r'\^|&|\|', file.contents()):
+        return
+
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    lexemes = lexer.lexemes()
+
+    ok = True
+    for lexeme in lexemes:
+        if lexeme.inactive():
+            continue
+
+        # Find any occurance of ^, &, or |
+        if re.match(r'(\^|&|\|)$', lexeme.text()):
+            prevLex = lexeme
+            nextLex = lexeme
+            tempLex = lexeme.previous(True, True)
+            if tempLex and (tempLex.text() == '(' or tempLex.token() == 'Operator'):
+                continue
+            
+
+            # Find any following or preceding boolean-like operand
+            while prevLex and not re.match(r';|}|{|<|>|<=|>=|==|!=', prevLex.text()):
+                if prevLex.ent() and prevLex.ent().type() == '_Bool':
+                    ok = False
+                    break
+
+                prevLex = prevLex.previous(True, True)
+
+            while nextLex and not re.match(r';|}|{|<|>|<=|>=|==|!=|\)|,', nextLex.text()):
+                if nextLex.text() == '(':
+                    nextLex = Modules.findClose(nextLex)
+                if nextLex.ent() and nextLex.ent().type() == '_Bool':
+                    ok = False
+                    break
+
+                nextLex = nextLex.next(True, True)
+
+
+            # Mark the 'ok' variable
+            if (prevLex and re.match(r'(<|>|<=|>=|==|!=)$', prevLex.text()) or nextLex and re.match(r'(<|>|<=|>=|==|!=)$', nextLex.text())):
+                ok = False
+
+        if not ok:
+            check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text())
+            ok = True
+

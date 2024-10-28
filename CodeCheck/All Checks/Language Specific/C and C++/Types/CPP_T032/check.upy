@@ -1,0 +1,114 @@
+import re
+
+MAX_RETURN_VAR = 2
+ERR1 = "Multiple output values from a function not returned as a struct or tuple."
+
+# The ID for the check
+def ids():
+    return ('A8-4-4', 'CPP_T032')
+
+# The short name of the check
+def name(id):
+    return {
+        'A8-4-4': 'Published Standards/AUTOSAR/Multiple output values from a function should be returned as a struct or tuple.',
+        'CPP_T032': 'All Checks/Language Specific/C and C++/Types/Multiple output values from a function should be returned as a struct or tuple.',
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'A8-4-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T032': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>Returning multiple values from a function using a struct or tuple clearly states output parameters and allows to avoid confusion of passing them as a reference in a function call. Returning a struct or tuple will not have an additional overhead for compilers that support return-value-optimization.</p>
+
+<p>In C++14, a returned tuple can be conveniently processed using <code>std::tie</code> at the call site, which will put the tuple elements directly into existing local variables. In C++17, structured bindings allow to initialize local variables directly from members or elements of a returned struct or tuple.</p>
+
+<p>Note: For return types representing an abstraction, a struct should be preferred over a generic tuple.</p>
+
+<p>Note: This rule applies equally to <code>std::pair</code>, which is a special kind of tuple for exactly two elements.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A8-4-4.cpp 289816 2017-10-06 11:19:42Z michal.szczepankiewicz $
+
+#include &lt;tuple&gt;
+
+// Non-compliant, remainder returned as the output parameter
+int Divide1(int dividend, int divisor, int& remainder)
+{
+    remainder = dividend % divisor;
+    return dividend / divisor;
+}
+
+// Compliant, both quotient and remainder returned as a tuple
+std::tuple&lt;int, int&gt; Divide2(int dividend, int divisor)
+{
+    return std::make_tuple(dividend / divisor, dividend % divisor);
+}
+
+// Compliant since C++17, return tuple using list-initialization
+// std::tuple&lt;int, int&gt; Divide3(int dividend, int divisor)
+// {
+//     return { dividend / divisor, dividend % divisor };
+// }
+
+int main()
+{
+    int quotient, remainder;
+    std::tie(quotient, remainder) = Divide2(26, 5); // store in local variables
+    // auto [quotient, remainder] = Divide3(26, 5); // since C++17, by
+    // structured bindings
+    return 0;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• C++ Core Guidelines [11]: F.21: To return multiple "out" values, prefer returning a tuple or struct.
+</p>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    for ref in file.filerefs("Define","Function", True):
+        if ref.ent().parameters():
+            passby_ref = 0 if ref.ent().type() == "void" else 1
+            for param in ref.ent().ents("Define","Parameter"):
+                if param.type() and re.search(r"&", param.type()):
+                    if param.ref("C Setby"):
+                        passby_ref += 1
+            if passby_ref >= MAX_RETURN_VAR:
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

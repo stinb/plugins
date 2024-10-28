@@ -1,0 +1,126 @@
+ERR1 = 'Free dynamically allocated memory when no longer needed.'
+
+
+# The ID for the check
+def id():
+    return ('MEM31-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MEM31-C': 'Published Standards/SEI Cert Standards/C/Free dynamically allocated memory when no longer needed',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MEM31-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Free dynamically allocated memory when no longer needed'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Free dynamically allocated memory when no longer needed</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to free memory can result in the exhaustion of system memory resources, which can lead to a denial-of-service attack.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/MEM31-C.+Free+dynamically+allocated+memory+when+no+longer+needed</i></p>
+<p><b>Exceptions</b></p>
+<p><i>MEM31-C-EX1: Allocated memory does not need to be freed if it is assigned to a pointer whose lifetime includes program termination.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdlib.h&gt;
+
+enum { BUFFER_SIZE = 32 };
+
+int f(void) {
+  char *text_buffer = (char *)malloc(BUFFER_SIZE);
+  if (text_buffer == NULL) {
+    return -1;
+  }
+  return 0;
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        dynamic_objs = {}
+
+        for obj_ref in func_ref.ent().refs("Set", "Object ~Static"):
+            lex = lexer.lexeme(obj_ref.line(), obj_ref.column())
+            on_set = False
+            parenthesis = 0
+
+            while lex and (lex.text() != ";"):
+                if lex.text() == "(":
+                    parenthesis += 1
+                elif lex.text() == ")":
+                    if not parenthesis:
+                        break
+
+                    parenthesis -= 1
+                if lex.text() == "=":
+                    on_set = True
+                elif on_set and lex.text() in ["malloc", "calloc", "realloc", "kmalloc", "kzalloc", "kcalloc", "vmalloc"]:
+                    dynamic_objs[obj_ref.ent().id()] = obj_ref
+                    break
+
+                lex = lex.next(ignore_whitespace=True)
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == "free":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and (lex.ent().id() in dynamic_objs) and (call_ref.line() > dynamic_objs[lex.ent().id()].line()):
+                        dynamic_objs.pop(lex.ent().id())
+
+                    lex = lex.next(ignore_whitespace=True)
+
+        for obj_ref in dynamic_objs.values():
+            check.violation(obj_ref.ent(), file,
+                            obj_ref.line(), obj_ref.column(), ERR1)

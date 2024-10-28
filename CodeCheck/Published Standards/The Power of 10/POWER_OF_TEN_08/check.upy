@@ -1,0 +1,363 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-06-26
+
+
+import re
+
+from Modules import findClose
+from Modules import lexemeBeforeLexeme
+
+
+ERR1 = 'Too many preprocessor conditionals %1'
+ERR2 = 'Preprocessor directive/operator "%1" not allowed'
+ERR3 = 'Macro definition is not simple because it has %1'
+ERR4 = 'Variadic arguments in function declaration'
+
+LITERAL_NEWLINE = '\\\n'
+
+ALL_CONDITIONALS = {'if', 'ifdef', 'ifndef', 'elif', 'elifdef', 'elifndef',
+'else'}
+
+
+# A list of size 1, because a function can't change a number in the global scope
+totalConditionals = [0]
+
+allowedConditionals = set()
+
+
+def ids():
+    return ('POWER_OF_TEN_08', 'CPP_PR004')
+
+
+def name(id):
+    return {
+        'POWER_OF_TEN_08': '''Published Standards/The Power of 10/\
+8 Limit Preprocessor Usage''',
+        'CPP_PR004': '''All Checks/Language Specific/C and C++/Preprocessor/\
+Limit Preprocessor Usage''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POWER_OF_TEN_08': [
+            'Language: C',
+            'Language: C++',
+            'Standard: The Power of Ten',
+            'Preprocessor'
+        ],
+        'CPP_PR004': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor'
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p>The use of the preprocessor must be limited to the inclusion of header files
+and simple macro definitions. Token pasting, variable argument lists (ellipses),
+and recursive macro calls are not allowed. All macros must expand into complete
+syntactic units. The use of conditional compilation directives must be kept to a
+minimum.</p>
+
+<p><b>Rationale</b></p>
+
+<p>The C preprocessor is a powerful obfuscation tool that can destroy code
+clarity and befuddle many text-based checkers. The effect of constructs in
+unrestricted preprocessor code can be extremely hard to decipher, even with a
+formal language definition. In a new implementation of the C preprocessor,
+developers often must resort to using earlier implementations to interpret
+complex defining language in the C standard.</p>
+
+<p>The rationale for the caution against conditional compilation is equally
+important. With just 10 conditional compilation directives, there could be up to
+2<sup>10</sup> possible versions of the code, each of which would have to be
+tested - causing a huge increase in the required test effort. The use of
+conditional compilation cannot always be avoided, but even in large software
+development efforts there is rarely justification for more than one or two such
+directives, beyond the standard boilerplate that avoids multiple inclusions of
+the same header file. A tool-based checker should flag each use and each use
+should be justified in the code.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+#define A 0
+#define B 1
+
+#if A                                           // Violation - too many conditionals
+  #define X 1
+#elif B                                         // Violation - too many conditionals
+  #define X 1
+#endif
+
+#undef B                                        // Violation - directive not allowed
+#include_next "stdlib.h"                        // Violation - directive not allowed
+#warning "Hello there"                          // Violation - directive not allowed
+
+#define DEBUG(x, ...) printf(x, __VA_ARGS__)    // Violation - variadic arguments
+
+#define STRINGIZE(n) printf_s("token"#n)        // Violation - operator not allowed
+#define PASTE(n) printf_s(token##n)             // Violation - operator not allowed
+#define CHARIZE(x) #@x                          // Violation - operator not allowed
+
+#define MIN(x, y) ((y &lt; x) ? y : x)
+#define MACRO_IN_DEF_FUNCTIONAL(x, y) MIN(x, y) // Violation - not allowed by option
+#define MACRO_IN_DEF_LITERAL A                  // Violation - not allowed by option
+
+#define BRACES(x, y) {}                         // Violation - not allowed by option
+#define MULTIPLE_LINES 1                        /* Violation - not allowed by option */ \
+        + 1
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+
+<p>This check does not evaluate if all macros expand into valid syntax. For code
+that is not inactive, this is provided by compiler errors.</p>
+
+<p>A macro that is not a "simple macro" is interpreted as having any one of the
+following characteristics, which can each be customized</p>
+
+<ul>
+<li>It has a macro</li>
+<li>It has a multiple lines</li>
+<li>It has curly braces</li>
+</ul>
+
+<p>This rule says that "variable argument lists" are not allowed, which we
+interpret to mean variadic arguments in function macros and also in functions.
+Variadic arguments in functions are not allowed because the variadic argument
+macros are used. We will not consider these to be simple macros because of how
+different the syntax is compared to normal array syntax.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('macroInDef', 'Allow macros with macros', False)
+    check.options().checkbox('multipleLine', 'Allow macros with multiple lines', False)
+    check.options().checkbox('braces', 'Allow macros with curly braces', False)
+    check.options().checkbox('varArgFn', 'Allow variadic arguments in functions', False)
+    check.options().integer('maxConditionals', 'Max amount of conditional directives', 0)
+    check.options().integer('maxConditionalsPerFile', 'Max amount of conditional directives per file', 0)
+    check.options().text('allowedConditionals', 'Allowed conditional directives (space-separated)', 'if ifdef ifndef elif elifdef elifndef else')
+
+
+def check(check, file):
+    # Options
+    macroInDef             = check.options().lookup('macroInDef')
+    multipleLine           = check.options().lookup('multipleLine')
+    braces                 = check.options().lookup('braces')
+    varArgFn               = check.options().lookup('varArgFn')
+    maxConditionals        = check.options().lookup('maxConditionals')
+    maxConditionalsPerFile = check.options().lookup('maxConditionalsPerFile')
+    if not allowedConditionals:
+        for word in check.options().lookup('allowedConditionals').split():
+            if word and word[0] == '#':
+                word = word[1:]
+            if word in ALL_CONDITIONALS:
+                allowedConditionals.add(word)
+
+    # Go through all lexemes to check the preprocessor usage
+    conditionalsPerFile = 0
+    lexer = file.lexer(True)
+    lex = lexer.first()
+    while lex:
+        # Skip if it's not a preprocessor directive
+        if lex.token() != 'Preprocessor':
+            lex = lex.next(True, True)
+            continue
+
+        # Violation if there are too many conditionals
+        if lex.text() in ALL_CONDITIONALS:
+            totalConditionals[0] += 1
+            conditionalsPerFile += 1
+            reasons = []
+            if conditionalsPerFile > maxConditionalsPerFile:
+                reasons.append('in this file')
+            if totalConditionals[0] > maxConditionals:
+                reasons.append('in the whole project')
+            # Too many conditionals
+            if reasons:
+                reasons = join(reasons)
+                check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1, reasons)
+            # Not an allowed conditional
+            if lex.text() not in allowedConditionals:
+                check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR2, getFullOperator(lex))
+        # Violation it's a disallowed directive or operator
+        elif lex.text() == '#':
+            lexNext = lex.next(True, True)
+            if lexNext and lexNext.token() != 'Preprocessor':
+                lexPrev = lex.previous(True, True)
+                isDirective = not lexPrev or lexPrev.line_begin() != lex.line_begin()
+                # Directive
+                if isDirective:
+                    check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR2, lexNext.text())
+                # Operator
+                else:
+                    check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR2, getFullOperator(lex))
+        # Violation if the directive isn't allowed
+        # (to reduce redundant violations, ignore literal newline characters)
+        elif lex.text() not in {'include', 'define', 'endif', LITERAL_NEWLINE}:
+            check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR2, getFullOperator(lex))
+        # Violation if the macro definition isn't simple
+        elif lex.text() == 'define':
+            reasons = getReasonsMacroIsNotSimple(lex, macroInDef, multipleLine, braces)
+            if reasons:
+                reasons = join(reasons)
+                check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR3, reasons)
+
+        lex = lex.next(True, True)
+
+    # Skip the next part if variadic argument functions are allowed
+    if varArgFn:
+        return
+
+    # Check for variadic argument functions
+    for ref in file.filerefs('Define, Declare', 'Function'):
+        ent = ref.ent()
+
+        # Skip if the lexeme wasn't found
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex or lex.text() != ent.name():
+            continue
+
+        # Skip if the parameter parentheses weren't found
+        lexOpen = lex.next(True, True)
+        lexClose = findClose(lexOpen)
+        if not lexClose or lexClose.text() != ')':
+            continue
+
+        # Find an ellipsis in the parameters
+        ellipsis = False
+        lex = lexOpen
+        while lex and not isSameLexeme(lex, lexClose):
+            if lex.text() == '...' and lex.token() == 'Punctuation':
+                ellipsis = True
+                break
+            lex = lex.next(True, True)
+
+        # Skip if the ellipsis wasn't found
+        if not ellipsis:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR4)
+
+
+def isSameLexeme(lex0, lex1):
+    return lex0.line_begin() == lex1.line_begin() \
+    and lex0.line_end() == lex1.line_end() \
+    and lex0.column_begin() == lex1.column_begin() \
+    and lex0.column_end() == lex1.column_end()
+
+
+def getReasonsMacroIsNotSimple(lex, macroInDef, multipleLine, braces):
+    reasons = set()
+
+    # Go next to the identifier or stop
+    lex = lex.next(True, True)
+    if not lex:
+        return
+
+    # Go next or stop
+    lex = lex.next(True, True)
+    if not lex:
+        return
+
+    # Variadic arguments
+    if lex.text() == '(':
+        lexClose = findClose(lex)
+        if lexClose and hasVariadicArguments(lex, lexClose):
+            reasons.add('variadic arguments')
+
+    # Stop early if all of the macro complexities are allowed
+    if macroInDef and multipleLine and braces:
+        return list(reasons)
+
+    # Look at the lexemes of the definition
+    line = lex.line_begin()
+    while lex:
+        # Stop at the end of the definition
+        if lex.line_begin() != line:
+            break
+
+        # Look at the token
+        token = lex.token()
+        if token == 'Identifier':
+            ent = lex.ent()
+            # Definition has a macro
+            if ent and ent.kind().check('Macro'):
+                # If macros in the definition aren't allowed
+                if not macroInDef:
+                    reasons.add('a macro')
+        elif token == 'Preprocessor':
+            # Definition is multiple lines, and look at the next line
+            if lex.text() == LITERAL_NEWLINE:
+                line += 1
+                # If multiple lines aren't allowed
+                if not multipleLine:
+                    reasons.add('multiple lines')
+        elif token == 'Punctuation':
+            # Definition has a curly brace
+            if lex.text() == '{':
+                # If curly braces aren't allowed
+                if not braces:
+                    reasons.add('curly braces')
+
+        lex = lex.next(True, True)
+
+    reasons = list(reasons)
+    reasons.sort()
+    return reasons
+
+
+def hasVariadicArguments(lex, lexClose):
+    while lex and lexemeBeforeLexeme(lex, lexClose):
+        if lex.text() == '...':
+            return True
+        lex = lex.next(True, True)
+    return False
+
+
+def getFullOperator(lex):
+    texts = [lex.text()]
+
+    # Stringizing, token pasting, or charizing operator
+    if lex.text() == '#':
+        # Stringizing operator
+        lexPrev = lex.previous()
+        lexNext = lex.next()
+        if lexPrev and lexPrev.text() == '#':
+            texts.append(lexPrev.text())
+        # Charizing operator
+        elif lexNext and lexNext.text() == '@':
+            texts.append(lexNext.text())
+
+    return ''.join(texts)
+
+
+def join(strList):
+    length = len(strList)
+    if length == 0:
+        return ''
+    elif length == 1:
+        return strList[0]
+    elif length == 2:
+        return ' and '.join(strList)
+    else:
+        return ', and '.join([', '.join(strList[:-1]), strList[-1]])

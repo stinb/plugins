@@ -1,0 +1,116 @@
+ERR1 = 'Do not store pointers returned by certain functions.'
+
+
+# The ID for the check
+def id():
+    return ('ENV34-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ENV34-C': 'Published Standards/SEI Cert Standards/C/Do not store pointers returned by certain functions',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'ENV34-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not store pointers returned by certain functions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not store pointers returned by certain functions</p>
+<p><b>Risk Assessment</b></p>
+<p>Storing the pointer to the string returned by getenv(), localeconv(), setlocale(), or strerror() can result in overwritten data.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/ENV34-C.+Do+not+store+pointers+returned+by+certain+functions</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;stdio.h&gt;
+  
+void func(void) {
+  char *tmpvar;
+  char *tempvar;
+ 
+  tmpvar = getenv("TMP");
+  if (!tmpvar) {
+    /* Handle error */
+  }
+  tempvar = getenv("TEMP");
+  if (!tempvar) {
+    /* Handle error */
+  }
+  if (strcmp(tmpvar, tempvar) == 0) {
+    printf("TMP and TEMP are the same.\n");
+  } else {
+    printf("TMP and TEMP are NOT the same.\n");
+  }
+}
+</code></pre>
+"""
+
+
+
+
+def test_language(language):
+    return language == 'C++'
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        # value: ent id of object assigned to by function return
+        restricted_funcs = {"getenv": None, "asctime": None,
+                            "localeconv": None, "setlocale": None, "strerror": None}
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Unresolved Function"), key=lambda x: x.line()):
+            func_name = call_ref.ent().name()
+
+            if func_name in restricted_funcs:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+
+                if lex.previous(ignore_whitespace=True).text() != "=":
+                    continue
+                else:
+                    lex = lex.previous()
+
+                    while lex.token() != "Identifier":
+                        lex = lex.previous()
+
+                    if not restricted_funcs[func_name]:
+                        restricted_funcs[func_name] = lex.ent().id()
+                    elif restricted_funcs[func_name] and restricted_funcs[func_name] != lex.ent().id():
+                        for ref in lex.ent().refs(""):
+                            if ref.line() > call_ref.line():
+                                check.violation(
+                                    lex.ent(), file, ref.line(), ref.column(), ERR1)
+                                break

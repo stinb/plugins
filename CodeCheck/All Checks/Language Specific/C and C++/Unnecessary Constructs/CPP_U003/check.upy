@@ -1,0 +1,133 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# Rewritten by Robby Bennett
+# 2023-03-14
+
+
+import re
+
+
+ERR1 = 'Unused parameter in non-virtual function'
+
+
+def ids():
+    return ('MISRA08_0-1-11', 'CPP_U003')
+
+
+def name(id):
+    return {
+        'MISRA08_0-1-11': '''Published Standards/MISRA-C++ 2008/\
+0-1-11 Unused Parameters in Non-virtual Functions''',
+        'CPP_U003': '''All Checks/Language Specific/C and C++/Unnecessary Constructs/\
+Unused Parameters in Non-virtual Functions''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_0-1-11': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Unnecessary Constructs',
+        ],
+        'CPP_U003': [
+            'Language: C',
+            'Language: C++',
+            'Unnecessary Constructs',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p>
+There shall be no <i>unused</i> parameters (named or unnamed) in non-virtual
+functions.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+<i>Unused</i> function parameters are often due to design changes and can lead
+to mismatched parameter lists.
+</p>
+
+<p><b>Exception</b></p>
+
+<p>
+An unnamed parameter in the definition of a function that is used as a
+<i>callback</i> does not violate this rule.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">  typedef int16_t ( * CallbackFn )( int16_t a, int16_t b );
+  int16_t Callback_1 ( int16_t a, int16_t b ) // Compliant
+  {
+    return a + b;
+  }
+  int16_t Callback_2 ( int16_t a, int16_t b ) // Non-compliant
+  {
+    return a;
+  }
+  int16_t Callback_3 ( int16_t, int16_t b )   // Compliant by exception
+  {
+    return b;
+  }
+  void Dispatch ( int16_t n,
+                  int16_t a,
+                  int16_t b,
+                  int16_t c, // Non-compliant
+                  int16_t )  // Non-compliant if Dispatch not a callback.
+  {
+    CallbackFn pFn;
+    switch ( n )
+    {
+      case  0: pFn = &Callback_1; break;
+      case  1: pFn = &Callback_2; break;
+      default: pFn = &Callback_3; break;
+    }
+    ( *pFn )( a, b );
+  }
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('ignoreTemplates', 'Ignore function templates', False)
+
+
+def check(check, file):
+    entKind = 'Function ~Virtual'
+    if check.options().lookup('ignoreTemplates'):
+        entKind += ' ~Template'
+
+    for ref in file.filerefs('Define', entKind, True):
+        func = ref.ent()
+
+        for ref in func.refs('Define', 'Parameter', True):
+            param = ref.ent()
+
+            # Skip if the parameter is used
+            if param.name() == '...':
+                continue
+            if param.refs('Setby ~Init, Useby ~Inactive, Modifyby, Callby'):
+                continue
+            if func.refs('Useby Ptr') and param.kind().check('Unnamed'):
+                continue
+
+            check.violation(param, ref.file(), ref.line(), ref.column(), ERR1)

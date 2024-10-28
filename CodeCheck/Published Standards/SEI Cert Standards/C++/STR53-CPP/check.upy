@@ -1,0 +1,135 @@
+import re
+
+
+ERR1 = 'Range check element access.'
+
+
+# The ID for the check
+def id():
+    return ('STR53-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'STR53-CPP': 'Published Standards/SEI Cert Standards/C++/Range check element access',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Range check element access'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Range check element access</p>
+<p><b>Risk Assessment</b></p>
+<p>Unchecked element access can lead to out-of-bound reads and writes and write-anywhere exploits. These exploits can, in turn, lead to the execution of arbitrary code with the permissions of the vulnerable process.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/STR53-CPP.+Range+check+element+access</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;string&gt;
+  
+extern std::size_t get_index();
+  
+void f() {
+  std::string s("01234567");
+  s[get_index()] = '1';
+}
+
+
+#include &lt;string&gt;
+#include &lt;locale&gt;
+ 
+void capitalize(std::string &s) {
+  std::locale loc;
+  s.front() = std::use_facet&lt;std::ctype&lt;char&gt;&gt;(loc).toupper(s.front());
+}
+</pre>
+<p><i>Developer Notes: </i>This check automatically flags a violation when a function is passed as an argument to the string::operator[] function.</p>
+"""
+
+
+def tags(id):
+    return {
+        'STR53-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P6',
+            'Level: L2',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in file.filerefs("Define", "Object, Parameter"):
+            obj_type = obj_ref.ent().type()
+
+            if obj_type and ("string" in obj_type):
+                for ref in obj_ref.ent().refs(""):
+                    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+
+                    if lex.next().text() != "[":
+                        continue
+
+                    on_index = 0
+
+                    while lex:
+                        if lex.text() == "[":
+                            on_index += 1
+                        elif lex.text() == "]":
+                            on_index -= 1
+
+                            if not on_index:
+                                break
+                        elif on_index and lex.ent() and lex.ent().kind().check("Function"):
+                            check.violation(obj_ref.ent(), ref.file(),
+                                            ref.line(), ref.column(), ERR1)
+
+                        lex = lex.next(ignore_whitespace=True)
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if re.search(r"basic_string::(front|back)", call_ref.ent().longname()):
+                lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+
+                if lex.previous().text() == ".":
+                    lex = lex.previous().previous()
+
+                    if lex.ent() and ("string" in lex.ent().type()):
+                        compliant = False
+
+                        for use_ref in lex.ent().refs("Useby"):
+                            if (use_ref.ent().id() != func_ref.ent().id()) or (use_ref.line() > call_ref.line()):
+                                continue
+
+                            use_lex = file.lexer().lexeme(
+                                use_ref.line(), use_ref.column())
+
+                            if (use_lex.next().text() == ".") and (use_lex.next().next().text() == "empty"):
+                                compliant = True
+                                break
+
+                        if not compliant:
+                            check.violation(
+                                lex.ent(), file, call_ref.line(), call_ref.column(), ERR1)

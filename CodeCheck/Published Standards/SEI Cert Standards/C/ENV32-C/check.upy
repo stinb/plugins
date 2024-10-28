@@ -1,0 +1,137 @@
+ERR1 = 'All exit handlers must return normally.'
+
+
+# The ID for the check
+def id():
+    return ('ENV32-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ENV32-C': 'Published Standards/SEI Cert Standards/C/All exit handlers must return normally',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'ENV32-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Likely',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+            'Control Flow',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'All exit handlers must return normally'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>All exit handlers must return normally</p>
+<p><b>Risk Assessment</b></p>
+<p>Terminating a call to an exit handler in any way other than by returning is undefined behavior and may result in abnormal program termination or other unpredictable behavior. It may also prevent other registered handlers from being invoked.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/c/ENV32-C.+All+exit+handlers+must+return+normally</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;stdlib.h&gt;
+
+void exit1(void) {
+  /* ... Cleanup code ... */
+  return;
+}
+
+void exit2(void) {
+  extern int some_condition;
+  if (some_condition) {
+    /* ... More cleanup code ... */
+    exit(0);
+  }
+  return;
+}
+
+int main(void) {
+  if (atexit(exit1) != 0) {
+    /* Handle error */
+  }
+  if (atexit(exit2) != 0) {
+    /* Handle error */
+  }
+  /* ... Program code ... */
+  return 0;
+}
+
+
+
+#include &lt;stdlib.h&gt;
+#include &lt;setjmp.h&gt;
+
+jmp_buf env;
+int val;
+
+void exit1(void) {
+  longjmp(env, 1);
+}
+
+int main(void) {
+  if (atexit(exit1) != 0) {
+    /* Handle error */
+  }
+  if (setjmp(env) == 0) {
+    exit(0);
+  } else {
+    return 0;
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call", "Unresolved Function"):
+        if call_ref.ent().name() in ["atexit", "at_quick_exit"]:
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param and (lex.token() == "Identifier") and lex.ent() and lex.ent().kind().check("Function"):
+                    for ref in lex.ent().refs("Call", "Unresolved Function"):
+                        if ref.ent().name() in ["_Exit", "exit", "quick_exit", "longjmp"]:
+                            check.violation(ref.scope(), file,
+                                            ref.line(), ref.column(), ERR1)
+
+                lex = lex.next(ignore_whitespace=True)

@@ -1,0 +1,161 @@
+ERR1 = 'Do not suppress or ignore checked exceptions.'
+
+
+# The ID for the check
+def ids():
+    return ('ERR00-J', 'JAVA_ERR00')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ERR00-J': 'Published Standards/SEI Cert Standards/Java/Do not suppress or ignore checked exceptions',
+        'JAVA_ERR00': 'All Checks/Language Specific/Java/Exceptional Behavior/Do not suppress or ignore checked exceptions',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'ERR00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_ERR00': [
+            'Language: Java',
+            'Exceptional Behavior',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not suppress or ignore checked exceptions'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not suppress or ignore checked exceptions</p>
+<p><b>Risk Assessment</b></p>
+<p>Ignoring or suppressing exceptions can result in inconsistent program state.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/ERR00-J.+Do+not+suppress+or+ignore+checked+exceptions</i></p>
+<p><b>Exceptions</b></p>
+<p><i>ERR00-J-EX0: Exceptions that occur during the freeing of a resource may be suppressed in those cases where failure to free the resource cannot affect future program behavior. Examples of freeing resources include closing files, network sockets, shutting down threads, and so forth. Such resources are often freed in catch or finally blocks and never reused during subsequent execution. Consequently, the exception cannot influence future program behavior through any avenue other than resource exhaustion. When resource exhaustion is adequately handled, it is sufficient to sanitize and log the exception for future improvement; additional error handling is unnecessary in this case.</i></p>
+<p><i>ERR00-J-EX1: When recovery from an exceptional condition is impossible at a particular abstraction level, code at that level must not handle that exceptional condition. In such cases, an appropriate exception must be thrown so that higher level code can catch the exceptional condition and attempt recovery.</i></p>
+<p><i>ERR00-J-EX2: An InterruptedException may be caught and suppressed when extending class Thread [Goetz 2006]. An interruption request may also be suppressed by code that implements a thread's interruption policy [Goetz 2006, p. 143].</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">try {
+  //...
+} catch (IOException ioe) {
+  ioe.printStackTrace();
+}
+
+
+
+class Foo implements Runnable {
+  public void run() {
+    try {
+      Thread.sleep(1000);
+    } catch (InterruptedException e) {
+      // Ignore
+    }
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>The check automatically flags catch blocks that are one-liner, empty or contain comments only.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == "Java"
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for method_ref in file.filerefs("Define", "Method"):
+        method_ent = method_ref.ent()
+        method_cfg = method_ent.control_flow_graph()
+        if not method_cfg:
+            continue
+
+        for node in method_cfg.nodes():
+            if node.kind() == "try-catch":
+                lex = lexer.lexeme(node.line_begin(), node.column_begin())
+                on_scope = 0
+                on_new = False
+                on_throw = False
+                catch_param = None
+                compliant = False
+                interrupted = False
+                is_interruptedexc = False
+
+                while lex:
+                    if lex.text() == "{":
+                        on_scope += 1
+                    elif lex.text() == "}":
+                        on_scope -= 1
+
+                        if not on_scope:
+                            if compliant and ((lex.line_begin() - node.line_begin()) <= 2):
+                                compliant = False
+
+                            break
+                    elif not on_scope and lex.ent() and lex.ent().kind().check("Catch Parameter"):
+                        catch_param = lex.ent()
+                    elif not on_scope and lex.text() == "InterruptedException" and lex.token() == "Identifier":
+                        is_interruptedexc = True
+                    elif on_scope and is_interruptedexc and (lex.text() == "interrupt") and (lex.token() == "Identifier") and lex.ref().kind().check("Callby"):
+                        interrupted = True
+                        break
+                    elif on_scope and lex.text() == "throw":
+                        on_throw = True
+                    elif on_throw and lex.text() == "new":
+                        on_new = True
+                    elif on_throw and lex.text() == ";":
+                        on_throw = False
+                        on_new = False
+                    elif on_new and lex.ent() and lex.ent().kind().check("Class") and ("Exception" in lex.ent().type()):
+                        on_param = 0
+
+                        while lex:
+                            if lex.text() == "(":
+                                on_param += 1
+                            elif lex.text() == ")":
+                                on_param -= 1
+
+                                if not on_param:
+                                    break
+                            elif on_param and lex.ent() and lex.ent().id() == catch_param.id():
+                                compliant = True
+                                break
+
+                            lex = lex.next()
+
+                        if compliant:
+                            break
+
+                        on_new = False
+                    elif on_scope and lex.token() not in {"Comment"}:
+                        compliant = True
+
+                    lex = lex.next(ignore_whitespace=True)
+
+                if not compliant and not interrupted:
+                    check.violation(None, file, node.line_begin(),
+                                    node.column_begin(), ERR1)

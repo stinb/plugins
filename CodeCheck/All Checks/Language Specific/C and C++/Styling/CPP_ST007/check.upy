@@ -1,0 +1,91 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 7-21-2021
+import re
+
+ERR1 = 'Declaration was made within an individual block'
+
+def id():
+    return 'CPP_ST007'
+
+def name():
+    return "All Checks/Language Specific/C and C++/Styling/" +  """\
+Declarations shall not be made within an individual block but \
+shall be placed at the function level or at the module level."""
+
+
+def tags(id):
+    return {
+        'CPP_ST007': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Declarations shall not be made within an individual block but
+shall be placed at the function level or at the module level.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    # Gather and go through func refs
+    funcs = file.filerefs('Define', 'Function')
+    for func in funcs:
+
+        # Find the function block
+        lexeme = lexer.lexeme(func.line(), 0)
+        while lexeme and lexeme.text() != '{':
+            lexeme = lexeme.next(True, True)
+        if not lexeme:
+            return
+        closeFunc = findClose(lexeme)
+        if not closeFunc:
+            return
+
+        lexeme = lexeme.next(True, True)
+        while lexeme and not (lexeme.line_begin() == closeFunc.line_begin() and lexeme.column_begin() == closeFunc.column_begin()):
+
+            # Find any blocks inside the function
+            if lexeme.text() == '{':
+                close = findClose(lexeme)
+                while close and lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    
+                    # Look for any definein refs in these blocks and throw a violation
+                    if lexeme.ent():
+                        lexRefs = lexeme.ent().refs('Definein')
+                        for lexRef in lexRefs:
+                            if lexRef.line() == lexeme.line_begin():
+                                check.violation(lexeme.ref().ent(), file, lexeme.ref().line(), lexeme.ref().column(), ERR1)
+                    lexeme = lexeme.next(True, True)
+
+            lexeme = lexeme.next(True, True)
+
+            
+            
+# Find the closing curly brace when given an open curly brace
+def findClose(lexeme):
+    count = 0
+    while lexeme and not (lexeme.text() == '}' and count == 0):
+        if lexeme.text() == '{':
+            count += 1
+        
+        lexeme = lexeme.next(True, True)
+
+        if lexeme and lexeme.text() == '}':
+            count -= 1
+
+
+    return lexeme

@@ -1,0 +1,126 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 2-9-2023
+
+import re
+import Modules
+
+DEF_NAME = "Define wrappers around native methods"
+
+# The ID for the check
+def ids():
+    return ('JNI00-J', 'JAVA_JNI00')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'JNI00-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_JNI00': "All Checks/Language Specific/Java/Java Native Interface/" + DEF_NAME,
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'JNI00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_JNI00': [
+            'Language: Java',
+            'Java Native Interface',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Define wrappers around native methods.
+</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to define wrappers around native methods can allow unprivileged
+callers to invoke them and exploit inherent vulnerabilities such as buffer
+overflows in native libraries.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/JNI00-J.+Define+wrappers\
++around+native+methods</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public final class NativeMethod {
+
+  // Public native method
+  public native void nativeOperation(byte[] data, int offset, int len);
+
+  // Wrapper method that lacks security checks and input validation
+  public void doOperation(byte[] data, int offset, int len) {
+    nativeOperation(data, offset, len);
+  }
+
+  static {
+    // Load native library in static initializer of class
+    System.loadLibrary("NativeMethodLib");
+  }
+}
+</code></pre>
+<p><b>Developer's Note:</b></p>
+Automated detection for this check is not feasible in the fully general
+case. This check simply looks for any public native method, checks
+that there is a wrapper for it, and if so, that the wrapper invokes a
+permission-checking method from the SecurityManager class.
+</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    # look for public native methods
+    for method_ref in file.filerefs("Define", "Method ~Private ~Protected", True):
+        method_ent = method_ref.ent()
+        native = False
+
+        # make sure it's native
+        lexeme = lexer.lexeme(method_ref.line(), method_ref.column())
+        while (lexeme and lexeme.previous() and (lexeme.token() != "Newline")):
+            if lexeme.text() == "native":
+                native = True
+            lexeme = lexeme.previous()
+
+        if native == True:
+            # check for a Callby Nondynamic ref, if it has one then the ref.ent().name() is the name of the parent/wrapper function
+            for callby_ref in method_ent.refs("Java Callby Nondynamic"):
+                secured = False
+
+                calling_ent = callby_ref.ent() #calling ent / wrapper
+
+                # make sure the wrapper is a method and not a class
+                if not re.search(r"Method",calling_ent.kindname()):
+                    check.violation(method_ent, file, callby_ref.line(), callby_ref.column(), "Wrapper should be defined around public native method '%1'", method_ent.name())
+
+                # check the wrapper function to see if a securityManager function is called in that method as well
+                for call_ref in calling_ent.refs("Java Call", "Java Method"):
+                    # print("Wrapper ent: ", calling_ent.name())
+                    # print("Called method: ", call_ref.ent().name())
+                    if re.search(r"securityManager", call_ref.ent().name()):
+                        secured = True
+
+                if secured == False:
+                    check.violation(method_ent, file, callby_ref.line(), callby_ref.column(), "Wrapper surrounding public native method '%1' is not secure", method_ent.name())

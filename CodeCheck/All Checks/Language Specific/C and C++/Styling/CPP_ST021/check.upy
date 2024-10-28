@@ -1,0 +1,270 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-12-2020
+
+import re
+
+# The ID for the check
+def id():
+    return 'CPP_ST021'
+
+# The short name of the check
+def name():
+    return """\
+All Checks/Language Specific/C and C++/Styling/Placement of braces for \
+constructs shall be consistent within a module"""
+
+
+
+def tags(id):
+    return {
+        'CPP_ST021': [
+            'Language: C',
+            'Language: C++',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """\
+<p><b>Developer's Note</b></p>
+<p>This check first looks at the first construct in the module to see if it
+follows one of the standards. Then it looks at the rest of the functions of
+the module to see if they follow the same format the pattern that the first
+function used. If the first function doesn't follow the standard and all the
+other functions do, then a violation will be thrown for not following the
+standard on the first function. The rest of the functions will also throw
+violations because they weren't consistent with the first function even if
+they follow the standard.</p>
+<p>Consistent placement of curly braces helps improve readability, as shows
+in the examples below.</p>
+<pre><code language="C++">if (expression) {
+    statements;
+}
+if (expression)
+{
+    statements;
+}
+if (expression)
+    {
+    statements;
+    }
+</code></pre>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+# Options for the check
+def define_options(check):
+   return
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if file and file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    func_refs = file.filerefs('Define', 'C Function ~Unknown ~Unresolved')
+    if not func_refs:
+        return
+
+    firstConstruct = True
+    pattern = []
+    pattern1 = {}
+    for func in func_refs:
+        first = True
+        funcClose = None
+        indent = ''
+        begin, end = getFunctionDefnLines(func.ent())
+        if begin == None or end == None:
+            continue
+        funcLexemes = lexer.lexemes(begin, end)
+
+        # Look for first curly brace in the function
+        for lexeme in funcLexemes:
+            if funcClose and lexeme.line_begin() == funcClose.line_begin() and lexeme.column_begin() == funcClose.column_begin():
+                break
+            ok = True
+            alsoOk = True
+            okAlso = True
+            okClose = True
+
+            if lexeme.text() == '{' and not first:
+                prev = lexeme.previous()
+                previous = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+                # Record the pattern
+                if firstConstruct:
+                    if prev.token() == 'Whitespace':
+                        pattern.append(prev.text())
+                        pattern1['Whitespace'] = prev.text()
+                        prev = prev.previous()
+                    
+                    if prev.token() == 'Newline':
+                        pattern.append(prev.text())
+                        pattern1['Newline'] = prev.text()
+                    else:
+                        pattern = ['noNewline']
+                        pattern1['Newline'] = ''
+
+
+                    # Find corresponding curly brace and check if it adheres to standard
+                    close = findClose(lexeme)
+                    if close:
+                        if close.previous().token() == 'Whitespace':
+                            pattern1['close'] = close.previous().text()
+                        else:
+                            pattern1['close'] = ''
+                        if pattern[0] == 'noNewline':
+                            indent = ''
+                            prevLex = lexeme
+                            while prevLex and prevLex.token() != 'Newline':
+                                prevLex = prevLex.previous()
+                            if prevLex:
+                                prevLex = prevLex.next()
+                            if prevLex.token() == 'Whitespace':
+                                indent = prevLex.text()
+                            if close.column_begin() != len(indent):
+                                alsoOk = False
+                        elif close.column_begin() != lexeme.column_begin():
+                            okAlso = False
+                    firstConstruct = False
+
+
+
+                else:
+                    okClose = True
+                    newPattern = []
+                    newPattern1 = {}
+                    # Record the newPattern
+                    if prev.token() == 'Whitespace':
+                        newPattern.append(prev.text())
+                        prev = prev.previous()
+
+                    if prev.token() == 'Newline':
+                        newPattern.append(prev.text())
+                    else:
+                        newPattern = ['noNewline']
+
+                    # Find corresponding curly brace and check if it adheres to standard
+                    close = findClose(lexeme)
+                    if close:
+                        if pattern[0] == 'noNewline':
+                            indent = ''
+                            prevLex = lexeme
+                            while prevLex and prevLex.token() != 'Newline':
+                                prevLex = prevLex.previous()
+                            if prevLex:
+                                prevLex = prevLex.next()
+                            if prevLex.token() == 'Whitespace':
+                                indent = prevLex.text()
+                            if close.column_begin() != len(indent):
+                                okClose = False
+
+                        if len(close.previous().text()) != len(pattern1['close']):
+                            okClose = False
+                        
+
+                    # Check if curly brace pattern is consistent
+                    if len(newPattern) != len(pattern):
+                        ok = False
+                    else:
+                        for i in range(len(newPattern)):
+                            if newPattern[i] != pattern[i]:
+                                ok = False
+                                break
+
+                # Throw violation if a standard was violated
+                prevLex = lexeme.previous(ignore_comments=True, ignore_whitespace=True)
+                prevLex = prevLex.next()
+                nextLex = lexeme.previous()
+                if not ok:
+                    violation = check.violation(func.ent(), file, lexeme.line_begin(), lexeme.column_begin(), 'The opening curly brace is not consistently placed within the module')
+                    if pattern[0] == 'noNewline':
+                        violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), nextLex.line_end(), nextLex.column_end() + 1, ' ')
+                    else:
+                        patternString = ''
+                        for string in reversed(pattern):
+                            patternString += string
+
+                        if prevLex.column_begin() == lexeme.column_begin():
+                            violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), prevLex.line_begin(), prevLex.column_begin(), patternString)
+                        else:
+                            violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), nextLex.line_end(), nextLex.column_end() + 1, patternString)
+
+                if not okClose:
+                    violation = check.violation(func.ent(), file, close.line_begin(), close.column_begin(), 'The closing curly brace is not consistently placed within the module')
+                    if close.previous().token() == 'Whitespace':
+                        prevLex = close.previous()
+                        violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), prevLex.line_begin(), prevLex.column_begin() + len(prevLex.text()), pattern1['close'] + indent)
+                    else:
+                        prevLex = close
+                        violation.add_fixit_hint(prevLex.line_begin(), prevLex.column_begin(), prevLex.line_begin(), prevLex.column_begin(), pattern1['close'] + indent)
+
+                if close:
+                    prevLex = close.previous(ignore_comments=True, ignore_whitespace=True)
+                    prevLex = prevLex.next()
+
+                    nextLex = close.previous()
+                if not alsoOk:
+                    violation = check.violation(func.ent(), file, close.line_begin(), close.column_begin(), 'The closing curly brace does not adhere to standard')
+                    violation.add_fixit_hint(nextLex.line_begin(), nextLex.column_begin(), nextLex.line_end(), nextLex.column_end() + 1, '')
+                if not okAlso:
+                    if lexeme.previous().token() != 'Whitespace':
+                        text = ''
+                    else:
+                        text = lexeme.previous().text()
+                    violation = check.violation(func.ent(), file, close.line_begin(), close.column_begin(), 'The closing curly brace does not adhere to standard')
+                    if nextLex.token() == 'Newline':
+                        violation.add_fixit_hint(nextLex.line_end(), nextLex.column_end() + 1, nextLex.line_end(), nextLex.column_end() + 1, text)
+                    else:
+                        violation.add_fixit_hint(nextLex.line_begin(), nextLex.column_begin(), nextLex.line_end(), nextLex.column_end() + 1, text)
+            
+
+            elif lexeme.text() == '{' and first:
+                funcClose = findClose(lexeme)
+                first = False
+
+
+
+# Obtains function begin and end lines
+def getFunctionDefnLines(func):
+    begin_ref = func.ref("definein")
+    end_ref = func.ref("end")
+    if not begin_ref or not end_ref:
+        return None, None
+    return (begin_ref.line(), end_ref.line())
+
+# Finds the corresponding closing curly brace when given an opening curly brace
+def findClose(lexeme):
+    count = 0
+    nextLex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+    if not nextLex:
+        return
+    while nextLex.text() != '}':
+        if nextLex.text() == '{':
+            count += 1
+        nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+        if not nextLex:
+            return
+
+        while nextLex.text() == '}':
+            if count > 0:
+                count -= 1
+                nextLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+                if not nextLex:
+                    return
+            else:
+                break
+
+    return nextLex
+
+
+
+

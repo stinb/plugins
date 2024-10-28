@@ -1,0 +1,291 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 10-16-14
+
+
+# Boiler Plate code
+use base ( 'Understand::Codecheck' );
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => '"U" or "u" suffix not applied to integer constant %1';
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA23_7.2";}
+
+
+
+# This is the short error the Understand will use
+sub name { return 'Published Standards\\MISRA C 2023\\7.2 A "u" or "U" suffix shall be applied to all integer constants that are represented in an unsigned type';}
+
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2023',
+    'Category: Required',
+    'Types',
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return '7.2 ( Required ) 7.2 A "u" or "U" suffix shall be applied to all integer constants that are represented in an unsigned type.';
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Amplification</b></p>
+This rule applies to:
+</p>
+
+<p>
+• Integer constants that appear in the controlling expressions of <i>#if</i> and <i>#elif</i> preprocessing
+directives;
+</p>
+
+<p>
+• Any other integer constants that exist after preprocessing.
+</p>
+
+<p>
+<i>Note</i>: during preprocessing, the type of an integer constant is determined in the same manner as after
+preprocessing except that:
+</p>
+
+<p>
+• All signed integer types behave as if they were <i>long</i> (C90) or <i>intmax_t</i> (C99);
+</p>
+
+<p>
+• All unsigned integer types behave as if they were <i>unsigned long</i> (C90) or <i>uintmax_t</i> (C99).
+</p>
+
+<p><b>Rationale</b></p>
+The type of an integer constant is a potential source of confusion, because it is dependent on a
+complex combination of factors including:
+</p>
+
+<p>
+• The magnitude of the constant;
+</p>
+
+<p>
+• The implemented sizes of the integer types;
+</p>
+
+<p>
+• The presence of any suffixes;
+</p>
+
+<p>
+• The number base in which the value is expressed (i.e. decimal, octal or hexadecimal).
+</p>
+
+<p>
+For example, the integer constant 40000 is of type <i>signed int</i> in a 32-bit environment but of type <i>signed
+long</i> in a 16-bit environment. The value 0x8000 is of type <i>unsigned int</i> in a 16-bit environment, but of
+type signed int in a 32-bit environment.
+</p>
+
+<p>
+<i>Note</i>:
+</p>
+
+<p>
+• Any value with a "U" suffix is of unsigned type;
+</p>
+
+<p>
+• An unsuffixed decimal value less than 2^31 is of signed type.
+</p>
+
+<p>
+But:
+</p>
+
+<p>
+• An unsuffixed hexadecimal value greater than or equal to 2^15 may be of signed or unsigned
+type;
+</p>
+
+<p>
+• For C90, an unsuffixed decimal value greater than or equal to 2^31 may be of signed or unsigned
+type.
+</p>
+
+<p>
+Signedness of constants should be explicit. If a constant is of an unsigned type, applying a "U" suffix
+makes it clear that the programmer understands that the constant is unsigned.
+</p>
+
+<p>
+<i>Note</i>: this rule does not depend on the context in which a constant is used; promotion and other
+conversions that may be applied to the constant are not relevant in determining compliance with this
+rule.
+</p>
+
+<p><b>Example</b></p>
+The following example assumes a machine with a 16-bit int type and a 32-bit long type. It shows the
+type of each i nteger constant determined in accordance with The Standard. The integer constant
+0x8000 is non-compliant because it has an unsigned type but does not have a “U” suffix.
+</p>
+
+<pre><code language="C++">  int a_72  = 32767;    /* Compliant */
+  int b_72  = 0x7fff;   /* Compliant */
+  long c_72 = 32768;    /* Compliant */
+  int d_72  = 32768u;   /* Compliant */
+  int e_72  = 0x8000;   /* Non-compliant */
+  int f_72  = 0x8000u;  /* Compliant */
+
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+Treating preprocessor literals as longs instead of ints slows this check down considerably. This check
+utilizes Understand's Lexer, but is limited in the information available. Because of this, each literal must be
+tested to see if it is part of a preprocessing directive, which requires backing up to the start of the line.
+Under normal circumstances the performance impact is negligible, but when a project includes files with
+a large numbers of literals, then this check will take a considerable amount of time. Treating literals
+as longs will prevent false positives, but is not required to ensure compliance with this check.
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->integer( 'int', 'Integer size in bits', 16 );
+  $check->option->integer( 'long', 'Long size in bits', 32 );
+  $check->option->checkbox( 'prepro', 'Treat preprocessor literals as long? ( Slower check, See description for details )', 0 );
+}
+
+
+# This is the actual test being performed on the user's code
+sub check {
+
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check( 'file' );
+
+  my $int = 2 ** $check->option->lookup( 'int' );
+  my $long = 2 ** $check->option->lookup( 'long' );
+
+  my $twoToTheThirtyOne = 2 ** 31;
+  my $twoToTheFifteen = 2 ** 15;
+  
+  my $lexer = $file->lexer( 0 );
+  my @lexemes = $lexer->lexemes if $lexer;
+  
+  foreach my $lexeme ( @lexemes ) {
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+    
+    next unless $lexeme->token eq 'Literal';
+    next unless $lexeme->text =~ /(^0[0-8]+$)|(^0x[0-9a-fA-F]+$)|(^[1-9][0-9]*$)/;
+
+    my $ok = 0;
+    my $val = 0;
+    if ( $lexeme->text =~ /(^0[0-8]+$)|(^0x[0-9a-fA-F]+$)/ ) {
+      $val = oct ( $lexeme->text );
+    } else {
+      $val = $lexeme->text;
+    }
+
+
+    # Check to see if this is a preprocessor
+    my $intSize = 0;
+    my $copyOfLexeme = $lexeme;
+
+    if ( checkPreprocessor ( $check, $copyOfLexeme ) ) {
+      $intSize = $long;  
+    } else {
+      $intSize = $int;  
+    }
+
+
+    if ( $lexeme->text =~ /^0[0-8]+$/ ) {
+
+      $ok = 1 if $val < $intSize / 2;
+
+    } elsif ( $lexeme->text =~ /^0x[0-9a-fA-F]+$/ ) {
+
+      $ok = 1 if $val < $intSize / 2 or $val < $twoToTheFifteen;
+
+    } elsif ( $lexeme->text =~ /^[1-9][0-9]*$/ ) {
+
+      $ok = 1 if $val < $intSize / 2 or $val < $twoToTheThirtyOne;
+
+    } else {
+
+      # Should not happen
+      ######
+      $check->violation( 0, $file, $lexeme->line_begin, $lexeme->column_begin, 'Error reading ' . $lexeme->text );
+      ######
+
+    }
+
+    $check->violation( 0, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1, $lexeme->text ) unless $ok;
+
+  }
+}
+
+
+# This subroutine will test if a token is a preprocessor literal
+sub checkPreprocessor {
+
+  my $check = shift;
+  return 0 unless $check->option->lookup( 'prepro' );
+
+  my $lexeme = shift;
+
+  while ( $lexeme and ( $lexeme->text ne ';' or $lexeme->text ne ',' ) ) {
+
+    if ( $lexeme->text eq 'if' or $lexeme->text eq 'elif' ) {
+
+      return 1 if $lexeme->prevUseful->text eq '#';
+
+
+    } elsif ( $lexeme->text eq '#' ) {
+
+      return 0;
+
+    }
+
+    $lexeme = $lexeme->prevUseful;
+
+  }
+  return 0;
+}

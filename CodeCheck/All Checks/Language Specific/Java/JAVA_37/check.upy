@@ -1,0 +1,146 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 5-4-22
+
+import re
+
+ERR1 = 'Calculation that resolves to the same value performed inside "%1" loop'
+
+def ids():
+    return ('JAVA_37')
+
+def name(id):
+    return {
+        'JAVA_37': '''All Checks/Language Specific/Java/\
+Calculations that resolve to the same value shall not be performed inside a loop. \
+''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_37': [
+            'Language: Java',
+            'Control Flow',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>
+Calculations that resolve to the same value shall not be performed inside a\
+ loop.
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">int x;
+for (int i = 0; i &lt; 5; i++) {
+    x = 2 + 3;
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Some variable & assignment calculations may always result in the same value,\
+ but can only be checked at runtime. This is a limitation of static analysis.\
+ A constant expression assignment will only be determined with expressions of\
+ literals and/or final variables.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+loops = {'for', 'while', 'do'}
+operators = {'+', '-', '*', '/', '%', '<<', '>>', '>>>', '?', ':'}
+
+
+def isVariable(ent):
+    return not ent.kind().check('Final')
+
+
+def checkAssignment(check, file, lex, startText):
+    simpleAssignment = True
+
+    # Until the end of the assignment, see if it's a constant expression
+    while lex and lex.text() != ';':
+        if lex.token() not in {'Literal', 'Operator', 'Identifier', 'Punctuation'}:
+            simpleAssignment = False
+        elif lex.token() == 'Identifier':
+            ent = lex.ent()
+            if not ent or not ent.kind().check('Variable, Class Type'):
+                simpleAssignment = False
+            elif ent and isVariable(ent):
+                simpleAssignment = False
+        lex = lex.next(True, True)
+
+    if simpleAssignment:
+        check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR1, startText)
+
+    return lex.previous(True, True)
+
+
+def checkLoop(check, file, lex):
+    start = lex
+    startText = start.text()
+
+    lex = lex.next(True, True)
+
+    openParen = 0
+    openBraces = 0
+    timeForCode = False
+    if startText == 'do':
+        timeForCode = True
+
+    while lex:
+        text = lex.text()
+
+        # Recursively parse
+        if text in loops:
+            return checkLoop(check, file, lex)
+        # Parse the start of the loop
+        elif text == '(':
+            openParen += 1
+        elif text == ')':
+            openParen -= 1
+            if openParen == 0:
+                timeForCode = True
+        elif text == '{':
+            openBraces += 1
+        elif text == '}':
+            openBraces -= 1
+            if openBraces == 0:
+                return lex
+        # One liner
+        elif text == ';' and openParen == 0 and openBraces == 0 and timeForCode:
+            timeForCode = False
+            return lex
+        # Assignment in loop
+        elif text == '=' and openParen == 0 and timeForCode:
+            lex = checkAssignment(check, file, lex, startText)
+
+        lex = lex.next(True, True)
+
+    return lex
+
+
+def check(check, file):
+    lex = file.lexer().first()
+
+    while lex:
+        if lex.text() in loops:
+            lex = checkLoop(check, file, lex)
+            continue
+
+        lex = lex.next(True, True)

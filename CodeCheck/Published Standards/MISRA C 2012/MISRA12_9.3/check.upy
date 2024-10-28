@@ -1,0 +1,171 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2-14-2024
+import re
+import Modules
+
+ERR1 = 'Array was not fully initialized'
+
+def ids():
+    return ('MISRA12_9.3', 'CPP_DD019', 'MISRA23_9.3')
+
+def name(id):
+    return {
+        'MISRA12_9.3': """\
+Published Standards/MISRA C 2012/9.3 Arrays shall not be partially initialized""",
+        'CPP_DD019': """\
+All Checks/Language Specific/C and C++/Declarations and Definitions/Arrays shall not be partially initialized""",
+        'MISRA23_9.3': """\
+Published Standards/MISRA C 2023/9.3 Arrays shall not be partially initialized""",
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'MISRA12_9.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Declarations and Definitions'
+        ],
+        'CPP_DD019': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions'
+        ],
+        'MISRA23_9.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Declarations and Definitions'
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Amplification</b></p>
+<p>If any element of an array object or subobject is explicitly initialized,
+then the entire object or subobject shall be explicitly initialized.</p>
+<p><b>Rationale</b></p>
+<p>Providing an explicit initial ization for each element of an array makes it
+clear that every element has been considered.</p>
+<p><b>Exception</b></p>
+<ol type="1">
+<li>An initializer of the form { 0 } may be used to explicitly initialize all
+elements of an array object or subobject.</li>
+<li>An array whose initializer consists only of designated initializers may be
+used, for example to perform a sparse initialization.</li>
+<li>An array initialized using a string literal does not need an initializer for
+every element.</li></ol>
+<p><b>Example</p></b>
+<pre><code language="C++">/* Compliant */
+int32_t x[ 3 ] = { 0, 1, 2 };
+/* Non-compliant - y[ 2 ] is implicitly initialized */
+int32_t y[ 3 ] = { 0, 1 };
+/* Non-compliant - t[ 0 ] and t[ 3 ] are implicitly initialized */
+float32_t t[ 4 ] = { [ 1 ] = 1.0f, 2.0f };
+/* Compliant - designated initializers for sparse matrix */
+float32_t z[ 50 ] = { [ 1 ] = 1.0f, [ 25 ] = 2.0f };</code></pre>
+<p>In the following compliant example, each element of the array arr is
+initialized:</p>
+<pre><code language="C++">float32_t arr[ 3 ][ 2 ] =
+{
+  { 0.0f, 0.0f },
+  { PI / 4.0f, -PI / 4.0f },
+  { 0 } /* initializes all elements of array subobject arr[ 2 ] */
+};</pre></code>
+<p>In the following example, array elements 6 to 9 are implicitly initialized to
+'\0':</p>
+<pre><code language="C++">char h[ 10 ] = "Hello"; /* Compliant by Exception 3 */
+</pre></code>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    count = 0
+    refs = file.filerefs('Set ~Deref', 'Object')
+
+    for ref in refs:
+        # Skip if not array
+        if not re.search(r'\[\d\]', str(ref.ent().type())):
+            continue
+
+        # Prepare list
+        type = str(ref.ent().type()).split('[')
+        numbers = type[1:]
+        for i in range(0, len(numbers)):
+            numbers[i] = re.sub(r'\D', '', numbers[i])
+
+        # Create lexer if it has yet to be created
+        if numbers:
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+
+            commaTotal = 1
+            for num in numbers:
+                commaTotal = int(num) * commaTotal
+            commaTotal -= 1
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            while lexeme and not re.search(r'\=|;', lexeme.text()):
+                lexeme = lexeme.next(True, True)
+
+            # Go through the set statement
+            if lexeme and lexeme.text() == '=':
+                while lexeme and not lexeme.text() == '{':
+                    lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '{':
+                    lexeme, count = checkList(lexeme, Modules.findClose(lexeme), 0, numbers, 0)
+
+                if count < commaTotal:
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+
+# Count total commas but replace a '0' initialized array with the amount of
+# commas it should have. Also checks for exception
+def checkList(lexeme, close, count, numbers, i):
+    if not close:
+        return 0
+    lexeme = lexeme.next(True, True)
+    ok = False
+    ok1 = False
+    onlyZero = None
+    allOk = True
+    while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+        if lexeme.text() == '{':
+            if i + 1 < len(numbers):
+                lexeme, addToCount = checkList(lexeme, Modules.findClose(lexeme), count, numbers, i + 1)
+                count += addToCount
+        if re.match(r',', lexeme.text()):
+            if not (ok and ok1):
+                allOk = False
+
+            count += 1
+            ok = False
+            ok1 = False
+        elif lexeme.text() == '[':
+            ok = True
+        elif lexeme.text() == '=':
+            ok1 = True
+        elif lexeme.token() == 'Literal' and onlyZero != False:
+            if lexeme.text().isdigit():
+                if lexeme.text() == '0':
+                    onlyZero = True
+                else:
+                    onlyZero = False
+
+        lexeme = lexeme.next(True, True)
+
+    if onlyZero:
+        count = int(numbers[i]) - 1
+    return lexeme, count

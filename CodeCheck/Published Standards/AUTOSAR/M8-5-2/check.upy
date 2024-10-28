@@ -1,0 +1,301 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2021-10-27
+
+
+import json
+import re
+
+
+ERR1 = 'Braces do not indicate nested structure of array of size %1'
+ERR2 = 'Some elements were not listed in of array of size %1'
+ERR3 = 'Zero initialization at sub-level of array of size %1'
+
+
+def ids():
+    return ('MISRA08_8-5-2','M8-5-2', 'CPP_S002')
+
+
+def name(id):
+    return {
+        'MISRA08_8-5-2': '''\
+Published Standards/MISRA-C++ 2008/8-5-2 Incorrect Initializer Lists''',
+        'M8-5-2': '''\
+Published Standards/AUTOSAR/Incorrect Initializer Lists''',
+        'CPP_S002': '''\
+All Checks/Language Specific/C and C++/Structures and Unions/Incorrect \
+Initializer Lists'''
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_8-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Automation: Automated',
+            'Structures and Unions',
+        ],
+        'M8-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Structures and Unions',
+        ],
+        'CPP_S002': [
+            'Language: C',
+            'Language: C++',
+            'Structures and Unions',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+
+<p>Braces shall be used to indicate and match the structure in the non-zero
+initialization of arrays and structures.</p>
+
+<p><b>Rationale</b></p>
+
+<p>ISO/IEC 14882:2003 [1] requires initializer lists for arrays, structures and
+union types to be enclosed in a single pair of braces  (though the behaviour if
+this is not done is undefined). The rule given here goes further in requiring
+the use of additional braces to indicate nested structures. This forces the
+developer to explicitly consider and demonstrate the order in which elements of
+complex data types are initialized (e.g. multi-dimensional arrays).</p>
+
+<p>The zero initialization of arrays or structures shall only be applied at the
+top level.</p>
+
+<p>The non-zero initialization of arrays or structures requires an explicit
+initializer for each element.</p>
+
+<p><b>Example</b></p>
+
+<p>The following shows two valid ways of initializing the elements of a two
+dimensional array, but the first does not adhere to the rule:</p>
+
+<pre><code language="C++">\
+int16_t x[3][2] = { 1, 2, 3, 4, 5, 6 };             // Non-compliant
+int16_t y[3][2] = { { 1, 2 }, { 3, 4 }, { 5, 6 } }; // Compliant
+</code></pre>
+
+<p>A similar principle applies to structures, and nested combinations of
+structures, arrays and other types.</p>
+
+<p>Note also that all the elements of arrays or structures can be initialized
+(to zero or <i>NULL</i>) by giving an explicit initializer for the first element
+only. If this method of initialization is chosen then the  first element should
+be initialized to zero (or <i>NULL</i>), and nested braces need not be used.</p>
+
+<pre><code language="C++">\
+// The following are compliant
+int16_t a1[5] = { 1, 2, 3, 0, 0 };    // Non-zero initialization
+int16_t a2[5] = { 0 };                // Zero initialization
+int16_t a3[2][2] = { };               // Zero initialization
+// The following are non-compliant
+int16_t a4[5] = { 1, 2, 3 };          // Partial initialization
+int16_t a5[2][2] = { { }, { 1, 2 } }; // Zero initialization at sub-level
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+
+<p>This check cannot check an array of structs or class objects, so these arrays
+are skipped.</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    # For every initialized value that is also set
+    for ref in file.filerefs('Set Init'):
+        ent = ref.ent()
+
+        # Skip if no type
+        entType = ent.type()
+        if not entType:
+            continue
+
+        # Skip if not an array
+        if not re.search(r'\[\d+\]$', entType):
+            continue
+
+        # Skip if it contains a struct, which is initialized with braces
+        if isStruct(entType):
+            continue
+
+        # Skip if the value isn't braces
+        value = ent.value()
+        if not value or not re.search(r'^{.*}$', value):
+            continue
+
+        # String to int
+        declaredSize = re.findall('\\[(\\d+)\\]', entType)
+        declaredSizeString = re.search('(\\[\\d+\\])+', entType).group()
+        for i in range(len(declaredSize)):
+            declaredSize[i] = int(declaredSize[i])
+
+        # Remove any whitespace
+        value = re.sub(r'\s', '', value)
+        # Remove any |
+        value = re.sub(r'\|', '', value)
+        # Remove any =
+        value = re.sub(r'=', '', value)
+        # Replace string literals with zeros
+        value = re.sub(r"'(?:\\.|[^'\n\\])*'", '0', value)
+        value = re.sub(r'"(?:\\.|[^"\n\\])*"', '0', value)
+        # Remove any casting
+        value = re.sub(r'\([_a-zA-Z][_a-zA-Z0-9]*\)', '', value)
+        # Remove any parentheses
+        value = re.sub(r'[\(\)]', '', value)
+        # Remove any square brackets and the insides
+        value = re.sub('\\[.*?\\]', '', value)
+        # Curly braces to square brackets
+        value = re.sub(r'{', '[', value)
+        value = re.sub(r'}', ']', value)
+        # Remove trailing commas
+        value = re.sub(r',]', ']', value)
+        # Replace elements with zeros
+        value = re.sub(r'[^\[|\]|\,]', '0', value)
+        # Replace many zeros with 1 zero
+        value = re.sub(r'0+', '0', value)
+
+        # Skip if the actual size is unknown or empty
+        actualSize = parseArraySize(check, ref, value, declaredSizeString)
+        if not actualSize or actualSize == [0]:
+            continue
+
+        # Braces do not indicate nested structure
+        if len(declaredSize) > len(actualSize):
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1, declaredSizeString)
+        # Partial initialization of array
+        elif declaredSize != actualSize and None not in actualSize and 0 not in actualSize:
+            # See if the actual size seems to be bigger.
+            # This can happen because the value ignores the preprocessor.
+            actualSizeSeemsSmaller = False
+            actualSizeSeemsBigger = False
+            for i in range(0, min(len(declaredSize), len(actualSize))):
+                declaredValue = declaredSize[i]
+                actualValue = actualSize[i]
+                if type(declaredValue) != int or type(actualValue) != int:
+                    continue
+                if actualValue < declaredValue:
+                    actualSizeSeemsSmaller = True
+                elif actualValue > declaredValue:
+                    actualSizeSeemsBigger = True
+
+            # Skip if the actual size is too big and not too small.
+            # These initializer lists don't actually compile.
+            if actualSizeSeemsBigger and not actualSizeSeemsSmaller:
+                continue
+
+            if hasStructOrClassElements(ent):
+                continue
+
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR2, declaredSizeString)
+
+
+def isStruct(entType: str) -> bool:
+    return bool(re.search(r'\bstruct\b', entType))
+
+
+def hasStructOrClassElements(ent) -> bool:
+    # False if it doesn't have element entities
+    elements = ent.ents('', 'Typedef, Class')
+    if not elements:
+        return False
+
+    element = elements[0]
+
+    # True by kind
+    if element.kind().check('Struct, Class'):
+        return True
+
+    # True by type
+    elementType = element.type()
+    if elementType and isStruct(elementType):
+        return True
+
+    return False
+
+
+# Parse an array string to an actual size and compare it to the declared size
+# Example input: { { 1, 2 }, { 3, 4 }, { 5, 6 } }
+# Example output: [3, 2]
+def parseArraySize(check, ref, string: str, declaredSize: list[int]):
+    # Parse the array as json
+    try:
+        parsed = json.loads(string)
+    except:
+        return None
+
+    # Get the size
+    size = parseArraySizeRecursive(check, ref, parsed, declaredSize)
+
+    # Allow zero initialization at the base
+    if parsed == [0] or parsed == []:
+        size = [0]
+
+    return size
+
+
+def parseArraySizeRecursive(check, ref, array, declaredSize: list[int]):
+    # Base case of element
+    if not isinstance(array, list):
+        return None
+    # Base case of []
+    elif len(array) == 0:
+        return 0
+
+    # Make sure each item is the same size
+    sizeA = len(array)
+    sizeAllBZ = None
+    for b in array:
+        # Base case of element
+        if not isinstance(b, list):
+            return [sizeA]
+
+        # Get the size recursively
+        sizeBZ = parseArraySizeRecursive(check, ref, b, declaredSize)
+        if sizeAllBZ == None:
+            sizeAllBZ = sizeBZ
+
+        # Zero initialization at sub-level
+        if b == [0] or b == []:
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR3, str(declaredSize))
+            sizeAllBZ = 0
+            break
+
+        # Make sure the current list is the same size
+        elif sizeBZ[0] != sizeAllBZ[0] and sizeBZ[0] != None:
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR2, str(declaredSize))
+            sizeAllBZ[0] = None
+            break
+
+        # Make sure the deeper list is the same size
+        elif len(sizeBZ) > 1 and sizeBZ[1] != sizeAllBZ[1] and sizeBZ[1] != 0:
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR2, str(declaredSize))
+            sizeAllBZ[1] = None
+            break
+
+    if isinstance(sizeAllBZ, list):
+        return [sizeA] + sizeAllBZ
+    else:
+        return [sizeA] + [sizeAllBZ]

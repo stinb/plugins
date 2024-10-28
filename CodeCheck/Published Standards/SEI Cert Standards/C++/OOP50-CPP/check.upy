@@ -1,0 +1,154 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 5/20/2023
+
+ERR1 = 'Invoked virtual function %s in constructor/destructor: %s'
+
+DEF_NAME = "Do not invoke virtual functions from constructors or destructors"
+
+# The ID for the check
+def ids():
+    return ('OOP50-CPP')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'OOP50-CPP': 'Published Standards/SEI Cert Standards/C++/' + DEF_NAME
+    }[id]
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+
+def tags(id):
+    return {
+        'OOP50-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+            'Virtual Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not invoke virtual functions from constructors or destructors</p>
+<p><b>Risk Assessment</b></p>
+<p>Because the order of construction starts with base classes and moves to more derived classes, attempting to call a derived class function from a base class under construction is dangerous.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/OOP50-CPP.+Do+not+invoke+virtual+functions+from+constructors+or+destructors</i></p>
+<p><b>Exceptions</b></p>
+<p><i>OOP50-CPP-EX1: </i>Because valid use cases exist that involve calling (non-pure) virtual functions from the constructor of a class, it is permissible to call the virtual function with an explicitly qualified ID. The qualified ID signifies to code maintainers that the expected behavior is for the class under construction or destruction to be the final overrider for the function call.</p>
+<p><i>OOP50-CPP-EX2: </i>It is permissible to call a virtual function that has the final virt-specifier from a constructor or destructor, as in this example.</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">struct B {
+  B() { seize(); }
+  virtual ~B() { release(); }
+
+protected:
+  virtual void seize();
+  virtual void release();
+};
+
+struct D : B {
+  virtual ~D() = default;
+
+protected:
+  void seize() override {
+    B::seize();
+    // Get derived resources...
+  }
+
+  void release() override {
+    // Release derived resources...
+    B::release();
+  }
+};</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# Options for the check
+def define_options(check):
+    pass
+
+def check(check, file):
+
+    # get class and struct
+    for cs in file.filerefs("Define", "Class, Struct"):
+        #pm(cs.ent().longname(), check, cs.ent(), file, cs.line(), cs.column())
+        if cs.ent() is None:
+            continue
+
+        # exception 2
+        if class_final(cs):
+            continue
+
+        # check their constructor or destructor
+        for meth in cs.ent().refs("Define", "Member Function, ~Unresolved"):
+            if meth.ent() is None:
+                continue
+            if meth.ent().name() in [ cs.ent().name(), "~" + cs.ent().name()]:
+
+                # now see if it calls virtual methods
+                # we flag the ent of the function
+                # just return the line of the first call
+                for calls in meth.ent().refs("Call Virtual", "Virtual Function"):
+                    if calls.ent() is None:
+                        continue;
+
+                    # exception 2
+                    if override_final(calls.ent().ref("Declarein")):
+                        continue
+
+                    pm(ERR1 %(calls.ent().name(),meth.ent().name()), check, meth.ent(), calls.file(), calls.line(), calls.column())
+                    break
+
+def class_final(ref):
+
+    if ref is None:
+        return False
+
+    lexer = ref.file().lexer(expand_macros=False)
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    while lexeme is not None and lexeme.text() != "{":
+        if lexeme.text() == "final":
+            return True
+
+        lexeme = lexeme.next(True, True)
+
+    return False
+
+def override_final(ref):
+
+    if ref is None:
+        return False
+
+    lexer = ref.file().lexer()
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+
+    while lexeme is not None and lexeme.text() != ";":
+        if lexeme.text() == "final":
+            return True
+
+        lexeme = lexeme.next(True, True)
+
+    return False
+
+
+
+
+def pm(s, check, ent = None, file = None, line=-1, col=-1):
+    check.violation(ent, file, line, col, str(s))

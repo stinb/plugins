@@ -1,0 +1,130 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-25-2021
+import re
+from Modules import stringIsStd
+
+ERR1 = 'Not clear if function assumes ownership of the object'
+
+def ids():
+    return ('A20-8-2', 'CPP_P037')
+
+def name(id):
+    return {
+        'A20-8-2': """\
+Published Standards/AUTOSAR/A std::unique_ptr shall be used to represent \
+exclusive ownership""",
+        'CPP_P037': """\
+All Checks/Language Specific/C and C++/Pointers/A std::unique_ptr shall be used \
+to represent exclusive ownership"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A20-8-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P037': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>std::unique_ptr is a smart pointer that owns and manages another object and removes
+it when it goes out of scope. It has almost no overhead over a raw pointer and clearly
+states developers intentions and ownership status of the object.
+Note: Further usage of the instance of std::unique_ptr in another scope requires
+transferring ownership using move semantics.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1  // $Id: A20-8-2.cpp 308981 2018-02-26 08:11:52Z michal.szczepankiewicz $
+2
+3  #include &lt;thread&gt;
+4  #include &lt;memory&gt;
+5
+6  struct A
+7  {
+8    A(std::uint8_t xx, std::uint8_t yy) : x(xx), y(yy) {}
+9    std::uint8_t x;
+10   std::uint8_t y;
+11 };
+12
+13 //consumes object obj or just uses it
+14 void Foo(A* obj) { }
+15 void Bar(std::unique_ptr&lt;A&gt; obj) { }
+16
+17 int main(void)
+18 {
+19   A* a = new A(3,5); //non-compliant with A18-5-2
+20   std::unique_ptr&lt;A&gt; spA = std::make_unique&lt;A&gt;(3,5);
+21
+22   //non-compliant, not clear if function assumes
+23   //ownership of the object
+24   std::thread th1{&Foo, a};
+25   std::thread th2{&Foo, a};
+26   //compliant, it is clear that function Bar
+27   //assumes ownership
+28   std::thread th3{&Bar, std::move(spA)};
+29
+30   th1.join();
+31   th2.join();
+32   th3.join();
+33   return 0;
+34 }
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Typed', 'Unresolved Class Type')
+
+    for ref in refs:
+        if not stringIsStd(ref.ent().longname(), 'thread'):
+            continue
+
+        ok = False
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        while lexeme and lexeme.text() != '{':
+            lexeme = lexeme.next(True, True)
+
+        # Look for the function reference passed to the std::thread
+        while lexeme and not re.search(r',|}', lexeme.text()):
+            if lexeme.ent() and lexeme.ent().kindname() == 'Function':
+                defRef = lexeme.ent().ref('Define')
+                beginRef = lexeme.ent().ref('Begin')
+                checkLex = lexer.lexeme(defRef.line(), defRef.column())
+
+                while checkLex and beginRef and not (checkLex.line_begin() == beginRef.line() and checkLex.column_begin() == beginRef.column()):
+
+                    # Check if the parameter of the function uses a unique_ptr
+                    if checkLex.text() == 'unique_ptr' and checkLex.ent() and stringIsStd(checkLex.ent().longname(), 'unique_ptr'):
+                        ok = True
+                        break
+                    checkLex = checkLex.previous(True, True)
+
+            lexeme = lexeme.next(True, True)
+
+        if not ok:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)

@@ -1,0 +1,265 @@
+ERR1 = 'Function returns a reference or a pointer of an automatic variable defined within the function.'
+
+
+# The ID for the check
+def ids():
+    return ('M7-5-1', 'MISRA08_7-5-1', 'CPP_F031', 'MISRA23_6.8.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M7-5-1': 'Published Standards/AUTOSAR/A function shall not return a reference or a pointer to an automatic variable (including parameters), defined within the function.',
+        'MISRA08_7-5-1': 'Published Standards/MISRA-C++ 2008/7-5-1 A function shall not return a reference or a pointer to an automatic variable (including parameters), defined within the function.',
+        'CPP_F031': 'All Checks/Language Specific/C and C++/Functions/A function shall not return a reference or a pointer to an automatic variable (including parameters), defined within the function.',
+        'MISRA23_6.8.2': 'Published Standards/MISRA C++ 2023/6.8.2 A function must not return a reference or a pointer to a local variable with automatic storage duration',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'MISRA08_7-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Functions',
+        ],
+        'M7-5-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Non-automated',
+            'Functions',
+        ],
+        'CPP_F031': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+        'MISRA23_6.8.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Mandatory',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_6.8.2':
+        return '''
+<p><b>Amplification</b></p>
+<p>This rule also applies to:</p>
+<p>1. Function parameters passed by value; and</p>
+<p>2. Returning a lambda that captures by reference a variable with automatic storage duration; and</p>
+<p>3. Returning a lambda that captures the address of a variable with automatic storage duration.</p>
+<p>For the purposes of this rule, a throw that is not caught within the function is considered to be a
+return from the function.</p>
+
+<p><b>Rationale</b></p>
+<p>Automatic variables are destroyed when a function returns. Returning a reference or pointer to such
+a variable allows it to be used after its destruction, leading to undefined behaviour.</p>
+<p>Note: this rule and Rule 6.8.3 use decidable checks that allow trivial, specific instances of potentially
+dangling references to be detected statically. Other (possibly non-decidable) cases are covered by
+Rule 6.8.1.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">int32_t * f1()
+{
+ int32_t x = 99;
+ return &x; // Non-compliant
+}
+int32_t * f2( int32_t y )
+{
+ return &y; // Non-compliant
+}
+int32_t & f3()
+{
+ int32_t x = 99;
+ return x; // Non-compliant
+}
+int32_t & f4( int32_t y )
+{
+ return y; // Non-compliant
+}
+int32_t & f5( int32_t & x )
+{
+ return x; // Rule does not apply
+}
+int32_t * f6()
+{
+ static int32_t x = 0;
+ return &x; // Rule does not apply
+}
+void f7()
+{
+ int32_t x = 0;
+ throw &x; // Non-compliant
+}
+void f8()
+{
+ try
+ {
+ int32_t x = 0;
+ throw &x; // Rule does not apply - caught within this function
+ }
+ catch ( ... )
+ {
+ }
+}
+auto f9()
+{
+ int32_t x { 42 };
+ return [&x]() {}; // Non-compliant - captures local by reference
+}
+auto f10()
+{
+ int32_t x { 42 };
+ return [p = &x]() {}; // Non-compliant - captures address of local
+}</code></pre>
+
+The following example is compliant with this rule, but violates Rule 6.8.1.
+
+<pre><code language="C++">int32_t * f11()
+{
+ int32_t i = 42;
+ int32_t * p = &i;
+ return p; // Compliant with this rule
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 6.8.1, Rule 6.8.3</p>
+        '''
+
+    return '''
+<p>
+A function shall not return a reference or a pointer to a non-static variable defined within the function.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Automatic variables are destroyed at the end of the function call. Returning a reference or pointer to such a variable allows it to be used after its destruction, leading to undefined behaviour.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">int32_t * fn1 ( void )
+{
+    int32_t x = 99;
+    return ( &x );             // Non-compliant
+}
+int32_t * fn2 ( int32_t y )
+{
+    return ( &y );             // Non-compliant
+}
+int32_t & fn3 ( void )
+{
+    int32_t x = 99;
+    return ( x );              // Non-compliant
+}
+int32_t & fn4 ( int32_t y )
+{
+    return ( y );              // Non-compliant
+}
+int32_t * fn5 ( void )
+{
+    static int32_t x = 0;
+    return &x;                 // Compliant
+}
+</code></pre>
+'''
+
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref, ent):
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+    for func_ref in file.filerefs("Define", "Function"):
+        func_ent = func_ref.ent()
+        func_return = func_ent.ref("Return")
+        func_type = func_ent.type()
+
+        if not func_return or not func_type:
+            func_cfg = func_ent.control_flow_graph()
+            try_lines = []
+            ret_lines = []
+
+            for node in func_cfg.nodes():
+                if node.kind() == "try":
+                    start_line = node.line_begin()
+                    node_end = node.end_node()
+
+                    while start_line <= node_end.line_end():
+                        try_lines.append(start_line)
+                        start_line += 1
+                elif node.kind() == "return":
+                    start_line = node.line_begin()
+
+                    while start_line <= node.line_end():
+                        ret_lines.append(start_line)
+                        start_line += 1
+
+            for obj_ref in func_ent.refs("Define", "~Static Object, Parameter"):
+                for add_use in obj_ref.ent().refs("Addr Useby, Useby Capture"):
+                    if add_use.ent().kind().check("Lambda") and add_use.line() in ret_lines:
+                        check_violation(add_use, add_use.scope())
+                        continue
+
+                    lex = add_use.file().lexer().lexeme(add_use.line(), add_use.column())
+                    
+                    while lex and lex.token() != "Whitespace":
+                        lex = lex.previous()
+
+                    lex = lex.previous(True, True)
+
+                    if (lex.text() == "throw" and lex.line_begin() not in try_lines):
+                        check_violation(add_use, add_use.scope())
+
+            continue
+
+        if "*" in func_type:
+            for use_ref in func_ent.refs("Addr Use", "Object, Parameter"):
+                use_ent = use_ref.ent()
+                if (use_ent.parent() and (use_ent.parent().name() == func_ent.name())
+                    and not use_ent.kind().check("Static")
+                        and use_ref.line() == func_return.line()):
+                    pass_ref = False
+                    
+                    for ass_ref in use_ent.refs("Assignby Ptr"):
+                        if ass_ref.line() == use_ref.line() and ass_ref.column() == use_ref.column():
+                            pass_ref = True
+                            break
+
+                    if pass_ref:
+                        continue
+
+                    check_violation(use_ref, use_ent)
+
+        elif "&" in func_type:
+            for use_ref in func_ent.refs("Use", "Object, Parameter"):
+                use_ent = use_ref.ent()
+                if (use_ent.parent() and (use_ent.parent().name() == func_ent.name())
+                        and not use_ent.kind().check("Static")
+                        and "&" not in use_ent.type()
+                        and use_ent.type() in func_type
+                        and use_ref.line() == func_return.line()):
+                    check_violation(use_ref, use_ent)

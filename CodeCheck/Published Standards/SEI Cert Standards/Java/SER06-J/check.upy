@@ -1,0 +1,115 @@
+ERR1 = 'Make defensive copies of private mutable components on readObject() method.'
+
+
+# The ID for the check
+def ids():
+    return ('SER06-J', 'JAVA_SER06')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'SER06-J': 'Published Standards/SEI Cert Standards/Java/Make defensive copies of private mutable components during deserialization',
+        'JAVA_SER06': 'All Checks/Language Specific/Java/Serialization/Make defensive copies of private mutable components during deserialization',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'SER06-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_SER06': [
+            'Language: Java',
+            'Serialization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Make defensive copies of private mutable components during deserialization'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Make defensive copies of private mutable components during deserialization</p>
+<p><b>Risk Assessment</b></p>
+<p>Failure to defensively copy mutable components during deserialization can violate the immutability contract of an object.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/SER06-J.+Make+defensive+copies+of+private+mutable+components+during+deserialization</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class MutableSer implements Serializable {
+  private static final Date epoch = new Date(0);
+  private Date date = null; // Mutable component
+
+  public MutableSer(Date d){
+    date = new Date(d.getTime()); // Constructor performs defensive copying
+  }
+
+  private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
+    ois.defaultReadObject();
+    // Perform validation if necessary
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    IMMUTABLE_CLASSES = {"String", "Integer", "Float", "Double",
+                         "Byte", "Long", "Short", "Boolean", "Character"}
+
+    for imp_ref in file.filerefs("Implement Couple", "Interface Type Public"):
+        if imp_ref.ent().name() == "Serializable":
+            readobj_copied_ents = []
+
+            for method_ref in imp_ref.scope().refs("Define", "Member Method"):
+                if method_ref.ent().name() == "readObject":
+                    for ref in method_ref.ent().refs("Set", "Private Member Variable ~Final"):
+                        readobj_copied_ents.append(ref.ent().id())
+                    break
+
+            for mem_ref in imp_ref.scope().refs("Define", "Private Member Variable ~Final"):
+                mem_ent, _ = get_ent_type(mem_ref.ent())
+
+                if mem_ent and mem_ent.kind().check("Class") and (mem_ref.ent().id() not in readobj_copied_ents) and (mem_ent.name() not in IMMUTABLE_CLASSES) and mem_ref.scope().ref("Define", "~Final Variable"):
+                    check.violation(mem_ref.ent(), file,
+                                    mem_ref.line(), mem_ref.column(), ERR1)

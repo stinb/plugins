@@ -1,0 +1,120 @@
+import re
+
+
+ERR1 = "Header file contains definitions of functions or objects that are non-inline and have external linkage"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_6.2.4')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_6.2.4': 'Published Standards/MISRA C++ 2023/6.2.4 A header file shall not contain definitions of functions or objects that are non-inline and have external linkage'
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_6.2.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_6.2.4': """
+<p><b>Amplification</b></p>
+<p>This rule prohibits the definition within a header file of non-inline:</p>
+<p>● Namespace-scope variables; and</p>
+<p>● Namespace-scope functions; and</p>
+<p>● Static and non-static member functions; and</p>
+<p>● Non-const, static data members.</p>
+<p>This rule does not apply to entities without linkage (scope local entities) or entities with internal linkage.</p>
+
+<p><b>Rationale</b></p>
+<p>Header files should be used to declare C++ templates, types, functions, references and objects.</p>
+<p>Defining a non-inline entity (function or object) with external linkage in a header file causes a violation
+of the one-definition rule when that header file is included in multiple translation units, resulting in
+undefined behaviour.</p>
+<p>Whilst defining non-inline entities with internal linkage in header files can cause needless duplication,
+it is not a violation of this rule.</p>
+<p>Entities defined explicitly or implicitly as inline, or without external linkage, can appear in header files
+without risking violation of the one-definition rule if all definitions across all translation units are
+consistent. The latter can be guaranteed by using a single header file to define such an entity (see
+Rule 6.2.3).</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// Header file a.h
+void f1(); // Rule does not apply - not a definition
+void f2() { } // Non-compliant
+inline void f3() { } // Compliant
+
+template&lt; typename T &gt;
+void f4( T ) { } // Compliant - implicitly inline
+
+int32_t a; // Non-compliant
+
+constexpr auto ans { 42 }; // Compliant - no external linkage
+
+struct X
+{
+ int32_t a; // Compliant - no linkage
+ inline static const
+ int32_t b { 2 }; // Compliant - X::b has external linkage but is inline
+};</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 6.2.1, Rule 6.2.3</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r"\.h(h|pp|xx)?$", file.name()):
+        return
+
+    for def_ref in file.filerefs("Define", "~Template Function, ~Member Object"):
+        lex = file.lexer(lookup_ents=False).lexeme(def_ref.line(), def_ref.column())
+        is_inline = False
+
+        while lex and lex.line_begin() == def_ref.line():
+            if lex.text() in ["inline", "constexpr"]:
+                is_inline = True
+            elif lex.text() == "extern":
+                is_inline = False
+                break
+
+            lex = lex.previous(True, True)
+
+        if not is_inline:
+            check.violation(def_ref.ent(), file, def_ref.line(), def_ref.column(), ERR1)
+
+    for mem_ref in file.filerefs("Declare", "Static Member"):
+        utype = mem_ref.ent().freetext("UnderlyingType")
+
+        if utype and "const" not in utype:
+            check.violation(mem_ref.ent(), file, mem_ref.line(), mem_ref.column(), ERR1)

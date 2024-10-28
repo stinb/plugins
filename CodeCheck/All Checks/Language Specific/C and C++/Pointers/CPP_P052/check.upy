@@ -1,0 +1,147 @@
+ERR1 = "A parameter shall be passed by reference if it can't be NULL."
+
+
+# The ID for the check
+def ids():
+    return ('A8-4-10', 'CPP_P052')
+
+
+# The short name of the check
+def name(id):
+    return {
+        "A8-4-10": "Published Standards/AUTOSAR/A parameter shall be passed by reference if it can't be NULL", \
+        "CPP_P052": "All Checks/Language Specific/C and C++/Pointers/A parameter shall be passed by reference if it can't be NULL",
+    }[id]
+
+
+def tags(id):
+    return {
+        'A8-4-10': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P052': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rule</b></p>
+
+<p>
+A parameter shall be passed by reference if it can't be NULL
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Passing a parameter by pointer suggests that it can be NULL. If it can't be NULL (i.e. it's not optional) it should therefore be passed by reference instead. Only parameters that can be NULL shall be passed by pointer.
+</p>
+
+<p>
+Note: The C++ Library Fundamentals TS v2 defines <code>std::observer_ptr</code> as a near drop-in replacement for raw pointers that makes it explicit that the object is not owned by the pointer.
+</p>
+
+<p>
+Note: <code>boost::optional</code> supports reference types, and in C++17 <code>std::optional</code> can be used in conjunction with <code>std::reference_wrapper</code> (using <code>std::optional</code> with a value type would create an undesirable copy of the object)
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A8-4-10.cpp 307966 2018-02-16 16:03:46Z christof.meerwald $
+
+#include &lt;cstdint&gt;
+#include &lt;numeric&gt;
+#include &lt;vector&gt;
+
+// Non-Compliant: non-optional parameter passed by pointer
+int32_t Sum(const std::vector&lt;int32_t&gt; *v)
+{
+    return std::accumulate(v-&gt;begin(), v-&gt;end(), 0);
+}
+
+// Compliant: non-optional parameter passed by reference
+int32_t Sum(const std::vector&lt;int32_t&gt; &v)
+{
+    return std::accumulate(v.begin(), v.end(), 0);
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• C++ Core Guidelines [11]: F.60: Prefer T* over T& when "no argument" is a valid option
+</p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 118: Arguments should be passed via pointers if NULL values are possible.
+</p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 118.1: An object should be passed as const T* if its value should not be modified.
+</p>
+
+<p>
+• JSF December 2005 [8]: AV Rule 118.2: An object should be passed as T* if its value may be modified.
+</p>
+
+<p><b>Developer's Note</b></p>
+
+<p>
+This check will flag the function that uses a non-optional parameter passed as a pointer.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(False, 8, False, False)
+
+    if lexer:
+        for func_ref in file.filerefs("Define", "Function ~Lambda ~Macro"):
+            for param_ref in func_ref.ent().refs("Define", "Parameter"):
+                param_type = param_ref.ent().type()
+
+                if ((param_type is not None) and ("*" in param_type)):
+                    compliant = False
+                    is_optional = False
+                    lex = lexer.lexeme(param_ref.line(), param_ref.column())
+                    paren = 1
+
+                    while lex and lex.text() != "," and paren:
+                        if lex.text() == ")" and lex.token() == "Punctuation":
+                            paren -= 1
+                        elif lex.text() == "(" and lex.token() == "Punctuation":
+                            paren += 1
+                        elif lex.text() == "=" and lex.token() == "Operator":
+                            is_optional = True
+                        elif is_optional and lex.text() == "NULL" and lex.token() == "Identifier":
+                            compliant = True
+                            break
+
+                        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+                    if not compliant:
+                        check.violation(param_ref.ent(), file, func_ref.line(), func_ref.column(), ERR1)
+                        break

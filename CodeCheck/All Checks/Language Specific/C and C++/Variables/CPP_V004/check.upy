@@ -1,0 +1,160 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 12-8-21
+
+
+import re
+
+
+ERR1 = 'Non-volatile POD variable has only one use.'
+
+
+POD_TYPES = {'bool', 'char', 'signed char', 'unsigned char', 'short', 'short int', 'signed short', 'signed short int', 'unsigned short int', 'int', 'signed', 'signed int', 'unsigned', 'unsigned int', 'long', 'long int', 'signed long', 'signed long int', 'unsigned long', 'unsigned long int', 'long long', 'long long int', 'signed long long', 'signed long long int', 'unsigned long long', 'unsigned long long int', 'int8_t', 'int16_t', 'int32_t', 'int64_t', 'int_fast8_t', 'int_fast16_t', 'int_fast32_t', 'int_fast64_t', 'int_least8_t', 'int_least16_t', 'int_least32_t', 'int_least64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t', 'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t', 'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t', 'float', 'double', 'long double'}
+
+
+def ids():
+	return ('CPP_V004', 'MISRA08_0-1-4', 'M0-1-4')
+
+
+def name(id):
+	return {
+		'CPP_V004': 'All Checks/Language Specific/C and C++/Variables/A project shall not contain non-volatile POD variables having only one use.',
+		'MISRA08_0-1-4': 'Published Standards/MISRA-C++ 2008/0-1-4 A project shall not contain non-volatile POD variables having only one use.',
+		'M0-1-4': 'Published Standards/AUTOSAR/A project shall not contain non-volatile POD variables having only one use.',
+	}[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_0-1-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Variables',
+        ],
+        'M0-1-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Variables',
+        ],
+        'CPP_V004': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+    }.get(id)
+
+def description():
+	return 'A project shall not contain non-volatile POD variables having only one use.'
+
+
+def detailed_description():
+	return '''\
+
+<p><b>Rationale</b></p>
+With the exception of volatile variables, variables declared and used only once do not contribute to program computations. A use is either an assignment (explicit initialization) or a reference.</p>
+
+<p>
+These variables are essentially noise but their presence may indicate that the wrong variable has been used elsewhere. Missing statements contribute to this problem.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">const int16_t x = 19;      // Compliant
+const int16_t y = 21;      // Non-compliant
+void usedonlyonce ( void )
+{
+  int16_t once_1 = 42;     // Non-compliant
+  int16_t once_2;
+  once_2 = x;              // Non-compliant
+}
+</code></pre>
+
+<p>
+Note that <code>x</code> is compliant as there are two uses, firstly when initialized and secondly when assigned to <code>once_2</code>.
+</p>
+
+'''
+
+
+def test_language(language):
+	return language == 'C++'
+
+
+def test_entity(file):
+	return True
+
+
+def test_global():
+	return False
+
+
+def pod(objEnt):
+	# Check data type
+	if objEnt.type():
+		plainType = re.sub(r'const ', '', objEnt.type())
+		plainType = re.sub(r'constexpr ', '', objEnt.type())
+		plainType = re.sub(r'volatile ', '', plainType)
+		if plainType in POD_TYPES:
+			return True
+
+	# Check if we are looking at a struct of some kind
+	classRef = objEnt.ref('Typed')
+	if not classRef or (classRef.ent().longname() and re.search("^std::", classRef.ent().longname())):
+		return False
+
+	# Pull everything that this class defines
+	refsDefined = classRef.ent().refs('Define')
+	for ref in refsDefined:
+		# Test each part of the definition for what is POD
+		ent = ref.ent()
+		if ent.longname() == ent.name() + '::' + ent.name():
+			return False
+		if ent.longname() == ent.name() + '::~' + ent.name():
+			return False
+		if 'Protected' in ent.kind().longname() and 'Static' not in ent.kind().longname():
+			return False
+		if 'Private' in ent.kind().longname() and 'Static' not in ent.kind().longname():
+			return False
+		if 'Virtual' in ent.kind().longname():
+			return False
+		if 'Derive' in ref.kind().longname():
+			return False
+		if 'Base' in ref.kind().longname():
+			return False
+
+	return True
+
+
+def check(check, file):
+	for ref in file.filerefs('Define', 'Object ~Member ~TemplateParameter'):
+		ent = ref.ent()
+		entType = ent.type()
+
+		# Ignore debugging and unnamed variables
+		if re.match(r'_|\[unnamed\]', ent.name()):
+			continue
+
+		# Ignore types like 'enum (anonymous)'
+		if entType and '(anonymous)' in entType:
+			continue
+
+		# Ignore volatile
+		if entType and 'volatile' in entType:
+			continue
+
+		# Ignore variables with more than one use
+		uses = len(ent.refs('Setby, Useby, Callby, Modifyby'))
+		if uses > 1:
+			continue
+
+		# Ignore variables that aren't plain old data
+		if not pod(ent):
+			continue
+
+		check.violation(ent, file, ref.line(), ref.column(), ERR1)

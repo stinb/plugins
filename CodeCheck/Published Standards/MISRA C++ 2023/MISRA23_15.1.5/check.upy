@@ -1,0 +1,158 @@
+ERR1 = "A class shall only define an initializer-list constructor when it is the only constructor"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_15.1.5')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_15.1.5': 'Published Standards/MISRA C++ 2023/15.1.5 A class shall only define an initializer-list constructor when it is the only constructor'
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_15.1.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_15.1.5': """
+<p><b>Amplification</b></p>
+<p>Copy and move constructors are permitted in addition to the initializer-list constructor.</p>
+<p>A constructor is an initializer-list constructor if its first parameter is of type
+std::initializer_list&lt; T &gt; or is a reference to a (possibly cv-qualified)
+std::initializer_list&lt; T &gt;, and either there are no other parameters or else all other
+parameters have default arguments.</p>
+<p>A constructor is an initializer-list constructor if:</p>
+<p>● Its first parameter is of type std::initializer_list&lt; T &gt; or is a reference to a (possibly cv-qualied) std::initializer_list&lt; T &gt;; and</p>
+<p>● Either there are no other parameters or else all other parameters have default arguments.</p>
+
+<p><b>Rationale</b></p>
+<p>Under the special overload resolution rules, a constructor with a sole std::initializer_list&lt; T &gt;
+parameter will always be preferred over a constructor taking individual arguments of convertible types
+in initializations using curly braces. Consequently, the effect of an initialization may differ depending
+on the form of initialization (curly braces or parentheses) and may not meet developer expectation.</p>
+<p>Although the guidelines within this document do not apply to C++ Standard Library definitions, the
+design of std::vector demonstrates the problem that this rule prevents in user classes:</p>
+<pre><code language="C++">std::vector&lt; int32_t &gt; v1{ 3, 4 }; // Vector has two elements: {3, 4}
+std::vector&lt; int32_t &gt; v2( 3, 4 ); // Vector has three elements: {4, 4, 4}</code></pre>
+<p>Another source of confusion arises when a default constructor is present and an object is initialized
+with empty curly braces. According to language rules, this will always call the default constructor, but
+a developer may expect an initialization with an empty initializer list.</p>
+<p>Note: a non-constructor function taking a single std::initializer_list&lt; T &gt; parameter will
+require both parentheses and curly braces at the call site, so does not suffer from the concern
+addressed by this rule.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class A // Non-compliant
+{
+public:
+ A( std::size_t x, std::size_t y );
+ A( std::initializer_list&lt; std::size_t &gt; list );
+};
+
+class B // Compliant - no initializer-list constructor
+{
+public:
+ B( std::size_t x, std::size_t y );
+ // The following is not an initializer-list constructor
+ B( std::size_t x, std::initializer_list&lt; std::size_t &gt; list);
+};
+
+class C // Compliant
+{
+public:
+ C( std::initializer_list&lt; std::size_t &gt; list );
+};
+
+class D // Compliant
+{
+public:
+ D( const D & d );
+ D( D && d );
+ D( std::initializer_list&lt; std::size_t &gt; list );
+};</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        has_initlist_constr = False
+        constr_ctr = 0
+
+        for func_ref in class_ref.ent().refs("Define, Declare", "Member Function", True):
+            skip = False
+            param_ctr = 0
+            has_initlist_param = False                
+
+            if func_ref.ent().name() != class_ref.ent().name():
+                continue
+
+            for param_ref in func_ref.ent().refs("Define, Declare", "Parameter", True):                    
+                utype = param_ref.ent().freetext("UnderlyingType")
+                init = param_ref.ent().freetext("InitText")
+                ent_type, _ = get_ent_type(param_ref.ent())
+
+                if not param_ctr and ent_type and ent_type.kind().check("Class") and (ent_type.name() == class_ref.ent().name()):
+                    skip = True
+                    break
+                elif not param_ctr and utype and "initializer_list" in utype:
+                    has_initlist_param = True
+
+                if not init:
+                    param_ctr += 1
+
+            if skip:
+                continue
+            elif (param_ctr == 1) and has_initlist_param:
+                has_initlist_constr = True
+
+            constr_ctr += 1
+
+        if has_initlist_constr and constr_ctr > 1:
+            check.violation(class_ref.ent(), file, class_ref.line(), class_ref.column(), ERR1)
+
+
+                

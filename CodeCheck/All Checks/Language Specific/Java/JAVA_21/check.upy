@@ -1,0 +1,144 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 6-2-22
+
+
+import re
+
+
+ERR1 = 'Finalizer calls "%1" outside of "try" block, which may throw exceptions'
+
+
+def id():
+    return ('JAVA_21')
+
+
+def name(id):
+    return {'JAVA_21': """\
+All Checks/Language Specific/Java/\
+Finalizers shall catch and manage their own exceptions as well as any \
+propagated exceptions that may be thrown from functions called by the \
+finalizer.\
+"""}[id]
+
+
+
+def tags(id):
+    return {
+        'JAVA_21': [
+            'Language: Java',
+            'Exception Handling',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>
+If a finalizer calls a method that can throw exception, it should be in a try\
+ block.
+</p>
+
+<p><b>Risk Assessment</b></p>
+<p>
+If an uncaught exception is thrown during the finalization, the exception is\
+ ignored and finalization of that object terminates.
+</p>
+
+<p>
+See 12.6 Finalization of Class Instances:
+<i>
+https://docs.oracle.com/javase/specs/jls/se7/html/jls-12.html#jls-12.6
+</i>
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class Test {
+    public void finalize() throws ArithmeticException {
+        divideByZero();
+    }
+
+    private void divideByZero() throws ArithmeticException {
+        int x = 1 / 0;
+    }
+}
+</code></pre>
+
+<p>
+<i>Developer Notes:</i>
+Because of complexity, finalizers with their own exceptions can only be\
+ determined at runtime. However, this still checks propogated exceptions that\
+ may be thrown from methods called.
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def lexEquals(a, b):
+    return a.line_begin() == b.line_begin() and a.column_begin() == b.column_begin()
+
+
+def check(check, file):
+    lexer = None
+
+    # Methods
+    for finalizerRef in file.filerefs('Define', 'Method'):
+        finalizer = finalizerRef.ent()
+
+        # Skip everything but finalizers
+        if finalizer.name() != 'finalize':
+            continue
+
+        callsWithThrows = False
+
+        # Find a call that can throw exceptions
+        for callRef in finalizer.refs('Call', 'Method'):
+            call = callRef.ent()
+            if call.refs('Throw'):
+                callsWithThrows = True
+                break
+
+        # Skip finalizers that don't call methods with throws
+        if not callsWithThrows:
+            continue
+
+        # Get the finalizer lexemes
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+        beginRef = finalizer.ref('Begin')
+        endRef = finalizer.ref('End')
+        lex = lexer.lexeme(beginRef.line(), beginRef.column())
+        end = lexer.lexeme(endRef.line(), endRef.column())
+
+        # Find all calls that throw exceptions
+        prev = None
+        tryBlockOpenBraces = []
+        openBraces = 0
+        while lex and not lexEquals(lex, end):
+            text = lex.text()
+
+            # Parse braces for try block
+            if text == '{':
+                openBraces += 1
+                if prev == 'try':
+                    tryBlockOpenBraces.append(openBraces)
+            elif text == '}':
+                openBraces -= 1
+                if tryBlockOpenBraces and openBraces < tryBlockOpenBraces[-1]:
+                    tryBlockOpenBraces.pop()
+
+            # Other lexeme in the method brace, but not in try block
+            elif openBraces and not tryBlockOpenBraces:
+                ent = lex.ent()
+                if ent and ent.refs('Throw'):
+                    check.violation(finalizer, file, lex.line_begin(), lex.column_begin(), ERR1, text)
+
+            prev = lex.text()
+            lex = lex.next(True, True)

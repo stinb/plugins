@@ -1,0 +1,114 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8-25-2021
+import re
+from Modules import stringIsStd
+
+ERR1 = 'Argument to std::forward was subsequently used'
+
+def ids():
+    return ('A18-9-4', 'CPP_L022')
+
+def name(id):
+    return {
+        'A18-9-4': """\
+Published Standards/AUTOSAR/An argument to std::forward shall not be subsequently used""",
+        'CPP_L022': """\
+All Checks/Language Specific/C and C++/Libraries/An argument to std::forward shall not be subsequently used"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A18-9-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Libraries',
+        ],
+        'CPP_L022': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Depending on the value category of parameters used in the call, std::forward
+may result in a move of the parameter. When the value is an lvalue,
+modifications to the parameter will affect the argument of the caller. If the
+value is an rvalue, the value may be in indeterminate state after the call to
+std::forward.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">// $Id: A18-9-4.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+#include &lt;iostream&gt;
+#include &lt;utility&gt;
+template &lt;typename T1, typename T2&gt;
+void F1(T1 const& t1, T2& t2) {
+    // ...
+};
+template &lt;typename T1, typename T2&gt;
+void F2(T1&& t1, T2&& t2)
+{
+    f1(std::forward&lt;T1&gt;(t1), std::forward&lt;T2&gt;(t2));
+    ++t2; // Non-compliant
+};
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    refs = file.filerefs('Call', 'Unresolved Function Template')
+    lexer = None
+    seen = []
+
+    for ref in refs:
+        # Skip if not 'forward'
+        if not stringIsStd(ref.ent().longname(), 'forward'):
+            continue
+
+        # Ensure each violation is only thrown once
+        s = ref.ent().longname() + str(ref.line()) + str(ref.column())
+        if s in seen:
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        first = True
+        # Look for arguments of forward
+        ent = None
+        while lexeme and lexeme.text() != ';':
+            if first and lexeme.ent() and re.search(r'Parameter', lexeme.ent().kindname()) and not re.search(r'Template', lexeme.ent().kindname()):
+                ent = lexeme.ent()
+                first = False
+
+            lexeme = lexeme.next(True, True)
+
+        # Skip if ent for argument not found (macros and inactive code)
+        if not ent:
+            continue
+
+        # Check to see if arguments of forward are subsequently used
+        if lexeme:
+            lexeme = lexeme.next(True, True)
+        while lexeme and lexeme.text() != ';':
+            if lexeme.ent():
+                if lexeme.ent().name() == ent.name():
+                    check.violation(ent, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                    seen.append(ref.ent().longname() + str(ref.line()) + str(ref.column()))
+
+            lexeme = lexeme.next(True, True)

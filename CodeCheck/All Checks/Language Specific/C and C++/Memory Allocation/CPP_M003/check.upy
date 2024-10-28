@@ -1,0 +1,184 @@
+ERR1 = 'Bitwise operations and operations that assume data representation performed on objects.'
+CHAR_MANIPULATION_FUNCS = {"memchr", "memcmp", "memset", "memcpy", "memmove"}
+
+
+# The ID for the check
+def ids():
+    return ('A12-0-2', 'CPP_M003')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-0-2': 'Published Standards/AUTOSAR/Bitwise operations and operations that assume data representation in memory shall not be performed on objects.',
+        'CPP_M003': 'All Checks/Language Specific/C and C++/Memory Allocation/Bitwise operations and operations that assume data representation in memory shall not be performed on objects.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A12-0-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Memory Allocation'
+        ],
+        'CPP_M003': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Bitwise operations and operations that assume data representation in
+memory shall not be performed on objects.</p>
+<p><b>Rationale</b></p>
+<p>Object representations may consist of more than only the declared fields (unless the
+objects are standard-layout or trivially copyable). Performing bitwise operations on
+objects may access bits that are not part of the value representation, which may lead
+to undefined behavior. Operations on objects (e.g. initialization, copying, comparing,
+setting, accessing) shall be done by dedicated constructors, overloaded operators,
+accessors or mutators.</p>
+<p><b>Note</b></p>
+<p>This check only flags a character array manipulation function that has a class object as one of its parameters.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-0-2.cpp 305629 2018-01-29 13:29:25Z piotr.serwa $
+2 //
+3 #include &lt;cstdint&gt;
+4 #include &lt;cstring&gt;
+5
+6 class A
+7 {
+8 public:
+9 A() = default;
+10 A(uint8_t c, uint32_t i, int8_t d, int32_t h) : c(c), i(i), d(d), h(h) {}
+11
+12 bool operator==(const A& rhs) const noexcept
+13 {
+14 return c==rhs.c && i==rhs.i && d==rhs.d && h==rhs.h;
+15 }
+16
+17 private:
+18 uint8_t c;
+19 uint32_t i;
+20 int8_t d;
+21 int32_t h;
+22 };
+23
+24
+25 int main(void)
+26 {
+27 A noninit;
+28
+29 //setting field c
+30 std::memset(&noninit, 3, 1); //non-compliant
+31 //setting field i
+32 std::memset(((uint8_t*)&noninit)+sizeof(uint8_t)+3, 5, 1); //non-compliant
+33
+34 A init(3, 5, 7, 9); //compliant
+35
+36 if (noninit == init) //compliant
+37 {
+38
+39 }
+40
+41 if (0 == std::memcmp(&noninit, &init, sizeof(init)))
+42 { //non-compliant, includes padding bytes
+43
+44 }
+45
+46 return 0;
+47 }
+</code></pre>
+<p><b>See also</b></p>
+<p>• JSF December 2005 [8]: AV Rule 156: All the members of a structure (or class)
+shall be named and shall only be accessed via their names.</p>
+<p>• JSF December 2005 [8]: AV Rule 210: Algorithms shall not make assumptions
+concerning how data is represented in memory (e.g. big endian vs. little endian,
+base class subobject ordering in derived classes, nonstatic data member ordering
+across access specifiers, etc.)</p>
+<p>• JSF December 2005 [8]: AV Rule 210.1: Algorithms shall not make assumptions
+concerning the order of allocation of nonstatic data members separated by an
+access specifier.</p>
+<p>• JSF December 2005 [8]: AV Rule 211: Algorithms shall not assume that shorts,
+ints, longs, floats, doubles or long doubles begin at particular addresses.</p>
+<p>• SEI CERT C++ Coding Standard [10]: EXP42-C: Do not compare padding data</p>
+<p>• SEI CERT C++ Coding Standard [10]: EXP62-C: Do not access the bits of an
+object representation that are not part of the object’s value representation</p>
+<p>• SEI CERT C++ Coding Standard [10]: OOP57-CPP: Prefer special member
+functions and overloaded operators to C Standard Library functions</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for call_ref in file.filerefs("Call ~Implicit", "Function"):
+        if call_ref.ent().name() in CHAR_MANIPULATION_FUNCS:
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            lex = next_lex(lex)
+            in_param = 1
+            is_class_object = False
+
+            while lex and in_param:
+                lex = next_lex(lex)
+                if not lex:
+                    return
+
+                if lex.ent():
+                    _ent, _type = get_ent_type(lex.ent())
+                    is_class_object = _ent.kind().check("Class ~Template")
+
+                if is_class_object:
+                    check.violation(None, file, call_ref.line(),
+                                    call_ref.column(), ERR1)
+                    break
+                elif lex.text() == "(" and lex.token() == "Punctuation":
+                    in_param += 1
+                elif lex.text() == ")" and lex.token() == "Punctuation":
+                    in_param -= 1
+
+
+def next_lex(_lex):
+    return _lex.next(ignore_whitespace=True, ignore_comments=True)
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()

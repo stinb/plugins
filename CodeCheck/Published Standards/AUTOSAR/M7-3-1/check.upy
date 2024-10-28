@@ -1,0 +1,215 @@
+# This script is designed to run with Understand - CodeCheck
+# 8-16-21
+
+
+import re
+
+
+ERR1 = 'Declaration in global namespace (%1)'
+ERR2 = "The use of 'inline namespace' in the global namespace is prohibited"
+ERR3 = "The use of 'using directive' in the global namespace is prohibited"
+
+
+TYPE_EXCEPTIONS = {'char', 'signed char', 'unsigned char', 'short', 'short int', 'signed short', 'signed short int', 'unsigned short', 'unsigned short int', 'int', 'signed', 'signed int', 'unsigned', 'unsigned int', 'long', 'long int', 'signed long', 'signed long int', 'unsigned long', 'unsigned long int', 'long long', 'long long int', 'signed long long', 'signed long long int', 'unsigned long long', 'unsigned long long int', 'float', 'double', 'long double', '__int32_t'}
+TYPEDEF_EXCEPTIONS = r'^(u?int(_(fast|least))?|float)\d+_t$'
+
+
+def ids():
+    return ('M7-3-1', 'MISRA08_7-3-1', 'CPP_I004', 'MISRA23_6.0.3')
+
+
+def name(id):
+    return {
+        'M7-3-1': 'Published Standards/AUTOSAR/Global Namespace Declarations',
+        'MISRA08_7-3-1': 'Published Standards/MISRA-C++ 2008/7-3-1 Global Namespace Declarations',
+        'CPP_I004': 'All Checks/Language Specific/C and C++/Identifiers/Global Namespace Declarations',
+        'MISRA23_6.0.3': 'Published Standards/MISRA C++ 2023/6.0.3 Global Namespace Declarations',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_7-3-1': [
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+            'Identifiers',
+        ],
+        'M7-3-1': [
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+            'Identifiers',
+        ],
+        'CPP_I004': [
+            'Language: C++',
+            'Declarations and Definitions',
+            'Identifiers',
+        ],
+        'MISRA23_6.0.3': [
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+            'Identifiers',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    if id == 'MISRA23_6.0.3':
+        return '''
+<p><b>Title</b></p>
+<p>The only <i>declarations</i> in the global namespace should be
+<code>main</code>, namespace declarations and <code>extern "C"</code>
+declarations.</p>
+
+<p><b>Amplification</b></p>
+<p>This rule also prohibits use of using directives and inline namespaces in the global namespace.</p>
+<p>It does not apply to namespace aliases, static_assert or to names that are declared within the C++ Standard.</p>
+
+<p><b>Rationale</b></p>
+<p>Declaring names into appropriate namespaces reduces the names found during lookup, helping to
+ensure that the names found meet developer expectations.</p>
+<p>Adherence with this rule is particularly important within header files, as it reduces the chance that the
+order of their inclusion will affect program behaviour.</p>
+<p>Notes:</p>
+<p>1. Using directives and inline namespaces do not actually add names to the global namespace, but
+they do make them appear as if they are in it.</p>
+<p>2. Names declared within an anonymous namespace appear in the global namespace. However,
+their use is permitted as they do not have external linkage.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">\
+void f1( int32_t );     // Non-compliant
+
+int32_t x1;             // Non-compliant
+
+namespace               // Compliant
+{
+  void f2( int32_t );   // Rule does not apply
+
+  int32_t x2;           // Rule does not apply
+}
+
+namespace MY_API        // Compliant
+{
+  void b2( int32_t );   // Rule does not apply
+
+  int32_t x2;           // Rule does not apply
+}
+
+using namespace MY_API; // Non-compliant
+using MY_API::b2;       // Non-compliant
+namespace MY = MY_API;  // Compliant
+
+int main()              // Compliant
+{
+  extern void f3();     // Non-compliant
+}
+</code></pre>
+        '''
+
+    return '''
+<p><b>Title</b></p>
+<p>The global namespace shall only contain <i>main</i>, namespace declarations
+and <i>extern "C"</i> declarations.</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Declaring names into appropriate namespaces reduces the names found during lookup, helping to ensure that the names found meet developer expectations.
+</p>
+
+<p><b>Exception</b></p>
+
+<p>The types defined for compliance with Rule 3-9-2 may also be in the global namespace.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+void f1 ( int32_t );    // Non-compliant
+
+int32_t x1;             // Non-compliant
+
+namespace
+{
+   void f2 ( int32_t ); // Compliant
+   int32_t x2;          // Compliant
+}
+
+namespace MY_API
+{
+   void b2 ( int32_t ); // Compliant
+   int32_t x2;          // Compliant
+}
+
+int32_t main ( )        // Compliant
+{
+}
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.file_type() == 'C++'
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    using_inline = check.id() == 'MISRA23_6.0.3'
+
+    check.option().checkbox('using_inline', 'Flag the use of using directives and inline namespaces in the global namespace', using_inline)
+
+
+def typedefForBasicNumericType(ent):
+    if ent.kind().check('Typedef, Type Alias'): # Typedef
+        if ent.type() in TYPE_EXCEPTIONS: # Number or char
+            if re.search(TYPEDEF_EXCEPTIONS, ent.name()) or ent.name() == 'char_t': # Specific size
+                return True
+    return False
+
+
+def check(check, file):
+    using_inline = check.option().lookup('using_inline')
+
+    for ref in file.filerefs('Declare, Define', '~Namespace ~Parameter ~Member ~Class ~Macro'):
+        ent = ref.ent()
+
+        # Exception Rule 3-9-2
+        if typedefForBasicNumericType(ent):
+            continue
+        # Ignore extern "C"
+        if ent.freetext('Linkage') == 'C':
+            continue
+        # Ignore main function
+        if ent.name() == 'main':
+            continue
+        # Ignore when not in global scope
+        if ent.parent() and not ent.parent().kind().check('File'):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
+
+    if not using_inline:
+        return
+
+    for namespace_ref in file.filerefs("Declare, Define", "Namespace"):
+        if namespace_ref.ent().contents() and re.search("^inline", namespace_ref.ent().contents()):
+            check.violation(namespace_ref.ent(), file, namespace_ref.line(), namespace_ref.column(), ERR2)
+
+    for using_ref in file.filerefs('Using'):
+        if using_ref.scope().id() != file.id():
+            continue
+
+        check.violation(using_ref.ent(), file, using_ref.line(), using_ref.column(), ERR3)

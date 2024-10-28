@@ -1,0 +1,199 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-08-20
+
+
+import re
+from enum import Enum
+
+from understand import CFGraph, CFNode, Ent
+from Modules import lexemeBefore
+
+
+class Throw(Enum):
+    UNKNOWN = -1
+    NO_THROW = 0
+    THROW = 1
+
+
+ERR1 = 'Exception could be thrown in the destructor'
+
+OPT1 = 'strictThrowAll'
+OPT1_THROW = 'Can throw exceptions'
+OPT1_NOTHROW = 'Cannot throw exceptions'
+
+
+def ids():
+    return ('EFFECTIVECPP_08', 'CPP_D030')
+
+
+def name(id):
+    return {
+        'EFFECTIVECPP_08': '''Published Standards/Effective C++ (3rd Edition) Scott Meyers/\
+8. Exceptions in Destructors''',
+        'CPP_D030': '''All Checks/Language Specific/C and C++/Destructors/\
+Exceptions in Destructors''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'EFFECTIVECPP_08': [
+            'Destructors',
+            'Exception Handling',
+            'Language: C++',
+            'Standard: Effective C++',
+        ],
+        'CPP_D030': [
+            'Destructors',
+            'Exception Handling',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+<p>Prevent exceptions from leaving destructors.</p>
+
+<p><b>Developer's Notes</b></p>
+<p>The type caught in a catch statement is not checked.</p>
+<p>Complicated <code>noexcept</code> expressions are not parsed.</p>
+<p>This check relies on exception specification, rather than whether functions
+actually throw exceptions.</p>
+<p>Functions with a Linkage freetext of C are assumed to not throw exceptions.
+Detecting C functions can be improved by enabling the project configuration
+C++ > Includes > Add found system include files to source list.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().radio_vert(OPT1, 'Functions without throw/noexcept specification', [OPT1_THROW, OPT1_NOTHROW], OPT1_NOTHROW)
+
+
+def check(check, file):
+    assume_throws = check.options().lookup(OPT1) == OPT1_THROW
+
+    # Each destructor method
+    for define in file.filerefs('Define', 'Member Function'):
+        destructor = define.ent()
+        if not re.search(r'^~', destructor.name()):
+            continue
+
+        # Skip if no CFG to find try-catch blocks
+        cfg = destructor.control_flow_graph()
+        if not cfg:
+            continue
+
+        # Each call in the destructor
+        for call in destructor.refs('Call'):
+            callee = call.ent()
+
+            # Skip it's specified to not throw exceptions
+            throws = see_if_throws(callee)
+            if throws == Throw.UNKNOWN:
+                throws = Throw.THROW if assume_throws else Throw.NO_THROW
+            if throws == Throw.NO_THROW:
+                continue
+
+            # Skip if the exception is caught
+            if see_if_caught(call.line(), call.column(), cfg):
+                continue
+
+            check.violation(destructor, call.file(), call.line(), call.column(), ERR1)
+
+        # Get definition end or skip
+        end = destructor.ref('End')
+        if not end or end.file() != define.file():
+            continue
+        lex = file.lexer(False).lexeme(define.line(), define.column())
+
+        # Find throw statement in lexemes
+        while lex and lexemeBefore(lex, end.line(), end.column()):
+            # Skip if not `throw`
+            if lex.text() != 'throw':
+                lex = lex.next(True, True)
+                continue
+
+            # Skip if caught
+            if see_if_caught(lex.line_begin(), lex.column_begin(), cfg):
+                lex = lex.next(True, True)
+                continue
+
+            check.violation(destructor, define.file(), lex.line_begin(), lex.column_begin(), ERR1)
+
+            lex = lex.next(True, True)
+
+
+# Whether the function is specified to throw
+def see_if_throws(fn: Ent) -> Throw:
+    # If it's C and not C++
+    if fn.freetext('Linkage') == 'C':
+        return Throw.NO_THROW
+
+    # If there's noexcept specification
+    noexcept = fn.freetext('Noexcept')
+    if noexcept in {'', 'true', '1'}:
+        return Throw.NO_THROW
+    elif noexcept in {'false', '0'}:
+        return Throw.THROW
+
+    # If there's a throw in the body or in dynamic exception specification
+    throw_specifier = fn.freetext('AllowExceptions')
+    if throw_specifier == '':
+        return Throw.NO_THROW
+    if throw_specifier or fn.freetext('ThrowExceptions'):
+        return Throw.THROW
+
+    return Throw.UNKNOWN
+
+
+# Whether the code location is caught by a `catch` statement in the CFG
+def see_if_caught(line: int, column: int, cfg: CFGraph) -> bool:
+    try_nodes: list[CFNode] = []
+
+    # Get the node of the line and column or assume it's not caught
+    target_node = None
+    for other_node in cfg.nodes():
+        if other_node.kind() == 'try':
+            try_nodes.append(other_node)
+        elif other_node.kind() == 'end-try':
+            if try_nodes:
+                try_nodes.pop()
+        elif get_location_in_node(line, column, other_node):
+            target_node = other_node
+            break
+    if not target_node:
+        return False
+
+    # If not in a try block, then it's not caught
+    if not try_nodes:
+        return False
+
+    return True
+
+
+# Whether the code location is in the CFG node
+def get_location_in_node(line: int, column: int, node: CFNode) -> bool:
+    if not node.line_begin():
+        return False
+    if line < node.line_begin() or line > node.line_begin():
+        return False
+    if line == node.line_begin() and column < node.column_begin():
+        return False
+    if line == node.line_end() and column > node.column_end():
+        return False
+    return True

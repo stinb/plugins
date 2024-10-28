@@ -1,0 +1,213 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 2/1/2022
+
+import re
+
+ERR1 = 'The throw of {} is not specified in function {}\'s preamble.'
+ERR2 = 'The throw of {} described in function {}\'s preamble is not actually thrown.'
+ERR3 = 'The throw of {} is not specified in a declaration\'s preamble of {}.'
+ERR4 = 'The throw of {} described in a declaration of {}\'s preamble is not actually thrown.'
+
+DEF_NAME = """Checked exceptions that could be thrown from a function shall be specified together with the function declaration and they shall be identical in all function declarations and for all its overriders."""
+
+# The ID for the check
+def ids():
+    return ('A15-4-5', 'CPP_C043')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+     'A15-4-5': f'Published Standards/AUTOSAR/{DEF_NAME}',
+     'CPP_C043': f'All Checks/Language Specific/C and C++/Comments/{DEF_NAME}',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A15-4-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Comments',
+        ],
+        'CPP_C043': [
+            'Language: C',
+            'Language: C++',
+            'Comments',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p> In C++ language, all exceptions are unchecked, because the compiler does not force
+to either handle the exception or specify it. Because dynamic-exception specification is
+obsolete and error prone, an alternative mechanism of specifying checked exceptions
+using C++ comments along with function declarations is used. It is a concept that is
+based on Java exception handling mechanism.
+When analyzing a given function f, a static code analysis needs to analyze functions
+invoked by f and analyze if they throw any checked exceptions that are not caught by f
+and not listed by f in the function comment.</p>
+<p><b>Exception</b></p>
+<p>Within generic code, it is not generally possible to know what types of exceptions may
+be thrown from operations on template arguments, so a precise exception specification
+cannot be written. Therefore, this rule does not apply for templates.</p>
+<p><b>Example</b></p>
+
+<pre><code language="C++">#include &lt;cstdint&gt;
+#include &lt;stdexcept&gt;
+
+/// @checkedException
+class CommunicationError : public std::exception
+{
+    // Implementation
+};
+
+/// @checkedException
+class BusError : public CommunicationError
+{
+    // Implementation
+};
+
+/// @checkedException
+class Timeout : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+    // Implementation
+};
+
+/// @throw CommunicationError Communication error
+/// @throw BusError Bus error
+/// @throw Timeout On send timeout exception
+void Send1( // UNDCC_Valid - All and only those checked exceptions that can be thrown are specified
+    std::uint8_t* buffer,
+    std::uint8_t bufferLength) noexcept(false)
+{
+    // ...
+    throw CommunicationError();
+    // ...
+    throw BusError();
+    // ...
+    throw Timeout("Timeout reached");
+    // ...
+}
+
+/// @throw CommunicationError Communication error
+void Send2(  // UNDCC_Violation - checked exceptions that can be thrown are missing from specification
+    std::uint8_t* buffer,
+    std::uint8_t bufferLength) noexcept(false)
+{
+    // ...
+    throw CommunicationError();
+    // ...
+    throw Timeout("Timeout reached");
+    // ...
+}
+
+class MemoryPartitioningError : std::exception
+{
+    // Implementation
+};
+
+/// @throw CommunicationError Communication error
+/// @throw BusError Bus error
+/// @throw Timeout On send timeout exception
+/// @throw MemoryPartitioningError Memory partitioning error prevents message
+/// from being sent.
+void Send3( // UNDCC_Violation - additional checked exceptions are specified
+    std::uint8_t* buffer,
+    std::uint8_t bufferLength) noexcept(false)
+{
+    // ...
+    throw CommunicationError();
+    // ...
+    throw Timeout("Timeout reached");
+    // ...
+}</code></pre>
+<br>
+<i>Author Notes: This check does not test that each called function's throws are included in the preamble. Each function is checked independently. If foo calls bar and bar throws an error, foo does not need to include the exception in foo's preamble.</i>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# Options for the check
+def define_options(check):
+    pass
+
+def check(check, file):
+    # get all functions throws
+    for function in file.filerefs("Define", "Function ~Undefined ~Unresolved ~Explicit"):
+        # get all throws within function
+        throws = []
+        for throw in function.ent().refs("Throw"):
+            throws.append(throw.ent().name())
+
+        if len(throws) < 1:
+            continue
+
+        # check comments for all throws in preamble
+        describedThrows = get_described_throws_from_comment(function.ent().comments("before"))
+
+        #compare and flag violations
+        notDescribed = set(throws) - set(describedThrows)
+        notThrown = set(describedThrows) - set(throws)
+
+        for throw in notDescribed:
+            pm(ERR1.format(throw, function.ent()), check, function.ent(), function.file(), function.line(), function.column())
+
+        for throw in notThrown:
+            pm(ERR2.format(throw, function.ent()), check, function.ent(), function.file(), function.line(), function.column())
+
+        #now make sure the declarations also follow suit. Note- using the api combines all declarations together so we have to use the lexer
+        for declare in function.ent().refs("Declarein"):
+            preamble = get_preamble(declare, check)
+            describedThrows = get_described_throws_from_comment(preamble)
+            notDescribed = set(throws) - set(describedThrows)
+            notThrown = set(describedThrows) - set(throws)
+            #pm(preamble, check)
+            for throw in notDescribed:
+                pm(ERR3.format(throw, function.ent()), check, function.ent(), declare.file(), declare.line(), declare.column())
+
+            for throw in notThrown:
+                pm(ERR4.format(throw, function.ent()), check, function.ent(), declare.file(), declare.line(), declare.column())
+
+
+def get_preamble(ref, check):
+    comment = ""
+     # move to function def via lexer
+    lexer = ref.file().lexer(lookup_ents=False)
+    if lexer is None:
+        return comment
+
+    #get the comment line and start from the last index and move until we are no longer in a comment
+    if ref.line() - 1 < 1:
+        return comment
+
+    commentLine = lexer.lexemes(ref.line() - 1, ref.line() - 1)
+    lexeme = commentLine[-1]
+    while lexeme and ( lexeme.token() == "Comment" or lexeme.token() == "Newline" ):
+        comment = lexeme.text() + comment
+        lexeme = lexeme.previous(False, False)
+
+    return comment
+
+def get_described_throws_from_comment(comment):
+    results = re.findall(r'@throw\s*\S*', comment)
+    s = []
+    for i in results:
+        s.append(i.replace("@throw","").strip())
+    return s
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

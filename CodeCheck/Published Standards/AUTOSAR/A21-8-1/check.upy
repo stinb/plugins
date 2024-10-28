@@ -1,0 +1,146 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-26-2021
+import re
+
+ERR1 = 'Object %1 was passed to %2 and is not an unsigned char'
+ERR2 = 'An object was passed to %1 and is not an unsigned char'
+
+def ids():
+    return ('A21-8-1', 'CPP_T001')
+
+def name(id):
+    return {
+        'A21-8-1': """\
+Published Standards/AUTOSAR/Arguments to character-handling functions shall be \
+representable as an unsigned char""",
+        'CPP_T001': """\
+All Checks/Language Specific/C and C++/Types/Arguments to character-handling \
+functions shall be representable as an unsigned char"""
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A21-8-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T001': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>This rule applies to the character handling functions in &lt;cctype&gt;. They all
+take an int parameter as input and specify that its value either shall be EOF or
+otherwise shall be representable as an unsigned char. On platforms where char is
+signed, it can have negative values that are not representable as an unsigned
+char, so that passing a char to such a function can result in undefined
+behavior.</p>
+<p>Thus, this rule mandates that all character arguments passed to such
+functions shall be explicitly cast to unsigned char.</p>
+<p>Note: Of all the functions in &lt;cctype&gt;, isdigit and isxdigit are the only
+ones whose behavior does not depend on the currently installed locale. See
+A18-0-3 in section 6.18.0 for a rule concerning the setlocale function.</p>
+<p><b>Example</p></b>
+<pre><code language="C++">1  // $Id: A21-8-1.cpp 312606 2018-03-21 09:52:14Z jan.babst $
+2  #include &lt;algorithm&gt;
+3  #include &lt;cctype&gt;
+4  #include &lt;string&gt;
+5
+6  void RemoveDigits_Bad(std::string& s)
+7  {
+8    s.erase(std::remove_if(s.begin(),
+9                           s.end(),
+10                          [](char c) {
+11                            return std::isdigit(c); // non-compliant
+12                          }),
+13           s.cend());
+14 }
+15
+16 void RemoveDigits_Good(std::string& s)
+17 {
+18   s.erase(std::remove_if(s.begin(),
+19                          s.end(),
+20                          [](char c) {
+21                            return std::isdigit(
+22                              static_cast&lt;unsigned char&gt;(c)); // compliant
+23                          }),
+24           s.cend());
+25 }
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    cctypeFunctions = ['isalnum', 'isalpha', 'isblank', 'iscntrl', 'isdigit', 'isgraph', 'islower', 'isprint', 'ispunct', 'isspace', 'isupper', 'isxdigit', 'tolower', 'toupper']
+
+    refs = file.filerefs('Call', 'Unresolved Function')
+
+    for ref in refs:
+        if not ref.ent().name() in cctypeFunctions:
+            continue
+        ok = False
+        lex = None
+
+        if not lexer:
+            lexer = file.lexer()
+
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        lexeme = lexeme.next(True, True)
+        if lexeme.text() == '(':
+            close = findClose(lexeme)
+
+            # Mark ok if a unsigned char object or a cast to unsigned char is found
+            while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                if lexeme.next(True, True) and lexeme.text() == 'unsigned' and lexeme.next(True, True).text() == 'char':
+                    ok = True
+                    break
+
+                if lexeme.ent() and lexeme.ent().type() == 'unsigned char':
+                    ok = True
+                    break
+
+                if lexeme.ent() and not ok:
+                    lex = lexeme
+
+
+                lexeme = lexeme.next(True, True)
+
+            if not ok:
+                if lex:
+                    check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1, lex.ent().name(), ref.ent().name())
+                else:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, ref.ent().name())
+
+
+# Find corresponding closing parenthesis given an open parenthesis
+def findClose(lexeme):
+    count = 0
+
+    while lexeme and not (lexeme.text() == ')' and count == 0):
+        if lexeme.text() == '(':
+            count += 1
+
+        lexeme = lexeme.next(True, True)
+
+        if lexeme.text() == ')':
+            count -= 1
+
+    return lexeme

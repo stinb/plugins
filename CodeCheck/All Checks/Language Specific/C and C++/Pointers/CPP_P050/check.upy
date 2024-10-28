@@ -1,0 +1,254 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 1/25/2022
+
+import re
+
+ERR1 = 'Literal zero (0) used as null-pointer-constant via init.'
+ERR2 = 'Literal zero (0) used as null-pointer-constant via parameter: %d'
+ERR3 = 'Literal zero (0) used as null-pointer-constant via assignment.'
+ERR4 = 'Literal zero (0) used as null-pointer-constant via default parameter: %d'
+
+DEF_NAME = "Literal zero (0) shall not be used as the null-pointer-constant."
+
+# The ID for the check
+def ids():
+    return ('M4-10-2', 'MISRA08_4-10-2', 'CPP_P050')
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'M4-10-2': 'Published Standards/AUTOSAR/' + DEF_NAME,
+        'MISRA08_4-10-2': 'Published Standards/MISRA-C++ 2008/4-10-2 ' + DEF_NAME,
+        'CPP_P050': 'All Checks/Language Specific/C and C++/Pointers/' + DEF_NAME
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_4-10-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Pointers',
+        ],
+        'M4-10-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Pointers',
+        ],
+        'CPP_P050': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+<p>In C++, the literal 0 is both an integer type and the null-pointer-constant. To meet developer
+expectations, NULL should be used as the null-pointer-constant, and 0 for the integer zero.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include &lt;cstddef&gt;
+void f1 ( int32_t );
+void f2 ( int32_t * );
+void f3 ( )
+{
+ f1 ( 0 ); // Compliant
+ f2 ( 0 ); // Non-compliant, 0 used as the null pointer constant
+}</code></pre>
+<br>
+<i>Author Notes: Initilizing a const with a typedef that is defined as literal 0 is a parser warning so that violation is not included.</i>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# Options for the check
+def define_options(check):
+    pass
+
+def check(check, file):
+
+    checkv(check, file)
+    checkc(check, file)
+   
+
+def checkv(check, file):
+
+    checkFileLexer = file.lexer()
+    if not checkFileLexer:
+        return
+
+    for iptr in file.filerefs("Set Init", "~unresolved ~unknown"):
+
+        # 4/6/23 added ent check, 5/20/23
+        if iptr and iptr.ent() and iptr.ent().type() and re.search(r".*\*$", iptr.ent().type()): #if its a *
+
+            #now we have to check that its set incorrectly
+            line = checkFileLexer.lexemes(iptr.line(), iptr.line())
+            if not line:
+                continue
+            lexeme = line[0]
+            
+            while lexeme and lexeme.text() != iptr.ent().name():#go to init
+                lexeme = lexeme.next(True, True)
+            if not lexeme:
+                continue
+            lexeme = lexeme.next(True, True) # should be =
+            if lexeme.text() == "=":
+                lexeme = lexeme.next(True, True) # now on value
+                if lexeme.text() == "0":
+                    pm(ERR1, check, iptr.ent(), file, iptr.line(), iptr.column())
+        
+            #we also have to track all setbys and see if they later set it to 0
+            for s in iptr.ent().refs("Setby ~Init ~Deref"):
+                thisLexer = s.file().lexer()
+                if not  thisLexer:
+                    return
+                line =  thisLexer.lexemes(s.line(), s.line())
+                if not line:
+                    continue
+                lexeme = line[0]
+                while lexeme and lexeme.text() != iptr.ent().name():#go to init
+                    lexeme = lexeme.next(True, True)
+                if not lexeme:
+                    continue
+                lexeme = lexeme.next(True, True) # should be =
+                if lexeme.text() == "=":
+                    lexeme = lexeme.next(True, True) # now on value
+                    if lexeme.text() == "0":
+                        pm(ERR3, check, iptr.ent(), s.file(), s.line(), s.column())
+
+
+def checkc(check, file):
+    checkFileLexer = file.lexer()
+    if not checkFileLexer:
+        return
+
+    for func in file.filerefs("Define, Declare", "Function ~Unknown ", True):
+        zDefaults = checkd(func,file,checkFileLexer, check) #check for incorrect default values
+        parameters = func.ent().parameters(False).split(",")
+        s = ""
+        for p in parameters:
+            s += " " + p
+        #pm(s + " DEFINE", check, func.ent(), file, func.line(), func.column())
+        for pIndex in range(len(parameters)):
+            p = parameters[pIndex]
+            if re.search(r".*\*$", p):#function is qualified now check callbys
+                #check its default
+                if zDefaults is not None and pIndex in zDefaults:
+                    pm(ERR4 %pIndex, check, func.ent(), file, func.line(), func.column())
+
+                for c in func.ent().refs("Callby ~Inactive"):
+                    thisLexer = c.file().lexer()
+                    if not thisLexer:
+                        return
+                    line =  thisLexer.lexemes(c.line(), c.line())
+                    if not line:
+                        continue
+                    s = []
+                    for l in line:
+                        s.append( l.text() )
+                    lexeme = line[0]
+
+                    while lexeme and lexeme.text() != func.ent().name():#go to call
+                        lexeme = lexeme.next(True, True)
+
+                    if not lexeme:
+                        continue
+
+                    lexeme = lexeme.next(True, True) # (
+                    if lexeme.text() != "(":
+                        continue
+                    
+                    lexeme = lexeme.next(True, True) # first item
+
+                    cIndex = 0
+                    oPc = 0 # checking for other parens inside
+                    while lexeme.text() != ")" or oPc > 0: #go to the correct var 
+                        #pm(func.ent().name() +" " +str(cIndex) + " " +lexeme.text() +" " + str(oPc), check, func.ent(), c.file(), c.line(), c.column())
+                        if cIndex == pIndex:
+                            break
+                        
+                        if lexeme.text() == "(":
+                            oPc += 1
+
+                        if lexeme.text() == ")":
+                            oPc -= 1
+
+
+                        if lexeme.text() == "," and oPc < 1:
+                            cIndex += 1
+                        
+                        lexeme = lexeme.next(True, True)
+
+                    #we are now on our input, if its ) its thesame result
+                    if lexeme.text() == "0":
+                        pm(ERR2 %pIndex, check, func.ent(), c.file(), c.line(), c.column())
+
+
+def checkd(func, file, lexer, check):
+    zDefault = []
+    if not lexer:
+        return
+    line = lexer.lexemes(func.line(),func.line())
+    if not line:
+        return
+    lexeme = line[0]
+
+    while lexeme and lexeme.text() != func.ent().name():#go to call
+        lexeme = lexeme.next(True, True)
+
+    if not lexeme:
+        return
+
+    lexeme = lexeme.next(True, True) # (
+    if lexeme.text() != "(":
+        return
+
+    lexeme = lexeme.next(True, True) # first item
+
+    oPc = 0 # checking for other parens inside
+    cIndex = 0
+
+    while lexeme.text() != ")" or oPc > 0: #go to the correct var 
+        
+        if lexeme.text() == "(":
+            oPc += 1
+
+        if lexeme.text() == ")":
+            oPc -= 1
+        
+        if lexeme.text() == "," and oPc < 1:
+            cIndex += 1
+
+        if lexeme.text() == "=" and oPc < 1:
+            #look for default
+            lexeme = lexeme.next(True, True)
+            if lexeme.text() == "0":
+                zDefault.append(cIndex)
+                #pm(ERR4, check, func.ent(), file, func.line(), func.column())
+        lexeme = lexeme.next(True, True)
+    return zDefault
+
+
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

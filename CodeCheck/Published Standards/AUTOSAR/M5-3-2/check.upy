@@ -1,0 +1,145 @@
+import re
+
+
+ERR1 = '''The unary minus operator shall not be applied to an
+expression whose underlying type is unsigned'''
+
+
+# The ID for the check
+def ids():
+    return ('M5-3-2', 'CPP_E051', 'MISRA23_8.3.1')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M5-3-2': 'Published Standards/AUTOSAR/Unary Minus Operator Applied to an Expression with an Unsigned Type',
+        'CPP_E051': 'All Checks/Language Specific/C and C++/Expressions/Unary Minus Operator Applied to an Expression with an Unsigned Type',
+        'MISRA23_8.3.1': 'Published Standards/MISRA C++ 2023/8.3.1 The built-in unary - operator should not be applied to an expression of unsigned type',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'M5-3-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'CPP_E051': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+        'MISRA23_8.3.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return '''The unary minus operator shall not be applied to an
+expression whose underlying type is unsigned.'''
+
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_8.3.1':
+        return '''
+<p><b>Amplification</b></p>
+<p>This rule applies to the type of an expression before any integral promotion.</p>
+
+<p><b>Rationale</b></p>
+<p>Applying the built-in unary - operator to an expression whose promoted type is unsigned generates
+a result of the same unsigned type, which may not meet developer expectations.</p>
+<p>The result of applying the unary - operator to an expression whose type is unsigned prior to integral
+promotion will only be negative when the promoted type is signed. The promoted type depends on
+the operand’s rank and the implemented integer sizes.</p>
+
+<p><b>Example</b></p>
+<p>The following example assumes that int is 32 bits.</p>
+<pre><code language="C++">void f( int32_t a );
+void f( uint32_t a );
+void g( uint32_t x, uint16_t y )
+{
+ f( -x ); // Non-compliant - calls f( uint32_t a )
+ f( -y ); // Non-compliant - calls f( int32_t a )
+}
+</code></pre>
+        '''
+
+    return """
+<p><b>Rule</b></p>
+<p>The unary minus operator shall not be applied to an
+expression whose underlying type is unsigned.</p>
+<p><b>Rationale</b></p>
+<p>Applying the unary minus operator to an expression of type unsigned int, unsigned long or
+unsigned long long generates a result of type unsigned int, unsigned long or unsigned long long
+respectively and is not a meaningful operation. Applying unary minus to an operand of smaller
+unsigned integer type may generate a meaningful signed result due to integral promotion, but this
+is not considered good practice.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">On a machine with a 32-bit int type:
+uint8_t a = -1U; // Non-compliant - a is assigned 255
+int32_t b = -a; // Non-compliant - b is assigned -255
+uint32_t c = 1U;
+int64_t d = -c; // Non-compliant - d is assigned MAX_UINT
+</code></pre>
+<p><b>See also</b></p>
+<p>See Section 6.5.0 for a description of underlying type.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(_ref):
+        check.violation(_ref.ent(), file,
+                        _ref.line(), _ref.column(), ERR1)
+
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for obj_ref in file.filerefs('Define', 'Object, Parameter'):
+        obj_ent = obj_ref.ent()
+
+        # Skip unless the type starts with u
+        if not obj_ent.type() or not re.search(r'^u', obj_ent.type()):
+           continue
+
+        # Violation if the value first assigned is negative
+        if obj_ent.value() and re.search(r'^-', obj_ent.value()):
+            check_violation(obj_ref)
+
+        # Violation if negated in an assignment
+        for assign_ref in obj_ent.refs('Assignby Value'):
+            lex = lexer.lexeme(assign_ref.line(), assign_ref.column())
+            if not lex:
+                continue
+            lex = lex.previous()
+
+            if lex and lex.text() == '-' and lex.token() == 'Operator':
+                check_violation(assign_ref)

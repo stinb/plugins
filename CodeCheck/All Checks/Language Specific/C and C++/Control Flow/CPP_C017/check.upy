@@ -1,0 +1,287 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 7-6-22
+
+
+import re
+
+
+ERR1 = 'Iteration-statement or selection-statement not a compound-statement'
+
+
+def ids():
+    return ('CPP_C017', 'MISRA12_15.6', 'MISRA23_9.3.1', 'MISRA23_15.6')
+
+
+def name(id):
+    return {
+        'CPP_C017': '''All Checks/Language Specific/C and C++/Control Flow/\
+The body of an iteration-statement or a selection-statement shall be a\
+ compound-statement \
+        ''',
+        'MISRA12_15.6': '''Published Standards/MISRA C 2012/\
+15.6 The body of an iteration-statement or a selection-statement shall be a\
+ compound-statement \
+        ''',
+        'MISRA23_9.3.1': '''Published Standards/MISRA C++ 2023/\
+9.3.1 The body of an iteration-statement or a selection-statement shall be a\
+compound-statement
+        ''',
+        'MISRA23_15.6': '''Published Standards/MISRA C 2023/\
+15.6 The body of an iteration-statement or a selection-statement shall be a\
+ compound-statement \
+        ''',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_15.6': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'CPP_C017': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+        'MISRA23_9.3.1': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA23_15.6': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Amplification</b></p>
+The body of an iteration-statement (while, do … while or for) or a selection -statement (if, else, switch) shall
+be a compound-statement.
+</p>
+
+<p><b>Rationale</b></p>
+It is possible for a developer to mistakenly believe that a sequence of statements forms the body of
+an iteration-statement or <em>selection-statement</em> by virtue of their indentation. The accidental inclusion of a
+semi-colon after the controlling expression is a particular danger, leading to a null control statement.
+Using a <em>compound-statement</em> clearly defines which statements actually form the body.
+</p>
+
+<p>
+Additionally, it is possible that indentation may lead a developer to associate an <em>else</em> statement with
+the wrong <em>if</em>.
+</p>
+
+<p><b>Exception</b></p>
+An if statement immediately following an else need not be contained within a compound-statement.
+</p>
+
+<p><b>Example</b></p>
+The layout for the compound-statement and its enclosing braces are style issues which are not
+addressed by this document; the style used in the following examples is not mandatory.
+</p>
+
+<p>
+Maintenance to the following
+</p>
+
+<pre><code language="C++">  while ( data_available )
+    process_data ( ); /* Non-compliant */
+</code></pre>
+
+<p>
+could accidentally give
+</p>
+
+<pre><code language="C++">  while ( data_available )
+    process_data ( ); /* Non-compliant */
+    service_watchdog ( );
+</code></pre>
+
+<p>
+where service_watchdog() should have been added to the loop body. The use of a <em>compound-statement</em>
+significantly reduces the chance of this happening.
+</p>
+
+<p>
+The next example appears to show that action_2() is the <em>else</em> statement to the first <em>if</em>.
+</p>
+
+<pre><code language="C++">  if ( flag_1 )
+    if ( flag_2 ) /* Non-compliant */
+      action_1 ( ); /* Non-compliant */
+  else
+    action_2 ( ); /* Non-compliant */
+</code></pre>
+
+<p>
+when the actual behaviour is
+</p>
+
+<pre><code language="C++">  if ( flag_1 )
+  {
+    if ( flag_2 )
+    {
+      action_1 ( );
+    }
+    else
+    {
+      action_2 ( );
+    }
+  }
+</code></pre>
+
+<p>
+The use of <em>compound-statements</em> ensures that <em>if</em> and <em>else</em> associations are clearly defined.
+The exception allows the use of <em>else if</em>, as shown below
+</p>
+
+<pre><code language="C++">  if ( flag_1 )
+  {
+    action_1 ( );
+  }
+  else if ( flag_2 ) /* Compliant by exception */
+  {
+    action_2 ( );
+  }
+  else
+  {
+    ;
+  }
+</code></pre>
+
+<p>
+The following example shows how a spurious semi-colon could lead to an error
+</p>
+
+<pre><code language="C++">  while ( flag ); /* Non-compliant */
+  {
+    flag = fn ( );
+  }
+</code></pre>
+
+<p>
+The following example shows the compliant method of writing a loop with an empty body:
+</p>
+
+<pre><code language="C++">  while ( !data_available )
+  {
+  }
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().checkbox('ignoreInactive', 'Ignore inactive code', False)
+
+
+# Recursively test iteration statments
+def iterationTest(function, lex, check, file, doFlag):
+    errorLocation = lex
+
+    # Test for else if clause, if so, we don't want to double test
+    if lex.text() == 'else' and lex.next(True, True).text() == 'if':
+        lex = lex.next(True, True)
+
+    # Move through parentheses if this iteration test is not a do .. while
+    if lex.text() not in {'do', 'else'}:
+
+        # Find first parentheses
+        while lex and (lex.text() != '('):
+            lex = lex.next(True, True)
+
+        # Setup tracking variables
+        if lex:
+          lex = lex.next(True, True)
+          count = 1
+        else:
+          return
+
+        # Move to the start of our iteration-statement
+        while lex and count > 0:
+            if lex.text() == '(':
+                count += 1
+            elif lex.text() == ')':
+                count -= 1
+            lex = lex.next(True, True)
+
+    else:
+        lex = lex.next(True, True)
+
+    # Find beginned of iteration-statement
+    while lex and lex.text() not in {'{', ';'}:
+
+        if lex and not lex.inactive() and lex.token() == 'Keyword':
+            if lex.text() in {'while', 'for', 'if', 'switch', 'else'}:
+                lex = iterationTest(function, lex, check, file, False)
+            elif lex.text() == 'do':
+                lex = iterationTest(function, lex, check, file, True)
+
+        if lex:
+            lex = lex.next(True, True)
+
+    # If we find a semi-colon before we find an open curly brace, we know we have an error
+    if not check.options().lookup('ignoreInactive') or not errorLocation.inactive():
+        if lex and lex.text() == ';' and not doFlag:
+            check.violation(function.ent(), file, errorLocation.line_begin(), errorLocation.column_begin(), ERR1)
+
+    return lex
+
+
+def check(check, file):
+    lexer = None
+
+    # Loop through all defined functions
+    for function in file.filerefs('Define', 'Function'):
+
+        # Pull text of function
+        text = function.ent().contents()
+        # Remove any // style comments
+        text = re.sub(r'\/\/.*?\n','\n', text)
+        # Remove any /* */ style comments
+        text = re.sub(r'\/\*[\s\S]*?\*\/','\n', text)
+        # Check if a loop statement exists
+        if not re.search(r'while|for|if|switch|do', text):
+            continue
+
+        # Spin up lexer to find goto statement
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False)
+        lex = lexer.lexeme(function.line(), function.column())
+        doFlag = False
+
+        # Check entire function
+        end = function.ent().ref('end').line()
+        while lex and lex.line_begin() < end:
+
+            # When we see one of our test cases
+            if lex.token() == 'Keyword' and lex.text() in {'while', 'for', 'do', 'if', 'switch', 'else'}:
+                if lex.text() == 'do':
+                    doFlag = True
+                lex = iterationTest(function, lex, check, file, doFlag)
+
+            if lex:
+                lex = lex.next(True, True)

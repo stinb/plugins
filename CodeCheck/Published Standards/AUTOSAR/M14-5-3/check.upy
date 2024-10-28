@@ -1,0 +1,140 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 10-19-22
+
+
+import re
+
+
+ERR1 = 'Copy assignment operator not declared'
+
+
+def ids():
+    return ('M14-5-3', 'MISRA08_14-5-3', 'CPP_D008')
+
+
+def name(id):
+    return {
+        'M14-5-3': 'Published Standards/AUTOSAR/A copy assignment operator shall be declared when there is a template assignment operator with a parameter that is a generic parameter',
+        'MISRA08_14-5-3': 'Published Standards/MISRA-C++ 2008/14-5-3 A copy assignment operator shall be declared when there is a template assignment operator with a parameter that is a generic parameter',
+        'CPP_D008': 'All Checks/Language Specific/C and C++/Declarations and Definitions/A copy assignment operator shall be declared when there is a template assignment operator with a parameter that is a generic parameter',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_14-5-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M14-5-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D008': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+def description():
+    return 'A copy assignment operator shall be declared when there is a template assignment operator with a parameter that is a generic parameter.'
+
+
+def detailed_description():
+    return '''\
+<p><b>Rationale</b></p>
+
+<p>
+Contrary to possible developer expectations, a template assignment operator will
+not suppress the compiler generated <i>copy assignment operator</i>. This may
+lead to incorrect copy semantics for members requiring deep copies.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">class A
+{
+public:
+    // A & operator= ( A const & rhs ) Example 1 - implicitly generated
+    // {
+    //     i = rhs.i;
+    //     return *this;
+    // }
+    template &lt;typename T&gt;
+    T & operator= ( T const & rhs ) // Example 2
+    {
+        if ( this != &rhs ) {
+            delete i;
+            i = new int;
+            *i = *rhs.i;
+        }
+        return *this;
+    }
+private:
+    int * i; // Member requires deep copy
+};
+void f ( A const & a1, A & a2 )
+{
+    a2 = a1; // Unexpectedly uses Example 1
+}
+</code></pre>
+
+<p>
+The implicitly generated <i>copy assignment operator</i> Example 1 will be used
+to copy <code>a1</code> to <code>a2</code>. Therefore, a shallow copy on the
+pointer member <code>i</code> will result in both <code>a1.i</code> and
+<code>a2.i</code> pointing to the same object. Was this the intent, or was it
+expected that a new object would be created and initialized?
+</p>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for classRef in file.filerefs('Define', 'Class Type', True):
+        classEnt = classRef.ent()
+
+        # Skip if a template operator= is not defined
+        templateAssignment = False
+        for methodRef in classEnt.refs('Define', 'Member Function Template', True):
+            methodEnt = methodRef.ent()
+            if methodEnt.name() == 'operator=':
+                templateAssignment = True
+                break
+        if not templateAssignment:
+            continue
+
+        # Skip if a copy operator= is defined
+        copyAssignment = False
+        for methodRef in classEnt.refs('Define', 'Member Function ~Template', True):
+            methodEnt = methodRef.ent()
+            if methodEnt.name() == 'operator=':
+                copyAssignment = True
+                break
+        if copyAssignment:
+            continue
+
+        check.violation(classEnt, file, classRef.line(), classRef.column(), ERR1)

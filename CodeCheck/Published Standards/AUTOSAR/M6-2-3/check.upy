@@ -1,0 +1,176 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 1-17-22
+
+
+import re
+
+
+ERR1 = 'Null statement is not on a line by itself %1 '
+PRECEDING = 'Nothing is allowed before the null statement '
+NOSPACE = 'There needs to be a space following the null statement '
+FOLLOWING ='Only comments and whitespace are allowed after '
+
+
+def ids():
+    return ('M6-2-3', 'MISRA08_6-2-3', 'CPP_C038', 'MISRA04_14.3')
+
+
+def name(id):
+    return {
+        'M6-2-3': 'Published Standards/AUTOSAR/Before preprocessing, a null statement shall only occur on a line by itself; it may be followed by a comment, provided that the first character following the null statement is a white-space character',
+        'MISRA08_6-2-3': 'Published Standards/MISRA-C++ 2008/6-2-3 Before preprocessing, a null statement shall only occur on a line by itself; it may be followed by a comment, provided that the first character following the null statement is a white-space character',
+        'CPP_C038': 'All Checks/Language Specific/C and C++/Comments/Before preprocessing, a null statement shall only occur on a line by itself; it may be followed by a comment, provided that the first character following the null statement is a white-space character',
+        'MISRA04_14.3': 'Published Standards/MISRA-C 2004/14.3 Before preprocessing, a null statement shall only occur on a line by itself; it may be followed by a comment provided that the first character following the null statement is a white-space character',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_6-2-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Comments',
+        ],
+        'MISRA04_14.3': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Comments',
+        ],
+        'M6-2-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Comments',
+        ],
+        'CPP_C038': [
+            'Language: C',
+            'Language: C++',
+            'Comments',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+Null statements should not normally be included deliberately, but where they are used, they shall appear on a line by themselves. White-space characters may precede the null statement to preserve indentation. If a comment follows the null statement, then at least one white-space character shall separate the null statement from the comment. The use of a white-space character to separate the null statement from any following comment is required on the grounds that it provides an important visual cue to reviewers. Following this rule enables a static checking tool to warn of null statements appearing on a line with other text, which would normally indicate a programming error.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">while ( ( port & 0x80 ) == 0 )
+{
+    ; // wait for pin - Compliant
+    /* wait for pin */ ; // Non-compliant, comment before ;
+    ;// wait for pin - Non-compliant, no white-space char after ;
+}
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.option().checkbox('allowInfinite', 'Allow exception for infinite loops: for (;;)', True)
+
+
+def check(check, file):
+
+    lexer = file.lexer(False)
+    if not lexer:
+        return
+    lexeme = lexer.first()
+
+    while lexeme:
+
+        if lexeme.text() == ';' and lexeme.token() == 'Punctuation':
+            isNull = True
+            startLex = lexeme.previous()
+            while startLex and not isStatementEnd(startLex):
+                if startLex.token() not in {'Whitespace', 'Newline', 'Comment'}:
+                    isNull = False
+                startLex = startLex.previous()
+            if not isNull:
+                lexeme = lexeme.next()
+                continue
+
+            # At this point we know that lexeme is at a semicolon: indicating a null statement
+            errorString = ''
+            startLex = lexeme.previous()
+
+            # Check for non whitespace before the null statement
+            while startLex and startLex.token() != 'Newline':
+                if startLex.token() != 'Whitespace':
+                    errorString += PRECEDING
+                    break
+                startLex = startLex.previous()
+
+            # Verify that the character following, if any, is a space
+            if lexeme and lexeme.next() and lexeme.next().token() not in {'Whitespace', 'Newline'}:
+                errorString += NOSPACE
+            endLex = lexeme.next()
+
+            # Check for non whitespace and non-comments after the null statement
+            while endLex and endLex.token() != 'Newline':
+                if endLex.token() not in {'Whitespace', 'Comment'}:
+                    errorString += FOLLOWING
+                    break
+                endLex = endLex.next()
+
+            if not errorString:
+                lexeme = lexeme.next()
+                continue
+            if not check.option().lookup('allowInfinite'):
+                check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, errorString)
+                lexeme = lexeme.next()
+                continue
+
+            # Allow exceptions for infinite loops
+            lineLex = lexeme.previous()
+            lineText = ''
+            while lineLex and lineLex.token() != 'Newline':
+                lineLex = lineLex.previous()
+            if lineLex:
+                lineLex = lineLex.next()
+
+            while lineLex and lineLex.token() != 'Newline':
+                if lineLex.token() != 'Comment':
+                    lineText += lineLex.text()
+                lineLex = lineLex.next()
+
+            # At this point lineText should have the contents of the line
+            # Do a regexp text against for(;;)
+            if re.search(r'for\W*\(\W*;\W*;\W*\)', lineText):
+                lexeme = lexeme.next()
+                continue
+
+            check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, errorString)
+
+        lexeme = lexeme.next()
+
+
+# Return true if the lexeme is at a statement end - semicolon ; or open bracket {
+def isStatementEnd(lex):
+    if lex.token() == 'Punctuation' and lex.text() in {';', '{'}:
+        return True
+    return False

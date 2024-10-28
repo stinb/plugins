@@ -1,0 +1,92 @@
+# This script is designed to run with Understand - CodeCheck
+# Rule 2–10–3 A typedef name (including qualification, if any) shall be a unique identifier.
+# Converted from perl to python, and simplified, by Ian Reed. November 2023.
+
+import re
+
+ERR1 = 'Violation: typedef "%1" reused.'
+ERR2 = "Non unique typedef identifier %1 conflicts with entity %2 in file %3 on line %4"
+
+def ids():
+  return ("CPP_I014", "MISRA08_2-10-3")
+
+def name(id):
+  return {
+      "CPP_I014": "All Checks\\Language Specific\\C and C++\\Identifiers\\A typedef name shall be a unique identifier.",
+      "MISRA08_2-10-3": "Published Standards\\MISRA-C++ 2008\\2-10-3 A typedef name shall be a unique identifier",
+    }[id]
+
+def tags(id):
+  return {
+    "CPP_I014": [
+      'Language: C',
+      'Language: C++',
+      'Identifiers',
+    ],
+    "MISRA08_2-10-3": [
+      'Language: C',
+      'Language: C++',
+      'Standard: MISRA C++ 2008',
+      'Category: Required',
+      'Identifiers',
+    ],
+  }.get(id)
+
+def detailed_description(id):
+  return """
+Reusing a <i>typedef</i> name either as another <i>typedef</i> name or for any other purpose may lead to developer confusion.
+The same <i>typedef</i> shall not be duplicated anywhere in the <i>project</i>, even if the declarations are identical.
+Note that where the type definition is made in a <i>header file</i>, and that <i>header file</i> is included in multiple source files, this rule is not violated.
+It is valid to reuse a <i>typedef</i> name in another <i>namespace</i>.
+"""
+
+def test_entity(file):
+  return False
+
+def test_language(language):
+  return language == 'C++'
+
+def test_global():
+  return True
+
+def increment(counts, key):
+  if not key in counts:
+    counts[key] = 1
+  else:
+    counts[key] += 1
+    
+def check(check):
+  seen = dict() # keys are long names, values are ref objects of typedef definitions.
+  counts = dict() # keys are long names, values are counts of how many times we have seen them.
+  shortNames = dict() # keys are short names, meaning the right most part of a fully qualified name, not including the namespace. Values are the same ref objects that are stored in the seen dictionary, though some values in this shortnames dictionary could get overridden when we encounter a newer unique long name that shares the same short name as another.
+  for file in check.files():
+    if not file.kind().check('c file'):
+      continue
+    for ref in file.filerefs('define', 'c typedef', False):
+      key = ref.ent().longname()
+      if key in seen:
+        # detected a duplicate typedef definition.
+        violation(check, ref, seen[key])
+        increment(counts, key)
+        if 2 == counts[key]:
+          # This adds a violation for the original typedef definition, since it was not a violation until we found a second one. Then both lines are violations. The if statement above specifically checks for the number 2 so we don't add even more violations for the original if we find a third or fourth duplicate typedef.
+          ref2 = seen[key]
+          violation(check, ref2, ref)
+      else:
+        seen[key] = ref
+        increment(counts, key)
+        shortNames[ref.ent().name()] = ref
+  for file in check.files():
+    for ref in file.filerefs('define, declare', 'c function, c object', False):
+      key = ref.ent().longname()
+      if key in seen:
+        # we detected an identifier definition that reused the same fully qualified name as the typedef.
+        violation(check, ref, seen[key])
+      else:
+        # if the longname is the same as the short name, then search for the short name as the last part of any fully qualified name.
+        if key == ref.ent().name() and key in shortNames:
+          violation(check, ref, shortNames[key])
+
+def violation(check, ref, originalRef):
+  #check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1, ref.ent().name())
+  check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR2, ref.ent().name(), originalRef.ent().name(), originalRef.file(), originalRef.line())

@@ -1,0 +1,118 @@
+ERR1 = 'Preserve thread safety and liveness when using condition variables.'
+
+
+# The ID for the check
+def id():
+    return ('CON55-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CON55-CPP': 'Published Standards/SEI Cert Standards/C++/Preserve thread safety and liveness when using condition variables',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Preserve thread safety and liveness when using condition variables'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Preserve thread safety and liveness when using condition variables</p>
+<p><b>Risk Assessment</b></p>
+<p>Failing to preserve the thread safety and liveness of a program when using condition variables can lead to indefinite blocking and denial of service (DoS).</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/CON55-CPP.+Preserve+thread+safety+and+liveness+when+using+condition+variables</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre>
+#include &lt;condition_variable&gt;
+#include &lt;iostream&gt;
+#include &lt;mutex&gt;
+#include &lt;thread&gt;
+  
+std::mutex mutex;
+std::condition_variable cond;
+ 
+void run_step(size_t myStep) {
+  static size_t currentStep = 0;
+  std::unique_lock&lt;std::mutex&gt; lk(mutex);
+ 
+  std::cout &lt;&lt; "Thread " &lt;&lt; myStep &lt;&lt; " has the lock" &lt;&lt; std::endl;
+ 
+  while (currentStep != myStep) {
+    std::cout &lt;&lt; "Thread " &lt;&lt; myStep &lt;&lt; " is sleeping..." &lt;&lt; std::endl;
+    cond.wait(lk);
+    std::cout &lt;&lt; "Thread " &lt;&lt; myStep &lt;&lt; " woke up" &lt;&lt; std::endl;
+  }
+ 
+  // Do processing...
+  std::cout &lt;&lt; "Thread " &lt;&lt; myStep &lt;&lt; " is processing..." &lt;&lt; std::endl;
+  currentStep++;
+ 
+  // Signal awaiting task.
+  cond.notify_one();
+ 
+  std::cout &lt;&lt; "Thread " &lt;&lt; myStep &lt;&lt; " is exiting..." &lt;&lt; std::endl;
+}
+ 
+int main() {
+  constexpr size_t numThreads = 5;
+  std::thread threads[numThreads];
+ 
+  // Create threads.
+  for (size_t i = 0; i &lt; numThreads; ++i) {
+    threads[i] = std::thread(run_step, i);
+  }
+ 
+  // Wait for all threads to complete.
+  for (size_t i = numThreads; i != 0; --i) {
+    threads[i - 1].join();
+  }
+}
+</pre>
+"""
+
+
+def tags(id):
+    return {
+        'CON55-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 25',
+            'Likelihood: Unlikely',
+            'Remediation Cost: Medium',
+            'Priority: P2',
+            'Level: L3',
+            'Threads',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object"):
+        obj_type = obj_ref.ent().type()
+
+        if obj_type and ("condition_variable" in obj_type):
+            for use_ref in obj_ref.ent().refs("Useby"):
+                lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+                lex = lex.next().next()
+
+                if (lex.text() == "notify_one") and lex.ent() and lex.ent().kind().check("Function"):
+                    check.violation(obj_ref.ent(), file,
+                                    use_ref.line(), use_ref.column(), ERR1)

@@ -1,0 +1,211 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2023-05-11
+
+
+import re
+
+from Modules import findClose
+from Modules import lexemeBeforeLexeme
+from Modules import refComparatorSameFile
+
+
+ERR1 = 'Loop counter is modified'
+ERR2 = 'Loop counter may be modified'
+
+
+def ids():
+    return ('M6-5-3', 'MISRA08_6-5-3', 'CPP_C022')
+
+
+def name(id):
+    return {
+        'M6-5-3': 'Published Standards/AUTOSAR/\
+The loop-counter shall not be modified within condition or statement',
+        'MISRA08_6-5-3': 'Published Standards/MISRA-C++ 2008/\
+6-5-3 The loop-counter shall not be modified within condition or statement',
+        'CPP_C022': 'All Checks/Language Specific/C and C++/Control Flow/\
+The loop-counter shall not be modified within condition or statement',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_6-5-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'M6-5-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Control Flow',
+        ],
+        'CPP_C022': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Rationale</b></p>
+<p>
+Modification of the <i>loop-counter</i> other than in <i>expression</i> leads to
+a badly-formed <i>for</i> loop.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">bool modify ( int32_t * pX )
+{
+    *pX++;
+    return ( *pX &lt; 10 );
+}
+for ( x = 0; modify ( &x ); ) // Non-compliant
+{
+}
+for ( x = 0; x &lt; 10; )
+{
+    x = x * 2; // Non-compliant
+}
+</code></pre>
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    violationRefs = set()
+
+    for define in file.filerefs('Define', 'Function'):
+        function = define.ent()
+
+        # Skip if no CFG
+        cfg = function.control_flow_graph()
+        if not cfg:
+            continue
+
+        # Check each for-node
+        for node in cfg.nodes():
+
+            if isForNode(file, node):
+                checkForNode(check, file, node, violationRefs)
+
+
+def isForNode(file, node):
+    # False if it's not a while-node or for-node
+    if node.kind() != 'while-for':
+        return False
+
+    # The lexeme is an open parenthesis, so go back and find 'for'
+    lexer = file.lexer(False, 8, False, False)
+    lex = lexer.lexeme(node.line_begin(), node.column_begin())
+    return lex.previous(True, True).text() == 'for'
+
+
+def checkForNode(check, file, forNode, violationRefs):
+    # Get the lexemes: ( ... )
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.lexeme(forNode.line_begin(), forNode.column_begin())
+    lexParenEnd = findClose(lex)
+    if not lexParenEnd:
+        return
+
+    # Get the semicolons and loop counter(s)
+    counters = set()
+    lexSemicolons = []
+    openParen = 0
+    while lex and lexemeBeforeLexeme(lex, lexParenEnd):
+        # Parse parentheses
+        if lex.text() == '(':
+            openParen += 1
+        elif lex.text() == ')':
+            openParen -= 1
+        # Get lexemes of semicolons
+        elif lex.text() == ';':
+            if openParen == 1:
+                lexSemicolons.append(lex)
+        # Get ent for loop counter(s)
+        elif lex.ent() and not lexSemicolons:
+            ent = lex.ent()
+            if ent and lex.next(True, True).text() == '=':
+                counters.add(ent)
+        lex = lex.next(True, True)
+
+    # Make sure the for-loop is normal and it was parsed correctly
+    if len(lexSemicolons) != 2:
+        return
+
+    # Every set/modify of the counter(s)
+    for counter in counters:
+        refs = counter.refs('Modifyby ~Inactive ~Deref, Setby ~Inactive ~Deref')
+        checkCounterRefs(check, file, forNode, violationRefs, lexSemicolons, lexParenEnd, refs, ERR1)
+        refs = counter.refs('Addr Useby ~Inactive')
+        checkCounterRefs(check, file, forNode, violationRefs, lexSemicolons, lexParenEnd, refs, ERR2)
+
+
+def checkCounterRefs(check, file, forNode, violationRefs, lexSemicolons, lexParenEnd, refs, err):
+    refs.sort(key=refComparatorSameFile)
+
+    for ref in refs:
+        # Skip if before the loop or in the init-clause
+        if refBeforeNode(ref, lexSemicolons[0]):
+            continue
+
+        # Skip if in the iteration-expression
+        if refAfterNode(ref, lexSemicolons[1]):
+            if refBeforeNode(ref, lexParenEnd):
+                continue
+
+        # Stop early when the refs are too far
+        if refAfterNode(ref, forNode.end_node()):
+            break
+
+        # Skip if a ref in this location already has a violation
+        refKey = f'{ref.file().id()} {ref.line()} {ref.column()}'
+        if refKey in violationRefs:
+            continue
+        violationRefs.add(refKey)
+
+        check.violation(ref.scope(), file, ref.line(), ref.column(), err)
+
+
+# The second parameter can be a node or a lexeme
+def refBeforeNode(ref, node):
+    if not node.line_begin():
+        return False
+    if ref.line() < node.line_begin():
+        return True
+    if ref.line() == node.line_begin():
+        if ref.column() < node.column_begin():
+            return True
+    return False
+
+
+# The second parameter can be a node or a lexeme
+def refAfterNode(ref, node):
+    if not node.line_begin():
+        return False
+    if ref.line() > node.line_end():
+        return True
+    if ref.line() == node.line_end():
+        if ref.column() > node.column_end():
+            return True
+    return False

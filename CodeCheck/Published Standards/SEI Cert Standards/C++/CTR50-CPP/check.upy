@@ -1,0 +1,153 @@
+ERR1 = 'Guarantee that container indices and iterators are within the valid range.'
+
+
+# The ID for the check
+def id():
+    return ('CTR50-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'CTR50-CPP': 'Published Standards/SEI Cert Standards/C++/Guarantee that container indices and iterators are within the valid range',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Guarantee that container indices and iterators are within the valid range'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Guarantee that container indices and iterators are within the valid range</p>
+<p><b>Risk Assessment</b></p>
+<p>Using an invalid array or container index can result in an arbitrary memory overwrite or abnormal program termination.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;cstddef&gt;
+  
+void insert_in_table(int *table, std::size_t tableSize, int pos, int value) {
+  if (pos &gt;= tableSize) {
+    // Handle error
+    return;
+  }
+  table[pos] = value;
+}
+
+
+#include &lt;vector&gt;
+  
+void insert_in_table(std::vector&lt;int&gt; &table, long long pos, int value) {
+  if (pos &gt;= table.size()) {
+    // Handle error
+    return;
+  }
+  table[pos] = value;
+}
+
+
+#include &lt;iterator&gt;
+  
+template &lt;typename ForwardIterator&gt;
+void f_imp(ForwardIterator b, ForwardIterator e, int val, std::forward_iterator_tag) {
+  do {
+    *b++ = val;
+  } while (b != e);
+}
+ 
+template &lt;typename ForwardIterator&gt;
+void f(ForwardIterator b, ForwardIterator e, int val) {
+  typename std::iterator_traits&lt;ForwardIterator&gt;::iterator_category cat;
+  f_imp(b, e, val, cat);
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check automatically flags the following: 1. An object used as an index if it is not an unsigned type. 2. An iterator dereferenced on its first use.</p>
+"""
+
+
+def tags(id):
+    return {
+        'CTR50-CPP': [
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Remediation Cost: High',
+            'Priority: P9',
+            'Level: L2',
+            'Threads',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("", "Object, Parameter"):
+        obj_type = obj_ref.ent().type()
+
+        if obj_type and not (("*" in obj_type) or ("vector" in obj_type)):
+            continue
+
+        lex = file.lexer().lexeme(obj_ref.line(), obj_ref.column())
+
+        if lex and (lex.next().text() != "["):
+            continue
+
+        on_index = 0
+
+        while lex:
+            if lex.text() == "[":
+                on_index += 1
+            elif lex.text() == "]":
+                on_index -= 1
+
+                if not on_index:
+                    break
+            elif (on_index == 1) and (lex.token() == "Identifier") and lex.ent() and lex.ent().kind().check("Parameter, Object") and (lex.next().text() not in ["->", "[", "."]):
+                underlying_type = lex.ent().freetext("UnderlyingType")
+
+                if underlying_type and "unsigned" not in underlying_type:
+                    check.violation(obj_ref.ent(), file,
+                                    obj_ref.line(), obj_ref.column(), ERR1)
+
+                break
+
+            lex = lex.next()
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for obj_ref in func_ref.ent().refs("Define", "Object, Parameter"):
+            obj_utype = obj_ref.ent().freetext("UnderlyingType")
+            obj_type = obj_ref.ent().type()
+
+            if (obj_utype and "iterator" not in obj_utype.lower()) and (obj_type and "iterator" not in obj_type.lower()):
+                continue
+
+            first_ref = None
+
+            for ref in sorted(obj_ref.ent().refs(""), key=lambda x: x.line()):
+                if (ref.line() == obj_ref.line()) or (ref.ent().id() != func_ref.ent().id()):
+                    continue
+
+                if not first_ref:
+                    first_ref = ref
+                elif first_ref and first_ref.line() != ref.line():
+                    break
+
+                if ref.kind().check("Deref ~Callby"):
+                    check.violation(obj_ref.ent(), file,
+                                    ref.line(), ref.column(), ERR1)

@@ -1,0 +1,341 @@
+#This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# 9-27-16
+
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => "Switch Incorrect: Default is not first or last switch label";
+
+
+# This registers ERR1 with Understand
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+sub checkID { return "MISRA23_16.5";}
+
+
+
+# This is the short error the Understand will use
+sub name { return "Published Standards\\MISRA C 2023\\16.5 A default label shall appear as either the first or the last switch label of a switch statement";}
+
+
+
+sub tags {
+  return (
+    'Language: C',
+    'Standard: MISRA C 2023',
+    'Category: Required',
+    'Control Flow'
+  );
+}
+
+# This is the full description of the rule being tested
+sub description {
+  return '16.5 ( Required ) A default label shall appear as either the first or the last switch label of a switch statement.';
+}
+
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Rationale</b></p>
+This rule makes it easy to locate the de fault label within a switch statement.
+</p>
+
+<p><b>Example</b></p>
+</p>
+
+<pre><code language="C++">  switch ( x )
+  {
+    default: /* Compliant - default is the first label */
+    case 0:
+      ++x;
+      break;
+    case 1:
+    case 2:
+      break;
+  }
+
+  switch ( x )
+  {
+    case 0:
+      ++x;
+      break;
+    default: /* Non-comp liant - default is mixed with the case labels */
+      x = 0;
+      break;
+    case 1:
+    case 2:
+      break;
+  }
+
+  switch ( x )
+  {
+  case 0:
+    ++x;
+    break;
+  case 1:
+  case 2:
+    break;
+  default: /* Compliant - default is the final label */
+    x = 0;
+    break;
+  }
+
+</code></pre>
+
+<p><b>See also</b><br>
+Rule 15.7, Rule 16.1
+</p>
+
+END_DESC
+}
+
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language eq "C++";
+}
+
+
+# This determines if this script is per file
+sub test_entity {
+  return 1;
+}
+
+
+# This determines if this script is per project or per file
+sub test_global {
+  return 0;
+}
+
+
+# Any defined options go here
+sub define_options{}
+
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("c file ~unresolved ~unknown");
+  # create lexer once for file
+  my ($lexer,$status) = $file->lexer(1,8,1,1);
+  return unless $lexer;
+  # loop through functions defined in the file
+  foreach my $ref ($file->filerefs("define","function",1)) {
+      my $func = $ref->ent();
+      my ($begin,$end) = getFunctionDefnLines($func);
+      next if (!$begin);
+      do_one_function($check,$file,$func,$lexer,$begin,$end);
+  }  
+}
+
+
+# Check one function.
+sub do_one_function {
+    my ($check,$file,$func,$lexer,$begin,$end) = @_;
+
+    setupLexemes($lexer,$begin,$end);
+    while (my $lexeme = nextLexeme()) {
+    handle_switch($check,$file,$func) if $lexeme->text() eq "switch";
+    }
+}
+
+
+# Handle a switch statement. Begin with current lexeme at the 'switch'
+# token and end with current lexeme at the closing '}' of the switch.
+sub handle_switch {
+
+  my ($check,$file,$func) = @_;
+
+  # skip to first curly brace
+  my $lexeme = nextLexeme() or return;
+  while ($lexeme->text() ne "{") {
+    $lexeme = nextLexeme() or return;
+  }
+
+  # process everything until closing brace
+  my $seen_default=0;
+  my $seen_case=0;
+  my $choice_okay=1;
+  while ($lexeme = nextLexeme(1)) { # allow comment lexeme
+    my $text = $lexeme->text();
+    last if $text eq "}";
+    if ($text eq "case") {
+      
+      if ($seen_default and $seen_case) {
+        $check->violation($func,$file,$lexeme->line_end,$lexeme->column_end,ERR1);
+        $seen_default=0  
+      }
+      $seen_case = 1;
+      $choice_okay = 0;
+      $lexeme = nextLexeme() or return 0 while $lexeme->text() ne ":";
+    } elsif  ($text eq "default") {
+      $seen_default = 1 if $seen_case;
+      $choice_okay = 0;
+      $lexeme = nextLexeme() or return 0 while $lexeme->text() ne ":";
+    } elsif ($lexeme->token() eq "Comment") {
+      $choice_okay = 1;
+    } else {
+        $choice_okay = handle_statement($check,$file,$func);
+    }
+  }
+  $lexeme = lastLexeme() if !$lexeme;
+}
+
+
+# Handle a statement, within a switch context.
+# Begin with current lexeme (passed in) at the first token of the statement
+# and end with the current lexeme at the last token of the statement.
+# Return 1 if a new choice statement is okay after this statement (ie, this
+# is a break/return statement or an if/else series of statements where all
+# paths end in break/return).
+sub handle_statement {
+    my ($check,$file,$func) = @_;
+    my $lexeme = currentLexeme() or return 0;
+    my $text = $lexeme->text();
+
+    # handle 'switch' statement, always returns 0.
+    if ($text eq "switch") {
+  handle_switch($check,$file,$func);
+  return 0;
+    }
+
+    # handle 'for' or 'while' statement, always returns 0.
+    if ($text eq "for" || $text eq "while") {
+  $lexeme = nextLexeme() or return 0 while $lexeme->text() ne "(";
+  my $paren=1;
+  while ($paren && ($lexeme = nextLexeme())) {
+      $text = $lexeme->text();
+      if ($text eq "(") {
+    ++$paren;
+      } elsif ($text eq ")") {
+    --$paren;
+      }
+  }
+  nextLexeme();
+  handle_statement($check,$file,$func);
+  return 0;
+    }
+
+    # handle 'do' statement, always returns 0.
+    if ($text eq "do") {
+  nextLexeme();
+  handle_statement($check,$file,$func);
+  return 0;
+    }
+
+    # handle 'if' statement.
+    if ($text eq "if") {
+  $lexeme = nextLexeme() or return 0 while $lexeme->text() ne "(";
+  my $paren=1;
+  while ($paren && ($lexeme = nextLexeme())) {
+      $text = $lexeme->text();
+      if ($text eq "(") {
+    ++$paren;
+      } elsif ($text eq ")") {
+    --$paren;
+      }
+  }
+  nextLexeme();
+  my $okay = handle_statement($check,$file,$func);
+  $lexeme = peekNextLexeme() or return 0;
+  return 0 if $lexeme->text() ne "else";
+  nextLexeme();
+  nextLexeme();
+  return handle_statement($check,$file,$func) && $okay;
+    }
+
+    # handle compound statement
+    if ($text eq "{") {
+  my $okay=0;
+  while (($lexeme = nextLexeme()) && $lexeme->text() ne "}") {
+      $okay = handle_statement($check,$file,$func);
+  }
+  return $okay;
+    }
+
+    my $okay = ($text eq "return" || $text eq "break");
+    while ($text ne ";") {
+  $lexeme = nextLexeme() or return $okay;
+  $text = $lexeme->text();
+    }
+
+    return $okay;
+}
+
+
+# Pass a function entity. Return an array of:
+#   the begin line
+#   the end line
+#   the defn file entity
+# Return undef if this info cannot be provided.
+sub getFunctionDefnLines {
+    my $func = shift;
+    my $begin_ref = $func->ref("definein");
+    my $end_ref = $func->ref("end");
+    return undef if (!$begin_ref || !$end_ref);
+    return ($begin_ref->line(), $end_ref->line(), $begin_ref->file());
+}
+
+
+# Setup the global lexemes array once per function, to use the NextLexeme() sub.
+my @lexemes=();
+my $lexeme_pos=0;
+sub setupLexemes {
+    my $lexer = shift;
+    my $begin = shift;
+    my $end = shift;
+    @lexemes = $lexer->lexemes($begin,$end);
+    $lexeme_pos = 0;
+}
+
+# Return the current lexeme.
+sub currentLexeme {
+    return $lexemes[$lexeme_pos-1];
+}
+
+# Return the last lexeme.
+sub lastLexeme {
+    return $lexemes[$#lexemes-1]
+}
+
+# Peek and return the next lexeme, but do not update the current lexeme.
+sub peekNextLexeme {
+    my $pos = $lexeme_pos;
+    my $next = nextLexeme();
+    $lexeme_pos = $pos;
+    return $next;
+}
+
+# Return the next interesting lexeme or undef when all lexemes are used.
+sub nextLexeme {
+    my $comment_okay = shift;
+    while ($lexeme_pos < $#lexemes) {
+  my $lexeme = $lexemes[$lexeme_pos++];
+  my $token = $lexeme->token();
+  if ($token eq "Preprocessor") {
+      while ($lexeme_pos < $#lexemes && $lexemes[$lexeme_pos]->token() ne "Newline") {
+    ++$lexeme_pos;
+      }
+      next;
+  } elsif ($comment_okay) {
+      next if ($lexeme->token() =~ m/Whitespace|Newline/);
+  } else {
+      next if ($lexeme->token() =~ m/Comment|Whitespace|Newline/);
+  }
+  return $lexeme;
+    }
+    return undef;
+}
+
+1;

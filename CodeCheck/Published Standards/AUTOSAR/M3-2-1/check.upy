@@ -1,0 +1,144 @@
+ERR1 = "Declaration from other file is not compatible"
+
+
+# The ID for the check
+def ids():
+    return ('M3-2-1', 'MISRA08_3-2-1', 'CPP_D040')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'M3-2-1': 'Published Standards/AUTOSAR/All declarations of an object or function shall have compatible types',
+        'MISRA08_3-2-1': 'Published Standards/MISRA-C++ 2008/3-2-1 All declarations of an object or function shall have compatible types',
+        'CPP_D040': 'All Checks/Language Specific/C and C++/Declarations and Definitions/All declarations of an object or function shall have compatible types',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_3-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+        'M3-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D040': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return "All declarations of an object or function shall have compatible types."
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rationale</b></p>
+
+<p>It is <i>undefined behaviour</i> if the declarations of an object or function in two different translation units do not have <i>compatible types.</i></p>
+
+<p>The easiest way of ensuring object or function types are compatible is to make the declarations identical.</p>
+
+<p><b>Developer's Note</b></p>
+
+<p>This strictly flags declarations that are not exactly identical.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// File a.cpp
+extern int32_t a;
+extern int32_t b [];
+extern char_t c;
+int32_t f1 ( );
+int32_t f2 ( int32_t );
+
+// File b.cpp
+extern int64_t a;       // Non-compliant - not compatible
+extern int32_t b [ 5 ]; // Compliant
+int16_t c;              // Non-compliant
+char_t f1 ( );          // Non-compliant
+char_t f2 ( char_t );   // Compliant - not the same function as
+                        //             int32_t f2 ( int32_t )
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 3-9-1</p>
+
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for obj_func_ref in file.filerefs("Declare ~Implicit", "Object, Function"):
+        flagged = False
+
+        for declare_ref in obj_func_ref.ent().refs("Declarein"):
+            if flagged:
+                break
+
+            if file.name() != declare_ref.file().name():
+                declaration_lex = lexer.lexeme(
+                    obj_func_ref.line(), obj_func_ref.column())
+                other_declaration_lex = declare_ref.file().lexer().lexeme(
+                    declare_ref.line(), declare_ref.column())
+
+                if (not other_declaration_lex) or ((declaration_lex.ent() and declaration_lex.ent().kind().check("Macro")) or (other_declaration_lex.ent() and other_declaration_lex.ent().kind().check("Macro"))
+                        or (declaration_lex.previous(ignore_whitespace=True).text() in {",", "("}) or (other_declaration_lex.previous(ignore_whitespace=True).text() in {",", "("})):   # Used as parameter
+                    continue
+
+                declaration_lex = lexer.lexeme(obj_func_ref.line(), 0)
+                other_declaration_lex = declare_ref.file().lexer().lexeme(declare_ref.line(), 0)
+
+                while declaration_lex.token() == "Whitespace":
+                    declaration_lex = declaration_lex.next(
+                        ignore_whitespace=True, ignore_comments=True)
+
+                while other_declaration_lex.token() == "Whitespace":
+                    other_declaration_lex = other_declaration_lex.next(
+                        ignore_whitespace=True, ignore_comments=True)
+
+                while declaration_lex and (declaration_lex.text() != obj_func_ref.ent().name()):
+                    if declaration_lex.text() != other_declaration_lex.text():
+                        check.violation(
+                            obj_func_ref.ent(), file, obj_func_ref.line(), obj_func_ref.column(), ERR1)
+                        flagged = True
+                        break
+
+                    declaration_lex = declaration_lex.next(
+                        ignore_whitespace=True, ignore_comments=True)
+                    other_declaration_lex = other_declaration_lex.next(
+                        ignore_whitespace=True, ignore_comments=True)

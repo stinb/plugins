@@ -1,0 +1,143 @@
+ERR1 = 'Take care when reading errno.'
+ERR2 = 'Errno is not set to zero before invoking a function that returns an in-band error indicator.'
+IB_FUNCS = {"fgetwc", "fputwc", "strtol", "wcstol", "strtoll", "wcstoll", "strtoul", "wcstoul", "strtoull", "wcstoull",
+            "strtoumax", "wcstoumax", "strtod", "wcstod", "strtof", "wcstof", "strtold", "wcstold", "strtoimax", "wcstoimax"}
+
+# The ID for the check
+
+
+def id():
+    return ('ERR30-C')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'ERR30-C': 'Published Standards/SEI Cert Standards/C/Take care when reading errno',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'ERR30-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P8',
+            'Level: L2',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Take care when reading errno'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Take care when reading errno</p>
+<p><b>Risk Assessment</b></p>
+<p>The improper use of errno may result in failing to detect an error condition or in incorrectly identifying an error condition when none exists.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/pages/viewpage.action?pageId=87152351</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">#include &lt;errno.h&gt;
+#include &lt;limits.h&gt;
+#include &lt;stdlib.h&gt;
+
+void func(const char *c_str) {
+  unsigned long number;
+  char *endptr;
+
+  number = strtoul(c_str, &endptr, 0);
+  if (endptr == c_str || (number == ULONG_MAX
+                         && errno == ERANGE)) {
+    /* Handle error */
+  } else {
+    /* Computation succeeded */
+  }
+}
+
+
+#include &lt;errno.h&gt;
+#include &lt;stdio.h&gt;
+
+void func(FILE* fp) {
+  errno=0;
+  ftell(fp);
+  if (errno) {
+    perror("ftell");
+  }
+}
+
+
+#include &lt;errno.h&gt;
+#include &lt;stdio.h&gt;
+
+void func(const char *filename) {
+  FILE *fileptr;
+
+  errno = 0;
+  fileptr = fopen(filename, "rb");
+  if (errno != 0) {
+    /* Handle error */
+  }
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check only covers library functions that set errno and return an in-band error indicator.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function"):
+        has_errno = False
+        errno_set_line = None
+
+        for use_ref in func_ref.ent().refs("Use", "Unresolved Macro"):
+            if use_ref.ent().name() == "errno":
+                has_errno = True
+                lex = lexer.lexeme(use_ref.line(), use_ref.column())
+                on_set = False
+
+                while lex and lex.text() != ";":
+                    if lex.text() == "=" and lex.token() == "Operator":
+                        on_set = True
+                    elif on_set:
+                        if lex.text() == "0" and lex.token() == "Literal":
+                            errno_set_line = use_ref.line()
+                            break
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)
+
+        if not has_errno:
+            continue
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() in IB_FUNCS and (not errno_set_line or (errno_set_line > call_ref.line())):
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), ERR2)

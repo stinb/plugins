@@ -1,0 +1,135 @@
+ERR1 = 'Use thread pools to enable graceful degradation of service during traffic bursts.'
+
+
+# The ID for the check
+def ids():
+    return ('TPS00-J', 'JAVA_TPS00')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'TPS00-J': 'Published Standards/SEI Cert Standards/Java/Use thread pools to enable graceful degradation of service during traffic bursts',
+        'JAVA_TPS00': 'All Checks/Language Specific/Java/Thread Pools/Use thread pools to enable graceful degradation of service during traffic bursts',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'TPS00-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+        ],
+        'JAVA_TPS00': [
+            'Language: Java',
+            'Thread Pools',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Use thread pools to enable graceful degradation of service during traffic bursts'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Use thread pools to enable graceful degradation of service during traffic bursts</p>
+<p><b>Risk Assessment</b></p>
+<p>Using simplistic concurrency primitives to process an unbounded number of requests could result in severe performance degradation, deadlock, or system resource exhaustion and DOS.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/TPS00-J.+Use+thread+pools+to+enable+graceful+degradation+of+service+during+traffic+bursts</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class Helper {
+  public void handle(Socket socket) {
+    // ...
+  }
+}
+
+final class RequestHandler {
+  private final Helper helper = new Helper();
+  private final ServerSocket server;
+
+  private RequestHandler(int port) throws IOException {
+    server = new ServerSocket(port);
+  }
+
+  public static RequestHandler newInstance() throws IOException {
+    return new RequestHandler(0); // Selects next available port
+  }
+
+  public void handleRequest() {
+    new Thread(new Runnable() {
+        public void run() {
+          try {
+            helper.handle(server.accept());
+          } catch (IOException e) {
+            // Forward to handler
+          }
+        }
+    }).start();
+  }
+
+}
+</code></pre>
+<p><i>Developer Notes: </i>This check automatically flags the start() method called directly on a Thread class instance.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    for call_ref in file.filerefs("Call", "Method Public Member"):
+        if call_ref.ent().longname() == "java.lang.Thread.start":
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_body = 0
+            check_call = False
+
+            while lex:
+                if not on_body and lex.text() == ".":
+                    check_call = True
+                elif check_call:
+                    if lex.text() == ")":
+                        on_body += 1
+                    else:
+                        if lex.ent() and lex.ent().type() == "Thread":
+                            check.violation(
+                                lex.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                        break
+
+                    check_call = False
+                elif lex.text() == ")":
+                    on_body += 1
+                elif lex.text() == "(":
+                    on_body -= 1
+
+                    if not on_body:
+                        lex = lex.previous()
+
+                        if lex.token() == "Identifier" and lex.text() == "Thread":
+                            check.violation(
+                                lex.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+
+                        break
+
+                lex = lex.previous(ignore_whitespace=True,
+                                   ignore_comments=True)

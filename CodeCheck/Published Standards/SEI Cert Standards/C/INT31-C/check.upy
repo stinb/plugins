@@ -1,0 +1,248 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 04-26-2023
+
+import re
+import Modules
+
+ERR1 = "Unsigned integer operation may result in lost or misinterpreted data"
+
+def id():
+    return 'INT31-C'
+
+def name():
+    return "Published Standards/SEI Cert Standards/C/" +  """\
+Ensure that unsigned integer operations do not result in lost or misinterpreted \
+data"""
+
+
+
+
+def tags(id):
+    return {
+        'INT31-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P6',
+            'Level: L2',
+            'Expressions',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Ensure that unsigned integer operations do not result in lost or
+misinterpreted data</p>
+<p>Integer conversions, both implicit and explicit (using a cast), must be guaranteed not to result in lost or misinterpreted data. This rule is particularly true for integer values that originate from untrusted sources and are used in any of the following ways:</p>
+<ul>
+<li>Integer operands of any pointer arithmetic, including array indexing</li>
+<li>The assignment expression for the declaration of a variable length array
+</li>
+<li>The postfix expression preceding square brackets [] or the expression in
+square brackets [] of a subscripted designation of an element of an array
+object</li>
+<li>Function arguments of type size_t or rsize_t (for example, an argument to a
+memory allocation function)</li>
+</ul>
+<p>Noncompliant Code Example (Unsigned to Signed)</p>
+<pre><code language="C++">#include &lt;limits.h&gt;
+
+void func(void) {
+  unsigned long int u_a = ULONG_MAX;
+  signed char sc;
+  sc = (signed char)u_a; /* Cast eliminates warning */
+  /* ... */
+}
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Object, Parameter')
+    types = ['long long', 'long', 'short', 'int', 'char']
+
+    for ref in refs:
+        if not re.search(r'char|int|short|long', str(ref.ent().type())):
+            continue
+        unsigned = False
+        signed = False
+        if re.search(r'unsigned', str(ref.ent().type())):
+            unsigned = True
+        else:
+            signed = True
+
+        aRefs = ref.ent().refs('Assignby')
+
+        for aRef in aRefs:
+            ok = True
+
+            # Check for signed to unsiged or unsigned to signed conversion
+            if unsigned and re.search(r'(?<!un)signed', str(aRef.ent().type())):
+                ok = False
+            elif signed and re.search(r'unsigned', str(aRef.ent().type())):
+                ok = False
+            # Check for potential data loss through type size change
+            elif re.search(r'long long', str(ref.ent().type())):
+                if checkType(types[1:], str(aRef.ent().type())):
+                    ok = False
+            elif re.search(r'long', str(ref.ent().type())):
+                if checkType(types[2:], str(aRef.ent().type())):
+                    ok = False
+            elif re.search(r'short|int', str(ref.ent().type())):
+                if checkType(types[4:], str(aRef.ent().type())):
+                    ok = False
+            else:
+                continue
+
+            # Check if checked in an 'if' statment
+            if not ok:
+                if not lexer:
+                    if file.lexer():
+                        lexer = file.lexer()
+                    else:
+                        return
+
+                if not checkIf(ref.ent(), lexer):
+                    check.violation(ref.ent(), file, aRef.line(), aRef.column(), ERR1)
+
+
+
+    uRefs = file.filerefs('Call, Use', 'Unresolved Function, Unresolved Macro')
+
+    for uRef in uRefs:
+        if not lexer:
+            if file.lexer():
+                lexer = file.lexer()
+            else:
+                return
+
+        ok = True
+
+        lexeme = lexer.lexeme(uRef.line(), uRef.column())
+
+        # First argument gets converted to unsigned char
+        if re.match(r'fputc|ungetc', uRef.ent().name()):
+            if checkCast(lexeme, 0, False, lexer, types[:4]):
+                ok = False
+
+
+        # Second argument gets converted to unsigned char
+        elif re.match(r'memset|memchr', uRef.ent().name()):
+            if checkCast(lexeme, 1, False, lexer, types[:4]):
+                ok = False
+
+        # Third argument gets converted to unsigned char
+        elif re.match(r'memset_s', uRef.ent().name()):
+            if checkCast(lexeme, 2, False, lexer, types[:4]):
+                ok = False
+
+
+        # First argument gets converted to signed char
+        elif re.search(r'ctype.h$', str(uRef.ent().parent())):
+            if checkCast(lexeme, 0, True, lexer, types[:4]):
+                ok = False
+        # Second argument gets converted to signed char
+        elif re.match(r'strchr|strrchr', uRef.ent().name()):
+            if checkCast(lexeme, 1, True, lexer, types[:4]):
+                ok = False
+
+        if not ok:
+            check.violation(uRef.ent(), file, uRef.line(), uRef.column(), ERR1)
+
+
+# Check to see if int is able to be cast to signed or unsigned char depending on function
+def checkCast(lexeme, argNum, signed, lexer, types):
+    if signed:
+        lower = -128
+        upper = 127
+    else:
+        lower = 0
+        upper = 256
+
+    lexeme = lexeme.next(True, True)
+    if lexeme and lexeme.text() == '(':
+        close = Modules.findClose(lexeme)
+        lexeme = lexeme.next(True, True)
+        commas = 0
+        negative = False
+        # .
+        while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+            lastLex = lexeme
+            if lexeme.text() == '(':
+                lexeme = Modules.findClose(lexeme)
+            elif lexeme.text() == ',' and commas == argNum:
+                break
+            elif lexeme.text() == ',':
+                commas += 1
+            # Check for negative sign in separate lexeme
+            elif commas == argNum and lexeme.text() == '-':
+                negative = True
+            elif commas == argNum and not lexeme.ent() and re.search(r'[1-9]', lexeme.text()):
+                num = re.sub(r'[^-1-9]', '', lexeme.text())
+                if '-' not in num and negative:
+                    num = int(num)
+                    num *= -1
+                else:
+                    num = int(num)
+                if num > upper or num < lower:
+                    return True
+
+            elif commas == argNum and lexeme.ent() and checkIf(lexeme.ent(), lexer):
+                return False
+
+
+
+            elif commas == argNum and lexeme.ent() and lexeme.ent().type():
+                if checkType(types, str(lexeme.ent().type())) and not checkIf(lexeme.ent(), lexer):
+                    return True
+
+            elif commas == argNum and lexeme.ent() and lexeme.ent().value() and re.search(r'[1-9]', str(lexeme.ent().value())):
+                value = re.sub(r'[^-1-9]', '', lexeme.ent().value())
+                num = eval(value)
+                if num > upper or num < lower:
+                    return True
+
+
+
+
+
+            if lexeme and lexeme.line_begin() == lastLex.line_begin() and lexeme.column_begin() == lastLex.column_begin():
+                lexeme = lexeme.next(True, True)
+
+        return False
+
+
+def checkIf(ent, lexer):
+    uRefs = ent.refs('Useby')
+    for uRef in uRefs:
+        lexeme = lexer.lexeme(uRef.line(), uRef.column())
+        while lexeme and not re.search(r';|{|}', lexeme.text()):
+            if lexeme.text() == 'if':
+                return True
+            lexeme = lexeme.previous(True, True)
+
+
+
+def checkType(types, str):
+    for type in types:
+        if re.search(type, str):
+            return True
+
+"""
+            elif uRef.ent().type() in types[:4]:
+                ok = False"""
+"""
+for a in types[4:]:
+    if re.search(a, str(aRef.ent().type())):
+        ok = False
+        break
+        """

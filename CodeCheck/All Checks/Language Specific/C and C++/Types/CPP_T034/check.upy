@@ -1,0 +1,159 @@
+import re
+
+
+ERR1 = '"Forward" parameter has not been forwarded or has been modified.'
+
+
+# The ID for the check
+def ids():
+    return ('A8-4-6', 'CPP_T034')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A8-4-6': 'Published Standards/AUTOSAR/"forward" parameters declared as T && shall always be forwarded.',
+        'CPP_T034': 'All Checks/Language Specific/C and C++/Types/"forward" parameters declared as T && shall always be forwarded.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A8-4-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T034': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+A "forward" parameter is declared with a type of forwarding reference (i.e. an rvalue reference to non-const template type (T &&)). As a forwarding reference can bind to both lvalues and rvalues, preserving lvalue-ness and cv qualifications, it is useful when forwarding a value to another function using "std::forward".
+</p>
+
+<p>
+However, as the parameter can bind to anything, it should only be used for forwarding without performing any other operations on the parameter.
+</p>
+
+<p>
+Note: A forwarding parameter can also be declared via "auto &&" in a generic lambda
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// $Id: A8-4-6.cpp 305588 2018-01-29 11:07:35Z michal.szczepankiewicz $
+
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+class A
+{
+  public:
+    explicit A(std::vector&lt;std::string&gt; &&v);
+};
+
+class B
+{
+  public:
+    explicit B(const std::vector&lt;std::string&gt; &v);
+};
+
+
+template&lt;typename T, typename ... Args&gt;
+T make(Args && ... args)
+{
+    return T{std::forward&lt;Args&gt;(args) ...}; // Compliant, forwarding args
+}
+
+int main()
+{
+    make&lt;A&gt;(std::vector&lt;std::string&gt;{ });
+
+    std::vector&lt;std::string&gt; v;
+    make&lt;B&gt;(v);
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• C++ Core Guidelines [11]: F.18: For "consume" parameters, pass by X&& and std::move the parameter
+</p>
+
+<p>
+• A18-9-2 in section 6.18.9
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    def check_violation(ref):
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for func_ref in file.filerefs("Define", "Function Template, Lambda Function"):
+        template_type = []
+
+        for temp_type in func_ref.ent().refs("Define", "TemplateParameter"):
+            template_type.append(temp_type.ent().name())
+
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            param_type = param_ref.ent().type()
+
+            if param_type and (("&&" in param_type and any(_type in param_type for _type in template_type)) or "auto &&" in param_type):
+                compliant = False
+                other_operations = param_ref.ent().ref("Modifyby, Assignby, Setby")
+
+                if other_operations:
+                    check_violation(param_ref)
+                    continue
+
+                for use_ref in param_ref.ent().refs("Useby"):
+                    lex = lexer.lexeme(use_ref.line(), use_ref.column())
+
+                    while lex and lex.line_begin() == use_ref.line():
+                        lex_name = lex.ent().longname() if lex.ent() else ""
+
+                        if re.search(r"std::(__1::)?forward", str(lex_name)):
+                            compliant = True
+                            break
+                        elif lex.text() == "if" and lex.token() == "Keyword":    # only used in condition
+                            compliant = True
+                            break
+
+                        lex = lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+                    if not compliant:
+                        check_violation(param_ref)

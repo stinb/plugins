@@ -1,0 +1,164 @@
+import re
+
+
+ERR1 = 'Do not pass arguments to certain Java Collections Framework methods that are a different type than the collection parameter type.'
+COLLECTION_TYPES = "(Map<.*>|Set<.*>|Queue<.*>|List<.*>|ArrayList<.*>|LinkedList<.*>|Vector<.*>|Stack<.*>|PriorityQueue<.*>|Deque<.*>|ArrayDeque<.*>|HashSet<.*>|LinkedHashSet<.*>|TreeSet<.*>|HashMap<.*>|SortedSet<.*>)"
+
+
+# The ID for the check
+def ids():
+    return ('EXP04-J', 'JAVA_EXP04')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'EXP04-J': 'Published Standards/SEI Cert Standards/Java/Do not pass arguments to certain Java Collections Framework methods that are a different type than the collection parameter type',
+        'JAVA_EXP04': 'All Checks/Language Specific/Java/Expressions/Do not pass arguments to certain Java Collections Framework methods that are a different type than the collection parameter type',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'EXP04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'JAVA_EXP04': [
+            'Language: Java',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not pass arguments to certain Java Collections Framework methods that are a different type than the collection parameter type'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not pass arguments to certain Java Collections Framework methods that are a different type than the collection parameter type</p>
+<p><b>Risk Assessment</b></p>
+<p>Passing arguments to certain Java Collection Framework methods that are of a different type from that of the class instance can cause silent failures, resulting in unintended object retention, memory leaks, or incorrect program operation [Techtalk 2007].</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/EXP04-J.+Do+not+pass+arguments+to+certain+Java+Collections+Framework+methods+that+are+a+different+type+than+the+collection+parameter+type</i></p>
+<p><b>Exceptions</b></p>
+<p><i>EXP04-J-EX1: The collections framework equals() method also takes an argument of type Object, but it is acceptable to pass an object of a different type from that of the underlying collection/map to the equals() method. Doing so cannot cause any confusion because the contract of the equals() method stipulates that objects of different classes will never be equivalent (see MET08-J. Preserve the equality contract when overriding the equals() method for more information).</i></p>
+<p><i>EXP04-J-EX2: Some Java programs, particularly legacy programs, may iterate through a collection of variously typed objects with the expectation that only those objects with the same type as the collection parameter will be operated on. An exception is allowed when there is no expectation that the operation is not a no-op.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">import java.util.HashSet;
+
+public class ShortSet {
+  public static void main(String[] args) {
+    HashSet&lt;Short&gt; s = new HashSet&lt;Short&gt;();
+    for (int i = 0; i &lt; 10; i++) {
+      s.add((short)i); // Cast required so that the code compiles
+      s.remove(i); // Tries to remove an Integer
+    }
+    System.out.println(s.size());
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not lexer:
+        return
+
+    for method_ref in file.filerefs("Define", "Method"):
+        collection_variables = {}  # key: ent_id, value: ent_type
+
+        for var_ref in method_ref.ent().refs("Define", "Variable"):
+            var_type = var_ref.ent().type()
+
+            if var_type and re.search(COLLECTION_TYPES, var_type):
+                type_ref = var_ref.ent().ref("Typed GenericArgument")
+
+                if not type_ref:
+                    continue
+
+                ent_type = type_ref.ent().name().lower()
+
+                if ent_type == "integer":
+                    ent_type = "int"
+                elif ent_type == "character":
+                    ent_type = "char"
+
+                collection_variables[var_ref.ent().id()] = ent_type
+
+        for call_ref in method_ref.ent().refs("Call", "Method Member"):
+            if call_ref.ent().name() in {"get", "contains", "remove", "add", "put"}:
+                call_lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                prev_lex = call_lex.previous()
+
+                if prev_lex.text() == ".":
+                    prev_lex = prev_lex.previous()
+                    var_id = prev_lex.ent().id() if prev_lex.ent() else 0
+
+                    if var_id in collection_variables:
+                        cast = None
+                        on_param = 0
+                        compliant = False
+                        literal_param = ""
+
+                        while call_lex:
+                            if call_lex.text() == "(":
+                                on_param += 1
+                            elif call_lex.text() == ")":
+                                on_param -= 1
+
+                                if not on_param:
+                                    if not compliant and literal_param:
+                                        if literal_param.isnumeric() and collection_variables[var_id] == "int":
+                                            compliant = True
+                                    break
+                            elif on_param == 2 and call_lex.token() == "Keyword":
+                                cast = call_lex.text()
+
+                                if cast == collection_variables[var_id]:
+                                    compliant = True
+                                    break
+                            elif on_param == 1 and call_lex.token() == "Identifier" and call_lex.ent().kind().check("Variable, Parameter"):
+                                lex_type = call_lex.ent().type().lower()
+
+                                if lex_type == "integer":
+                                    lex_type = "int"
+                                elif lex_type == "character":
+                                    lex_type = "char"
+
+                                if lex_type == collection_variables[var_id]:
+                                    compliant = True
+                                    break
+                            elif on_param == 1 and call_lex.token() == "Literal":
+                                literal_param += call_lex.text()
+
+                            call_lex = call_lex.next(
+                                ignore_whitespace=True)
+
+                        if not compliant:
+                            check.violation(
+                                call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)

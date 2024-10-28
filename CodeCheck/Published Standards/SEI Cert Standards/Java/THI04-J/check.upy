@@ -1,0 +1,192 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-9-2022
+
+import re
+import Modules
+
+ERR1 = "Thread performing blocking operations cannot be terminated"
+DEF_NAME = "Ensure that threads performing blocking operations can be terminated"
+
+# The ID for the check
+def ids():
+    return ('THI04-J', 'JAVA_THI04')
+    
+
+# Required - Return the short name of the check
+def name(id):
+    return {
+        'THI04-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_THI04': "All Checks/Language Specific/Java/Thread APIs/" + DEF_NAME,
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'THI04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_THI04': [
+            'Language: Java',
+            'Thread APIs',
+        ],
+    }.get(id)
+
+# The description of the check
+def detailed_description():
+    return """
+<p>Ensure that threads performing blocking operations can be terminated
+</p>
+<p><b>Risk Assessment</b></p>
+<p>Threads and tasks that block on operations involving or file I/O must provide
+callers with an explicit termination mechanism to prevent denial-of-service
+(DoS) vulnerabilities.</p>
+<p>For the full standard:
+<i>https://wiki.sei.cmu.edu/confluence/display/java/THI04-J.+Ensure+that+thread\
+s+performing+blocking+operations+can+be+terminated</i>
+</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">// Thread-safe class
+public final class SocketReader implements Runnable {
+  // Other methods...
+
+  public void readData() throws IOException {
+    String string;
+    while (!Thread.interrupted() && (string = in.readLine()) != null) {
+      // Blocks until end of stream (null)
+    }
+  }
+
+  public static void main(String[] args)
+                          throws IOException, InterruptedException {
+    SocketReader reader = new SocketReader("somehost", 25);
+    Thread thread = new Thread(reader);
+    thread.start();
+    Thread.sleep(1000);
+    thread.interrupt(); // Interrupt the thread
+  }
+}
+</code></pre>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    lexer = None
+
+    refs = file.filerefs('Define', 'Variable')
+
+    for ref in refs:
+        if re.search(r'Thread', str(ref.ent().type())):
+            ok = False
+            interrupt = False
+            sRefs = ref.ent().refs('Setby')
+
+            for sRef in sRefs:
+                if not lexer:
+                    if not file.lexer():
+                        return
+                    lexer = file.lexer()
+
+                # Look for thread.interrupt()
+                dRefs = sRef.scope().refs('Useby Deref Partial')
+                for dRef in dRefs:
+                    lexeme = lexer.lexeme(dRef.line(), dRef.column())
+                    if lexeme:
+                        lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.text() == '.':
+                            lexeme = lexeme.next(True, True)
+                            if lexeme and lexeme.text() == 'interrupt':
+                                interrupt = True
+                                break
+
+                if interrupt:
+                    lexeme = lexer.lexeme(sRef.line(), sRef.column())
+
+
+                    # Look for 'new Thread'
+                    while not ok and lexeme and lexeme.text() != ';':
+                        if lexeme.text() == 'new':
+                            lexeme = lexeme.next(True, True)
+                            if lexeme and re.search(r'Thread', lexeme.text()):
+                                lexeme = lexeme.next(True, True)
+                                if lexeme and lexeme.text() == '(':
+                                    close = Modules.findClose(lexeme)
+                                    # Look for ent
+                                    while not ok and lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                                        if lexeme.ent():
+                                            rRef = lexeme.ent().ref('Typed', 'Class')
+                                            if rRef:
+                                                cRefs = rRef.ent().refs('Define', 'Constructor')
+                                                for cRef in cRefs:
+                                                    sRefs = cRef.ent().refs('Set', 'Variable')
+                                                    for sRef in sRefs:
+                                                        if str(sRef.ent().type()) == 'InetSocketAddress':
+                                                            ok = True
+
+
+                                        lexeme = lexeme.next(True, True)
+
+                        lexeme = lexeme.next(True, True)
+
+                # Find a method that contains socket.close()
+                else:
+                    lexeme = lexer.lexeme(sRef.line(), sRef.column())
+                    # Look for 'new Thread'
+                    while not ok and lexeme and lexeme.text() != ';':
+                        if lexeme.text() == 'new':
+                            lexeme = lexeme.next(True, True)
+                            if lexeme and re.search(r'Thread', lexeme.text()):
+                                lexeme = lexeme.next(True, True)
+                                if lexeme and lexeme.text() == '(':
+                                    close = Modules.findClose(lexeme)
+                                    # Look for ent
+                                    while not ok and lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                                        if lexeme.ent():
+                                            rRef = lexeme.ent().ref('Typed', 'Class')
+                                            if rRef:
+                                                if re.search(r'implements.*Runnable', str(rRef.ent().type())):
+                                                    uRefs = lexeme.ent().refs('Useby Deref Partial')
+                                                    for uRef in uRefs:
+                                                        lexeme1 = lexer.lexeme(uRef.line(), uRef.column())
+                                                        if lexeme1:
+                                                            lexeme1 = lexeme1.next(True, True)
+                                                            if lexeme1 and lexeme1.text() == '.':
+                                                                lexeme1 = lexeme1.next(True, True)
+                                                                if lexeme1 and lexeme1.ent() and re.search(r'method', lexeme1.ent().kind().longname().lower()) and not re.search(r'unresolved|unknown', lexeme1.ent().kind().longname()):
+                                                                    sRefs = lexeme1.ent().refs('Use')
+                                                                    for sRef in sRefs:
+                                                                        lexeme2 = lexer.lexeme(sRef.line(), sRef.column())
+                                                                        if lexeme2 and (lexeme2.text() == 'socket' or (lexeme2.ent() and re.search(r'Socket', str(lexeme2.ent().type())))):
+                                                                            lexeme2 = lexeme2.next(True, True)
+                                                                            if lexeme2 and lexeme2.text() == '.':
+                                                                                lexeme2 = lexeme2.next(True, True)
+                                                                                if lexeme2 and lexeme2.text() == 'close':
+                                                                                    ok = True
+                                                                                    break
+
+
+                                        lexeme = lexeme.next(True, True)
+
+                        lexeme = lexeme.next(True, True)
+
+
+
+            if not ok:
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+

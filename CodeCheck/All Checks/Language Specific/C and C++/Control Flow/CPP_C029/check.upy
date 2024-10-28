@@ -1,0 +1,458 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-02-06
+
+
+import re
+
+from Modules import findClose
+
+
+ERR1 = 'Exit point not at end of function'
+ERR2 = 'Multiple exit points from function'
+
+
+def ids():
+    return ('MISRA04_14.7', 'MISRA08_6-6-5', 'MISRA12_15.5', 'CPP_C029', 'MISRA23_15.5')
+
+
+def name(id):
+    return {
+        'MISRA04_14.7': '''Published Standards/MISRA-C 2004/\
+14.7 A function shall have a single point of exit at the end of the function''',
+        'MISRA08_6-6-5': '''Published Standards/MISRA-C++ 2008/\
+6-6-5 A function shall have a single point of exit at the end of the function''',
+        'MISRA12_15.5': '''Published Standards/MISRA C 2012/\
+15.5 A function should have a single point of exit at the end''',
+        'CPP_C029': '''All Checks/Language Specific/C and C++/Control Flow/\
+Single exit point at end''',
+        'MISRA23_15.5': '''Published Standards/MISRA C 2023/\
+15.5 A function should have a single point of exit at the end''',
+        }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_6-6-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA12_15.5': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Control Flow',
+        ],
+        'MISRA04_14.7': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Control Flow',
+        ],
+        'CPP_C029': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+        'MISRA23_15.5': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA04_14.7': '''\
+<p>
+This is required by IEC 61508, under good programming style.
+</p>
+''',
+        'MISRA08_6-6-5': '''\
+<p><b>Rationale</b></p>
+
+<p>
+This is required by IEC 61508 [12], as part of the requirements for a modular
+approach.
+</p>
+
+<p><b>Exception</b></p>
+
+<p>
+A function implementing a <i>function-try-block</i> is permitted to have
+multiple points of exit, one for the try block and one for each catch handler.
+</p>
+
+<p>
+Throwing an exception that is not caught within the function is not considered a
+point of exit for this rule.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void fn ( void )
+{
+  if ( ... )
+  {
+    return;        // Non-compliant
+  }
+  try
+  {
+    if ( ... )
+    {
+      throw ( 1 ); // Compliant by exception
+    }
+  }
+  catch ( int32_t )
+  {
+    throw;         // Compliant by exception
+  }
+  return;          // Non-compliant
+}
+
+void fn2 ( void )
+{
+  try
+  {
+    return;        // Non-compliant
+  }
+  catch ( ... )
+  {
+    return;        // Non-compliant
+  }
+}
+
+void fn3 ( void ) try
+{
+  return;          // Compliant by exception
+}
+catch ( int32_t )
+{
+  return;          // Compliant by exception
+}
+catch ( ... )
+{
+  return;          // Compliant by exception
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+IEC 61508 [12] Part 3 Table B.9
+</p>
+''',
+        'MISRA12_15.5': '''\
+<p><b>Amplification</b></p>
+
+<p>
+A function should have no more than one return statement.
+</p>
+
+<p>
+When a <i>return</i> statement is used, it should be the final statement in the
+compound statement that forms the body of the function.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+A single point of exit is required by IEC 61508 and ISO 26262 as part of the
+requirements for a modular approach.
+</p>
+
+<p>
+Early returns may lead to the unintentional omission of function termination
+code.
+</p>
+
+<p>
+If a function has exit points interspersed with statements that produce
+<i>persistent side effects</i>, it is not easy to determine which side effects
+will occur when the function is executed.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+In the following non-compliant code example, early returns are used to validate
+the function parameters.
+</p>
+
+<pre><code language="C++">bool_t f ( uint16_t n, char *p )
+{
+  if ( n &gt; MAX )
+  {
+    return false;
+  }
+
+  if ( p == NULL )
+  {
+    return false;
+  }
+
+  return true;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 17.4
+</p>
+''',
+        'CPP_C029': '''\
+<p>
+This is required by IEC 61508, under good programming style.
+</p>
+''',
+        'MISRA23_15.5': '''\
+<p><b>Amplification</b></p>
+
+<p>
+A function should have no more than one return statement.
+</p>
+
+<p>
+When a <i>return</i> statement is used, it should be the final statement in the
+compound statement that forms the body of the function.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+A single point of exit is required by IEC 61508 and ISO 26262 as part of the
+requirements for a modular approach.
+</p>
+
+<p>
+Early returns may lead to the unintentional omission of function termination
+code.
+</p>
+
+<p>
+If a function has exit points interspersed with statements that produce
+<i>persistent side effects</i>, it is not easy to determine which side effects
+will occur when the function is executed.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+In the following non-compliant code example, early returns are used to validate
+the function parameters.
+</p>
+
+<pre><code language="C++">bool_t f ( uint16_t n, char *p )
+{
+  if ( n &gt; MAX )
+  {
+    return false;
+  }
+
+  if ( p == NULL )
+  {
+    return false;
+  }
+
+  return true;
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 17.4
+</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('ignore', 'Ignore constructors and destructors', False)
+    check.options().checkbox('eachExit', 'Violations for each exit', False)
+
+
+def areLexemesOrdered(lLex, rLex):
+    lLine, lColumn = lLex.line_begin(), lLex.column_begin()
+    rLine, rColumn = rLex.line_begin(), rLex.column_begin()
+    return lLine < rLine or (lLine == rLine and lColumn < rColumn)
+
+
+def getFunctionBraces(define, lexer):
+    # Get ( )
+    openParen = lexer.lexeme(define.line(), define.column())
+    while openParen and openParen.text() != '(':
+        openParen = openParen.next(True, True)
+    closeParen = findClose(openParen)
+
+    # Get { }
+    openBrace = closeParen
+    while openBrace and openBrace.text() != '{':
+        openBrace = openBrace.next(True, True)
+    closeBrace = findClose(openBrace)
+
+    if closeBrace:
+        return (openBrace, closeBrace)
+
+
+def getReturnsInBlock(node, endTryNodes, visited=None, returns=None, end=None, first=True):
+    if first:
+        visited = set()
+        returns = list()
+        if node.kind() == 'try':
+            end = node.end_node()
+        elif node.kind() == 'try-catch':
+            end = endTryNodes[node]
+
+    # Base case: skip inner try/catch blocks
+    if not first:
+        if node.kind() == 'try':
+            node = node.end_node()
+        elif node.kind() == 'try-catch':
+            node = endTryNodes[node]
+
+    # Base case: end of try or catch node reached
+    if node == end:
+        return returns
+
+    # Base case: skip if visited
+    if node in visited:
+        return returns
+    visited.add(node)
+
+    # Get this return
+    if node.kind() == 'return':
+        returns.append(node)
+
+    # Recursively get returns
+    for child in node.children():
+        getReturnsInBlock(child, endTryNodes, visited, returns, end, False)
+
+    return returns
+
+
+def isReturnAtEnd(nodes, ret, normalTryCatch):
+    # Get the node immediately after the return
+    # (end of function, end of control flow, or dead code)
+    nodeAfter = None
+    for i in range(len(nodes) - 1):
+        if nodes[i] == ret:
+            nodeAfter = nodes[i + 1]
+            break
+
+    # Not at end: kind other than any try/catch block or end of function
+    if nodeAfter.kind() not in {'end-try', 'try-catch', 'end'}:
+        return False
+
+    # Not at end: normal try/catch block
+    if normalTryCatch and nodeAfter.kind() in {'end-try', 'try-catch'}:
+        return False
+
+    return True
+
+
+def check(check, file):
+    ignoreCtorDtor = check.options().lookup('ignore')
+    eachExit = check.options().lookup('eachExit')
+
+    for define in file.filerefs('Define', 'Function'):
+        fun = define.ent()
+
+        # Option: Skip constructors and destructors
+        parent = fun.parent()
+        if ignoreCtorDtor and fun.kind().check('Member') and parent:
+            if fun.name() == parent.name():
+                continue
+            if fun.name() == '~' + parent.name():
+                continue
+
+        cfg = fun.control_flow_graph()
+        if not cfg:
+            continue
+        nodes = cfg.nodes()
+
+        # Dictionary for skipping to the end of a catch node
+        # { catchNode: endTryNode, ... }
+        endTryNodes = dict()
+
+        # Variables useful for finding function catch blocks
+        lexer          = None
+        functionBraces = None
+
+        # Each function, try, catch (catch block or function catch block)
+        for block in nodes:
+            if block.kind() not in {'start', 'try', 'try-catch'}:
+                continue
+
+            # Store the end-try nodes for the try-catch nodes
+            if block.kind() == 'try':
+                end = block.end_node()
+                for child in block.children():
+                    endTryNodes[child] = end
+
+            # Recursively get returns in the block
+            returns = getReturnsInBlock(block, endTryNodes)
+
+            # Skip if no returns for the block
+            if len(returns) == 0:
+                continue
+
+            # See if normal (not a function try block nor a function catch block)
+            normalTryCatch = True
+            if block.kind() in {'try', 'try-catch'} and block.line_begin():
+                # Get lexemes for function braces and this block
+                if not lexer:
+                    lexer = file.lexer(False)
+                    functionBraces = getFunctionBraces(define, lexer)
+                blockLex = lexer.lexeme(block.line_begin(), block.column_begin())
+
+                # See if the try/catch block a normal block
+                if functionBraces:
+                    # Normal: try block is after the beginning of the function
+                    if block.kind() == 'try':
+                        normalTryCatch = areLexemesOrdered(functionBraces[0], blockLex)
+                    # Normal: catch block is before the end of the function
+                    else:
+                        normalTryCatch = areLexemesOrdered(blockLex, functionBraces[1])
+
+            # Skip function block
+            if block.kind() == 'start':
+                if len(returns) <= 1 and isReturnAtEnd(nodes, returns[0], normalTryCatch):
+                    continue
+
+            # Skip try or catch block
+            else:
+                if normalTryCatch:
+                    if len(returns) == 0:
+                        continue
+                else:
+                    if len(returns) <= 1 and isReturnAtEnd(nodes, returns[0], normalTryCatch):
+                        continue
+
+            # Violation at each early exit
+            if eachExit:
+                for node in returns:
+                    if isReturnAtEnd(nodes, node, normalTryCatch):
+                        continue
+                    check.violation(fun, file, node.line_begin(), node.column_begin(), ERR1)
+            # Violation at function
+            else:
+                check.violation(fun, file, define.line(), define.column(), ERR2)
+                break

@@ -1,0 +1,143 @@
+import re
+
+
+ERR1 = 'Do not synchronize on a collection view if the backing collection is accessible.'
+COLLECTION_TYPES = "(Map<.*>|Set<.*>|Queue<.*>|List<.*>|ArrayList<.*>|LinkedList<.*>|Vector<.*>|Stack<.*>|PriorityQueue<.*>|Deque<.*>|ArrayDeque<.*>|HashSet<.*>|LinkedHashSet<.*>|TreeSet<.*>|HashMap<.*>|SortedSet<.*>)"
+COLLECTION_VIEW_METHODS = {"keySet", "entrySet",
+                           "values", "singletonList", "asList", "subList"}
+
+
+# The ID for the check
+def ids():
+    return ('LCK04-J', 'JAVA_LCK04')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'LCK04-J': 'Published Standards/SEI Cert Standards/Java/Do not synchronize on a collection view if the backing collection is accessible',
+        'JAVA_LCK04': 'All Checks/Language Specific/Java/Locking/Do not synchronize on a collection view if the backing collection is accessible',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'LCK04-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_LCK04': [
+            'Language: Java',
+            'Locking',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not synchronize on a collection view if the backing collection is accessible'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not synchronize on a collection view if the backing collection is accessible</p>
+<p><b>Risk Assessment</b></p>
+<p>Synchronizing on a collection view instead of the collection object can cause nondeterministic behavior.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/LCK04-J.+Do+not+synchronize+on+a+collection+view+if+the+backing+collection+is+accessible</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">private final Map&lt;Integer, String&gt; mapView =
+    Collections.synchronizedMap(new HashMap&lt;Integer, String&gt;());
+private final Set&lt;Integer&gt; setView = mapView.keySet();
+
+public Map&lt;Integer, String&gt; getMap() {
+  return mapView;
+}
+
+public void doSomething() {
+  synchronized (setView) {  // Incorrectly synchronizes on setView
+    for (Integer k : setView) {
+      // ...
+    }
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+
+    if not (lexer and re.search(r"synchronized", file.contents())):
+        return
+
+    for class_ref in file.filerefs("Define", "Class Type"):
+        for method_ref in class_ref.ent().refs("Define", "Method Member"):
+            if "synchronized" in method_ref.ent().contents():
+                end_ref = method_ref.ent().ref("End")
+                lex = lexer.lexeme(method_ref.line(), method_ref.column())
+                in_synchronized = False
+
+                while lex and lex.line_begin() != end_ref.line():
+                    if lex.text() == "synchronized" and lex.token() == "Keyword":
+                        in_synchronized = True
+                    elif in_synchronized and lex.token() == "Identifier":
+                        lex_ent = lex.ent()
+                        if lex_ent:
+                            ent_type = lex_ent.type()
+                        else:
+                            ent_type = None
+
+                        if ent_type and re.search(COLLECTION_TYPES, ent_type):
+                            for set_ref in lex_ent.refs("Setby Init"):
+                                set_lex = lexer.lexeme(
+                                    set_ref.line(), set_ref.column())
+                                backing_collection = None
+                                collection_view = False
+                                check_call = False
+
+                                while set_lex and set_lex.text() != ";":
+                                    if set_lex.token() == "Identifier" and set_lex.ent().type() and re.search(COLLECTION_TYPES, set_lex.ent().type()) and set_lex.ref() and set_lex.ref().kind().check("Useby Deref Partial"):
+                                        backing_collection = set_lex.ent()
+                                        check_call = True
+                                    elif check_call and set_lex.token() == "Identifier":
+                                        if set_lex.ref() and set_lex.ref().kind().check("Callby") and set_lex.text() in COLLECTION_VIEW_METHODS:
+                                            collection_view = True
+                                            break
+
+                                        check_call = False
+
+                                    set_lex = set_lex.next(
+                                        ignore_whitespace=True, ignore_comments=True)
+
+                                if collection_view and backing_collection:
+                                    for any_ref in backing_collection.refs("", "Method Member"):
+                                        if any_ref.ent().id() != method_ref.ent().id():
+                                            check.violation(
+                                                lex_ent, file, lex.line_begin(), lex.column_begin(), ERR1)
+                                            break
+
+                        in_synchronized = False
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)

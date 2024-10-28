@@ -1,0 +1,144 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kevin Groke
+
+# Boiler Plate code
+use base ("Understand::Codecheck");
+use strict;
+
+# This is the error that will be returned when a violation is found
+use constant ERR1 => 'Possible Assignment in If Statement Condition.';
+
+# This registers ERR1 with Understand
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+}
+
+# This is the short error the Understand will use
+
+sub checkID { return "CPP_C036";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Control Flow\\If statements shall not have assignments in the conditions";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Control Flow',
+  );
+}
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description { return <<"END_DESC"
+<p>
+This rule looks for single equal signs in the condition of 'if statements' and
+throws an violation. This is valid C/C++ but not desired by some times because
+of its confusing nature. So, this is valid.
+</p>
+
+<pre><code language="C++">if (a == b) {
+</code></pre>
+
+<p>
+This is not valid.
+</p>
+
+<pre><code language="C++">if (a = b) {
+</code></pre>
+
+<p>
+A standard way to explicitly allow this is to permit assignments inside of an
+extra pair of parenthesis.
+</p>
+
+<pre><code language="C++">if ((a = b)) {
+</code></pre>
+
+<p>
+This check has an option, enabled by default, to allow this behaviour.
+</p>
+
+END_DESC
+}
+
+# This section defines the programming language this script is testing
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+# This determines if this script is per file
+sub test_entity { return 1;}
+
+# This determines if this script is per project or per file
+sub test_global { return 0;}
+
+# Any defined options go here
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox("allowInNested","Allow assignment in nested parenthesis",1);
+}
+
+# Use this function for throwing errors
+sub throwError {
+  my $check = shift;
+  my $ent = shift;
+  my $file = shift;
+  my $line = shift;
+  my $column = shift;
+  my $error = shift;
+  my $name = shift;
+  $check->violation($ent,$file,$line,$column,$error);
+}
+
+# This is the actual test being performed on the user's code
+sub check {
+  # Pull the name of the check and the name of the file from the incoming script request
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check('c file');
+  my $allowNested = $check->option->lookup("allowInNested");
+
+  # Pull a list of all functions that are defined within this file
+  my @functionsDefined = $file->filerefs("Define", "Function");
+  return unless @functionsDefined;
+
+  # loop through all defined functions
+  foreach my $function(@functionsDefined) {
+    my $end = $function->ent->ref("End");
+    next unless $end;
+    # Spin up a lexer
+    my $lexeme = $function->lexeme;
+    next unless $lexeme;
+
+    #While I am still within the function
+    while ( $lexeme && $lexeme->line_begin < $end->line ) {
+
+      # Continue unless we are looking at an if statement
+      next unless $lexeme->text eq "if";
+
+      # Check syntax for if statement
+      if ( $lexeme->text eq "if" and $lexeme->token ne "Preprocessor" ) {
+
+        # Move into condition structure
+        $lexeme = $lexeme->nextUseful();
+        $lexeme = $lexeme->nextUseful();
+
+        my $count = 1;
+        ENT : while ( $lexeme && !( $count == 1 and $lexeme->text eq ')' ) ) {
+          $count ++ if $lexeme->text eq '(';
+          $count -- if $lexeme->text eq ')';
+          if ( $lexeme->text eq "=" and $lexeme->token eq "Operator" && (!$allowNested || $count == 1)){
+            throwError($check, $function->ent,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1);
+          }
+          $lexeme = $lexeme->nextUseful();
+        }
+      }
+    }
+    continue {
+      if ( $lexeme ) {
+        $lexeme = $lexeme->nextUseful;
+      }
+    }
+  }
+}

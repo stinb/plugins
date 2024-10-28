@@ -1,0 +1,120 @@
+ERR1 = 'Argument contains token that looks like a preprocessing directive'
+
+
+PREPROCESSOR_DIRECTIVES = {"ifdef", "ifndef", "if", "undef", "define",
+                           "elif", "else", "endif", "line", "error", "include", "pragma"}
+
+
+# The ID for the check
+def ids():
+    return ('M16-0-5', 'CPP_PR039', 'MISRA23_19.3.5')
+
+def name(id):
+    return {
+        'M16-0-5': """\
+Published Standards/AUTOSAR/Function-like Macro Containing Preprocessing \
+Directives""",
+        'CPP_PR039': """\
+All Checks/Language Specific/C and C++/Preprocessor/Function-like Macro \
+Containing Preprocessing Directives""",
+        'MISRA23_19.3.5': """\
+Published Standards/MISRA C++ 2023/19.3.5 Tokens that look like a preprocessing directive shall not occur within a macro argument""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'M16-0-5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Preprocessor',
+        ],
+        'CPP_PR039': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+        'MISRA23_19.3.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p> Arguments to a function-like macro shall not contain
+tokens that look like preprocessing directives.</p>
+<p><b>Rationale</b></p>
+<p>If any of the arguments act like preprocessor directives, the behaviour when macro substitution is
+made can be unpredictable.
+</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#define M(A) printf ( #A )
+void main ( )
+{
+ M(
+#ifdef SW // Non-compliant
+ "Message 1"
+#else // Non-compliant
+ "Message 2"
+#endif // Non-compliant
+ );
+}
+<p>The above may print</p>
+#ifdef SW "Message 1" #else "Message 2" #endif
+<p>or</p>
+Message 2
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for macro_ref in file.filerefs("", "Macro Functional"):
+        paranthesis_stack = []
+        in_param = False
+
+        lex = lexer.lexeme(macro_ref.line(), macro_ref.column())
+
+        while lex:
+            lex_text = lex.text()
+            lex_token = lex.token()
+
+            if not paranthesis_stack and (lex_text == "(" and lex_token == "Punctuation"):
+                in_param = True
+            elif in_param and lex.token() == "Preprocessor" and lex.text() in PREPROCESSOR_DIRECTIVES:
+                check.violation(macro_ref.ent(), file,
+                                lex.line_begin(), lex.column_begin(), ERR1)
+            elif in_param and (lex_text == "(" and lex_token == "Punctuation"):
+                paranthesis_stack.append(lex_text)
+            elif (lex_text == ")" and lex_token == "Punctuation") and paranthesis_stack:
+                paranthesis_stack.pop()
+            elif (lex_text == ")" and lex_token == "Punctuation") and not paranthesis_stack:
+                break
+
+            lex = lex.next(ignore_comments=True, ignore_whitespace=True)

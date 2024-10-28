@@ -1,0 +1,138 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 5-11-2022
+import re
+
+ERR1 = 'Statement was not indented to level of its block'
+ERR2 = 'New block was not indented one increment further'
+
+def ids():
+    return ('JAVA_24', 'JAVA_25')
+
+def name(id):
+    return {
+        'JAVA_25': """\
+All Checks/Language Specific/Java/Each statement shall be indented to the level of its block.""",
+
+        'JAVA_24': """\
+All Checks/Language Specific/Java/Each new block shall be indented one increment further than its \
+parent block."""
+    }[id]
+
+
+def tags(id):
+    return {
+        'JAVA_24': [
+            'Language: Java',
+            'Styling',
+        ],
+        'JAVA_25': [
+            'Language: Java',
+            'Styling',
+        ],
+
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    return { 
+        'JAVA_25': """ 
+<p><b>Title or clarified title</b></p>
+<p>Each statement shall be indented to the level of its block.</p>
+<p><b>Example</b></p>
+<pre><code language="Java">public static void method(){
+    int x = 0;
+    if(y = 0){
+        x = 2;
+    }
+}</code></pre>
+<p><b>Developer's Note</b></p>
+<p>This check determines the level of indentation for the block as an indent
+larger than the previous block indentation level</p>
+""",
+
+        'JAVA_24': """ 
+<p><b>Title or clarified title</b></p>
+<p>Each new block shall be indented one increment further than its parent block.
+</p>
+<p><b>Example</b></p>
+<pre><code language="Java">public static void method(){
+    int x = 0;
+    if(y = 0){
+        x = 2;
+    }
+}</code></pre>
+<p><b>Developer's Note</b></p>
+<p>This check determines the level of indentation for the block as an indent
+larger than the previous block indentation level</p>
+"""
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    if not file.lexer():
+        return
+
+    ERR = ERR1
+    if check.id() == 'JAVA_24':
+        ERR = ERR2
+
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+    indent = 0
+    indents = []
+
+    for lexeme in lexemes:
+        violation = None
+        # Find indent before open curly brace
+        if lexeme.text() == '{':
+            lexeme = lexeme.previous()
+            while lexeme and lexeme.token() != 'Newline':
+                lexeme = lexeme.previous()
+
+            if lexeme:
+                lexeme = lexeme.next()
+
+            # Change indent to correspond with the current block
+            if lexeme and lexeme.token() == 'Whitespace':
+                indent = len(lexeme.text()) + 1
+            else:
+                indent = 0
+
+            # Push new indent onto stack
+            indents.append(indent)
+
+
+
+        # Check if each indent matches indentation of block
+        elif lexeme.token() == 'Newline':
+            nextLex = lexeme.next(True, True)
+            if nextLex and nextLex.line_begin() != lexeme.line_begin() + 1:
+                continue
+
+            # If the indent is before a closing curly brace, pop the indents stack
+            if nextLex and nextLex.text() == '}':
+                if indents:
+                    indents.pop()
+                    if indents:
+                        indent = indents[-1]
+                    else:
+                        indent = 0
+                else:
+                    pass
+            lexeme = lexeme.next()
+
+            # Check that then indent is indented to the level of its block
+            if lexeme and lexeme.token() == 'Whitespace':
+                if len(lexeme.text()) < indent:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR)
+
+            elif lexeme:
+                if indent != 0:
+                    check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR)

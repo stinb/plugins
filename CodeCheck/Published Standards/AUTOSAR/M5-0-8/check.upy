@@ -1,0 +1,192 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 11-8-21
+
+
+import re
+
+
+ERR1 = 'Expression of type "%1" is converted to "%2"'
+
+
+def ids():
+    return ('M5-0-8', 'MISRA08_5-0-8', 'CPP_T012')
+
+
+def name(id):
+    return {
+        'M5-0-8': 'Published Standards/AUTOSAR/An explicit integral or floating-point conversion shall not increase the size of the underlying type of a cvalue expression',
+        'MISRA08_5-0-8': 'Published Standards/MISRA-C++ 2008/5-0-8 An explicit integral or floating-point conversion shall not increase the size of the underlying type of a cvalue expression',
+        'CPP_T012': 'All Checks/Language Specific/C and C++/Types/An explicit integral or floating-point conversion shall not increase the size of the underlying type of a cvalue expression',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MISRA08_5-0-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Types',
+        ],
+        'M5-0-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T012': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+def description():
+    return 'An explicit integral or floating-point conversion shall not increase the size of the underlying type of a cvalue expression.'
+
+
+def detailed_description():
+    return '''\
+
+<p><b>Rationale</b></p>
+
+<p>
+A cast applied to the result of an expression does not change the type in which the expression is evaluated, which may be contrary to developer expectations.
+</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// Integral to Float
+void f1 ( )
+{
+    int16_t s16a;
+    int16_t s16b;
+    int16_t s16c;
+    float32_t f32a;
+    // The following performs integer division
+    f32a = static_cast&lt; float32_t &gt; ( s16a / s16b ); // Non-compliant
+    // The following also performs integer division
+    s16c = s16a / s16b;
+    f32a = static_cast&lt; float32_t &gt; ( s16c ); // Compliant
+    // The following performs floating-point division
+    f32a = static_cast&lt; float32_t &gt; ( s16a ) / s16b; // Compliant
+}
+</code></pre>
+
+<p>
+In the above example, the expression <code>( s16a / s16b )</code> is performed with an <i>underlying type</i> of <code>int16_t</code> rather than <code>float32_t</code>.
+</p>
+
+<pre><code language="C++">// Float to Integral
+void f2 ( )
+{
+    float32_t f32a;
+    float32_t f32b;
+    float32_t f32c;
+    int16_t s16a;
+    // The following performs floating-point division
+    s16a = static_cast&lt; int16_t &gt; ( f32a / f32b ); // Non-compliant
+    // The following also performs floating-point division
+    f32c = f32a / f32b;
+    s16a = static_cast&lt; int16_t &gt; ( f32c ); // Compliant
+    // The following performs integer division
+    s16a = static_cast&lt; int16_t &gt; ( f32a ) / f32b; // Compliant
+}
+</code></pre>
+
+<p>
+In the above example, the expression <code>( f32a / f32b )</code> is performed with an <i>underlying type</i> of <code>float32_t</code> rather than <code>int16_t</code>.
+</p>
+
+'''
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def matchString(lexeme, text):
+    if lexeme.text() == text:
+        return lexeme.next(ignore_comments=True, ignore_whitespace=True)
+    else:
+        return None
+
+
+def matchSet(lexeme, texts):
+    if lexeme.text() in texts:
+        return lexeme.next(ignore_comments=True, ignore_whitespace=True)
+    else:
+        return None
+
+
+def check(check, file):
+    casts = {'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast'}
+    # Dictionary of all minimum size in bits, not always true for all compilers and target platforms
+    size = {'char': 8, 'signed char': 8, 'unsigned char': 8, 'short': 16, 'short int': 16, 'signed short': 16, 'signed short int': 16, 'unsigned short int': 16, 'int': 16, 'signed': 16, 'signed int': 16, 'unsigned': 16, 'unsigned int': 16, 'long': 32, 'long int': 32, 'signed long': 32, 'signed long int': 32, 'unsigned long': 32, 'unsigned long int': 32, 'long long': 64, 'long long int': 64, 'signed long long': 64, 'signed long long int': 64, 'unsigned long long': 64, 'unsigned long long int': 64, 'int8_t': 8, 'int16_t': 16, 'int32_t': 32, 'int64_t': 64, 'int_fast8_t': 8, 'int_fast16_t': 16, 'int_fast32_t': 32, 'int_fast64_t': 64, 'int_least8_t': 8, 'int_least16_t': 16, 'int_least32_t': 32, 'int_least64_t': 64, 'uint8_t': 8, 'uint16_t': 16, 'uint32_t': 32, 'uint64_t': 64, 'uint_fast8_t': 8, 'uint_fast16_t': 16, 'uint_fast32_t': 32, 'uint_fast64_t': 64, 'uint_least8_t': 8, 'uint_least16_t': 8, 'uint_least32_t': 32, 'uint_least64_t': 64, 'float': 32, 'double': 64, 'long double': 80}
+    operators = {'+', '-', '*', '/', '%', '&', '|', '^', '<<', '>>'}
+
+    lexer = None
+
+    # Whenever a value is set by a cast
+    for toRef in file.filerefs('Set', 'Object'):
+        toEnt = toRef.ent()
+
+        # If the value being assigned is a number
+        if toEnt.type() in size:
+            
+            # Get the lexer and lexeme
+            if not lexer:
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(toRef.line(), toRef.column())
+            lexeme = lexeme.next(ignore_comments=True, ignore_whitespace=True)
+
+            # Match the following: = cast<float>
+            lexeme = matchString(lexeme, '=')
+            if not lexeme:
+                continue
+            lexeme = matchSet(lexeme, casts)
+            if not lexeme:
+                continue
+            lexeme = matchString(lexeme, '<')
+            if not lexeme:
+                continue
+            lexeme = matchSet(lexeme, size)
+            if not lexeme:
+                continue
+            lexeme = matchString(lexeme, '>')
+            if not lexeme:
+                continue
+            lexeme = matchString(lexeme, '(')
+            if not lexeme:
+                continue
+
+            fromEnt = lexeme.ent()
+            if not fromEnt:
+                continue
+
+            # If the fromEnt and toEnt are numbers
+            if fromEnt.type() in size and toEnt.type() in size:
+
+                # If the size increases
+                if size[toEnt.type()] > size[fromEnt.type()]:
+
+                    # If the next token is an operator
+                    lexeme = lexeme.next(ignore_comments=True, ignore_whitespace=True)
+                    if matchSet(lexeme, operators):
+                        
+                        check.violation(toEnt, file, toRef.line(), toRef.column(), ERR1, fromEnt.type(), toEnt.type())
+

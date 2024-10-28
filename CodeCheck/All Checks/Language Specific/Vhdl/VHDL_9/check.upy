@@ -1,0 +1,115 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 8-21-2023
+
+# The ID for the check
+def id():
+    return 'VHDL_9'
+
+# The short name of the check
+def name():
+    return "All Checks/Language Specific/Vhdl/VHDL_9" +  ' Duplicate signal assignments'
+
+
+def tags(id):
+    return {
+        'VHDL_9': [
+            'Language: VHDL',
+            'Declarations and Definitions',
+        ],
+
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Duplicate signal assignments.'
+
+# The long description of the check
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Duplicate Signal Assignments</p>
+
+<p><b>Description</b></p>
+<p>
+Identifying and eliminating duplicate signal assignments in VHDL code is 
+crucial for maintaining the integrity and reliability of the design. 
+Duplicate assignments can introduce inconsistencies and conflicts in the 
+logic, making the behavior unpredictable and difficult to debug. Simulation 
+results may become inaccurate, and the code's readability may suffer, which 
+can hinder collaboration among team members. Furthermore, duplicate assignments 
+can lead to issues during synthesis, affecting the efficiency and correctness 
+of the hardware implementation. By addressing these duplicates, you can ensure 
+a more robust, portable, and optimized VHDL design.
+</p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="VHDL">\
+architecture Behavioral of Example is
+    signal A, B, C: std_logic;
+begin
+    -- Duplicate assignment to signal A
+    A &lt;= '1';
+    A &lt;= '0';
+
+    -- Duplicate assignment to signal B
+    B &lt;= '0';
+    B &lt;= '1';
+
+    -- Non-duplicate assignment to signal C
+    C &lt;= '1';
+end architecture Behavioral;
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>None</p>
+'''
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'VHDL'
+
+def check(check, file):
+    if file.lexer():
+        lexer = file.lexer()
+    else:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        # find process starting point
+        assignment_count = 0
+        if lexeme.text() == "process" and lexeme.token() == "Keyword" and not (lexeme.previous(True,True).text() == "end" and lexeme.previous(True,True).token() == "Keyword"):
+            proc_ent = lexeme.ent()
+            proc_start = lexeme.line_begin()
+            temp_lex = lexeme
+
+            while temp_lex:
+                if temp_lex.text() == "process" and temp_lex.token() == "Keyword" and temp_lex.previous(True,True).text() == "end" and temp_lex.previous(True,True).token() == "Keyword":
+                    proc_end = temp_lex.line_begin()
+                    proc_range = range(proc_start, proc_end, 1)
+
+                    # process beginning and end found, now check each signal's refs for multiple assignments in this process block
+                    for sig_ref in file.filerefs("Define, Declare", "Signal", True):
+                        sig_ent = sig_ref.ent()
+                        for sig_set_ref in sig_ent.refs("Vhdl Setby"):
+                            sig_set_ref_line = sig_set_ref.line()
+
+                            if sig_set_ref_line in proc_range:
+                                assignment_count += 1
+
+
+                temp_lex = temp_lex.next(True,True)
+
+        if assignment_count > 1:
+            check.violation(sig_ent, file, sig_set_ref.line(), sig_set_ref.column(), "Duplicate assignments of signal '%1' within same statement region of process '%2'", sig_ent, proc_ent)
+            break
+
+        lexeme = lexeme.next(True, True)

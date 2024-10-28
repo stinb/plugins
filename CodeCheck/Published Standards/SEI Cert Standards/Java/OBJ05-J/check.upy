@@ -1,0 +1,190 @@
+import re
+
+
+ERR1 = 'Do not return references to private mutable class members.'
+
+
+def ids():
+    return ('OBJ05-J', 'JAVA_OBJ05')
+
+
+def name(id):
+    return {
+        'OBJ05-J': 'Published Standards/SEI Cert Standards/Java/Do not return references to private mutable class members',
+        'JAVA_OBJ05': 'All Checks/Language Specific/Java/Object Orientation/Do not return references to private mutable class members',
+    }[id]
+
+
+def tags(id):
+    return {
+        'OBJ05-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 75',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P12',
+            'Level: L1',
+        ],
+        'JAVA_OBJ05': [
+            'Language: Java',
+            'Object Orientation',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return """
+<p>Do not return references to private mutable class members</p>
+<p><b>Risk Assessment</b></p>
+<p>Returning references to internal object state (mutable or immutable) can render an application susceptible to information leaks and corruption of its objects' states, which consequently violates class invariants. Control flow can also be affected in some cases.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/OBJ05-J.+Do+not+return+references+to+private+mutable+class+members</i></p>
+<p><b>Exceptions</b></p>
+<p><i>OBJ05-J-EX0: When a method is called with only an immutable view of an object, that method may freely use the immutable view without defensive copying. This decision should be made early in the design of the API. Note that new callers of such methods must also expose only immutable views.</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class MutableClass {
+  private Date d;
+
+  public MutableClass() {
+    d = new Date();
+  }
+
+  public Date getDate() {
+    return d;
+  }
+}
+
+
+
+class MutableClass {
+  private Date[] date;
+
+  public MutableClass() {
+    date = new Date[20];
+    for (int i = 0; i &lt; date.length; i++) {
+      date[i] = new Date();
+    }
+  }
+
+  public Date[] getDate() {
+    return date; // Or return date.clone()
+  }
+}
+
+
+class ReturnRef {
+  // Internal state, may contain sensitive data
+  private Hashtable&lt;Integer,String&gt; ht = new Hashtable&lt;Integer,String&gt;();
+
+  private ReturnRef() {
+    ht.put(1, "123-45-6666");
+  }
+
+  public Hashtable&lt;Integer,String&gt; getValues(){
+    return ht;
+  }
+
+  public static void main(String[] args) {
+    ReturnRef rr = new ReturnRef();
+    Hashtable&lt;Integer, String&gt; ht1 = rr.getValues(); // Prints sensitive data 123-45-6666
+    ht1.remove(1);                                   // Untrusted caller can remove entries
+    Hashtable&lt;Integer, String&gt; ht2 = rr.getValues(); // Now prints null; original entry is removed
+  }
+}
+</code></pre>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        for private_member in class_ref.ent().refs("Define", "Private Member"):
+            ent, type = get_ent_type(private_member.ent())
+
+            if ent.kind().check("Class"):
+                mutable = False
+                lib = ent.library()
+
+                for member_ref in ent.refs("Define", "Private Member"):
+                    for set_ref in member_ref.ent().refs("Setby"):
+                        if (set_ref.ent().parent().id() == ent.id()) and (set_ref.ent().name() != ent.name()):
+                            mutable = True
+
+                if mutable or (lib == "Standard"):
+                    for use_ref in private_member.ent().refs("Useby", "Method Member"):
+                        if use_ref.ent().type() in {"boolean"} or used_as_param(use_ref):
+                            continue
+                        elif use_ref.kind().check("Return"):
+                            check.violation(use_ref.ent(), file,
+                                            use_ref.line(), use_ref.column(), ERR1)
+                        else:
+                            has_return = False
+                            an_array = False
+                            is_cloned = False
+                            check_if_cloned = False
+                            lexer = use_ref.file().lexer()
+                            lexes = lexer.lexemes(
+                                use_ref.line(), use_ref.line())
+
+                            if re.search(r"\[\]$", private_member.ent().type()):
+                                an_array = True
+
+                            for lex in lexes:
+                                if lex.text() == "return" and lex.token() == "Keyword":
+                                    has_return = True
+                                elif lex.ent() and lex.ent().id() == use_ref.scope().id():
+                                    check_if_cloned = True
+                                elif check_if_cloned:
+                                    next_lex = lex.next()
+
+                                    if next_lex.text() == "clone" and next_lex.token() == "Identifier":
+                                        is_cloned = True
+
+                                    check_if_cloned = False
+
+                            if (has_return and an_array) or (has_return and not is_cloned):
+                                check.violation(
+                                    use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed", "~GenericParameter")
+
+    seen = set()
+    while typed_ref and typed_ref not in seen:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed", "~GenericParameter")
+        seen.add(typed_ref)
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def used_as_param(ref):
+    lexer = ref.file().lexer()
+    lex = lexer.lexeme(ref.line(), ref.column())
+
+    while lex.line_begin() == ref.line():
+        if lex.text() == "(" and lex.token() == "Punctuation":
+            prev_lex = lex.previous()
+
+            if prev_lex.ent() and prev_lex.ent().kind().check("Method"):
+                return True
+
+        lex = lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+    return False

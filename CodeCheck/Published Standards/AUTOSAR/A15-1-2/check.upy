@@ -1,0 +1,154 @@
+import re
+
+ADDRESS = "&"
+POINTER = "*"
+
+ERR1 = "Exception object is a pointer"
+
+# The ID for the check
+def ids():
+  return ('A15-1-2', 'CPP_E058', 'MISRA23_18.1.1')
+
+# The short name of the check
+def name(id):
+    return {
+        'A15-1-2': 'Published Standards/AUTOSAR/An exception object shall not be a pointer',
+        'CPP_E058': 'All Checks/Language Specific/C and C++/Exception Handling/An exception object shall not be a pointer',
+        'MISRA23_18.1.1': 'Published Standards/MISRA C++ 2023/18.1.1 An exception object shall not have pointer type',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A15-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Exception Handling'
+        ],
+        'CPP_E058': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+        'MISRA23_18.1.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+  return """\
+<p><b>Rationale</b></p>
+<p>If an exception object of pointer type is thrown and that pointer refers to a dynamically created object, then it may be unclear which function is responsible for destroying it, and when. This may lead to memory leak.</p>
+<p>If an exception object of pointer type is thrown and that pointer refers to an automatic variable, it allows using a variable after its destruction, leading to undefined behavior.</p>
+<p>This ambiguity does not exist if a copy of the object is thrown.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 //% $Id: A15-1-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+2 #include &lt;cstdint&gt;
+3 class A
+4 {
+5 // Implementation
+6 };
+7 void Fn(std::int16_t i)
+8 {
+9 A a1;
+10 A& a2 = a1;
+11 A* a3 = new A;
+12
+13 if (i &lt; 10)
+14 {
+15 throw a1; // Compliant - copyable object thrown
+16 }
+17
+18 else if (i &lt; 20)
+19 {
+20 throw A(); // Compliant - copyable object thrown
+21 }
+22
+23 else if (i &lt; 30)
+24 {
+25 throw a2; // Compliant - copyable object thrown
+26 }
+27
+28 else if (i &lt; 40)
+29 {
+30 throw & a1; // Non-compliant - pointer type thrown
+31 }
+32
+33 else if (i &lt; 50)
+34 {
+35 throw a3; // Non-compliant - pointer type thrown
+36 }
+37
+38 else if (i &lt; 60)
+39 {
+40 throw(*a3); // Compliant - memory leak occurs, violates other rules
+41 }
+42
+43 else
+44 {
+45 throw new A; // Non-compliant - pointer type thrown
+46 }
+47 }
+</code></pre>
+<p><b>See also</b></p>
+<p>MISRA C++ 2008 [7]: 15-0-2 An exception object should not have pointer type.
+</p>
+<p>C++ Core Guidelines [11]: E.13: Never throw while being the direct owner of an object
+</p>"""
+
+def test_entity(file):
+  return file.kind().check('header file,code file')
+
+def test_global():
+  return False
+
+def test_language(language):
+  return language == 'C++'
+
+def check(check, file):
+  if not file.lexer():
+    return
+  else:
+    lexer = file.lexer()
+  lex = lexer.first()
+  if not lex:
+    return
+
+  while lex:
+    valid = True
+    if lex and lex.text() == "throw" and lex.token() == "Keyword":
+
+      while lex and not lex.ent() and (lex.text() != ";"):
+        if (lex.text() == "new") and (lex.token() == "Keyword"):
+          valid = False
+          break
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+      if valid and lex and lex.ent():
+          object = "" if lex.previous(ignore_whitespace=True, ignore_comments=True).text() == "throw" else lex.previous(ignore_whitespace=True, ignore_comments=True).text()
+          object += str(lex.ent().name())
+
+          if ADDRESS in str(lex.ent().type()):
+            if POINTER in object:
+              valid = False
+          elif POINTER in str(lex.ent().type()):
+            if not POINTER in object:
+              valid = False
+          else:
+            if ADDRESS in object:
+              valid = False
+
+    if not valid:
+      check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+    lex = lex.next()

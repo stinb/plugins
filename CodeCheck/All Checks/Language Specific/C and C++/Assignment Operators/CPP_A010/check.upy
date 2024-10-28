@@ -1,0 +1,165 @@
+import re
+
+ERR1 = 'Move constructor uses copy-initialization for data members or base classes.'
+
+
+SCALAR_TYPES = {"int", "short", "double",
+                "float", "char", "bool", "long", "*", "enum", "std::nullptr_t"}
+
+
+# The ID for the check
+def ids():
+    return ('A12-8-4', 'CPP_A010')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A12-8-4': 'Published Standards/AUTOSAR/Move constructor shall not initialize its class members and base classes using copy semantics.',
+        'CPP_A010': 'All Checks/Language Specific/C and C++/Assignment Operators/Move constructor shall not initialize its class members and base classes using copy semantics.',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A12-8-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Assignment Operators'
+        ],
+        'CPP_A010': [
+            'Language: C',
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>Move constructor shall not initialize its class members and base classes
+using copy semantics.</p>
+<p><b>Rationale</b></p>
+<p>Data members or base classes initialization in move constructor needs to be done
+with move semantics. Move construction is an optimization strategy and the copyinitialization for data members and base classes will have negative impact on the
+program's performance, as well as it does not meet developer expectations.</p>
+<p><b>Exception</b></p>
+<p>In move constructor, copy initialization for data members of scalar types does not
+violate this rule.</p>
+<p>See: Scalar-Types.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A12-8-4.cpp 271696 2017-03-23 09:23:09Z piotr.tanski $
+2 #include &lt;cstdint&gt;
+3 #include &lt;string&gt;
+4 class A
+5 {
+6 public:
+7 // ...
+8 A(A&& oth)
+9 : x(std::move(oth.x)), // Compliant
+10 s(std::move(oth.s)) // Compliant
+11 {
+12 }
+13
+14 private:
+15 std::int32_t x;
+16 std::string s;
+17 };
+18 class B
+19 {
+20 public:
+21 // ...
+22 B(B&& oth)
+23 : x(oth.x), // Compliant by exception, std::int32_t is of scalar
+24 // type
+25 s(oth.s) // Non-compliant
+26 {
+27 }
+28
+29 private:
+30 std::int32_t x;
+31 std::string s;
+32 };
+33 class C
+34 {
+35 public:
+36 // ...
+37 C(C&& oth)
+38 : x(oth.x), // Compliant by exception
+39 s(std::move(oth.s)) // Compliant
+40 {
+41 }
+42
+43 private:
+44 std::int32_t x = 0;
+45 std::string s = "Default string";
+46 };
+</code></pre>
+<p><b>See Also</b></p>
+<p>• SEI CERT C++ [10]: OOP11-CPP Do not copy-initialize members or base classes
+from a move constructor.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer:
+        return
+
+    for class_ref in file.filerefs("Define", "Class"):
+        for func_ref in class_ref.ent().refs("Define", "Function"):
+            if func_ref.ent().name() == class_ref.ent().name() and f"{class_ref.ent().name()} &&" in func_ref.ent().parameters():
+                compliant = False
+                in_argument = False
+                identifier_lex = None
+                parenthesis_stack = []
+                lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+                while lex and lex.text() != "{":
+                    lex_name = lex.ent().longname() if lex.ent() else lex.ent()
+
+                    if lex.text() == ":" and lex.token() == "Operator":
+                        in_argument = True
+                    elif in_argument and lex.token() == "Identifier" and lex.ent() and lex.ent().kind().check("Member, Class"):
+                        identifier_lex = lex
+
+                        if identifier_lex.ent().type() and any(_type in identifier_lex.ent().type() for _type in SCALAR_TYPES):  # Exception
+                            compliant = True
+                    elif in_argument and identifier_lex and lex.text() == "(":
+                        parenthesis_stack.append(lex.text())
+                    elif parenthesis_stack and re.search(r"std::(__1::)?move", str(lex_name)):
+                        compliant = True
+                    elif in_argument and lex.text() == ")" and parenthesis_stack:
+                        parenthesis_stack.pop()
+
+                        if not parenthesis_stack:
+                            if not compliant:
+                                check.violation(identifier_lex.ent(), file, identifier_lex.line_begin(
+                                ), identifier_lex.column_begin(), ERR1)
+
+                            compliant = False
+                            identifier_lex = None
+
+                    lex = lex.next(ignore_comments=True,
+                                   ignore_whitespace=True)

@@ -1,0 +1,124 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 07-19-2021
+
+import re
+
+ERR1 = """\
+Dynamically allocated pointer %1 was not set to a value prior to its use"""
+
+# The ID for the check
+def ids():
+    return ('CPP_M008')
+
+# The short name of the check
+def name(id):
+    return {
+        'CPP_M008':  "All Checks/Language Specific/C and C++/Memory Allocation/Dynamically allocated memory shall be set to some value prior to its use as an rvalue or in a test"
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_M008': [
+            'Language: C',
+            'Language: C++',
+            'Memory Allocation',
+        ],
+
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Dynamically allocated memory shall be set to some value
+prior to its use as an rvalue or in a test. Although this is a
+programming error and some compilers may catch it, this is
+considered significant enough to be listed as a standard.</p>
+<p>Developer's note</p>
+<p>This check will look in a single scope (function or global scope)
+and only be able to check if the memory was set on a line before the
+line that uses the memory.</p>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    #Gather function refs
+    functions = file.filerefs('Define', 'Function')
+
+    # Skip if file does not have one of the following keywords
+    if not re.search(r'new|malloc|calloc|realloc', file.contents()):
+        return
+
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+
+    for function in functions:
+        begin = function.ent().ref('Begin').line()
+        end = function.ent().ref('End').line()
+        violations = []
+        # Gather set refs
+        refs = function.ent().refs('Set ~Deref', 'Object', True)
+        for ref in refs:
+            ok = True
+
+            # Find allocation keywords
+            if re.search(r'new|malloc|calloc|realloc', str(ref.ent().value())):
+                useRefs = ref.ent().refs('Deref Useby')
+                for useRef in useRefs:
+                    if useRef.file() != ref.file() or useRef.line() < begin or useRef.line() > end:
+                        continue
+                    ok = False
+                    ref1 = useRef
+                    setRefs = useRef.ent().refs('Deref Set')
+                    sr = None
+                    for setRef in setRefs:
+                        if setRef.file() != ref.file() or setRef.line() < begin or setRef.line() > end:
+
+                            continue
+                        # Compare the line of the deref set and the deref use
+                        if setRef.line() < useRef.line():
+                            ok = True
+                    if not ok:
+                        check.violation(ref1.scope(), ref1.file(), ref1.line(), ref1.column(), ERR1, ref1.scope().name())
+                        break
+
+
+            elif not ref.ent().value():
+                lexeme = lexer.lexeme(ref.line(), 0)
+                flagged = False
+
+                while lexeme and not lexeme.text() == ';':
+                    # Find allocation keywords
+                    if re.match(r'new|malloc|calloc|realloc', lexeme.text()):
+                        useRefs = ref.ent().refs('Deref Useby')
+                        for useRef in useRefs:
+                            if useRef.file() != ref.file() or useRef.line() < begin or useRef.line() > end:
+                                continue
+                            ok = False
+                            ref1 = useRef
+                            setRefs = useRef.ent().refs('Deref Set')
+                            for setRef in setRefs:
+                                if setRef.file() != ref.file() or setRef.line() < begin or setRef.line() > end:
+                                    continue
+                                # Compare the line of the deref set and the deref use
+                                if setRef.line() < useRef.line():
+                                    ok = True
+                            if not ok:
+                                check.violation(ref1.scope(), ref1.file(), ref1.line(), ref1.column(), ERR1, ref1.scope().name())
+                                flagged = True
+                                break
+
+                        if flagged:
+                            break
+
+                    lexeme = lexeme.next(True, True)
+
+
+

@@ -1,0 +1,142 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 08-04-2021
+
+import re
+
+ERR1 = "Variable was accessed through a pointer of an incompatible type"
+
+def id():
+    return 'EXP39-C'
+
+def name():
+    return "Published Standards/SEI Cert Standards/C/" +  """\
+Do not access a variable through a pointer of an incompatible type"""
+
+
+
+
+def tags(id):
+    return {
+        'EXP39-C': [
+            'Language: C',
+            'Standard: SEI CERT C',
+            'Severity: 50',
+            'Likelihood: Unlikely',
+            'Remediation Cost: High',
+            'Priority: P2',
+            'Level: L3',
+            'Pointers',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p>Modifying a variable through a pointer of an incompatible type (other than
+unsigned char) can lead to unpredictable results. Subclause 6.2.7 of the C
+Standard states that two types may be distinct yet compatible and addresses
+precisely  when two distinct types are compatible.</p>
+<p>Non-compliant</p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void f(void) {
+  if (sizeof(int) == sizeof(float)) {
+    float f = 0.0f;
+    int *ip = (int *)&f;
+    (*ip)++;
+    printf("float is %f\n", f);
+  }
+}
+</code></pre>
+<p>Compliant</p>
+<pre><code language="C++">#include &lt;float.h&gt;
+#include &lt;math.h&gt;
+#include &lt;stdio.h&gt;
+
+void f(void) {
+  float f = 0.0f;
+  f = nextafterf(f, FLT_MAX);
+  printf("float is %f\n", f);
+}
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+
+    # Gather all object refs
+    refs = file.filerefs('Define', 'Object')
+    lexer = None
+
+    for ref in refs:
+        # Skip non-pointer objects
+        if not re.search(r'\*', str(ref.ent().type())):
+            continue
+        if ref.ent().ref('FunctionPtr'):
+            continue
+        if re.search(r'unsigned\schar', str(ref.ent().type())):
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+            if not lexer:
+                continue
+
+        # Get rid of the '*' in the pointer's type
+        type = re.sub(r'\s\*', '', str(ref.ent().type()))
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+
+        lexeme = lexeme.next(True, True)
+
+        first = True
+        ok = True
+        while lexeme and not re.match(r';|{|}', lexeme.text()):
+            if lexeme.text() == '[':
+                while lexeme.text() != ']':
+                    lexeme = lexeme.next(True, True)
+            # Throw violation if the pointer type doesn't match the assigned type
+            if lexeme and lexeme.ent() and lexeme.ent().type() != type and lexeme.ent().type() != ref.ent().type():
+                if first:
+                    ok = False
+                    v = lexeme
+                repl1 = re.sub(r'(\(\*\))|(\[.*\])', '', str(lexeme.ent().type()))
+                if repl1 == type or re.search(r'Macro', lexeme.ent().kindname()):
+                    first = False
+                    ok = True
+
+
+
+
+            lexeme = lexeme.next(True, True)
+
+        if not ok:
+            if ref.ent().ref('Deref, Ptr') or v.ent().ref('Deref, Ptr'):
+                check.violation(v.ent(), file, v.line_begin(), v.column_begin(), ERR1)
+
+
+    # Below will check for casting on the left side of a set ref
+    deRefs = file.filerefs('Deref Set', 'Object')
+    for deRef in deRefs:
+        if not lexer:
+            lexer = file.lexer()
+            if not lexer:
+                continue
+
+        lexeme = lexer.lexeme(deRef.line(), deRef.column())
+        asterisk = False
+        keyword = False
+        while lexeme and not re.match(r';|{|}|=', lexeme.text()):
+            if lexeme.text() == '*':
+                asterisk = True
+
+            if lexeme.token() == 'Keyword':
+                keyword = True
+
+            lexeme = lexeme.previous(True, True)
+
+        if asterisk and keyword:
+            check.violation(deRef.ent(), file, deRef.line(), deRef.column(), ERR1)

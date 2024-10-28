@@ -1,0 +1,180 @@
+
+ERR1 = 'Unused variable'
+
+# The ID for the check
+
+
+def ids():
+    return ('A0-1-1', 'CPP_V017')
+
+# The short name of the check
+
+
+def name(id):
+    return {
+        'A0-1-1': 'Published Standards/AUTOSAR/A project shall not contain instances of non-volatile variables being given values that are not subsequently used',
+        'CPP_V017': 'All Checks/Language Specific/C and C++/Variables/A project shall not contain instances of non-volatile variables being given values that are not subsequently used',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A0-1-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Variables'
+        ],
+        'CPP_V017': [
+            'Language: C',
+            'Language: C++',
+            'Variables',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return """\
+<p><b>Rationale</b></p>
+<p>Known as a DU dataflow anomaly, this is a process whereby there is a data flow in
+which a variable is given a value that is not subsequently used. At best this is inefficient, but may indicate a genuine problem. Often the presence of these constructs is due to
+the wrong choice of statement aggregates such as loops.</p>
+<p>See: DU-Anomaly.</p>
+<p><b>Exception</b></p>
+<p>Loop control variables (see Section 6.6.5) are exempt from this rule.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">//% $Id: A0-1-1.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;array&gt;
+#include &lt;cstdint&gt;
+std::uint8_t Fn1(std::uint8_t param) noexcept
+{
+std::int32_t x{
+0}; // Non-compliant - DU data flow anomaly; Variable defined,
+// but not used
+if (param &gt; 0)
+{
+return 1;
+}
+else
+{
+return 0;
+}
+}
+std::int32_t Fn2() noexcept
+{
+std::int8_t x{10U}; // Compliant - variable defined and will be used
+std::int8_t y{20U}; // Compliant - variable defined and will be used
+std::int16_t result = x + y; // x and y variables used
+
+x = 0; // Non-compliant - DU data flow anomaly; Variable defined, but x is
+// not subsequently used and goes out of scope
+y = 0; // Non-compliant - DU data flow anomaly; Variable defined, but y is
+// not subsequently used and goes out of scope
+return result;
+}
+std::int32_t Fn3(std::int32_t param) noexcept
+{
+std::int32_t x{param +
+1}; // Compliant - variable defined, and will be used in
+// one of the branches
+// However, scope of x variable could be reduced
+if (param &gt; 20)
+{
+return x;
+}
+return 0;
+}
+std::int32_t Fn4(std::int32_t param) noexcept
+{
+std::int32_t x{param +
+1}; // Compliant - variable defined, and will be used in
+// some of the branches
+if (param &gt; 20)
+{
+return x + 1;
+}
+else if (param &gt; 10)
+{
+return x;
+}
+else
+{
+return 0;
+}
+}
+void Fn5() noexcept
+{
+std::array&lt;std::int32_t, 100&gt; arr{};
+arr.fill(1);
+
+constexpr std::uint8_t limit{100U};
+std::int8_t x{0};
+for (std::uint8_t i{0U}; i &lt; limit; ++i) // Compliant by exception - on the
+// final loop, value of i defined will
+// not be used
+{
+arr[i] = arr[x];
+++x; // Non-compliant - DU data flow anomaly on the final loop, value
+// defined and not used
+}
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>MISRAC++2008: 0-1-6 A project shall not contain instances of non-volatile
+variables being given values that are never subsequently used.
+</p>"""
+
+# Tests the type of file
+
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for ref in file.filerefs("Define", "Function"):
+        for ent in ref.ent().ents("", "Local Object"):
+            kind_refs = []
+            loop_variable = False
+            macro = False
+            for ref in sorted(ent.refs("~Name ~Typed"), key=lambda ent: ent.line()):
+                for lexeme in lexer.lexemes(ref.line(), ref.line()):
+
+                    # loop control variables exemption
+                    if lexeme.text() in {"for", "while"} and lexeme.token() == "Keyword":
+                        loop_variable = True
+                        break
+
+                kind_refs.append(ref)
+
+            last_ref = kind_refs[-1]
+
+            # filter macros
+            try:
+                if int(last_ref.scope().freetext("DefinedInMacro")):
+                    macro = True
+            except:
+                pass
+
+            if last_ref.kindname() in {"Modify", "Set", "Init"} and not loop_variable and not macro:
+                if len(kind_refs) > 1:
+                    second_last_ref = kind_refs[-2]
+                    if last_ref.line() == second_last_ref.line() and second_last_ref.kindname() in {"Use", "Deref Set", "Setby"}:
+                        return
+
+                check.violation(last_ref.scope(), file, last_ref.line(),
+                                last_ref.column(), ERR1)

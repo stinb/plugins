@@ -1,0 +1,535 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2022-12-21
+
+
+import re
+from Modules import searchContents
+
+
+ERR1 = 'More than one break or goto in loop'
+ERR2 = 'More than one break in loop'
+ERR3 = 'More than one goto in loop'
+
+
+def ids():
+    return ('MISRA04_14.6', 'MISRA08_6-6-4', 'MISRA12_15.4', 'CPP_C026', 'MISRA23_15.4')
+
+
+def name(id):
+    return {
+        'MISRA04_14.6': '''Published Standards/MISRA-C 2004/14.6\
+ For any iteration statement there shall be at most one break statement used\
+ for loop termination''',
+        'MISRA08_6-6-4': '''Published Standards/MISRA-C++ 2008/6-6-4\
+ For any iteration statement there shall be no more than one break or goto\
+ statement used for loop termination''',
+        'MISRA12_15.4': '''Published Standards/MISRA C 2012/15.4\
+ There should be no more than one break or goto statement used to terminate any\
+ iteration statement''',
+        'CPP_C026': '''All Checks/Language Specific/C and C++/Control Flow/\
+ There should be no more than one break or goto statement used to terminate any\
+ iteration statement''',
+        'MISRA23_15.4': '''Published Standards/MISRA C 2023/15.4\
+ There should be no more than one break or goto statement used to terminate any\
+ iteration statement''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_6-6-4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA12_15.4': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Control Flow',
+        ],
+        'MISRA04_14.6': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: required',
+            'Control Flow',
+        ],
+        'CPP_C026': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+        'MISRA23_15.4': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA04_14.6': '''\
+<p>
+These rules are in the interests of good structured programming. One
+<i>break</i> statement is allowed in a loop since this allows, for example, for
+dual outcome loops or for optimal coding.
+</p>
+''',
+
+        'MISRA08_6-6-4': '''\
+<p><b>Rationale</b></p>
+
+<p>
+Restricting the number of exits from a loop is done in the interests of good
+structured programming. One <i>break</i> or <i>goto</i> statement is acceptable
+in a loop since this allows, for example, for dual outcome loops or optimal
+coding.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">for ( int32_t i = 0; i &lt; 10; i++ )
+{
+  if ( ... )
+  {
+    break; // Compliant
+  }
+}
+while ( ... )
+{
+  if ( ... )
+  {
+    break; // Compliant
+  }
+}
+for ( int32_t i = 0; i &lt; 10; i++ )
+{
+  if ( ... )
+  {
+    break;
+  }
+  else if ( ... )
+  {
+    break; // Non-compliant - second jump from loop
+  }
+  else
+  {
+    ...
+  }
+}
+while ( ... )
+{
+  if ( ... )
+  {
+    break;
+  }
+  if ( ... )
+  {
+    break; // Non-compliant - second jump from loop
+  }
+}
+</code></pre>
+''',
+
+        'MISRA12_15.4': '''\
+<p><b>Rationale</b></p>
+
+<p>
+Restricting the number of exits from a loop helps to minimize visual code
+complexity. The use of one <i>break</i> or <i>goto</i> statement allows a single
+secondary exit path to be created when early loop termination is required.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+Both of the following nested loops are compliant as each has a single
+<i>break</i> used for early loop termination.
+</p>
+
+<pre><code language="C++">for ( x = 0; x &lt; LIMIT; ++x )
+{
+  if ( ExitNow ( x ) )
+  {
+    break;
+  }
+  for ( y = 0; y &lt; x; ++y )
+  {
+    if ( Exit Now ( LIMIT - y ) )
+    {
+      break;
+    }
+  }
+}
+</code></pre>
+
+<p>
+The following loop is non-compliant as there are multiple <i>break</i> and
+<i>goto</i> statements used for early loop termination.
+</p>
+
+<pre><code language="C++">for ( x = 0; x &lt; LIMIT; ++x )
+{
+  if ( BreakNow ( x ) )
+  {
+    break;
+  }
+  else if ( GotoNow ( x ) )
+  {
+    goto EXIT;
+  }
+  else
+  {
+    KeepGoing ( x );
+  }
+}
+EXIT:
+  ;
+</code></pre>
+
+<p>
+In the following example, the inner <i>while</i> loop is compliant because there
+is a single <i>goto</i> statement that can cause its early termination. However,
+the outer <i>while</i> loop is non-compliant because it can be terminated early
+either by the <i>break</i> statement or by the goto statement in the inner
+<i>while</i> loop.
+</p>
+
+<pre><code language="C++">while ( x != 0u )
+{
+  x = calc_new_x ( );
+  if ( x == 1u )
+  {
+    break;
+  }
+  while ( y != 0u )
+  {
+    y = calc_new_y ( );
+    if ( y == 1u )
+    {
+      goto L1;
+    }
+  }
+}
+L1:
+z = x + y;
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 15.1, Rule 15.2, Rule 15.3
+</p>
+''',
+
+        'CPP_C026': '''\
+<p><b>Rationale</b></p>
+
+<p>
+Restricting the number of exits from a loop helps to minimize visual code
+complexity. The use of one <i>break</i> or <i>goto</i> statement allows a single
+secondary exit path to be created when early loop termination is required.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+Both of the following nested loops are compliant as each has a single
+<i>break</i> used for early loop termination.
+</p>
+
+<pre><code language="C++">for ( x = 0; x &lt; LIMIT; ++x )
+{
+  if ( ExitNow ( x ) )
+  {
+    break;
+  }
+  for ( y = 0; y &lt; x; ++y )
+  {
+    if ( Exit Now ( LIMIT - y ) )
+    {
+      break;
+    }
+  }
+}
+</code></pre>
+
+<p>
+The following loop is non-compliant as there are multiple <i>break</i> and
+<i>goto</i> statements used for early loop termination.
+</p>
+
+<pre><code language="C++">for ( x = 0; x &lt; LIMIT; ++x )
+{
+  if ( BreakNow ( x ) )
+  {
+    break;
+  }
+  else if ( GotoNow ( x ) )
+  {
+    goto EXIT;
+  }
+  else
+  {
+    KeepGoing ( x );
+  }
+}
+EXIT:
+  ;
+</code></pre>
+
+<p>
+In the following example, the inner <i>while</i> loop is compliant because there
+is a single <i>goto</i> statement that can cause its early termination. However,
+the outer <i>while</i> loop is non-compliant because it can be terminated early
+either by the <i>break</i> statement or by the goto statement in the inner
+<i>while</i> loop.
+</p>
+
+<pre><code language="C++">while ( x != 0u )
+{
+  x = calc_new_x ( );
+  if ( x == 1u )
+  {
+    break;
+  }
+  while ( y != 0u )
+  {
+    y = calc_new_y ( );
+    if ( y == 1u )
+    {
+      goto L1;
+    }
+  }
+}
+L1:
+z = x + y;
+</code></pre>
+''',
+        'MISRA23_15.4': '''\
+<p><b>Rationale</b></p>
+
+<p>
+Restricting the number of exits from a loop helps to minimize visual code
+complexity. The use of one <i>break</i> or <i>goto</i> statement allows a single
+secondary exit path to be created when early loop termination is required.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+Both of the following nested loops are compliant as each has a single
+<i>break</i> used for early loop termination.
+</p>
+
+<pre><code language="C++">for ( x = 0; x &lt; LIMIT; ++x )
+{
+  if ( ExitNow ( x ) )
+  {
+    break;
+  }
+  for ( y = 0; y &lt; x; ++y )
+  {
+    if ( Exit Now ( LIMIT - y ) )
+    {
+      break;
+    }
+  }
+}
+</code></pre>
+
+<p>
+The following loop is non-compliant as there are multiple <i>break</i> and
+<i>goto</i> statements used for early loop termination.
+</p>
+
+<pre><code language="C++">for ( x = 0; x &lt; LIMIT; ++x )
+{
+  if ( BreakNow ( x ) )
+  {
+    break;
+  }
+  else if ( GotoNow ( x ) )
+  {
+    goto EXIT;
+  }
+  else
+  {
+    KeepGoing ( x );
+  }
+}
+EXIT:
+  ;
+</code></pre>
+
+<p>
+In the following example, the inner <i>while</i> loop is compliant because there
+is a single <i>goto</i> statement that can cause its early termination. However,
+the outer <i>while</i> loop is non-compliant because it can be terminated early
+either by the <i>break</i> statement or by the goto statement in the inner
+<i>while</i> loop.
+</p>
+
+<pre><code language="C++">while ( x != 0u )
+{
+  x = calc_new_x ( );
+  if ( x == 1u )
+  {
+    break;
+  }
+  while ( y != 0u )
+  {
+    y = calc_new_y ( );
+    if ( y == 1u )
+    {
+      goto L1;
+    }
+  }
+}
+L1:
+z = x + y;
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 15.1, Rule 15.2, Rule 15.3
+</p>
+''',
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    defaultCheckGoto = False if check.id() == 'MISRA04_14.6' else True
+
+    check.options().checkbox('break', 'Check for break', True)
+    check.options().checkbox('goto', 'Check for goto', defaultCheckGoto)
+
+
+def addEndLoopAndAfterLoop(node, visited):
+    # Add end of loop
+    loopEnd = node.end_node()
+    visited.add(loopEnd)
+
+    # Add next sibling of loop
+    beforeNextSibling = loopEnd if node.kind() == 'do-while' else node
+    for child in beforeNextSibling.children():
+        if beforeNextSibling.child_label(child) == 'no':
+            visited.add(child)
+            break
+
+
+def countBreaks(node, visited=None, first=True):
+    count = 0
+
+    # Initialize base cases with end of loop & after loop
+    if not visited:
+        visited = set()
+        addEndLoopAndAfterLoop(node, visited)
+
+    # Base case: visited
+    if node in visited:
+        return count
+    visited.add(node)
+
+    # Base case: skip inner loop/switch
+    if not first and node.kind() in {'while-for', 'do-while', 'switch'}:
+        node = node.end_node()
+
+    # Base case: end at goto
+    elif node.kind() == 'goto':
+        return 0
+
+    # Count 1
+    elif node.kind() == 'break':
+        count += 1
+
+    # Recursively count
+    for child in node.children():
+        count += countBreaks(child, visited, False)
+
+    return count
+
+
+def countGotos(node, visited=None):
+    count = 0
+
+    # Initialize base cases with end of loop & after loop
+    if not visited:
+        visited = set()
+        addEndLoopAndAfterLoop(node, visited)
+
+    # Base case: visited
+    if node in visited:
+        return count
+    visited.add(node)
+
+    # Base case: end at goto and count 1
+    if node.kind() == 'goto':
+        return count + 1
+
+    # Recursively count
+    for child in node.children():
+        count += countGotos(child, visited)
+
+    return count
+
+
+def check(check, file):
+    checkBreak = check.options().lookup('break')
+    checkGoto = check.options().lookup('goto')
+
+    # Choose the Violation message
+    if checkBreak and checkGoto:
+        ERR = ERR1
+    elif checkBreak:
+        ERR = ERR2
+    elif checkGoto:
+        ERR = ERR3
+
+    # Skip unless checking break or goto
+    if not checkBreak and not checkGoto:
+        return
+
+    # Skip unless the file has loops
+    if not searchContents(file, r'\W(while|for)\W'):
+        return
+
+    # All functions
+    for define in file.filerefs('Define', 'Function'):
+        fun = define.ent()
+
+        cfg = fun.control_flow_graph()
+        if not cfg:
+            continue
+
+        # Increment the amounts of terminators for each loop
+        for loop in cfg.nodes():
+            # Skip unless loop
+            if loop.kind() not in {'while-for', 'do-while'}:
+                continue
+
+            # Skip unless >= 2 breaks or gotos
+            breaks = countBreaks(loop) if checkBreak else 0
+            gotos  = countGotos(loop) if (checkGoto and breaks < 2) else 0
+            if breaks + gotos < 2:
+                continue
+
+            check.violation(fun, file, loop.line_begin(), loop.column_begin(), ERR)

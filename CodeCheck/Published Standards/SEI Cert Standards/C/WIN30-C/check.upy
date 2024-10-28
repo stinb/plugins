@@ -1,0 +1,218 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2024-01-15
+
+
+import re
+
+
+ERR1 = 'Allocation improperly freed by %1 instead of %2'
+ERR2 = 'Allocation not properly freed by %1'
+
+ARGUMENT_ALLOC_AND_DEALLOC = {
+    # From the WIN30-C table
+    'AllocateUserPhysicalPages': 'FreeUserPhysicalPages',
+    'AllocateUserPhysicalPagesNuma': 'FreeUserPhysicalPages',
+    # From the WIN30-C examples
+    'FormatMessageA': 'LocalFree',
+}
+
+ASSIGNMENT_ALLOC_AND_DEALLOC = {
+    # From the WIN30-C table
+    'malloc': 'free',
+    'realloc': 'free',
+    'LocalAlloc': 'LocalFree',
+    'LocalReAlloc': 'LocalFree',
+    'GlobalAlloc': 'GlobalFree',
+    'GlobalReAlloc': 'GlobalFree',
+    'VirtualAlloc': 'VirtualFree',
+    'VirtualAllocEx': 'VirtualFreeEx',
+    'VirtualAllocExNuma': 'VirtualFreeEx',
+    'HeapAlloc': 'HeapFree',
+    'HeapReAlloc': 'HeapFree',
+    # Other
+    'aligned_alloc': 'free',
+    'calloc': 'free',
+}
+
+DEALLOC = {
+    # From the WIN30-C table
+    'free',
+    'LocalFree',
+    'GlobalFree',
+    'VirtualFree',
+    'VirtualFreeEx',
+    'FreeUserPhysicalPages',
+    'HeapFree',
+}
+
+
+def ids():
+    return ('WIN30-C', 'CPP_M020')
+
+
+def name(id):
+    return {
+        'WIN30-C': '''Published Standards/SEI Cert Standards/C/\
+Properly pair allocation and deallocation functions''',
+        'CPP_M020': '''All Checks/Language Specific/C and C++/Memory Allocation/\
+Properly pair allocation and deallocation functions''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'WIN30-C': [
+            'Memory Allocation',
+            'Language: C',
+            'Language: C++',
+            'Standard: SEI CERT C',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P6',
+            'Level: L2',
+        ],
+        'CPP_M020': [
+            'Memory Allocation',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p><b>Title</b></p>
+<p>Properly pair allocation and deallocation functions</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Mixing allocation and deallocation functions can lead to memory corruption
+issues, or result in accessing out-of-bounds memory.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/c/WIN30-C.+Properly+pair+allocation+and+deallocation+functions'>
+https://wiki.sei.cmu.edu/confluence/display/c/WIN30-C.+Properly+pair+allocation+and+deallocation+functions</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="C++">\
+LPTSTR buf;
+DWORD n = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                        FORMAT_MESSAGE_FROM_SYSTEM |
+                        FORMAT_MESSAGE_IGNORE_INSERTS, 0, GetLastError(),
+                        LANG_USER_DEFAULT, (LPTSTR)&buf, 1024, 0);
+if (n != 0) {
+  /* Format and display the error to the user */
+
+  GlobalFree(buf);
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This check relies on simple expressions, which result in "Assign Ptr"
+references. For functions that return the allocated memory pointer, it assumes
+checks for an assignment with the <code>=</code> operator.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    checkAllocateArguments(check, file)
+    checkAllocateAssignments(check, file)
+
+
+def checkAllocateArguments(check, file):
+    for ref in file.filerefs('Assign Ptr', 'Object, Parameter'):
+        ent = ref.ent()
+
+        # Skip if not used in win32 allocation
+        alloc = ref.scope().parent()
+        if not alloc or alloc.name() not in ARGUMENT_ALLOC_AND_DEALLOC:
+            continue
+
+        goodFreeName = ARGUMENT_ALLOC_AND_DEALLOC[alloc.name()]
+        checkFree(check, ref, goodFreeName)
+
+
+def checkAllocateAssignments(check, file):
+    for ref in file.filerefs('Set', 'Object, Parameter'):
+        ent = ref.ent()
+
+        # Skip if not a pointer/array type
+        if not isPointer(ent):
+            continue
+
+        # Skip if no lexeme: (the variable entity name)
+        lex = file.lexer(False).lexeme(ref.line(), ref.column())
+        if not lex or lex.text() != ent.name():
+            continue
+        # Skip if no lexeme: =
+        lex = lex.next(True, True)
+        if not lex or lex.text() != '=':
+            continue
+        # Skip if no lexeme: (the allocation function name)
+        lex = lex.next(True, True)
+        if not lex or lex.text() not in ASSIGNMENT_ALLOC_AND_DEALLOC:
+            continue
+
+        goodFreeName = ASSIGNMENT_ALLOC_AND_DEALLOC[lex.text()]
+        checkFree(check, ref, goodFreeName)
+
+
+def checkFree(check, ref, goodFreeName):
+    ent = ref.ent()
+
+    # Get good and bad frees
+    goodFree = False
+    badFree = False
+    for otherRef in ent.refs('Assignby Ptr', 'Parameter'):
+        free = otherRef.ent().parent()
+        if not free:
+            continue
+        elif free.name() == goodFreeName:
+            goodFree = True
+        elif free.name() in DEALLOC:
+            badFree = True
+            check.violation(ent, otherRef.file(), otherRef.line(), otherRef.column(), ERR1, free.name(), goodFreeName)
+
+    # Skip if the allocation is properly freed and not improperly freed
+    if goodFree and not badFree:
+        return
+
+    check.violation(ent, ref.file(), ref.line(), ref.column(), ERR2, goodFreeName)
+
+
+def isPointer(ent):
+    # Falses if no type
+    entType = ent.type()
+    if not entType:
+        return False
+
+    # Remove <> from type
+    entTypeList = []
+    angleBrackets = 0
+    for char in entType:
+        if angleBrackets == '<':
+            angleBrackets += 1
+        elif angleBrackets == '>':
+            angleBrackets -= 1
+        elif angleBrackets == 0:
+            entTypeList.append(char)
+    entType = ''.join(entTypeList)
+
+    # False if no pointer symbol in type
+    if not re.search(r'[*[]', entType):
+        return False
+
+    return True

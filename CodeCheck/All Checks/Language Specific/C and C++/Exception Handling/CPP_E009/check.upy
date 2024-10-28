@@ -1,0 +1,129 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Kyle Jackson
+# Rewritten by Robby Bennett
+# 2023-04-11
+
+
+import re
+
+
+ERR1 = 'Function can throw an exception not of the indicated type'
+
+
+def ids():
+    return ('MISRA08_15-5-2', 'CPP_E009')
+
+
+def name(id):
+    return {
+        'MISRA08_15-5-2': '''Published Standards/MISRA-C++ 2008/\
+15-5-2 Exceptions thrown shall be the type indicated by the function''',
+        'CPP_E009': '''All Checks/Language Specific/C and C++/Exception Handling/\
+Exceptions thrown shall be the type indicated by the function''',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'MISRA08_15-5-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Exception Handling',
+        ],
+        'CPP_E009': [
+            'Language: C',
+            'Language: C++',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+def detailed_description():
+    return '''\
+<p>
+Where a function's declaration includes an <i>exception-specification</i>, the
+function shall only be capable of throwing exceptions of the indicated type(s).
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+If a function declared with an <i>exception-specification</i> throws an
+exception of a type not included in the specification, the function
+<i>unexpected()</i> is called. The behaviour of this function can be overridden
+within a <i>project</i>, but by default causes an exception of
+<i>std::bad_exception</i> to be thrown. If <i>std::bad_exception</i> is not
+listed in the <i>exception-specification</i>, then <i>terminate()</i> will be
+called, leading to <i>implementation-defined</i> termination of the program.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">// foo does not have an exception specification, so can propagate
+// exceptions of any type, including int
+void foo ( )
+{
+   throw ( 21 );
+}
+
+// goo specifies that it will only throw exceptions of type Exception.
+// If foo throws an int the function unexpected() is called, which may
+// terminate the program
+void goo ( ) throw ( Exception )
+{
+   foo ( ); // Non-compliant - int is not listed in the
+            // throw specification
+}
+</code></pre>
+'''
+
+
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for define in file.filerefs('Define', 'Function'):
+        function = define.ent()
+
+        # Next unless this function allow exceptions
+        exceptionText = function.freetext('AllowExceptions')
+        if not exceptionText:
+            continue
+
+        # Pull all references that this function calls
+        for call in getCalls(function):
+            called = call.ent()
+            otherException = called.freetext('ThrowExceptions')
+            if otherException == exceptionText:
+                continue
+            check.violation(called, call.file(), call.line(), call.column(), ERR1)
+
+
+# Get all call refs from a function recursively
+def getCalls(function):
+    allCalledSet  = set()
+    allCalledList = []
+    currentLevel  = function.refs('Call')
+
+    for call in currentLevel:
+        if call in allCalledSet:
+            continue
+        called = call.ent()
+        allCalledSet.add(called.id())
+        allCalledList.append(call)
+        currentLevel += called.refs('Call')
+
+    return allCalledList

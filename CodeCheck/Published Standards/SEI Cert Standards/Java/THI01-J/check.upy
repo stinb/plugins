@@ -1,0 +1,136 @@
+# This script is designed to run with Understand - CodeCheck
+# Micah Morgan - 5/3/2022
+
+ERR1 = 'Do not invoke ThreadGroup methods.'
+
+DEF_NAME = "Do not invoke ThreadGroup methods"
+
+# The ID for the check
+def ids():
+    return ('THI01-J', 'JAVA_THI01')
+
+# The short name of the check
+def name(id):
+    return {
+        'THI01-J': "Published Standards/SEI Cert Standards/Java/" + DEF_NAME,
+        'JAVA_THI01': "All Checks/Language Specific/Java/Thread APIs/" + DEF_NAME,
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'THI01-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 25',
+            'Likelihood: Probable',
+            'Remediation Cost: Medium',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_THI01': [
+            'Language: Java',
+            'Thread APIs',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not invoke ThreadGroup methods</p>
+<p><b>Risk Assessment</b></p>
+<p>Use of the ThreadGroup APIs may result in race conditions, memory leaks, and inconsistent object state.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/THI01-J.+Do+not+invoke+ThreadGroup+methods</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">final class HandleRequest implements Runnable {
+  public void run() {
+    // Do something
+  }
+}
+
+public final class NetworkHandler implements Runnable {
+  private static ThreadGroup tg = new ThreadGroup("Chief");
+
+  @Override public void run() {
+    new Thread(tg, new HandleRequest(), "thread1").start();
+    new Thread(tg, new HandleRequest(), "thread2").start();
+    new Thread(tg, new HandleRequest(), "thread3").start();
+  }
+
+  public static void printActiveCount(int point) {
+    System.out.println("Active Threads in Thread Group " + tg.getName() +
+        " at point(" + point + "):" + " " + tg.activeCount());
+  }
+
+}</code></pre>
+<p><b>Developer's Note:</b> The Java Compiler version must be set to 10-18 in order for this check to properly identify ThreadGroup methods.</p>
+"""
+
+def test_entity(file):
+    return file.kind().check('Java File')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+# Options for the check
+def define_options(check):
+    check.option().checkbox("ce", "Check classes that extend ThreadGroup", True)
+    check.option().checkbox("cm", "Check overriding methods", True)
+
+def check(check, file):
+
+    ce = check.option().lookup('ce')
+    cm = check.option().lookup('cm')
+
+    for mRef in file.filerefs("Call","Method ~Constructor"):
+        if "java.lang.ThreadGroup." in mRef.ent().longname():
+            #need to make sure we are checking it if its extend
+            if get_called_by(mRef) and get_called_by(mRef).ent() and get_called_by(mRef).ent().type() != "ThreadGroup":
+                if ce:
+                    pm(ERR1, check, mRef.ent(), mRef.file(), mRef.line(), mRef.column())
+            else:
+                pm(ERR1, check, mRef.ent(), mRef.file(), mRef.line(), mRef.column())
+        if cm and ce:
+            for oRef in mRef.ent().refs("Overrides"):
+                if "java.lang.ThreadGroup." in oRef.ent().longname():
+                    pm(ERR1, check, mRef.ent(), mRef.file(), mRef.line(), mRef.column())
+
+    for cRef in file.filerefs("Create","Class"):
+        if "java.lang.ThreadGroup" == cRef.ent().longname():
+            pm(ERR1, check, cRef.ent(), cRef.file(), cRef.line(), cRef.column())
+        if ce:
+            #extends class
+            for eRef in cRef.ent().refs("Extend"):
+                if eRef.ent().longname() == "java.lang.ThreadGroup":
+                    pm(ERR1, check, cRef.ent(), cRef.file(), cRef.line(), cRef.column())
+
+def get_called_by(ref):
+    lexer = ref.file().lexer()
+    if lexer is None:
+        return None
+
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if lexeme is None:
+        return None
+
+    lexeme = lexeme.previous(True, True) # .
+    if lexeme is None:
+        return None
+
+    lexeme = lexeme.previous(True, True) # caller
+    if lexeme is None:
+        return None
+
+    return lexeme
+
+def pm(s, check, ent = None, file = None, line=-1, col = -1):
+    check.violation(ent, file, line, col, str(s))

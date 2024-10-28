@@ -1,0 +1,140 @@
+import re
+ERR1 = 'Overridable method should not be called in clone().'
+
+
+# The ID for the check
+def ids():
+    return ('MET06-J', 'JAVA_MET06')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MET06-J': 'Published Standards/SEI Cert Standards/Java/Do not invoke overridable methods in clone()',
+        'JAVA_MET06': 'All Checks/Language Specific/Java/Methods/Do not invoke overridable methods in clone()',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'MET06-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: Low',
+            'Priority: P12',
+            'Level: L1',
+        ],
+        'JAVA_MET06': [
+            'Language: Java',
+            'Methods',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not invoke overridable methods in clone()'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not invoke overridable methods in clone()</p>
+<p><b>Risk Assessment</b></p>
+<p>Calling overridable methods on the clone under construction can expose class internals to malicious code or violate class invariants by exposing the clone to trusted code in a partially initialized state, affording the opportunity to corrupt the state of the clone, the object being cloned, or both.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/pages/viewpage.action?pageId=88487921</i></p>
+<p><b>Exceptions</b></p>
+<p><i>MET06-J-EX0: It is permitted to call a superclass's method via super.method(...), since such calls will not be dynamically dispatched to methods defined by a subclass. In fact, calling super.clone() is expected behavior.</i>...</p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">class CloneExample implements Cloneable {
+  HttpCookie[] cookies;
+
+  CloneExample(HttpCookie[] c) {
+    cookies = c;
+  }
+
+  public Object clone() throws CloneNotSupportedException {
+    final CloneExample clone = (CloneExample) super.clone();
+    clone.doSomething(); // Invokes overridable method
+    clone.cookies = clone.deepCopy();
+    return clone;
+  }
+
+  void doSomething() { // Overridable
+    for (int i = 0; i &lt; cookies.length; i++) {
+      cookies[i].setValue("" + i);
+    }
+  }
+
+  HttpCookie[] deepCopy() {
+    if (cookies == null) {
+      throw new NullPointerException();
+    }
+
+    // Deep copy
+    HttpCookie[] cookiesCopy = new HttpCookie[cookies.length];
+
+    for (int i = 0; i &lt; cookies.length; i++) {
+      // Manually create a copy of each element in array
+      cookiesCopy[i] = (HttpCookie) cookies[i].clone();
+    }
+    return cookiesCopy;
+  }
+}
+
+class Sub extends CloneExample {
+  Sub(HttpCookie[] c) {
+    super(c);
+  }
+
+  public Object clone() throws CloneNotSupportedException {
+    final Sub clone = (Sub) super.clone();
+    clone.doSomething();
+    return clone;
+  }
+
+  void doSomething() { // Erroneously executed
+    for (int i = 0;i &lt; cookies.length; i++) {
+      cookies[i].setDomain(i + ".foo.com");
+    }
+  }
+
+  public static void main(String[] args)
+      throws CloneNotSupportedException {
+    HttpCookie[] hc = new HttpCookie[20];
+    for (int i = 0 ; i &lt; hc.length; i++){
+      hc[i] = new HttpCookie("cookie" + i,"" + i);
+    }
+    CloneExample bc = new Sub(hc);
+    bc.clone();
+  }
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'Java'
+
+def check(check, file):
+    for clone_ref in file.filerefs("Overrides", "External Method Member"):
+        #print('1', file.name(), clone_ref.line(), clone_ref.column())
+        if clone_ref.ent().longname() == "java.lang.Object.clone":
+            for call_ref in clone_ref.scope().refs("Call", "Method Member ~External"):
+                if not re.search(r'final|unknown', call_ref.ent().kind().longname().lower()) and not call_ref.ent().ref('Importby'):
+                    typeRef = call_ref.ent().ref('Typed')
+                    if not (typeRef and (re.search(r'final|unknown', typeRef.ent().kind().longname().lower()) or typeRef.ent().ref('Importby'))):
+                        check.violation(call_ref.ent(), file,
+                                        call_ref.line(), call_ref.column(), ERR1)

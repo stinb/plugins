@@ -1,0 +1,138 @@
+import re
+
+
+ERR1 = 'Generic operator declared in a namespace that contain class type, enum type or union type declarations'
+OPERATOR_NAME = r'operator[\+\-\*/%<=>!&\|~\^]{1,2}'
+
+
+# The ID for the check
+def ids():
+    return ('A14-5-3', 'CPP_F048')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A14-5-3': 'Published Standards/AUTOSAR/A non-member generic operator shall only be declared in a namespace that does not contain class (struct) type, enum type or union type declarations',
+        'CPP_F048': 'All Checks/Language Specific/C and C++/Functions/A non-member generic operator shall only be declared in a namespace that does not contain class (struct) type, enum type or union type declarations',
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'A14-5-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Advisory',
+            'Automation: Automated',
+            'Functions'
+        ],
+        'CPP_F048': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>A non-member generic operator shall only be declared in a namespace that
+does not contain class (struct) type, enum type or union type declarations.</p>
+<p><b>Rationale</b></p>
+<p>Argument-dependent lookup (ADL) adds additional associated namespaces to the set
+of scopes searched when lookup is performed for the names of called functions. A
+generic operator found in one of these additional namespaces would be added to
+the overload set and choosen by overload resolution. ADL is complicated by several
+possible use forms for operators (via function calls and via expression, operators can
+be declared as members and as non-members) and lookup in those cases is different,
+which is likely to be inconsistent with developer expectation.</p>
+<p>Generic operator is a non-member operator template that can be called without
+explicit template arguments and has at least one generic parameter. A template type
+parameter T is a generic parameter if, in the function declaration, it has the (possibly
+cv-qualified) form of T, or T & or T &&.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">1 // $Id: A14-5-3.cpp $
+2 #include &lt;cstdint&gt;
+3
+4 template&lt;typename T&gt;
+5 class B
+6 {
+7 public:
+8 bool operator+( long rhs );
+9
+10 void f()
+11 {
+12 *this + 10;
+13 }
+14 };
+15
+16 namespace NS1
+17 {
+18 class A {};
+19
+20 template&lt;typename T&gt;
+21 bool operator+( T, std::int32_t ); // Non-Compliant: a member of namespace
+22 // with other declarations
+23 }
+24
+25 namespace NS2
+26 {
+27 void g();
+28
+29 template&lt;typename T&gt;
+30 bool operator+( T, std::int32_t ); // Compliant: a member of namespace
+31 // with declarations of functions only
+32 }
+33
+34 template class B&lt;NS1::A&gt;; // NS1::operator+ will be used in function B::f()
+35 // instead of B::operator+
+</code></pre>
+<p><b>See also</b></p>
+<p>• MISRA C++ 2008 [7]: M14-5-1: A non-member generic function shall only be
+declared in a namespace that containes only operator declarations.</p>
+"""
+
+
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    if not lexer or not re.search(OPERATOR_NAME, file.contents()):
+        return
+
+    for namespace_ref in file.filerefs("Declare", "Namespace"):
+        data_type = namespace_ref.ent().refs(
+            "Declare, Define", "Class, Enum, Union, Struct")
+
+        for func_ref in namespace_ref.ent().refs("Declare", "Function ~Member"):
+            if re.match(OPERATOR_NAME, func_ref.ent().name()) and data_type:
+                lex = lexer.lexeme(func_ref.line(), func_ref.column())
+
+                while lex and lex.text() != ";":
+                    template_param = lex.ent().kind().check(
+                        "TemplateParameter") if lex.ent() else False
+
+                    if lex.text() == "T" and template_param:
+                        check.violation(func_ref.ent(), file,
+                                        func_ref.line(), func_ref.column(), ERR1)
+
+                    lex = lex.next(ignore_whitespace=True,
+                                   ignore_comments=True)

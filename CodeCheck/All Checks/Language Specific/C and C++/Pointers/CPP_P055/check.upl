@@ -1,0 +1,261 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jordan Colbeth
+# 8-26-2020
+
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'Pointer asterisk is not placed with the variable';
+use constant ERR2 => 'Pointer asterisk is not placed with the type';
+use constant ERR3 => 'Pointer asterisk is not placed between the type and variable';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+  $check->add_tr_text(ERR2);
+  $check->add_tr_text(ERR3);
+}
+
+
+sub checkID { return "CPP_P055";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Pointers\\" .  "For pointer declarations, the placement of the * shall be consistent";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Pointers',
+  );
+}
+
+sub description { return "For pointer declarations, the placement of the * shall be consistent within a module.";}
+
+sub detailed_description { return <<"END_DESC"
+<p><b>Rationale</b></p>
+Mixed placement of the asterisk within a module is not allowed because it hinders readability. Any of the below
+style examples are allowed. You may choose your preferred alignment from the options below, and this check will
+then flag any pointers inconsistent with the chosen style.
+<p><b>Examples</b></p>
+<pre><code language="C++">/* valid pointer asterisk placements (depending on chosen option) */
+  int *myNum = 10; // * placed with variable
+  char* myChar; // * placed with type
+  char * myOtherChar; // * placed between type and variable
+</code></pre>
+</p>
+
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 1;}
+
+sub test_global { return 0;}
+
+# Define configurable options for the check.
+sub define_options{
+  my $check = shift;
+  $check->option->radio_vert("placement", "Place pointer asterisk with: ", ["Variable", "Type", "Centered between type and variable"], "Variable");
+}
+
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("C File ~unknown ~unresolved");
+
+  # grab lexemes from the file
+  my $lexer = $file->lexer;
+  return unless $lexer;
+  my $lexeme = $lexer->first;
+
+  my $violation;
+
+  if ($check->option->lookup("placement") eq "Type") {
+    while ($lexeme){
+      #Yield to GUI interupts
+      $check->yield();
+      return if $check->is_abort();
+
+      if ($lexeme->inactive){
+        # ignore inactive lexemes
+      }
+
+      # search for asterisks where the next lexeme is an identifier, these are potential pointers
+      elsif ($lexeme->text() eq "*" && $lexeme->nextUseful()->token() eq "Identifier" && !($lexeme->nextUseful->ent && $lexeme->nextUseful->ent->kindname =~ /Function/)) {
+
+        # skip lexeme unless its associated ent has a pointer type or is a class (so it will cover class/struct access modifiers)
+        my $nextEnt = $lexeme->nextUseful()->ent();
+        unless ( $nextEnt && ($nextEnt->type() =~ /\*/ || $nextEnt->kind->check('Class') || $nextEnt->kind->check('Struct')
+          || $nextEnt->kind->check('Namespace')) ) {
+          $lexeme = $lexeme->next();
+          next;
+        }
+
+        # assign temporary variable to traverse back to first * in case of multiple *
+        my $tempLexeme = $lexeme;
+        while ($tempLexeme->prevUseful()->text() eq "*") {
+          $tempLexeme = $tempLexeme->prevUseful();
+        }
+        # valid condition = no whitespace between type and *
+        if ( ( $lexeme->next && $lexeme->next->token eq 'Whitespace' ) && ( $tempLexeme->previous && $tempLexeme->previous->token ne 'Whitespace' ) ) {
+          $lexeme = $lexeme->next();
+          next;
+        }
+
+        # flag violation if the previous item is a keyword or typedef, indicating a true pointer
+        if ( $tempLexeme->prevUseful()->token() eq "Keyword" ) {
+          $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR2);
+        } elsif ( $tempLexeme->prevUseful()->ent() ) {
+          my $tempEnt = $tempLexeme->prevUseful()->ent();
+          if ( $tempEnt->kind->check('typedef') ) {
+            $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR2);
+          }
+        }
+        if ($violation){
+          my $prevLex;
+          my $nextLex;
+          if ($lexeme->previous->token() eq "Whitespace") {
+            $prevLex = $lexeme->previous;
+          } else {
+            $prevLex = $lexeme;
+          }
+          if ($lexeme->next->token() eq "Whitespace") {
+            $nextLex = $lexeme->next;
+          } else {
+            $nextLex = $lexeme;
+          }
+          $violation->add_fixit_hint($prevLex->line_begin, $prevLex->column_begin, $nextLex->line_begin, $nextLex->column_begin + length($nextLex->text), "* ");
+        }
+      }
+
+      $lexeme = $lexeme->next();
+    }
+  }
+  elsif ($check->option->lookup("placement") eq "Variable") {
+    while ($lexeme){
+      #Yield to GUI interupts
+      $check->yield();
+      return if $check->is_abort();
+
+      if ($lexeme->inactive){
+        # ignore inactive lexemes
+      }
+
+      # search for asterisks where the next lexeme is an identifier, these are potential pointers
+      elsif ($lexeme->text() eq "*" && $lexeme->nextUseful()->token() eq "Identifier" && !($lexeme->nextUseful->ent && $lexeme->nextUseful->ent->kindname =~ /Function/)) {
+
+        # skip lexeme unless its associated ent has a pointer type or is a class (so it will cover class/struct access modifiers)
+        my $nextEnt = $lexeme->nextUseful()->ent();
+        unless ( $nextEnt && ($nextEnt->type() =~ /\*/ || $nextEnt->kind->check('Class') || $nextEnt->kind->check('Struct')
+          || $nextEnt->kind->check('Namespace')) ) {
+          $lexeme = $lexeme->next();
+          next;
+        }
+
+        # assign temporary variable to traverse back to first * in case of multiple *
+        my $tempLexeme = $lexeme;
+        while ($tempLexeme->prevUseful()->text() eq "*") {
+          $tempLexeme = $tempLexeme->prevUseful();
+        }
+        # valid condition, no whitespace between variable and *
+        if ( ( $lexeme->next && $lexeme->next->token ne 'Whitespace' ) && ( $tempLexeme->previous && $tempLexeme->previous->token eq 'Whitespace' ) ) {
+          $lexeme = $lexeme->next();
+          next;
+        }
+
+        # flag violation if the previous item is a keyword or typedef, indicating a true pointer
+        if ( $tempLexeme->prevUseful()->token() eq "Keyword" ) {
+          $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1);
+        } elsif ( $tempLexeme->prevUseful()->ent() ) {
+          my $tempEnt = $tempLexeme->prevUseful()->ent();
+          if ( $tempEnt->kind->check('typedef') ) {
+            $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR1);
+          }
+        }
+        if ($violation){
+          my $prevLex;
+          my $nextLex;
+          if ($lexeme->previous->token() eq "Whitespace") {
+            $prevLex = $lexeme->previous;
+          } else {
+            $prevLex = $lexeme;
+          }
+          if ($lexeme->next->token() eq "Whitespace") {
+            $nextLex = $lexeme->next;
+          } else {
+            $nextLex = $lexeme;
+          }
+          $violation->add_fixit_hint($prevLex->line_begin, $prevLex->column_begin, $nextLex->line_begin, $nextLex->column_begin + length($nextLex->text), " *");
+        }
+      }
+
+      $lexeme = $lexeme->next();
+    }
+  }
+  elsif ($check->option->lookup("placement") eq "Centered between type and variable") {
+    while ($lexeme){
+      #Yield to GUI interupts
+      $check->yield();
+      return if $check->is_abort();
+
+      if ($lexeme->inactive){
+        # ignore inactive lexemes
+      }
+
+      # search for asterisks where the next lexeme is an identifier, these are potential pointers
+      elsif ($lexeme->text() eq "*" && $lexeme->nextUseful()->token() eq "Identifier" && !($lexeme->nextUseful->ent && $lexeme->nextUseful->ent->kindname =~ /Function/)) {
+
+        # skip lexeme unless its associated ent has a pointer type or is a class (so it will cover class/struct access modifiers)
+        my $nextEnt = $lexeme->nextUseful()->ent();
+        unless ( $nextEnt && ($nextEnt->type() =~ /\*/ || $nextEnt->kind->check('Class') || $nextEnt->kind->check('Struct')
+          || $nextEnt->kind->check('Namespace')) ) {
+          $lexeme = $lexeme->next();
+          next;
+        }
+
+        # assign temporary variable to traverse back to first * in case of multiple *
+        my $tempLexeme = $lexeme;
+        while ($tempLexeme->prevUseful()->text() eq "*") {
+          $tempLexeme = $tempLexeme->prevUseful();
+        }
+        # valid condition = whitespace between both the variable/type and *
+        if ( ( $lexeme->next && $lexeme->next->token eq 'Whitespace' ) && ( $tempLexeme->previous && $tempLexeme->previous->token eq 'Whitespace' ) ) {
+          $lexeme = $lexeme->next();
+          next;
+        }
+
+        # flag violation if the previous item is a keyword or typedef, indicating a true pointer
+        if ( $tempLexeme->prevUseful()->token() eq "Keyword" ) {
+          $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR3);
+        } elsif ( $tempLexeme->prevUseful()->ent() ) {
+          my $tempEnt = $tempLexeme->prevUseful()->ent();
+          if ( $tempEnt->kind->check('typedef') ) {
+            $violation = $check->violation($nextEnt, $file, $lexeme->line_begin, $lexeme->column_begin, ERR3);
+          }
+        }
+        if ($violation){
+          my $prevLex;
+          my $nextLex;
+          if ($lexeme->previous->token() eq "Whitespace") {
+            $prevLex = $lexeme->previous;
+          } else {
+            $prevLex = $lexeme;           }
+          if ($lexeme->next->token() eq "Whitespace") {
+            $nextLex = $lexeme->next;
+          } else {
+            $nextLex = $lexeme;
+          }
+          $violation->add_fixit_hint($prevLex->line_begin, $prevLex->column_begin, $nextLex->line_begin, $nextLex->column_begin + length($nextLex->text), " * ");
+        }
+      }
+
+      $lexeme = $lexeme->next();
+    }
+  }
+}

@@ -1,0 +1,245 @@
+import re
+
+DEF_NAME = "The right hand operand of a logical &&, || operators shall not contain side effects"
+
+# The ID for the check
+def ids():
+    return ('M5-14-1', 'MISRA12_13.5', 'CPP_E052', 'MISRA23_13.5')
+
+# The short name of the check
+def name(id):
+    return {
+        'M5-14-1': """\
+Published Standards/AUTOSAR/""" + DEF_NAME,
+        'MISRA12_13.5': """\
+Published Standards/MISRA C 2012/13.5 The right hand operand of a logical && or\
+ || operator shall not contain persistent side effects""",
+        'CPP_E052': """\
+All Checks/Language Specific/C and C++/Expressions/""" + DEF_NAME,
+        'MISRA23_13.5': """\
+Published Standards/MISRA C 2023/13.5 The right hand operand of a logical && or\
+ || operator shall not contain persistent side effects""",
+    }[id]
+    return ''
+
+
+
+
+
+def tags(id):
+    return {
+        'M5-14-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Expressions',
+        ],
+        'MISRA12_13.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E052': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+        'MISRA23_13.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return DEF_NAME
+
+# The long description of the check
+def detailed_description(id):
+    if id in ['MISRA12_13.5', 'MISRA23_13.5']:
+        return """\
+<p><b>Rationale</b></p>
+<p>The evaluation of the right-hand operand of the && and || operators is
+conditional on the value of the left-handoperand. If the right-hand operand
+contains side eff ects then those side eff ects may or may not occur which may
+be contrary to programmer expectations.</p>
+<p>If evaluation of the right-hand operand would produce side eff ects which are
+not persistent at the point in the program where the expression occurs then it
+does not matter whether the right-hand operand is evaluated or not.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">uint16_t f ( uint16_t y )
+{
+/* These side effects are not persistent as seen by the caller */
+uint16_t temp = y;
+tem p = y + 0x8080U;
+return temp;
+}
+uint16_t h ( uint16_t y )
+{
+static uint16_t temp = 0;
+/* This side effect is persistent */
+temp = y + temp;
+return temp;
+}
+void g ( void )
+{
+/* Compliant - f ( ) has no persistent side effects */
+if ( ishigh && ( a == f ( x ) ) )
+{
+}
+/* Non-compliant - h ( ) has a persistent side effect */
+if ( ishigh && ( a == h ( x ) ) )
+{
+}
+}
+volatile uint16_t v;
+uint16_t x;
+/* Non-compliant - access to volatile v is persistent */
+if ( ( x == 0u ) || ( v == 1u ) )
+{
+}
+/* Non-compliant if fp points to a function with persistent side effects */
+( fp != NULL ) && ( *fp ) ( 0 );
+
+"""
+    return """\
+<p><b>Rationale</b></p>
+<p>There are some situations in C++ where certain parts of expressions may not be evaluated. If these sub-expressions contain side effects then those side effects may or may not occur, depending on the values of other sub expressions.</p>
+<p>The operators which can lead to this problem are && and || where the evaluation of the right-hand operand is conditional on the value of the left-hand operand. The conditional evaluation of the right-hand operand of one of the logical operators can easily cause problems if the developer relies on a side effect occurring.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">if ( ishigh && ( x == i++ ) ) // Non-compliant
+...
+if ( ishigh && ( x == f( x ) ) ) // Only acceptable if f(x) is
+// known to have no side effects
+</code></pre>
+<p>The operations that cause side effects are accessing a volatile object, modifying an object, modifying a file, or calling a function that does any of those operations, which cause changes in the state of the execution environment of the calling function.</p>
+<p><b>See also</b></p>
+<p>Rule 5-2-11</p>
+<p>ISO/IEC 14882:2003 [1] §3.2(2), §5.14, §5.15</p>
+<p><b>Note</b></p>
+<p>Macro functions will be skipped in this check.</p>"""
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('header file,code file')
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+# supporting method - macro validation
+def macro_validation(lex):
+  while lex:
+    if lex.token() == "Punctuation" and lex.text() == ")":
+      return lex
+    elif lex.token() == "Punctuation" and lex.text() == "(":
+      lex = macro_validation(lex.next(ignore_whitespace=True, ignore_comments=True))
+    else:
+      lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+  return lex
+
+# supporting method - return value validation
+def modifyby_return_val(func_lexes, return_ent, line, column):
+  for lex in func_lexes:
+    if lex.token() not in ["Newline","Whitespace","Indent","Dedent"]:
+      if lex.ent() and lex.ent() == return_ent and lex.line_begin() == line and lex.column_begin() == column:
+        return False
+  return True
+
+# supporting method - travel thru func arguments
+def pass_thru_func_args(lex):
+  while lex:
+    if lex.token() == "Punctuation" and lex.text() == ")":
+      return lex
+    elif lex.token() == "Punctuation" and lex.text() == "(":
+      lex = pass_thru_func_args(lex.next(ignore_whitespace=True, ignore_comments=True))
+    else:
+      lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+  return lex
+
+# supporting method - pass thru indexes
+def pass_thru_index(lex):
+  while lex and lex.text() != "]":
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+  return lex
+
+# check all entities (object, function, macros) is modifyby
+def validate_entity(lex, file, check):
+  ent = lex.ent()
+  if ent.kind().check("Object"):
+    # check object entity further
+    if ent.refs("Modifyby"):
+      for modifyby in ent.refs("Modifyby"):
+        # check if entity is same with the current lex and modifyby
+        if modifyby.line() == lex.line_begin() and modifyby.column() == lex.column_begin():
+          check.violation(ent, file, lex.line_begin(), lex.column_begin(), DEF_NAME)
+    # check if object is an array
+    if ent and re.search(r'\[(\d*)\]', str(ent.type())):
+      lex = pass_thru_index(lex)
+    else:
+      lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+  elif ent.kind().check("Function"):
+    # check function entity further
+    if ent.ref("Use Return"):
+      usereturn = ent.ref("Use Return")
+      # check function has return value
+      if usereturn != None:
+        lexer = file.lexer(True, 8, False, False)
+        begin = ent.ref("Begin")
+        if begin:
+          func_lexes = lexer.lexemes(begin.line(), ent.ref("End").line())
+          if usereturn.ent().ref("Modifyby"):
+            for modifyby in usereturn.ent().refs("Modifyby"):
+              if not modifyby_return_val(func_lexes, usereturn.ent(), modifyby.line(), modifyby.column()):
+                check.violation(ent, file, lex.line_begin(), lex.column_begin(), DEF_NAME)
+                break
+          func_lexes.clear()
+        lexer = None
+    # avoids argument ent in validation
+    lex = pass_thru_func_args(lex)
+  elif ent.kind().check("Macro"):
+    lex = macro_validation(lex)
+  else:
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+  return lex
+
+# traverse the whole statement if found
+def traverse_right_hand(lex, file, check, preprocessor):
+  while lex:
+    if lex.token() == "Punctuation" and lex.text() in [")",";"]:
+      return lex
+    elif lex.token() == "Punctuation" and lex.text() == "(":
+      lex = traverse_right_hand(lex.next(ignore_whitespace=True, ignore_comments=True), file, check, preprocessor)
+    elif lex.ent() and not preprocessor:
+      lex = validate_entity(lex, file, check)
+    else:
+      lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+  return lex
+
+def check(check, file):
+  lexer = file.lexer(True, 8, False, False)
+  lex = lexer.first()
+  preprocessor = False
+
+  while lex:
+    if lex.token() == "Preprocessor":
+      preprocessor = True
+    elif preprocessor and lex.token() == "Keyword":
+      preprocessor = False
+
+    if lex.text() in ["&&","||"] and lex.token() == "Operator":
+      lex = traverse_right_hand(lex, file, check, preprocessor)
+    else:
+      lex = lex.next(ignore_whitespace=True, ignore_comments=True)

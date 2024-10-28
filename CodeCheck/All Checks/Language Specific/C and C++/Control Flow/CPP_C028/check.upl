@@ -1,0 +1,140 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant ERR1 => 'Null statement is not on a line by itself. %1';
+use constant PRECEDING => 'Nothing is allowed before the null statement. ';
+use constant NOSPACE => 'There needs to be a space following the null statement. ';
+use constant FOLLOWING =>'Only comments and whitespace are allowed after. ';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+  $check->add_tr_text(PRECEDING);
+  $check->add_tr_text(NOSPACE);
+  $check->add_tr_text(FOLLOWING);
+}
+
+
+sub checkID { return "CPP_C028";}
+
+sub name { return "All Checks\\Language Specific\\C and C++\\Control Flow\\A null statement shall only occur on a line by itself";}
+
+sub tags {
+  return (
+    'Language: C',
+    'Language: C++',
+    'Control Flow',
+  );
+}
+
+sub description { return "A null statement should be standalone on the line, with an optional comment.";}
+
+sub detailed_description { return <<"END_DESC"
+When a null statement is intentionally included, it should be very clear why it is there. It may be followed by whtespace then a comment.
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 1;}
+
+sub test_global { return 0;}
+
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox("allowInfinite","Allow exception for infinte loops - for (;;)",0);
+}
+
+sub check {
+  my $check = shift; 
+  my $file = shift; 
+  return unless $file->kind->check('c file'); 
+  
+  my $lexer = $file->lexer(0);
+  my $lexeme = $lexer->first if $lexer;
+  return unless $lexeme;
+  
+  WALKFILE:while($lexeme){
+     
+    #Yield to GUI interupts
+    $check->yield();
+    return if $check->is_abort();
+    
+    if($lexeme->text eq ";" and $lexeme->token eq "Punctuation"){
+      my $isNull = 1;
+      my $startLex = $lexeme->previous;
+      while ($startLex && !isStatementEnd($startLex)){ 
+        $isNull = 0 unless $startLex->token =~ /Whitespace|Newline|Comment/;
+        $startLex = $startLex->previous;
+      }
+      next WALKFILE unless $isNull;
+      # At this point we know that $lexeme is at a semicolon indicating a null statement
+      my $errorString;
+      $startLex = $lexeme->previous;
+      
+      #Check for non whitespace before the null statement
+      STARTLOOP:while ($startLex && $startLex->token ne "Newline"){
+        if ($startLex->token ne "Whitespace"){
+          $errorString .= PRECEDING;
+          last STARTLOOP;
+        }
+        $startLex = $startLex->previous;
+      }
+      
+      #verify that the character following if any, is a space.
+      if($lexeme && $lexeme->next && $lexeme->next->token !~ /Whitespace|Newline/){
+        $errorString .= NOSPACE;
+      }
+      my $endLex = $lexeme->next;
+       #Check for non whitespace and non-comments after the null statement
+      ENDLOOP:while ($endLex && $endLex->token ne "Newline"){
+        if ($endLex->token !~ /Whitespace|Comment/){
+          $errorString .= FOLLOWING;
+          last ENDLOOP;
+        }
+        $endLex = $endLex->next;
+      }
+      
+      
+      next WALKFILE unless $errorString;
+      if (! $check->option->lookup("allowInfinite")){
+        $check->violation(0,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1,$errorString) ;
+        next WALKFILE;
+      }
+      
+      # Allow exceptions for infinite loops
+      my $lineLex = $lexeme->previous;
+      my $lineText;
+      while ($lineLex && $lineLex->token ne "Newline"){
+        $lineLex = $lineLex->previous;
+      }
+      $lineLex = $lineLex->next if $lineLex;
+      
+      while ($lineLex && $lineLex->token ne "Newline"){
+        $lineText .= $lineLex->text if $lineLex->token ne "Comment";
+        $lineLex = $lineLex->next;
+      }
+      
+      #At this point $lineText should have the contents of the line
+      #Do a regexp text against for(;;)
+      next WALKFILE if $lineText =~ /for\W*\(\W*;\W*;\W*\)/gi;
+
+      $check->violation(0,$file,$lexeme->line_begin,$lexeme->column_begin,ERR1,$errorString) ;
+    }
+  }continue{
+    $lexeme = $lexeme->next;
+  }
+}
+
+#Return true if the lexeme is at a statement end - semicolon ; or open bracket {
+sub isStatementEnd{
+  my $lex = shift;
+  return unless $lex->token =~ /Punctuation/;
+  return unless $lex->text =~ /[;{]/;
+  return 1;  
+}

@@ -1,0 +1,156 @@
+# This script is designed to run with Understand - CodeCheck
+# 8-11-21
+
+
+ERR1 = 'Constexpr specifier should be used for values that can be determined at compile time'
+
+
+# The ID for the check
+def ids():
+    return ('A7-1-2', 'CPP_D047')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'A7-1-2': 'Published Standards/AUTOSAR/The constexpr specifier shall be used for values that can be determined at compile time',
+        'CPP_D047': 'All Checks/Language Specific/C and C++/Declarations and Definitions/The constexpr specifier shall be used for values that can be determined at compile time',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'A7-1-2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Declarations and Definitions',
+        ],
+        'CPP_D047': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Rationale</b></p>
+
+<p>
+The constexpr specifier declares that it is possible to evaluate the value of the function or variable at compile time, e.g. integral type overflow/underflow, configuration options or some physical constants. The compile-time evaluation can have no side effects so it is more reliable than const expressions.
+</p>
+
+<p>
+Note that the constexpr specifier in an object declaration implies const, and when used in a function declaration it implies inline.
+</p>
+
+<p>
+Note also that since 2014 C++ Language Standard constexpr specifier in member function declaration no longer implicitly implies that the member function is const.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">//% $Id: A7-1-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
+#include &lt;cstdint&gt;
+std::int32_t Pow1(std::int32_t number)
+{
+    return (number * number);
+}
+constexpr std::int32_t Pow2(
+    std::int32_t number) // Possible compile-time computing
+                         // because of constexpr specifier
+{
+    return (number * number);
+}
+void Fn()
+{
+    constexpr std::int16_t i1 = 20; // Compliant, evaluated at compile-time
+    const std::int16_t i2 = 20; // Non-compliant, possible run-time evaluation
+    std::int32_t twoSquare =
+        Pow1(2); // Non-compliant, possible run-time evaluation
+    const std::int32_t threeSquare =
+        Pow1(3); // Non-compliant, possible run-time evaluation
+    // static_assert(threeSquare == 9, "pow1(3) did not succeed."); // Value
+    // can not be static_assert-ed
+    constexpr std::int32_t fiveSquare =
+        Pow2(5); // Compliant, evaluated at compile time
+    static_assert(fiveSquare == 25,
+                "pow2(5) did not succeed."); // Compliant, constexpr
+                                             // evaluated at compile time
+    // constexpr std::int32_t int32Max =
+    // std::numeric_limits&lt;std::int32_t&gt;::max() + 1; //
+    // Compliant - compilation error due to
+    // compile-time evaluation (integer overflow)
+}
+class A
+{
+  public:
+    static constexpr double pi = 3.14159265; // Compliant - value of PI can be
+                                             // determined in compile time
+
+    // constexpr double e = 2.71828182; // Non-compliant - constexprs need
+    // to be static members, compilation error
+
+    constexpr A() = default; // Compliant
+};
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+• C++ Core Guidelines [11]: Con.5: Use constexpr for values that can be computed at compile time.
+</p>
+'''
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    for obj_ref in file.filerefs("Set Init", "Object"):
+        modifies = obj_ref.ent().refs( 'Setby ~init, Modifyby, Addr Useby' )
+        if modifies:
+            continue
+        constexpr = False
+        value = obj_ref.ent().value()
+        type_ref = obj_ref.ent().ref("Typed")
+        is_macro = True if obj_ref.ent().freetext("DefinedInMacro") else False
+
+        if is_macro or (type_ref and type_ref.ent().kind().check("Class, Struct")):
+            continue
+
+        if value:
+            lex = lexer.lexeme(obj_ref.line(), 1)
+
+            while lex and (lex.text() != obj_ref.ent().name()):
+                if lex.text() == "constexpr" and lex.token() == "Identifier":
+                    constexpr = True
+
+                lex = lex.next(ignore_whitespace=True,
+                               ignore_comments=True)
+
+            if not constexpr:
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)

@@ -1,0 +1,205 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2023-06-14
+
+
+import re
+
+
+ERR1 = 'Function is longer than %1 lines'
+ERR2 = 'Function has multiple statements on one line'
+ERR3 = 'Function has multiple declarations on one line'
+
+
+def ids():
+    return ('POWER_OF_TEN_04', 'CPP_ST033')
+
+
+def name(id):
+    return {
+        'POWER_OF_TEN_04': '''Published Standards/The Power of 10/\
+4 Short Functions''',
+        'CPP_ST033': '''All Checks/Language Specific/C and C++/Styling/\
+Short Functions''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'POWER_OF_TEN_04': [
+            'Language: C',
+            'Language: C++',
+            'Standard: The Power of Ten',
+            'Styling'
+        ],
+        'CPP_ST033': [
+            'Language: C',
+            'Language: C++',
+            'Styling'
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return '''\
+<p>No function should be longer than what can be printed on a single sheet of
+paper in a standard format with one line per statement and one line per
+declaration. Typically, this means no more than about 60 lines of code per
+function.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Each function should be a logical unit in the code that is understandable and
+verifiable as a unit. It is much harder to understand a logical unit that spans
+multiple pages. Excessively long functions are often a sign of poorly structured
+code.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">static void multiple_declarations(int a, int, b)
+{
+  int c;
+  int d, e; // Violation
+}
+
+static void multiple_statements(int a)
+{
+  if (a &gt; 0) {
+    ;
+  }
+  else if (a &lt; 0) {
+    ;
+  }
+  else { ; } // Violation
+
+  switch (a) {
+    case 1:
+      a *= 2;
+      break;
+    default:
+      a *= 3; break; // Violation
+  }
+
+  for (int i = 0; i &lt; 10; i++);      // Violation
+  for (int i = 0; i &lt; 10; i++) { ; } // Violation
+  for (int i = 0; i &lt; 10; i++)
+    ;
+  for (int i = 0; i &lt; 10; i++)
+    { ; }
+
+  while (a &lt; 20) {
+    a += 3; if (a &lt; 0) // Violation
+      break;
+  }
+
+  do {
+    a += 3;
+    if (a &lt; 0) break; // Violation
+  } while (a &lt; 20);
+}
+</code></pre>
+
+<p><b>Developer's Note</b></p>
+
+<p>The ubiquitous else-if statement is an allowed exception for multiple
+statements on one line.</p>
+
+<p>Because the focus of this rule is on functions, only objects in functions are
+checked for multiple declarations on one line. Parameters are allowed
+exceptions.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().integer('maxLines', 'Maximum lines per function', 60)
+
+
+def check(check, file):
+    maxLines = check.options().lookup('maxLines')
+    maxNewLineChars = maxLines - 1
+
+    for ref in file.filerefs('Define', 'Function', True):
+        ent = ref.ent()
+
+        # Violation if function is too long
+        if ent.contents().count('\n') > maxNewLineChars:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1, maxLines)
+
+        # Violation for each line with multiple statements
+        for line in getMultipleStatements(ent):
+            check.violation(ent, file, line, -1, ERR2)
+
+        # Violation for each line with multiple declarations
+        for line in getMultipleDeclarations(ent):
+            check.violation(ent, file, line, -1, ERR3)
+
+
+def getMultipleStatements(ent):
+    usedLines = dict()
+    crowdedLinesSet = set()
+    crowdedLinesList = []
+
+    # Stop if no control flow graph, like lambda functions
+    cfg = ent.control_flow_graph()
+    if not cfg:
+        return []
+
+    for node in cfg.nodes():
+        # Skip nodes without location, like start and end
+        if not node.line_begin():
+            continue
+
+        # Skip implicit nodes, like end-loop
+        if re.match(r'end-', node.kind()):
+            continue
+
+        # Each unique line
+        for line in range(node.line_begin(), node.line_end() + 1):
+            # Line is new
+            lineIsNew = False
+            if line not in usedLines:
+                lineIsNew = True
+                usedLines[line] = set()
+            # Skip 'else if'
+            kindsOnThisLine = usedLines[line]
+            if 'else' in kindsOnThisLine and node.kind() == 'if':
+                if len(kindsOnThisLine) == 1:
+                    continue
+            # Node kind is new to this line
+            if node.kind() not in kindsOnThisLine:
+                kindsOnThisLine.add(node.kind())
+            # Line is repeated for the first time
+            if not lineIsNew and line not in crowdedLinesSet:
+                crowdedLinesSet.add(line)
+                crowdedLinesList.append(line)
+
+    return crowdedLinesList
+
+
+def getMultipleDeclarations(ent):
+    usedLines = set()
+    crowdedLinesSet = set()
+    crowdedLinesList = []
+
+    for ref in ent.refs('Declare, Define', 'Object', True):
+        # Line is new
+        if ref.line() not in usedLines:
+            usedLines.add(ref.line())
+        # Line is repeated for the first time
+        elif ref.line() not in crowdedLinesSet:
+            crowdedLinesSet.add(ref.line())
+            crowdedLinesList.append(ref.line())
+
+    return crowdedLinesList

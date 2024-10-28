@@ -1,0 +1,199 @@
+ERR1 = 'Do not use the default serialized form for classes with implementation-defined invariants.'
+
+
+# The ID for the check
+def ids():
+    return ('SER07-J', 'JAVA_SER07')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'SER07-J': 'Published Standards/SEI Cert Standards/Java/Do not use the default serialized form for classes with implementation-defined invariants',
+        'JAVA_SER07': 'All Checks/Language Specific/Java/Serialization/Do not use the default serialized form for classes with implementation-defined invariants',
+    }[id]
+
+
+
+
+
+def tags(id):
+    return {
+        'SER07-J': [
+            'Language: Java',
+            'Standard: SEI CERT Java',
+            'Severity: 50',
+            'Likelihood: Probable',
+            'Remediation Cost: High',
+            'Priority: P4',
+            'Level: L3',
+        ],
+        'JAVA_SER07': [
+            'Language: Java',
+            'Serialization',
+        ],
+    }.get(id)
+
+# The short description of the check
+def description():
+    return 'Do not use the default serialized form for classes with implementation-defined invariants'
+
+
+# The long description of the check
+def detailed_description():
+    return """
+<p>Do not use the default serialized form for classes with implementation-defined invariants</p>
+<p><b>Risk Assessment</b></p>
+<p>Using the default serialized form for any class with implementation-defined invariants may result in the malicious tampering of class invariants.</p>
+<p>For the full standard: <i>https://wiki.sei.cmu.edu/confluence/display/java/SER07-J.+Do+not+use+the+default+serialized+form+for+classes+with+implementation-defined+invariants</i></p>
+<p><b>Noncompliant Code Example</b></p>
+<pre><code language="Java">public class NumberData extends Number {
+  // ... Implement abstract Number methods, like Number.doubleValue()...
+
+  private static final NumberData INSTANCE = new NumberData ();
+  public static NumberData getInstance() {
+    return INSTANCE;
+  }
+
+  private NumberData() {
+    // Perform security checks and parameter validation
+  }
+
+  protected int printData() {
+    int data = 1000;
+    // Print data
+    return data;
+  }
+}
+
+class Malicious {
+  public static void main(String[] args) {
+    NumberData sc = (NumberData) deepCopy(NumberData.getInstance());
+    // Prints false; indicates new instance
+    System.out.println(sc == NumberData.getInstance());
+    System.out.println("Balance = " + sc.printData());
+  }
+
+  // This method should not be used in production code
+  public static Object deepCopy(Object obj) {
+    try {
+      ByteArrayOutputStream bos = new ByteArrayOutputStream();
+      new ObjectOutputStream(bos).writeObject(obj);
+      ByteArrayInputStream bin =
+          new ByteArrayInputStream(bos.toByteArray());
+      return new ObjectInputStream(bin).readObject();
+    } catch (Exception e) {
+      throw new IllegalArgumentException(e);
+    }
+  }
+}
+
+
+public class Lottery implements Serializable {
+  private int ticket = 1;
+  private SecureRandom draw = new SecureRandom();
+
+  public Lottery(int ticket) {
+    this.ticket = (int) (Math.abs(ticket % 20000) + 1);
+  }
+
+  public int getTicket() {
+    return this.ticket;
+  }
+
+  public int roll() {
+    this.ticket = (int) ((Math.abs(draw.nextInt()) % 20000) + 1);
+    return this.ticket;
+  }
+
+  public static void main(String[] args) {
+    Lottery l = new Lottery(2);
+    for (int i = 0; i &lt; 10; i++) {
+      l.roll();
+      System.out.println(l.getTicket());
+    }
+  }
+
+  private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+    in.defaultReadObject();
+  }
+}
+
+
+public class AtomicReferenceArray&lt;E&gt; implements java.io.Serializable {
+  private static final long serialVersionUID = -6209656149925076980L;
+
+  // Rest of class...
+  // No readObject() method, relies on default readObject
+}
+</code></pre>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('java file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Java'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class ~Anonymous"):
+        is_serializable = False
+        is_singleton = False
+        has_readresolve = False
+        has_readobject = False
+        instance_ctr = 0
+        varset_refs_cons = []  # ent ids of member variable set in constructor
+        varset_refs_readobj = []  # ent ids of member variable set in readobj
+
+        for imp_ref in class_ref.ent().refs("Implement Couple"):
+            if imp_ref.ent().name() == "Serializable":
+                is_serializable = True
+
+        for ext_ref in class_ref.ent().refs("~Implicit Extend Couple"):
+            for imp_ref in ext_ref.ent().refs("Implement Couple"):
+                if imp_ref.ent().name() == "Serializable":
+                    is_serializable = True
+
+        if not is_serializable:
+            continue
+
+        for var_ref in class_ref.ent().refs("Define", "Private Static"):
+            var_type = var_ref.ent().type()
+
+            if var_type and var_type == class_ref.ent().name():
+                instance_ctr += 1
+
+        if instance_ctr == 1:
+            is_singleton = True
+
+        for meth_ref in class_ref.ent().refs("Define", "Method Member"):
+            if meth_ref.ent().name() == "readResolve":
+                has_readresolve = True
+            elif meth_ref.ent().name() == "readObject":
+                has_readobject = True
+
+                for mem_ref in meth_ref.ent().refs("Set", "Member Variable"):
+                    varset_refs_readobj.append(mem_ref.ent().id())
+            elif meth_ref.ent().name() == class_ref.ent().name():
+                for mem_ref in meth_ref.ent().refs("Set", "Member Variable"):
+                    mem_type = mem_ref.ent().type()
+
+                    if "transient" not in mem_type:
+                        varset_refs_cons.append(mem_ref.ent().id())
+
+        for varset in varset_refs_cons:
+            if varset not in varset_refs_readobj:
+                # readobject is invalid
+                has_readobject = False
+
+        if (is_serializable and is_singleton and not has_readresolve) or (is_serializable and not is_singleton and not has_readobject):
+            check.violation(class_ref.ent(), file,
+                            class_ref.line(), class_ref.column(), ERR1)
