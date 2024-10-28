@@ -36,18 +36,12 @@ sub support_progress { return 1; }
 
 # Indicate this report supports the cancel button.
 sub support_abort { return 1; }
-our $abort_called;
 our %lexers;
 
-# This function is called when the cancel button is clicked
-sub abort{
-  $abort_called=1;
-}
 
 # Initialization code will be called once, per external report object.
 sub init {
   my $report = shift;
-  $abort_called=0; #reset the cancel flag in case it was set on another run
   %lexers = ();
   $report->option->integer("minline","Minimum # lines to match",3);
   $report->option->integer("minchar","Minimum # characters to match",20);
@@ -60,7 +54,9 @@ sub init {
 sub generate {
   my $report = shift;
   my @matches = createInitialMatches($report,0,90);
+  return if $report->is_aborted();
   @matches = removeDuplicates($report,90,10,@matches);
+  return if $report->is_aborted();
 
   my $dupLines = 0;
   foreach my $match (@matches){
@@ -72,8 +68,8 @@ sub generate {
   close(FILE);
   $report->print("\n$dupLines lines of duplicate code found\n") if $dupLines;
   $report->print("\nNo Duplicated code found\n") unless $dupLines;
-  print("\n"); #Make sure to end with a new line, or the last line may not display  
-   
+  print("\n"); #Make sure to end with a new line, or the last line may not display
+
 }
 
 #*************************************
@@ -103,10 +99,11 @@ sub createInitialMatches{
     if ($linenum % 100 == 0){
       my $percent = int((($currentLine + $linenum) / $report->db->metric("CountLine")) * $totalPercentage)+ $initPercent;
       updatePercentage($report,$percent,"Initial Match Identification") ;
+      return if $report->is_aborted();
     }
     $currentLine += $file->metric("CountLine");
     foreach (@lines){$_ =~ s/^\s*|\s*$//g;}
-    
+
     for(my $i=0;$i<$#lines-($minline);$i++){
       my $line = $lines[$i];
       next unless $line;
@@ -118,24 +115,24 @@ sub createInitialMatches{
         $initialMatches{$line} = new Match($line, $minline) unless $initialMatches{$line};
         $initialMatches{$line}->addLoc($file, $i);
       }
-    }                                 
+    }
   }
   my @tempArray;
   foreach(values %initialMatches){
     next unless $_->getLocCount > 1 && $_->addLexemes();
     $_->fillUp($report);
     push @tempArray, $_ ;
-  }  
-   
+  }
+
   foreach(@tempArray){
     #$_->print($report);
   }
   #$report->tree(0);
   #$report->print("\n\n--- Finish initial Matches ---\n\n");
-  
+
   return @tempArray;
-  
-  
+
+
 }
 
 sub removeDuplicates{
@@ -145,16 +142,17 @@ sub removeDuplicates{
   my $minline = $report->option->lookup("minline");
   my $minchar = $report->option->lookup("minchar");
   my $counter = 0;
-  
+
   # Cycle through each match object and create a list of visited locations
   # If a location has already been reported in a specific match add
   foreach my $match (sort{$b->getNumLines() <=> $a->getNumLines();} @matches){
-  
+
     #Update status bar
     my $percent = int(($counter++/ $#matches) * $totalPercentage)+$initPercent if $#matches;
     updatePercentage($report,$percent,"Removing Duplicates") ;
-    
-    
+    return if $report->is_aborted();
+
+
     my $i = 0;
     LOC:while($i<$match->getLocCount){
       next LOC if $match->removeDuplicateLocations(\%dupList,$i);
@@ -167,10 +165,10 @@ sub removeDuplicates{
     }
     push @finalList, $match if ($match->getLocCount()>1);
   }
-  
+
   return @finalList;
 }
- 
+
 sub updatePercentage{
   my ($report,$percent,$message) = @_;
   $report->progress($percent,$message);
@@ -204,7 +202,7 @@ sub validToken{
 package Match;
 sub new{
   my ($class,$text, $numLines) = @_;
-  my $self = bless { 
+  my $self = bless {
     _fileList => [],
     _lineList => [],
     _lexList => [],
@@ -270,7 +268,7 @@ sub fillUp{
   my $ignoreComments = $report->option->lookup("ignoreComments");
   my @lexArray; #used to keep track of the current location in each location
   my @endArray; #keep track of the last matching lexeme in each location
-  
+
   @lexArray = @{$self->{_lexList}};
   my $textmatched = 1;
     STEP:while ($textmatched){
@@ -285,11 +283,11 @@ sub fillUp{
       map {$textmatched=0 if ! $_ || !$lexArray[0] || $_->text() ne $lexArray[0]->text();} @lexArray;
     }
     #At this point endArray is on the last matching lexeme in each file location, @lexArray is undef
-    
+
     #Get the actual text from the first file
     my $lex =  @{$self->{_lexList}}[0];
     my $text;
-    while ($lex && ! ($lex->line_begin eq $endArray[0]->line_begin 
+    while ($lex && ! ($lex->line_begin eq $endArray[0]->line_begin
                 && $lex->column_begin eq $endArray[0]->column_begin)){
       $text .= $lex->text unless $lex->token eq "Comment" && $ignoreComments;
       $lex=$lex->next;
