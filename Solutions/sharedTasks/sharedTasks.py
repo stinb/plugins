@@ -18,8 +18,7 @@ class Option:
 
 
 # Ref kinds and ent kinds
-FUN_REF_KINDS = 'Call, Use Ptr'
-FUN_ENT_KINDS = 'Function ~Unknown ~Unresolved, Method ~Unknown ~Unresolved, Procedure ~Unknown ~Unresolved'
+FUN_REF_KINDS = 'Call, Assign FunctionPtr'
 OBJ_ENT_KINDS = 'Object'
 OBJ_REF_KINDS = 'Modify, Set, Use'
 
@@ -50,6 +49,14 @@ COMMON_OPTIONS = (
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
     Option(REFERENCE, 'Reference', ['All', 'Simple'], 'All'),
 )
+
+
+def checkIsCallable(ent: Ent) -> bool:
+    if ent.kind().check('Function, Procedure, Subroutine, Method'):
+        return True
+    if ent.ref('Callby, Assignby FunctionPtr'):
+        return True
+    return False
 
 
 def refComparator(a: Ref, b: Ref) -> int:
@@ -110,7 +117,7 @@ def getFnOrObjRefs(
         enableDisableFunctions: dict,
         options: dict[str, str | bool] | None = None) -> list[Ref]:
 
-    refs = function.refs(FUN_REF_KINDS, 'Function')
+    refs = function.refs(FUN_REF_KINDS)
     refs += globalObjRefs(function, options)
     for ref in function.refs('Use', 'Macro'):
         if ref.ent() in enableDisableFunctions:
@@ -303,7 +310,7 @@ def getEdgeInfo(
         outgoing[scope].add(edgeKey)
 
     # Function calls
-    for call in fun.refs(FUN_REF_KINDS, FUN_ENT_KINDS, True):
+    for call in fun.refs(FUN_REF_KINDS, '~Unknown ~Unresolved', True):
         if options[REFERENCE] == 'All':
             scope = call.scope()
             ent = call.ent()
@@ -425,7 +432,7 @@ def parseArch(arch: Arch) -> (dict, dict, set[str]):
             for fieldGroup in group.children():
                 # Tasks
                 for ent in fieldGroup.ents(True):
-                    if not ent.kind().check(FUN_ENT_KINDS):
+                    if not checkIsCallable(ent):
                         continue
                     if ent not in tasks:
                       tasks[ent] = dict()
@@ -433,7 +440,7 @@ def parseArch(arch: Arch) -> (dict, dict, set[str]):
 
             # Tasks
             for ent in group.ents(False):
-                if ent in tasks or not ent.kind().check(FUN_ENT_KINDS):
+                if ent in tasks or not checkIsCallable(ent):
                     continue
                 tasks[ent] = dict()
     return (tasks, enableDisableFunctions, foundFields)
@@ -485,7 +492,9 @@ def findInterruptDisabledRefs(
     interruptDisabledRefs = set() # { str(ref), ... }
 
     # See which refs are interrupt-protected
-    for fun in db.ents(FUN_ENT_KINDS):
+    for fun in db.ents():
+        if not checkIsCallable(fun):
+            continue
         checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
     return interruptDisabledRefs
