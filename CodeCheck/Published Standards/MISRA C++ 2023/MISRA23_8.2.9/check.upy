@@ -1,0 +1,130 @@
+ERR1 = "The operand to typeid shall not be an expression of polymorphic class type"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_8.2.9')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_8.2.9': 'Published Standards/MISRA C++ 2023/8.2.9 The operand to typeid shall not be an expression of polymorphic class type'
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_8.2.9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_8.2.9': """
+<p><b>Amplification</b></p>
+<p>This rule does not apply to typeid( type-id ).</p>
+<pre><code language="C++">std::type_info const & type { typeid( std::iostream ) }; // Rule does not apply</code></pre>
+
+<p><b>Rationale</b></p>
+<p>An expression of polymorphic class type used as the operand to typeid may or may not be evaluated at runtime. It is therefore unclear if potential side effects within the expression will or will not occur.</p>
+<p>Additionally, typeid could throw a std::bad_typeid exception, but this will only happen if the operand has polymorphic class type.</p>
+<p>Note: this rule applies even when there is no runtime evaluation.</p>
+
+<pre><code language="C++">#include &lt;typeinfo&gt;
+struct S { }; // Non-polymorphic
+struct P { virtual void foo() {} }; // Polymorphic
+const std::type_info & foo( S * s )
+{
+ return typeid( *s ); // Compliant
+}
+const std::type_info & foo( P * p )
+{
+ return typeid( *p ); // Non-compliant
+}
+const std::type_info & foo( P p )
+{
+ return typeid( p ); // Non-compliant
+}
+const std::type_info & bar( P * p )
+{
+ return typeid( p-&gt;foo() ); // Compliant - type is always 'void'
+}
+}</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if "typeid" not in file.contents():
+        return
+
+    lex = file.lexer().first()
+
+    while lex:
+        if lex.text() != 'typeid':
+            lex = lex.next(True, True)
+            continue
+
+        lex = lex.next(True, True)
+
+        if lex.text() != "(":
+            lex = lex.next(True, True)
+            continue
+
+        on_typeid = 0
+
+        while lex:
+            if lex.text() == "(":
+                on_typeid += 1
+            elif lex.text() == ")":
+                on_typeid -= 1
+
+                if not on_typeid:
+                    break
+            elif (on_typeid == 1) and lex.ent() and lex.next().text() not in ["->", "."]:
+                lex_ent, _ = get_ent_type(lex.ent())
+
+                if lex_ent and lex_ent.kind().check("Class, Struct"):
+                    def_ref = lex_ent.ref("Define, Definein")
+
+                    if def_ref.scope().ref("Declare, Define", "Virtual Function"):
+                        check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+            lex = lex.next(True, True)
+
+               
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
