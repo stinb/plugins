@@ -56,7 +56,7 @@ This is what it will look look like in Python:
 3. Now modify the check subroutine to include the regular expression check and to signal a CodeCheck violation reporting the problem. Add this code at the end of the "check" function (make sure you have 'import re' at the top of the file):
 ```
   if re.search("^[a-zA-Z]", file.name()):
-      check.violation(file, file, -1, -1,"File name does not begin with a letter")
+      check.violation(file, file, 1, 1,"File name does not begin with a letter")
 ```
 4. The last step is to verify that the python syntax is correct. The easiest way to do this is to open a command line and run the appropriate python application that ships with Understand: 
 ```
