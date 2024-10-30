@@ -1,0 +1,129 @@
+ERR1 = "Variable '%1' should be initialized"
+
+
+def ids():
+    return ('MISRA23_11.6.1')
+ 
+
+def name(id):
+    return {
+        'MISRA23_11.6.1': 'Published Standards/MISRA C++ 2023/11.6.1 All variables should be initialized'
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_11.6.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Variables',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_11.6.1': """
+<p><b>Amplification</b></p>
+<p>All variables should either be explicitly or implicitly initialized.</p>
+<p>Apart from the following, all variables should be explicitly initialized with an associated initializer in
+their definition:</p>
+<p>1. Variables of class type, or</p>
+<p>2. Function parameters (which are initialized with the corresponding argument value), or</p>
+<p>3. Variables with static storage duration (which are zero-initialized by default).</p>
+
+<p><b>Rationale</b></p>
+<p>Having several states within a program increases the risk of defects being introduced. Each variable
+that is first uninitialized, then set to a value creates two program states. It is therefore better to initialize
+the variable directly to a value that is to be used. The intent of this rule is not that each variable is
+initialized with some value, but that it is initialized with its real value; the one that will be used when
+the variable is next read.</p>
+<p>In order to achieve this, the variable definition can be delayed until the “right” value is available. This
+naturally leads to reducing the variable’s scope, reducing the risk of the variable being used
+inappropriately. An immediately evaluated lambda can be used to compute a value when a variable’s
+initialization is more complex.</p>
+<p>In many cases, initializing the variable within its definition allows it to be a constant definition.</p>
+<p>Note: there are many ways to explicitly initialize a variable. When possible, the list-initialization syntax
+(with curly braces) should be used as it does not suffer from the issues that arise from the use of other
+syntactic forms (e.g. narrowing or declaring a function while trying to define a variable, also known as
+“the most vexing parse”).</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f( bool cond )
+{
+ int32_t i; // Non-compliant
+
+ if ( cond ) { i = 42; }
+ else { i = -1; }
+
+ int32_t j = cond ? 42 : -1; // Compliant
+ int32_t k = [&]() // Compliant
+ {
+ if ( cond ) { return 42; }
+ else { return -1; }
+ }();
+
+ string s; // Compliant - default-initialized
+}
+
+int32_t g; // Compliant - static initialization applies
+
+void f()
+{
+ thread_local int32_t i; // Compliant - static initialization applies
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 15.1.4</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):    
+    for def_ref in file.filerefs("Define", "Object ~Global ~Static"):
+        if def_ref.ent().ref("Setby Init"):
+            continue
+
+        ent, _ = get_ent_type(def_ref.ent())
+        
+        if ent and ent.kind().check("Class, Struct"):
+            continue
+
+        lex = file.lexer(lookup_ents=False).lexeme(def_ref.line(), def_ref.column())
+        compliant = False
+
+        while lex and (lex.line_begin() == def_ref.line()):
+            if lex.text() == "thread_local":
+                compliant = True
+                break
+
+            lex = lex.previous(True, True)
+
+        if compliant:
+            continue
+
+        check.violation(def_ref.ent(), file, def_ref.line(), def_ref.column(), ERR1, def_ref.ent().name())
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
