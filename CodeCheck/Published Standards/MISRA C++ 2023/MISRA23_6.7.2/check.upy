@@ -1,0 +1,139 @@
+ERR1 = 'Global variables shall not be used'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_6.7.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_6.7.2': "Published Standards/MISRA C++ 2023/6.7.2 Global variables shall not be used"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_6.7.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Variables',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_6.7.2': """
+<p><b>Amplification</b></p>
+<p>Global variables are:</p>
+<p>1. Variables defined in namespace scope; and</p>
+<p>2. Class static data members.</p>
+<p>This rule does not apply to global variables that are:</p>
+<p>1. constexpr; or</p>
+<p>2. const and that are initialized through static initialization.</p>
+
+<p><b>Rationale</b></p>
+<p>Global variables can be accessed and modified from:</p>
+<p>● Anywhere within the translation unit, if they have internal linkage; or</p>
+<p>● Anywhere within the program, if they have external linkage.</p>
+<p>This can lead to uncontrollable interactions between functions, with the risk of undefined behaviour
+occurring due to data races in concurrent programs.</p>
+<p>Additionally, certain aspects of the order of initialization of global variables are unspecified. This can lead
+to unpredictable results for global variables that are initialized at run-time (dynamic initialization).</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">int32_t foo();
+
+int32_t i1 { foo() }; // Non-compliant
+const int32_t i2 { i1 }; // Non-compliant - dynamic initialization
+
+namespace
+{
+ int32_t i3 { 0 }; // Non-compliant
+ constexpr int32_t bar()
+ {
+ return 42;
+ }
+ constexpr int32_t i4 { bar() }; // Rule does not apply - constexpr
+ const int32_t SIZE { 100 }; // Rule does not apply
+} // - const without dynamic initialization
+
+struct ComplexInit
+{
+ ComplexInit();
+};
+
+const ComplexInit c1 {}; // Non-compliant - dynamic initialization
+
+class StaticMember
+{
+ int32_t x; // Rule does not apply
+ static int32_t numInstances;
+};
+
+int32_t StaticMember::numInstances = 0; // Non-compliant
+constexpr auto add = // Rule does not apply - add is const
+ []( auto x, auto y ) { return x + y; };</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 6.7.1</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    global_refs = file.filerefs("Define", "Global Object")
+
+    for class_ref in file.filerefs("Define", "Class, Struct"):
+        global_refs.extend(class_ref.ent().refs("Define", "Static Member"))
+    
+    for ref in global_refs:
+        if ref.ent().freetext("DefinedInMacro"):
+            continue
+        
+        lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+        compliant = False
+
+        while lex and (lex.line_begin() == ref.line()):
+            if lex.text() == "constexpr":
+                compliant = True
+                break
+            elif lex.text() == "const":
+                compliant = True
+
+                for ass_ref in ref.ent().refs("Assign Value"):
+                    # dynamic initialization
+                    if ass_ref.line() == ref.line():
+                        compliant = False
+
+                break
+
+            lex = lex.previous(True, True)
+
+        if not compliant:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+        
+            
+
+
+            
