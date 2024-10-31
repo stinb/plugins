@@ -1,0 +1,150 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10/24/24
+
+import re
+import Modules
+
+ERR1 = 'Initializer list contains side effects'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_13.1', 'MISRA23_13.1', 'CPP_E082')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_13.1': 'Published Standards/MISRA C 2012/' + """\
+13.1 Initializer lists shall not contain persistent side effects""",
+        'MISRA23_13.1': 'Published Standards/MISRA C 2023/' + """\
+13.1 Initializer lists shall not contain persistent side effects""",
+        'CPP_E082': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+Initializer lists shall not contain persistent side effects""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_13.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_13.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E082': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Rationale</b></p>
+<p>C90 constrains the initializers for automatic objects with aggregate types to
+contain only constant expressions. However, C99 permits automatic aggregate
+initializers to contain expressions that are evaluated at run-time. It also
+permits compound literals which behave as anonymous initialized objects. The
+order in which side effects occur during evaluation of the expressions in an
+initializer list is unspecified and the behaviour of the initialization is
+therefore unpredictable if those side effects are persistent.</p>
+<pre><code language="C++">uint8_t *PORTA = ( uint8_t * ) 0x0002; /* Non-compliant */
+uint16_t *p;
+int32_t addr = ( in t32_t ) &p; /* Non-compliant */
+uint8_t *q = ( uint8_t * ) addr; /* Non-compliant */
+bool_t b = ( bool_t ) p; /* Non-compliant */
+enum etag { A, B } e = ( enum etag ) p; /* Non-compliant */</pre></code>
+"""
+    return {
+        'MISRA12_13.1': desc,
+        'MISRA23_13.1': desc,
+        'CPP_E082': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    operators = r'=|\+\+|\-\-'
+    lexer = None
+    seen = []
+    refs = file.filerefs('Define, Assignby', 'Object, Parameter')
+    for ref in refs:
+        if not re.search(r'\[.*\]', str(ref.ent().type())) or ref.line() in seen:
+            continue
+        ok = True
+        if ref.kind().check('Assignby'):
+            # Check for function call
+            if ref.scope().kind().check('Function'):
+                ok = False
+            # Check if volatile variable
+            elif 'volatile' in str(ref.scope().type()):
+                ok = False
+            else:
+                if not lexer:
+                    if not file.lexer():
+                        return
+                    lexer = file.lexer()
+                lexeme = lexer.lexeme(ref.line(), ref.column())
+                nextLex = lexeme.next(True, True)
+                prevLex = lexeme.previous(True, True)
+                if nextLex and re.search(operators, nextLex.text()) and not re.search(r'<|>|==', nextLex.text()):
+                    # Make sure that its in a initializer list
+                    while nextLex and not re.search(r';|}', nextLex.text()):
+                        nextLex = nextLex.next(True, True)
+                    if nextLex and nextLex.text() == '}':
+                        ok = False
+                elif prevLex and re.search(r'\+\+|\-\-', prevLex.text()):
+                    ok = False
+
+        else:
+            if re.search(operators, str(ref.ent().value())):
+                if not lexer:
+                    if not file.lexer():
+                        return
+                    lexer = file.lexer()
+
+                lexeme = lexer.lexeme(ref.line(), ref.column())
+                # Find = sign
+                while lexeme and not re.match(r'=|;', lexeme.text()):
+                    lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '=':
+                    # Find { of initializer list
+                    while lexeme and not re.match(r'{|;|}', lexeme.text()):
+                        prevLex = lexeme
+                        lexeme = lexeme.next(True, True)
+                    if lexeme and lexeme.text() == '{':
+                        close = Modules.findClose(lexeme)
+                        # Check for strings or comparisons
+                        while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                            if re.search(operators, lexeme.text()):
+                                if not re.search(r'\'|"', prevLex.text()):
+                                    if re.search(operators, lexeme.text()) and not re.search(r'<|>|==', lexeme.text()):
+                                        ok = False
+                                        break
+
+                            lexeme = lexeme.next(True, True)
+        if not ok:
+            seen.append(ref.line())
+            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
