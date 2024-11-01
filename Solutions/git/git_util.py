@@ -151,10 +151,10 @@ def targetAuthorCounts(plugin, target):
 
 def cache_vals(cacheKey, und_cache, file):
   if isinstance(cacheKey, str):
-    return und_cache.value(key=cacheKey, file = file, value=[])
+    return und_cache.value(key=cacheKey, ent=file, value=[])
   lists = []
   for key in cacheKey:
-    lists.append(und_cache.value(key=key, file = file, value=[]))
+    lists.append(und_cache.value(key=key, ent=file, value=[]))
   return tuple(zip(*lists))
 
 def targetGitValues(plugin, target, cacheKey, logKey):
