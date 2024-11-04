@@ -13,12 +13,12 @@ void f1(std::string q)
 {
     std::string s{q}; // Rule does not apply - not function call syntax
     s = q;            // Rule does not apply - not function call syntax
-    s.operator=(q);   // UndCC_Violation(1)
+    s.operator=(q);   // UndCC_Violation
 }
 void f2(std::function<int()> &f)
 {
-    f(); // UndCC_Violation(1) - using function call syntax
+    f(); // UndCC_FalseNeg - using function call syntax
     auto a = []()
     { return 10; };
-    a(); // UndCC_Violation(1) - using function call syntax
+    a(); // UndCC_FalseNeg - using function call syntax
 }
