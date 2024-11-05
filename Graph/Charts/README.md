@@ -27,7 +27,7 @@ def draw(graph, target):
     n.set("fillcolor", color)
 ```
 
-<img width="171" alt="image" src="https://github.com/user-attachments/assets/8216b431-58d4-4cd7-99d9-b8e5306e2ea9">
+<img width="171" alt="image" src=".doc/8216b431-58d4-4cd7-99d9-b8e5306e2ea9.png">
 
 ## Donut Chart
 To change this chart into a donut chart, use the "r1" attribute. The "r0" and "r1" attributes are the inner and outer radius of the graph object. Setting "r1" on the root graph determines where the root ends and the child nodes begin.
@@ -44,7 +44,7 @@ def draw(graph, target):
     n.set("fillcolor", color)
 ```
 
-<img width="228" alt="image" src="https://github.com/user-attachments/assets/622cec85-ad63-4139-b615-cb0ee19c412e">
+<img width="228" alt="image" src=".doc/622cec85-ad63-4139-b615-cb0ee19c412e.png">
 
 ## Half Donut
 To change this chart into a half donut chart, use the "sweep" attribute. This is the angle, in degrees, covered by the chart. By default, this is 360, the full circle. To make it a half circle, pass in 180 degrees:
@@ -62,7 +62,7 @@ def draw(graph, db):
     n.set("fillcolor", color)
 ```
 
-<img width="231" alt="image" src="https://github.com/user-attachments/assets/cb9d9896-c99a-43ae-bc23-834328b9b739">
+<img width="231" alt="image" src=".doc/cb9d9896-c99a-43ae-bc23-834328b9b739.png">
 
 ## Sunburst
 A sunburst chart occurs when there are clusters. Each nesting level is a layer. The width of each layer is determined by "rstep" the radius step/change. In a sunburst chart, only nodes are expected to have the "area" attribute. The area of a cluster will be calculated based on the nodes inside it. 
@@ -105,14 +105,15 @@ def draw(graph, arch):
 ```
 
 And, the result for a custom GitAhead's Directory Structure architecture is:
-<img width="416" alt="image" src="https://github.com/user-attachments/assets/a30c248c-8409-44e3-b5f0-625854ab70d8">
+
+<img width="416" alt="image" src=".doc/a30c248c-8409-44e3-b5f0-625854ab70d8.png">
 
 # Treemap
 The treemap algorithm is essentially equivalent to Graphviz's [patchwork](https://graphviz.org/docs/layouts/patchwork/) algorithm, but gives space to clusters. Unlike the sunburst chart, the treemap chart supports node and cluster labels. However, the label is only shown if it fits. Treemaps require the "area" attribute to be set on all nodes. The desired diagram size is set with "width" and "height" which default to 640 and 480 respectively. 
 
 Changing the sunburst code above to set "layout" to "treemap" gives this result for the same architecture.
 
-<img width="651" alt="image" src="https://github.com/user-attachments/assets/03c2f402-542c-4674-8fb4-ae22050e3192">
+<img width="651" alt="image" src=".doc/03c2f402-542c-4674-8fb4-ae22050e3192.png">
 
 The treemap layout supports the same [gradient color format](https://graphviz.org/docs/attr-types/colorList/) supported by Graphviz. Note that gradient color output is not supported by Understand's Visio exports or printing.
 
@@ -130,7 +131,7 @@ def draw(graph, db):
     n.set("fillcolor", color)
 ```
 
-<img width="96" alt="image" src="https://github.com/user-attachments/assets/096facf5-18dd-421f-adf2-5df4043a4605">
+<img width="96" alt="image" src=".doc/096facf5-18dd-421f-adf2-5df4043a4605.png">
 
 # Legends
 The "sunburst", "flatbubble" and "bar" (below) layouts support legends that are drawn as part of the graph. This is different then the legend Understand displays in the GUI which floats above the graph. Legends are created by creating a top level cluster with the "legend" attribute set to one of the following positions "left", "right", "top", or "bottom". Each node in the legend cluster is drawn with the color as a rectangle and the label to the right of it, in rows and columns determined by the location and chart size. 
@@ -152,7 +153,7 @@ def draw(graph, arch):
     n2.set("fillcolor", color)
 ```
 
-<img width="254" alt="image" src="https://github.com/user-attachments/assets/bb2a027d-aa69-4d90-9268-6bdaee612094">
+<img width="254" alt="image" src=".doc/bb2a027d-aa69-4d90-9268-6bdaee612094.png">
 
 
 # Beta Layouts
@@ -172,7 +173,7 @@ def draw(graph, db):
     n.set("fillcolor", color)
 ```
 
-<img width="130" alt="image" src="https://github.com/user-attachments/assets/1747c847-70b8-432d-97e2-a22d99fb0718">
+<img width="130" alt="image" src=".doc/1747c847-70b8-432d-97e2-a22d99fb0718">
 
 A stacked bar chart is possible using clusters. Each cluster is a bar, with the cluster label appearing as the axis label for the bar. Each node is stacked in that clusters bar. Check out [bar_demo.upy](https://github.com/stinb/plugins/blob/7.0/Graph/Charts/bar_demo.upy)for an example. Note that the scale is always linear, so the bar_demo.upy plugin suffers from huge chart areas when there's a mix of small and large values.
 
@@ -252,5 +253,5 @@ digraph "" {
 }
 ```
 
-![matrix2](https://github.com/user-attachments/assets/78bcdfd2-14a3-4778-8043-b3610ce1fdf6)
+![matrix2](.doc/78bcdfd2-14a3-4778-8043-b3610ce1fdf6)
 

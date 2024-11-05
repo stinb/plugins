@@ -4,7 +4,7 @@ They can be used to verify naming guidelines, metric requirements, published bes
 
 These scripts are developed using the Understand Perl and Python API's along with a set of special functions designed to interact with the Understand CodeCheck interface. 
 
-![image](https://user-images.githubusercontent.com/6586272/193142606-7bf859c2-138b-49d5-a0ec-a403a3a6cf7a.png)
+![image](.doc/193142606-7bf859c2-138b-49d5-a0ec-a403a3a6cf7a.png)
 
 # What Type of Checks Can I Write?
 With Understand we've taken a different approach to static analysis than a lot of other tools and that is also reflected in CodeCheck. Most other static analysis tools focus on identifying bugs, CodeCheck is also heavily focused on analyzing coding standards. For that reason many of our customers use Understand in addition to other static analysis tools.

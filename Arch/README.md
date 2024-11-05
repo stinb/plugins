@@ -7,21 +7,20 @@ Here are a few ideas:
  - automatically partition your files based on folder structure or file names
  - make an architecture that quickly separates 3rd party libraries from your teams code
 
-For example, [arch_last_author.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_last_author.upy) queries git to find the last person to edit each file, and makes an Architecture from that. I can that use that architecture to see who owns the file I'm looking at, explore dependecies based on author, or even see who's code is the most complex!
-![image](https://user-images.githubusercontent.com/6586272/206825252-1d7c2f5f-038c-4196-874d-e32475e798d0.png)
+For example, [arch_last_author.upy](../Solutions/git/arch_last_author.upy) queries git to find the last person to edit each file, and makes an Architecture from that. I can that use that architecture to see who owns the file I'm looking at, explore dependencies based on author, or even see who's code is the most complex!
+
+![image](.doc/206825252-1d7c2f5f-038c-4196-874d-e32475e798d0.png)
 
 
 ## Installation
-To install an Architecture plugin, simply drag the .upy or .upl file into the Understand GUI, it will ask if you want to install it. Alternatively, you can manually place it in one of the following locations:
+To install an Architecture plugin, select Tools->Plugin Manager and Add Plugin.  
+Once the Architecture plugin is added and enabled, you can create a new instance of the automatic architecture by selecting Architectures -> New Automatic Architectures.  
+You can view your new Architecture by select Architectures -> Browse Architectures
 
-- Windows – C:\Program Files\SciTools\conf\plugin\User\Arch
-- Mac – /Users/username/Library/Application Support/SciTools/plugin/Arch
-- Linux – /home/username/.config/SciTools/plugin/Arch
 
-To enable your custom architecture after installation, select Architectures->Browse Architectures and in the menu of that dialog select your new architecture
-![image](https://user-images.githubusercontent.com/6586272/206825152-d6911452-549b-433c-9b51-7cddcb14680d.png)
+![image](.doc/add_plugin.png)
 
-Some plugins may import common files. For example, all the [Git architectures](https://github.com/stinb/plugins/blob/main/Solutions/git) use [git_util.py](https://github.com/stinb/plugins/blob/main/Solutions/git) and [visibility matrix architectures](https://github.com/stinb/plugins/tree/main/Solutions/visibilityMatrix) use [matrix.py](https://github.com/stinb/plugins/tree/main/Solutions/visibilityMatrix/matrix.py). To install those, it's best to manually place the whole folder in the correct location so the import is found.
+![image](.doc/new_arch.png) 
 
 ## Performance
 Keep in mind that the project won't open completely until these architecture scripts finish running. During that time, Understand is essentially frozen. You will definitely want to make scripts that finish quickly so you don't have long waits opening the project.

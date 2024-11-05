@@ -4,7 +4,7 @@ Calls graphs with global objects are useful for finding all global objects acces
 
 The plugin [sharedTasksGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) displays all the call trees and objects in a single graph, highlighting global objects that are accessed from multiple root functions. The plugin [sharedTasksObjectGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksObjectGraph.upy) does is the reverse - it starts from objects and goes to root functions. The plugin [sharedTasksCSV.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) displays each reference in a table in an interactive report. It can also export a CSV file at the same time as the interactive report or when run directly from the command line.
 
-<img width="886" alt="image" src="https://github.com/stinb/plugins/assets/7937320/ff1f01b2-4970-4c34-ad12-ada42ee13c22">
+![image](.doc/338366919-ff1f01b2-4970-4c34-ad12-ada42ee13c22.png)
 
 All plugin scripts in this folder use the common [sharedTasks.py](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/sharedTAsks.py) so if a script is installed individually, the common file must be installed as well. Instead of installing individual scripts, it's recommended to copy the entire folder to a plugin directory:
 

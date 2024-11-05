@@ -23,7 +23,7 @@ The architecture type together with the file VFO and VFI values are used to clas
 
 The final matrix is sorted using these categories and displayed. 
 
-<img width="638" alt="image" src="https://github.com/stinb/plugins/assets/7937320/8ffdc34c-1ba1-4773-8d9f-73bc2fdbdf88">
+![image](.doc/305239491-8ffdc34c-1ba1-4773-8d9f-73bc2fdbdf88.png)
 
 
 Additional project metrics are:

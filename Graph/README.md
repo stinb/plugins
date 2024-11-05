@@ -18,9 +18,9 @@ Here are some of the more popular graphs you'll find here.
 * [controlFlow.upl](https://github.com/stinb/plugins/blob/main/Graph/controlFlow.upl): This is a version of the Function/Method Control flow graph that uses the Perl API
 * [assignment_tree.upl](https://github.com/stinb/plugins/blob/main/Graph/assignment_tree.upl): This graph shows where each object is assigned, and where it assigns others.
 
-![image](https://user-images.githubusercontent.com/6586272/193376858-3e304851-dcb3-4280-9d03-e9ba75185bde.png)
+![image](.doc/193376858-3e304851-dcb3-4280-9d03-e9ba75185bde.png)
 
 # Bonus
 Check out the [Gephi Extract](https://blog.scitools.com/create-beautiful-overview-graphs-of-your-code/) for an an amazing overview graph option.
 
-![image](https://blog.scitools.com/wp-content/uploads/2023/08/gitahead-overview_labeled.png)
+![image](../Solutions/gephiExport/.doc/68747470733a2f2f626c6f672e736369746f6f6c732e636f6d2f77702d636f6e74656e742f75706c6f6164732f323032332f30382f67697461686561642d6f766572766965775f6c6162656c65642e706e67.png)
