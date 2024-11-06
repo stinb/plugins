@@ -1,0 +1,125 @@
+ERR1 = '%1 should use the same type alias in all its declarations'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_6.9.1')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_6.9.1': "Published Standards/MISRA C++ 2023/6.9.1 The same type aliases shall be used in all declarations of the same entity"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_6.9.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Types',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_6.9.1': """
+<p><b>Rationale</b></p>
+<p>If a redeclaration uses different type aliases to those in its previous declarations, it may not be clear
+that the declarations refer to the same entity.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">typedef int32_t INT;
+using Index = int32_t;
+
+ INT i;
+extern int32_t i; // Non-compliant
+
+ INT j;
+extern INT j; // Compliant</code></pre>
+
+<p>In the following, there are two declarations of g, even though the types differ due to the top level const
+qualifier:</p>
+<pre><code language="C++">void g( int32_t i );
+void g( Index const i ); // Non-compliant - int32_t vs. Index
+
+void h( Index i );
+void h( Index const index ); // Compliant - Index used consistently
+void h( int32_t * i ); // Rule does not apply - different overload</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 6.2.2</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for type_ref in file.filerefs("Define", "Type Alias, Typedef"):
+        typedby_ents = []
+
+        for typedby_ref in type_ref.ent().refs("Typedby"):       
+            if typedby_ref.ent().id() in typedby_ents:
+                continue
+
+            skip = False
+
+            for cast_ref in typedby_ref.ent().refs("Cast Use"):
+                if (cast_ref.line() == typedby_ref.line()) and (cast_ref.column() ==  typedby_ref.column()):
+                    skip = True
+                    break
+            
+            if skip:
+                continue
+
+            typedby_ents.append(typedby_ref.ent().id())
+
+            def_refs = typedby_ref.ent().refs("Definein, Declarein")
+
+            if def_refs and (len(def_refs) == 1):
+                continue
+
+            for def_ref in def_refs:
+                if ((def_ref.file().id() == typedby_ref.file().id()) and (def_ref.line() == typedby_ref.line())) or def_ref.ent().freetext("DefinedInMacro"):
+                    continue
+
+                lex = def_ref.file().lexer().lexeme(def_ref.line(), def_ref.column())
+
+                if lex.ent() and lex.ent().kind().check("Macro"):
+                    continue
+
+                while lex.token() != "Whitespace":                        
+                    lex = lex.previous()
+
+                while lex.token() != "Identifier":
+                    lex = lex.previous(True, True)
+
+                if lex.text() != type_ref.ent().name():
+                    if (def_ref.line() < typedby_ref.line()) and (def_ref.file().id() == typedby_ref.file().id()):
+                        check.violation(typedby_ref.ent(), typedby_ref.file(), typedby_ref.line(), typedby_ref.column(), ERR1, typedby_ref.ent().name())
+                    else:
+                        check.violation(def_ref.scope(), def_ref.file(), def_ref.line(), def_ref.column(), ERR1, def_ref.scope().name())
+
+        
+            
+
+
+            
