@@ -9,7 +9,7 @@ Here are a few ideas:
 
 For example, [arch_last_author.upy](../Solutions/git/arch_last_author.upy) queries git to find the last person to edit each file, and makes an Architecture from that. I can then use that architecture to see who owns the file I'm looking at, explore dependencies based on author, or even see who's code is the most complex!
 
-![image](.doc/206825252-1d7c2f5f-038c-4196-874d-e32475e798d0.png)
+![image](.doc/archs.png)
 
 
 ## Installation
@@ -25,3 +25,4 @@ You can view your new Architecture by select Architectures -> Browse Architectur
 ## Performance
 Keep in mind that the project won't open completely until these architecture scripts finish running. During that time, Understand is essentially frozen. You will definitely want to make scripts that finish quickly so you don't have long waits opening the project.
 
+![image](.doc/copyright.png)
