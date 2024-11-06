@@ -7,7 +7,7 @@ Here are a few ideas:
  - automatically partition your files based on folder structure or file names
  - make an architecture that quickly separates 3rd party libraries from your teams code
 
-For example, [arch_last_author.upy](../Solutions/git/arch_last_author.upy) queries git to find the last person to edit each file, and makes an Architecture from that. I can that use that architecture to see who owns the file I'm looking at, explore dependencies based on author, or even see who's code is the most complex!
+For example, [arch_last_author.upy](../Solutions/git/arch_last_author.upy) queries git to find the last person to edit each file, and makes an Architecture from that. I can then use that architecture to see who owns the file I'm looking at, explore dependencies based on author, or even see who's code is the most complex!
 
 ![image](.doc/206825252-1d7c2f5f-038c-4196-874d-e32475e798d0.png)
 

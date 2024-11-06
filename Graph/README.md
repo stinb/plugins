@@ -23,4 +23,4 @@ Here are some of the more popular graphs you'll find here.
 # Bonus
 Check out the [Gephi Extract](https://blog.scitools.com/create-beautiful-overview-graphs-of-your-code/) for an an amazing overview graph option.
 
-![image](../Solutions/gephiExport/.doc/68747470733a2f2f626c6f672e736369746f6f6c732e636f6d2f77702d636f6e74656e742f75706c6f6164732f323032332f30382f67697461686561642d6f766572766965775f6c6162656c65642e706e67.png)
+![image](../Solutions/gephiExport/.doc/gephi.png)
