@@ -1,0 +1,263 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11/01/24
+
+import re
+import Modules
+
+ERR1 = 'Macro NULL was not in permitted form'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_11.9', 'MISRA23_11.9', 'CPP_E084')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_11.9': 'Published Standards/MISRA C 2012/' + """\
+11.9 The macro NULL shall be the only permitted form of integer null pointer 
+constant""",
+        'MISRA23_11.9': 'Published Standards/MISRA C 2023/' + """\
+11.9 The macro NULL shall be the only permitted form of integer null pointer 
+constant""",
+        'CPP_E084': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+The macro NULL shall be the only permitted form of integer null pointer 
+constant""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_11.9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_11.9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E084': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>An integer constant expression with the value 0 shall be derived from
+expansion of the macro NULL if it appears in any of the following contexts:</p>
+<ul>
+<li>As the value being assigned to a pointer;</li>
+<li>As an operand of an == or != operator whose other operand is a pointer;</li>
+<li>As the second operand of a ?: operator whose third operand is a pointer;
+</li>
+<li>As the third operand of a ?: operator whose second operand is a pointer.
+</li>
+<p>Ignoring whitespace and any surrounding parentheses, any such integer
+constant expression shall represent the entire expansion of NULL.</p>
+<p>Note: a null pointer constant of the form (void *)0 is permitted, whether or
+not it was expanded from NULL.</p>
+<p><b>Rationale</b></p>
+<p>Using NULL rather than 0 m akes it clear that a null pointer constant was
+intended.</p>
+<p><b>Example</b></p>
+<p>In the following example, the initialization of p2 is compliant because the
+integer constant expression 0 does not appear in one of the contexts prohibited
+by this rule.</p>
+<pre><code language="C++">int32_t *p1 = 0; /* Non-compliant */
+int32_t *p2 = ( void * ) 0; /* Compliant */</pre></code>
+<p>In the following example, the comparison between p2 and (void *)0 is
+compliant because the integer constant expression 0 appears as the operand of a
+cast and not in one of the contexts prohibited by this rule.</p>
+<pre><code language="C++">#define MY_NULL_1 0
+#define MY_NULL_2 ( void * ) 0
+if ( p1 == MY_NULL_1 ) /* Non-compliant */
+{
+}
+if ( p2 == MY_NULL_2 ) /* Compliant */
+{
+}</code></pre>
+<p>The following example is compliant because use of the macro NULL provided by
+the implementation is always permitted, even if it expands to an integer
+constant expression with value 0.</p>
+<pre><code language="C++">/* Could also be stdio.h, stdlib.h and others */
+#include <stddef.h>
+extern void f ( uint8_t *p );
+/* Compliant for any conforming definition of NULL, such as:
+* 0
+* ( void * ) 0
+* ( ( ( 0 ) ) )
+* ( ( ( 1 - 1 ) ) )
+*/
+f ( NULL );</code></pre>
+<p><b>See also</b></p>
+<p>Rule 11.4</p>
+"""
+    return {
+        'MISRA12_11.9': desc,
+        'MISRA23_11.9': desc,
+        'CPP_E084': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    operators = ['=', '==', '!=', '?', ':']
+    lexer = None
+    refs = file.filerefs('Set, Use', 'Object') + file.filerefs('Call', 'Function')
+
+    for ref in refs:
+        ok = True
+        if ref.ent().kind().check('Object') and '*' in str(ref.ent().type()):
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            if lexeme:
+                # Find Object Sets
+                if ref.kind().check('Set'):
+                    lexeme = lexeme.next(True, True)
+                    if lexeme and lexeme.text() == '=':
+                        while lexeme and lexeme.text() not in [';', '{', '}']:
+                            if lexeme.text() == '0':
+                                ok = False
+                            elif lexeme.text() == '(':
+                                lexeme = lexeme.next(True, True)
+                                if lexeme and lexeme.text() == 'void':
+                                    lexeme = lexeme.next(True, True)
+                                    if lexeme and lexeme.text() == '*':
+                                        # Cast found
+                                        ok = True
+                                        break
+
+                            lexeme = lexeme.next(True, True)
+
+                # Find uses in the given operators
+                elif ref.kind().check('Use'):
+                    prevLex = lexeme.previous(True, True)
+                    lexeme = lexeme.next(True, True)
+                    if prevLex and prevLex.text() in operators:
+                        prevLex = prevLex.previous(True, True)
+                        # Check the left operand for a literal 0
+                        if prevLex and prevLex.text() in [':', '==', '!=']:
+                            while prevLex and prevLex.text() not in ['?', ';', '=', '{', '}']:
+                                # Flag if 0 is found and not a cast to void *
+                                if lexeme.text() == '0' or (lexeme.ent() and '0' in str(lexeme.ent().value()) and 'void*' not in str(lexeme.ent().value()).replace(" ", "") and not re.search(r'\d.*\d', str(lexeme.ent().value()))):
+                                    ok = False
+                                    violationLex = prevLex
+                                    prevLex = prevLex.previous(True, True)
+                                    if prevLex and prevLex.text() == ')':
+                                        prevLex = prevLex.previous(True, True)
+                                        if prevLex and prevLex.text() == '*':
+                                            prevLex = prevLex.previous(True, True)
+                                            if prevLex and prevLex.text() == 'void':
+                                                # Cast found
+                                                ok = True
+                                    break
+                                prevLex = prevLex.previous(True, True)
+
+
+                    if lexeme and lexeme.text() in operators and not lexeme.text() == '?':
+                        lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.text() == '->':
+                            continue
+                        while lexeme and lexeme.text() not in [';', '{', '}']:
+                            # Flag if 0 is found and not a cast to void *
+                            if lexeme.text() == '0' or (lexeme.ent() and '0' in str(lexeme.ent().value()) and 'void*' not in str(lexeme.ent().value()).replace(" ", "") and not re.search(r'\d.*\d', str(lexeme.ent().value()))):
+                                ok = False
+                                violationLex = lexeme
+
+                            elif lexeme.text() == '(':
+                                lexeme = lexeme.next(True, True)
+                                if lexeme and lexeme.text() == 'void':
+                                    lexeme = lexeme.next(True, True)
+                                    if lexeme and lexeme.text() == '*':
+                                        # Cast found
+                                        ok = True
+                            break
+
+                            lexeme = lexeme.next(True, True)
+
+
+
+        # Find parameters
+        elif ref.ent().kind().check('Function') and '*' in ref.ent().parameters():
+            if not lexer:
+                if not file.lexer():
+                    return
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            if lexeme:
+                lexeme = lexeme.next(True, True)
+                if lexeme.text() == '(':
+                    count = 0
+                    parameters = ref.ent().parameters().split(',')
+                    close = Modules.findClose(lexeme)
+                    lexeme = lexeme.next(True, True)
+                    skip = False
+                    parameter = parameters[count]
+                    test = ''
+                    while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                        # Look for commas to check next parameter
+                        test += lexeme.text()
+                        if lexeme.text() == ',':
+                            count += 1
+                            if count == len(parameters):
+                                break
+                            parameter = parameters[count]
+                            skip = False
+                            # Skip if the function isn't asking for pointer
+                            if '*' not in parameter:
+                                skip = True
+                        if skip:
+                            pass
+
+                        # Flag if 0 is found and not a cast to void *
+                        elif lexeme.text() == '0' or (lexeme.ent() and '0' in str(lexeme.ent().value()) and 'void*' not in str(lexeme.ent().value()).replace(" ", "") and not re.search(r'\d.*\d', str(lexeme.ent().value()))):
+                            ok = False
+                            violationLex = lexeme
+                            break
+
+                        elif lexeme.text() == '(':
+                            nextLex = lexeme.next(True, True)
+                            if nextLex and nextLex.text() == 'void':
+                                nextLex = nextLex.next(True, True)
+                                if nextLex and nextLex.text() == '*':
+                                    # Cast found
+                                    ok = True
+                                    break
+                            else:
+                                lexeme = Modules.findClose(lexeme)
+                                continue
+
+
+
+                        lexeme = lexeme.next(True, True)
+                    
+
+
+        if not ok:
+            check.violation(file, file, ref.line(),ref.column(),ERR1)
