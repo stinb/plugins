@@ -25,7 +25,7 @@ void *worker_thread(void *dummy)
     int c;
     int result;
 
-    if ((result = pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, &i)) != 0) // UndCC_Violation
+    if ((result = pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, &i)) != 0) // UndCC_Violation(lin, mac)
     {
         /* handle error */
     }

@@ -26,12 +26,12 @@ void foo(const char *filename)
 
     if (pid == 0)
     {                    /*child*/
-        read(fd, &c, 1); // UndCC_Violation
+        read(fd, &c, 1); // UndCC_Violation(lin, mac)
         printf("child:%c\n", c);
     }
     else
     {                    /*parent*/
-        read(fd, &c, 1); // UndCC_Violation
+        read(fd, &c, 1); // UndCC_Violation(lin, mac)
         printf("parent:%c\n", c);
     }
 }

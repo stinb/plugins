@@ -17,7 +17,7 @@ int main(void)
     {
         /* Handle Error */
     }
-    if ((result = pthread_kill(thread, SIGTERM)) != 0) // UndCC_Violation
+    if ((result = pthread_kill(thread, SIGTERM)) != 0) // UndCC_Violation(lin, mac)
     {
         /* Handle Error */
     }

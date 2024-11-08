@@ -5,7 +5,7 @@
 void func(void)
 {
     double complex c = 2.0 + 4.0 * I;
-    double complex result = log2((double)c); // UndCC_Violation
+    double complex result = log2((double)c); // UndCC_Violation(lin, mac)
 }
 
 #endif // not _WIN32

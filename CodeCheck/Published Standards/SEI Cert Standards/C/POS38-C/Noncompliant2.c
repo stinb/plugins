@@ -33,7 +33,7 @@ void foo2(const char *filename)
     else
     {
         /*parent*/
-        fcntl(fd, F_DUPFD, 10); // UndCC_Violation
+        fcntl(fd, F_DUPFD, 10); // UndCC_Violation(lin, mac)
         printf("parent:%c\n", c);
     }
 }

@@ -54,7 +54,7 @@ int main()
         /* Handle error */
     }
 
-    if ((ret = pthread_create(&thread2, NULL, &waiter2, NULL))) // UndCC_Violation
+    if ((ret = pthread_create(&thread2, NULL, &waiter2, NULL))) // UndCC_Violation(lin, mac)
     {
         /* handle error */
     }
