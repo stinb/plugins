@@ -8,7 +8,7 @@ int16_t f1()
 }
 namespace
 {
-    struct A1 // UndCC_FalsePos(Win, Mac) - no reference to `A1 a;`
+    struct A1 // UndCC_FalsePos(Win) - no reference to `A1 a;`
     {
         A1 f();
     };
