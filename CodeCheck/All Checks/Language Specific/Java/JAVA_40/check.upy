@@ -1,13 +1,17 @@
 # This script is designed to run with Understand - CodeCheck
 # Written by Robby Bennett
-# 4-11-22
+# 2022-04-11
+
 
 import re
 
+
 ERR1 = 'No space after comma'
+
 
 def ids():
     return ('JAVA_40')
+
 
 def name(id):
     return {
@@ -21,11 +25,11 @@ def tags(id):
             'Language: Java',
             'Styling',
         ],
-
     }.get(id)
 
+
 def detailed_description():
-    return '''
+    return '''\
 <p>
 Spaces shall be placed after commas.
 </p>
@@ -42,6 +46,7 @@ Spaces shall be placed after commas.
 }
 </code></pre>
 '''
+
 
 def test_language(language):
     return language == 'Java'
@@ -61,70 +66,53 @@ def define_options(check):
     check.options().checkbox('ignoreStrings', 'Ignore strings', True)
 
 
-def positionInAnySpan(position, arrayOfSpans):
-    for span in arrayOfSpans:
-        start = span[0]
-        end = span[1]
-        if position >= start and position <= end:
-            return True
-    return False
-
-
 def check(check, file):
-    contents = file.contents()
+    for lex in file.lexer(False):
+        if lex.text() == ',':
+            check_comma(file, check, lex)
+        else:
+            check_other(file, check, lex)
 
-    # Get line locations
-    lineBreaks = {}
-    line = 1
-    for match in re.finditer('\n', contents):
-        start = match.span()[0]
-        lineBreaks[start] = line
-        line += 1
 
-    ignoreNewLines = check.options().lookup('ignoreNewLines')
-    ignoreComments = check.options().lookup('ignoreComments')
-    ignoreStrings = check.options().lookup('ignoreStrings')
+def check_comma(file, check, lex):
+    # Skip if it was the last token
+    next_lex = lex.next()
+    if not next_lex:
+        return
 
-    # Get comment position spans
-    if ignoreComments:
-        commentSpans = []
-        # Line comments
-        for match in re.finditer(r'(\/)\/.*?(\n)', contents):
-            start = match.span(1)[0]
-            end = match.span(2)[0]
-            commentSpans.append((start, end))
-        # Multiline comments
-        for match in re.finditer(r'(\/)\*[\s\S]*?\*(\/)', contents):
-            start = match.span(1)[0]
-            end = match.span(2)[0]
-            commentSpans.append((start, end))
+    # Skip whitespace or anything allowed by options
+    match next_lex.token():
+        case 'Comment':
+            if check.options().lookup('ignoreComments'):
+                return
+        case 'Newline':
+            if check.options().lookup('ignoreNewLines'):
+                return
+        case 'String':
+            if check.options().lookup('ignoreStrings'):
+                return
+        case 'Whitespace':
+            if next_lex.text().startswith(' '):
+                return
 
-    # Find string positions
-    if ignoreStrings:
-        lexer = file.lexer()
+    check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
 
-    # Get violations
-    for match in re.finditer('(\n).*(,)([^ ])', contents):
-        # Get positions
-        linePosition = match.span(1)[0]
-        commaPosition = match.span(2)[0]
-        line = lineBreaks[linePosition] + 1
-        column = commaPosition - linePosition - 1
 
-        # Skip if the next character is a new line
-        if ignoreNewLines:
-            otherCharacter = match[3][0]
-            if otherCharacter == '\n':
-                continue
+def check_other(file, check, lex):
+    # Skip if anything allowed by options
+    match lex.token():
+        case 'Comment':
+            if check.options().lookup('ignoreComments'):
+                return
+        case 'String':
+            if check.options().lookup('ignoreStrings'):
+                return
 
-        # Skip if the comma is in a comment
-        if ignoreComments and positionInAnySpan(commaPosition, commentSpans):
-            continue
-
-        # Skip if the comma is in a string
-        if ignoreStrings:
-            lexeme = lexer.lexeme(line, column)
-            if lexeme and lexeme.token() == 'String':
-                continue
-
-        check.violation(None, file, line, column, ERR1)
+    # Each line in the lexeme text
+    line_number = lex.line_begin()
+    for line_text in lex.text().splitlines():
+        # Each comma followed by not a space
+        for match in re.finditer(',[^ ]', line_text):
+            column = match.span()[0] + lex.column_begin()
+            check.violation(None, file, line_number, column, ERR1)
+        line_number += 1

@@ -1,16 +1,16 @@
 public enum State {
-    RUNNING, // UndCC_Valid - only when ignoring new lines
-    PAUSED,  // UndCC_Valid - only when ignoring new lines
-    STOPPED, // UndCC_Valid - only when ignoring new lines
+    /* UndCC_Valid(ignore_new_lines) */ RUNNING,
+    /* UndCC_Valid(ignore_new_lines) */ PAUSED,
+    /* UndCC_Valid(ignore_new_lines) */ STOPPED,
 }
 
 public class Program {
     public static void main(String[] args) {
         System.out.println("Hello", "world");      // UndCC_Valid
-        System.out.println("Hello","world");       // UndCC_Violation
-        // System.out.println("Hello","world");    // UndCC_Valid - only when ignoring comments
-        /* System.out.println("Hello","world"); */ // UndCC_Valid - only when ignoring comments
-        System.out.println(',');                   // UndCC_Valid - only when ignoring strings
-        System.out.println("Hello,world");         // UndCC_Valid - only when ignoring strings
+        System.out.println("Hello","world");       // UndCC_Valid(ignore_strings)
+        // System.out.println("Hello","world");    // UndCC_Valid(ignore_comments)
+        /* System.out.println("Hello","world"); */ // UndCC_Valid(ignore_comments)
+        System.out.println(',');                   // UndCC_Valid(ignore_strings)
+        System.out.println("Hello,world");         // UndCC_Valid(ignore_strings)
     }
 }
