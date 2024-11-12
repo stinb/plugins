@@ -1,0 +1,163 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11/07/24
+
+import re
+import Modules
+
+ERR1 = 'Result of an assignment operator was used'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_13.4', 'MISRA23_13.4', 'CPP_E085')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_13.4': 'Published Standards/MISRA C 2012/' + """\
+13.4 The result of an assignment operator should not be used""",
+        'MISRA23_13.4': 'Published Standards/MISRA C 2023/' + """\
+13.4 The result of an assignment operator should not be used""",
+        'CPP_E085': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+The result of an assignment operator should not be used""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_13.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Expressions',
+        ],
+        'MISRA23_13.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Expressions',
+        ],
+        'CPP_E085': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>This rule applies even if the expression containing the assignment operator
+is not evaluated.</p>
+<p><b>Rationale</b></p>
+<p>The use of assignment operators, simple or compound, in combination with
+other arithmetic operators is not recommended because:</p>
+<ul>
+<li>It can significantly impair the readability of the code;</li>
+<li>It introduces additional side effects into a statement making it more
+difficult to avoid the undefined behaviour covered by Rule 13.2.</li>
+</ul>
+<p><b>Example</b></p>
+<pre><code language="C++">x = y; /* Compliant */
+a[ x ] = a[ x = y ]; /* Non-compliant - the value of x = y
+* is used */
+/*
+* Non-compliant - value of bool_var = false is used but
+* bool_var == false was probably intended
+*/
+if ( bool_var = false )
+{
+}
+/* Non-compliant even though bool_var = true isn't evaluated */
+if ( ( 0u == 0u ) || ( bool_var = true ) )
+{
+}
+/* Non-compliant - value of x = f() is used */
+if ( ( x = f ( ) ) != 0 )
+{
+}
+/* Non-compliant - value of b += c is used */
+a[ b += c ] = a[ b ];
+
+/* Non-compliant - values of c = 0 and b = c = 0 are used */
+a = b = c = 0;</code></pre>
+<p><b>See also</b></p>
+<p>Rule 13.2</p>
+"""
+    return {
+        'MISRA12_13.4': desc,
+        'MISRA23_13.4': desc,
+        'CPP_E085': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not file.lexer():
+        return
+    lexer = file.lexer()
+    lexeme = lexer.first()
+    l = ['if', '[', 'while', 'for', '=', '+=', '-=']
+    assigns = ['=', '+=', '-=']
+    while lexeme:
+        lastLex = lexeme
+        if lexeme.text() in l:
+            ok = True
+            # Check if and while statements
+            if lexeme.text() in ['if', 'while', '[']:
+                if lexeme.text() != '[':
+                    lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() in ['(', '[']:
+                    close = Modules.findClose(lexeme)
+                    while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                        if lexeme.text() in assigns:
+                            ok = False
+                            break
+                        lexeme = lexeme.next(True, True)
+
+            # Check 2nd and 3rd statment of for loop
+            elif lexeme.text() == 'for':
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '(':
+                    close = Modules.findClose(lexeme)
+                    count = 0
+                    while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                        if lexeme.text() == ';':
+                            count += 1
+                        if count > 0:
+                            if lexeme.text() in assigns:
+                                ok = False
+                                break
+                        lexeme = lexeme.next(True, True)
+
+            # Check after =
+            elif lexeme.text() == '=':
+                lexeme = lexeme.next(True, True)
+                while lexeme and not lexeme.text() in [';', '{', '}']:
+                    if lexeme.text() in assigns:
+                        ok = False
+                        break
+                    lexeme = lexeme.next(True, True)
+                        
+            
+            if not ok:
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+        # If lexeme didn't change this iteration then get next lexeme
+        if lexeme and lexeme.line_begin() == lastLex.line_begin() and lexeme.column_begin() == lastLex.column_begin():
+            lexeme = lexeme.next(True, True)
