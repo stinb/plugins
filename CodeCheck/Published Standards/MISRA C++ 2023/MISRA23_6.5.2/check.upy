@@ -1,0 +1,123 @@
+ERR1 = "Internal linkage should be specified appropriately"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_6.5.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_6.5.2': "Published Standards/MISRA C++ 2023/6.5.2 Internal linkage should be specified appropriately"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_6.5.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Variables',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_6.5.2': """
+<p><b>Amplification</b></p>
+<p>Internal linkage for an entity is specified appropriately when:</p>
+<p>1. It is declared within an anonymous namespace; and</p>
+<p>2. None of its declarations use the extern keyword; and</p>
+<p>3. It is not declared static.</p>
+<p>This rule does not apply to variables declared constexpr or const.</p>
+
+<p><b>Rationale</b></p>
+<p>Whilst the static keyword can be used to give an entity internal linkage, it also has other uses, which
+may lead to confusion. An entity is unambiguously given internal linkage when it is declared in an
+anonymous namespace, with the added advantage that this declarative form can be consistently
+applied to all types of entity.</p>
+<p>An entity in an anonymous namespace can be declared extern, but this does not have an impact on
+its linkage.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">static void f1(); // Non-compliant
+
+namespace
+{
+ void f2(); // Compliant
+ int32_t notExtern1; // Compliant
+ extern int32_t notExtern2; // Non-compliant
+}</code></pre>
+
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs("Define, Declare", "~Namespace ~Macro ~Template ~Type ~Local ~Member"):
+        declared_extern = False
+
+        lex = file.lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+        while lex.line_begin() == ref.line():
+            if (lex.text() == "extern") and (lex.token() == "Keyword"):
+                declared_extern = True
+                break
+
+            lex = lex.previous(True, True)
+
+        if (ref.ent().parent() and (ref.ent().parent().id() != file.id())) or "const" in str(ref.ent().type()) or declared_extern or is_external(ref, file) or (ref.ent().kind().check("Function") and ref.ent().name() == "main"):
+            continue           
+
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)                     
+
+    for namespace_ref in file.filerefs("Define, Declare", "Unnamed Namespace"):
+        for ref in namespace_ref.ent().refs("Define, Declare", "~Macro ~Template ~Type ~Local ~Member"):
+            if is_external(ref, file) or "const" in str(ref.ent().type()):
+                continue
+
+            if ref.ent().kind().check("Static"):
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                continue
+
+            lex = file.lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+            while lex.line_begin() == ref.line():
+                if (lex.text() == "extern") and (lex.token() == "Keyword"):
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+                lex = lex.previous(True, True)
+
+
+def is_external(ref, file):
+    for def_ref in ref.ent().refs("Definein, Declarein"):
+        if def_ref.file().id() != file.id():
+            return True
+        
+    return False
+            
+
+        
+            
+
+
+            
