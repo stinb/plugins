@@ -10,5 +10,8 @@ struct S
 
 void f ( S * s )
 {
-   int32_t p = reinterpret_cast< int32_t >( s );   // UndCC_Violation
+#ifdef _WIN32
+   int32_t p = reinterpret_cast< int32_t >( s );   // UndCC_Violation(Win)
+#endif
 }
+
