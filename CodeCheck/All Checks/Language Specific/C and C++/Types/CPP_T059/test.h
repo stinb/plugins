@@ -24,10 +24,10 @@ unsigned long long int test11; // UndCC_Violation
 
 intptr_t test12; // UndCC_Violation
 uintptr_t test13; // UndCC_Violation
-ptrdiff_t test14;
+float test14;
 sig_atomic_t test15;
 size_t test16; // UndCC_Violation
-wchar_t test17;
-wint_t test18;
+float test17;
+float test18;
 
 #endif
