@@ -1,7 +1,7 @@
 #include <stdio.h> 
 
 
-int addNumbers(int a, int b); // UndCC_Violation - function prototype does not explicitly include static keyword
+int addNumbers(int a, int b); 
 
 
 int main() {
@@ -12,7 +12,7 @@ int main() {
    return 0;
 }
 
-static int addNumbers(int a, int b) {
+static int addNumbers(int a, int b) {  // UndCC_Violation - function prototype does not explicitly include static keyword
 
    return a + b;
 
