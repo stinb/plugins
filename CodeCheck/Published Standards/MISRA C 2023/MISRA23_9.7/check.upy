@@ -1,0 +1,147 @@
+ERR1 = "The atomic object %1 should be appropriately initialized before being accessed"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_9.7')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_9.7': "Published Standards/MISRA C 2023/9.7 Atomic objects shall be appropriately initialized before being accessed"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_9.7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+            'Variables',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_9.7': """
+<p><b>Amplification</b></p>
+<p>Initialization of atomic objects shall be completed before accessing them:</p>
+<p>● For objects that do not have static storage duration, initialization shall be included in their
+declaration using the assignment operator = or using the Standard Library function
+atomic_init(), before any other access.</p>
+<p>● For objects of static storage duration, the default initialization is sufficient.</p>
+
+<p><b>Rationale</b></p>
+<p>An atomic object is to be initialized before it is accessed. Concurrent access to the object being
+initialized, even via an atomic operation, constitutes a data race. </p>
+<p>The atomic_init() function initializes atomic objects, including any additional state that the
+implementation might need to carry for the atomic object. However, it does not avoid data races.</p>
+<p>Because of the potential initialization of the implementation state, atomic_init() cannot be replaced by
+other access functions, e.g. atomic_store(). Initialization of atomic objects inside of threads would
+impose constraints on thread ordering which are hard to ensure or verify. An explicit protection, e.g.
+by use of a mutex, would make atomicity unnecessary.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">_Atomic int32_t g_ai1; /* Compliant - default initialization */
+
+void main( void )
+{
+ _Atomic int32_t ai1 = 22; /* Compliant - directly initialized */
+ _Atomic int32_t ai2;
+ ai2 = 777; /* Non-compliant - not initialized by atomic_init */
+ _Atomic int32_t ai3;
+ atomic_init( &ai3, 333); /* Compliant - Initialized by atomic_init */
+ /* ------------ */
+
+ _Atomic int32_t ai4;
+ thrd_create( &id1, t1, &ai4);
+
+ atomic_init( &ai4, 666); /* Non-compliant - Initialized after user-thread
+ T1 is created */
+
+ thrd_join ( id1, NULL);
+}
+
+int32_t t1( t1_paramtype *ptr )
+{
+ /* accesses g_ai1, ai1, ai2, ai3, ai4 */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 5.1, Rule 1.5, Rule 9.1, Rule 12.6</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        atomic_refs = []   
+        init_atomic = {} # key: ent id, value: line_number
+
+        for obj_ref in func_ref.ent().refs("Define", "Object ~Static"):
+            utype = obj_ref.ent().freetext("UnderlyingType")
+
+            if "_Atomic" not in str(utype) or obj_ref.ent().ref("Setby Init"):
+                continue
+
+            atomic_refs.append(obj_ref)
+
+        if not atomic_refs:
+            continue
+
+        for call_ref in func_ref.ent().refs("Call", "Unresolved Function"):
+            if call_ref.ent().name() == "atomic_init":
+                lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif (on_param ==  1) and lex.ent():
+                        utype = obj_ref.ent().freetext("UnderlyingType")
+
+                        if "_Atomic" in str(utype):
+                            init_atomic[lex.ent().id()] = lex.line_begin()
+                            break
+
+                    lex = lex.next(True, True)
+
+        for obj_ref in atomic_refs:
+            for ref in obj_ref.ent().refs("~Definein ~Declarein"):
+                if (ref.ent().id() != func_ref.ent().id()) or (obj_ref.ent().id() in init_atomic and (init_atomic[obj_ref.ent().id()] <= ref.line())):
+                    continue
+                    
+                check.violation(obj_ref.ent(), file, ref.line(), ref.column(), ERR1, obj_ref.ent().name())
+                break
+                    
+                    
+                    
+
+
+
+
+            
