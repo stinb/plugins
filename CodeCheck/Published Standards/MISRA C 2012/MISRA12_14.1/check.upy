@@ -1,0 +1,178 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11/11/24
+
+import re
+import Modules
+
+ERR1 = 'The loop counter %1 has essentially floating type'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_14.1', 'MISRA23_14.1', 'CPP_E086')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_14.1': 'Published Standards/MISRA C 2012/' + """\
+14.1 A loop counter shall not have essentially floating type""",
+        'MISRA23_14.1': 'Published Standards/MISRA C 2023/' + """\
+14.1 A loop counter shall not have essentially floating type""",
+        'CPP_E086': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+A loop counter shall not have essentially floating type""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_14.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA23_14.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E086': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Rationale</b></p>
+<p>When using a floating-point loop counter, accumulation of rounding errors may
+result in a mismatch between the expected and actual number of iterations. This
+can happen when a loop step that is not a power of the floating-point radix is
+rounded to a value that can be represented.</p>
+<p>Even if a loop with a floating-point loop counter appears to behave correctly
+on one implementation, it may give a diff erent number of iterations on another
+implementation.</p>
+<p><b>Example</b></p>
+<p>In the following non-compliant example, the value of counter is unlikely to 
+be 1000 at the end of the loop.</p>
+<pre><code language="C++">uint32_t counter = 0u;
+for ( float32_t f = 0.0f; f < 1.0f; f += 0.001f )
+{
+  ++counter;
+}
+</code></pre>
+<p>The following compliant example uses an integer loop counter to guarantee
+1000 iterations and uses it to generate f for use within the loop.</p>
+<pre><code language="C++">float32_t f;
+for ( uint32_t counter = 0u; counter < 1000u; ++counter )
+{
+  f = ( float32_t ) counter * 0.001f;
+}
+</code></pre>
+<p>The following while loop is non-compliant because f is being used as a loop
+counter.</p>
+<pre><code language="C++">float32_t f = 0.0f;
+while ( f < 1.0f )
+{
+  f += 0.001f;
+}
+</code></pre>
+<p>The following while loop is compliant because f is not being used as a loop
+counter.</p>
+<pre><code language="C++">float32_t f;
+uint32_t u32a;
+f = read_float32 ( );
+do
+{
+  u32a = read_u32 ( );
+  /* f does not change in the loop so cannot be a loop counter */
+} while ( ( ( float32_t ) u32a - f ) > 10.0f );
+</code></pre>
+<p><b>See also</b></p>
+<p>Rule 14.2</p>
+"""
+    return {
+        'MISRA12_14.1': desc,
+        'MISRA23_14.1': desc,
+        'CPP_E086': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not file.lexer():
+        return
+    lexer = file.lexer()
+    lexeme = lexer.first()
+    while lexeme:
+        lastLex = lexeme
+        if lexeme.text() in ['do', 'for', 'while']:
+            start = None
+            end = None
+            do = False
+            # Find the beginning and end of 'do' block
+            if lexeme.text() == 'do':
+                start = lexeme
+                do = True
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '{':
+                    lexeme = Modules.findClose(lexeme)
+                    if lexeme:
+                        lexeme = lexeme.next(True, True)
+
+                    if not lexeme:
+                        continue
+            # Find the block and check the statement for floats
+            if lexeme.text() in ['for', 'while']:
+                if not start:
+                    start = lexeme
+                lexeme = lexeme.next(True, True)
+                if lexeme: 
+                    close = Modules.findClose(lexeme)
+                    while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                        if lexeme.ent() and 'float' in str(lexeme.ent().type()):
+                            if not end:
+                                if do:
+                                    end = close
+                                else:
+                                    nextLex = close.next(True, True)
+                                    if nextLex and nextLex.text() == '{':
+                                        end = Modules.findClose(nextLex)
+                            if isModified(lexeme.ent(), lexer, start.line_begin(), end.line_begin()):
+                                    check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.ent().name())
+                        lexeme = lexeme.next(True, True)
+
+        if lexeme.line_begin() == lastLex.line_begin() and lexeme.column_begin() == lastLex.column_begin():
+            lexeme = lexeme.next(True, True)
+
+
+
+# Check if modified in the block or in the statement
+def isModified(ent, lexer, start, end):
+    if not (ent and lexer and start and end):
+        return False
+    refs = ent.refs('Modifyby,Setby')
+    for ref in refs:
+        if ref.line() <= end and ref.line() >= start:
+            return True
+
+    return False
+
