@@ -1,0 +1,160 @@
+#
+#          Copyright (c) 2023, Scientific Toolworks, Inc.
+#
+# This file contains proprietary information of Scientific Toolworks, Inc.
+# and is protected by federal copyright law. It may not be copied or
+# distributed in any form or medium without prior written authorization
+# from Scientific Toolworks, Inc.
+#
+# Author: Jason Haslam
+#
+
+import understand
+from special_member_function import is_special_member_function
+
+ERR_FMT = 'Remove unused {} `{}`'
+
+ENT_KINDS = 'function ~virtual,object'
+REF_KINDS = 'declare ~implicit ~delete,define'
+
+SET_KINDS = 'setby ~init,modifyby'
+USE_KINDS = 'callby,useby,deref setby,deref modifyby,specializeby'
+
+OPT_ALLOW_INTERFACE_ENTITIES = 'allow_interface_entities'
+OPT_ALLOW_DELETED_ENTITIES = 'allow_deleted_entities'
+
+def id():
+    return 'STI_UNUSED'
+
+def name():
+    return 'SciTools/Unused Entities'
+
+def tags():
+    return [ 'Language: C', 'Language: C++', "Recommended", "Standard: SciTools' Recommended Checks", "Severity: 75" ]
+
+def description():
+    return 'SciTools unused entities'
+
+def detailed_description():
+    return """\
+<h3>Unused Entities</h3>
+
+<p>This check finds unused function and variable entities. Unused entities
+represent dead code that is no longer meaningful. Dead code complicates and
+obscures the true meaning of related code. It also imposes a maintenance
+burden when it's unclear if the code is actually used or not.</p>
+
+<p>By default, unused "interface" entities are not reported. These are
+entities declared in a header file that are not private.</p>
+
+<p>By default, unused "deleted" entities are not reported. These are special
+member functions that are declared private and don't have any definition.
+Explicitly deleted special member functions are ignored unconditionally.</p>
+
+<p>Violations can be suppressed by casting to void, or by annotating with the
+[[maybe_unused]] attribute or one of the equivalent compiler-specific
+attributes.</p>
+
+<p><b>Compliant</b></p>
+
+<pre><code language="C++">\
+int i = 0;
+(void) i; // suppress violation
+
+(void) functionWithSideEffect(); // discard return value
+</code></pre>
+
+<p><b>Non-Compliant</b></p>
+
+<pre><code language="C++">\
+int i = 0;
+
+int j = functionWithSideEffect();
+</code></pre>"""
+
+def test_entity(file):
+    return file.kind().check('c file')
+
+def test_global(file):
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    check.option().checkbox(
+        OPT_ALLOW_INTERFACE_ENTITIES, 'Allow "interface" entities', True)
+    check.option().checkbox(
+        OPT_ALLOW_DELETED_ENTITIES, 'Allow "deleted" entities', True)
+
+def check(check, file):
+    try:
+        lexer = file.lexer(False, 1, False, False)
+    except understand.UnderstandError:
+        return
+
+    opt_interface = check.option().lookup(OPT_ALLOW_INTERFACE_ENTITIES)
+    opt_deleted = check.option().lookup(OPT_ALLOW_DELETED_ENTITIES)
+    for ref in file.filerefs(REF_KINDS, ENT_KINDS):
+        ent = ref.ent()
+        if not is_ent_dead(ent):
+            continue
+
+        # Skip decls that weren't written in the source.
+        if ent_name(lexer, ref) != ent.name():
+            continue
+
+        # Skip "interface" entities.
+        if opt_interface and is_interface_entity(ent):
+            continue
+
+        # Skip unimplemented private special member functions.
+        if (opt_deleted and is_special_member_function(ent) and
+            ent.kind().check('private') and not ent.refs('definein')):
+            continue
+
+        line = ref.line()
+        text = ERR_FMT.format(ent.kind().name().lower(), ent.name())
+        violation = check.violation(ent, file, line, ref.column(), text)
+
+def is_ent_dead(ent):
+    # The entity is used.
+    for ref in ent.refs(USE_KINDS):
+        if ref.ent() != ent:
+            return False
+
+    # The entity is set by reference.
+    type = ent.type()
+    if type and type.endswith('&') and ent.refs(SET_KINDS):
+        return False
+
+    # The entity is a main function.
+    if ent.kind().check('function') and ent.name() == 'main':
+        return False
+
+    return True
+
+def is_interface_entity(ent):
+    if ent.kind().check('private'):
+        return False
+
+    # The entity is not defined/declared in a header file.
+    refs = ent.refs('definein,declarein')
+    if not [ref for ref in refs if ref.file().kind().check('header file')]:
+        return False
+
+    return True
+
+def ent_name(lexer, ref):
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    if not lexeme:
+        return ''
+
+    if lexeme.text() != 'operator':
+        return lexeme.text()
+
+    next = lexeme.next(True, True)
+    if not next:
+        return ''
+
+    return lexeme.text() + next.text()
