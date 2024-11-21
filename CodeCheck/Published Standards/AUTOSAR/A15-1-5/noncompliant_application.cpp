@@ -4,7 +4,7 @@
 
 void f() {
   try {
-    func(); // UndCC_Violation(mac(1),lin(0,1),win(0,1))
+    func(); // UndCC_Violation
   } catch(int &e) {
     // Handle error
   }
