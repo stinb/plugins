@@ -162,7 +162,7 @@ class Matches:
       # Create matches for branches
       hadBranch = False
       for childId, locs in self.nodes[nextId].children.items():
-        if len(locs) > 1:
+        if len(locs) > 1 and childId is not None:
           hadBranch = True
           if len(locs) == w:
             nextId = childId
