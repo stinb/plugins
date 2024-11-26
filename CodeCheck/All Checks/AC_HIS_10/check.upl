@@ -1,0 +1,171 @@
+#This script is designed to run with Understand - CodeCheck
+use base ("Understand::Codecheck");
+use strict;
+
+
+use constant MULT => 'Multiple exit points from function';
+use constant NOEXIT => 'No exit point in function';
+use constant NOTEND => 'Exit point not at end of function';
+use constant MULTTRY => 'Multiple exit points from function try block';
+use constant MULTCATCH => 'Multiple exit points from catch handler';
+
+sub register_tr_text() {
+  my $check = shift;
+  $check->add_tr_text(MULT);
+  $check->add_tr_text(NOEXIT);
+  $check->add_tr_text(NOTEND);
+}
+
+sub checkID { return "AC_HIS_10";}
+
+sub name { return "All Checks\\Number of return points (RETURN)";}
+
+sub tags {
+  return (
+    'Language: Ada',
+    'Language: C',
+    'Language: C++',
+    'Language: C#',
+    'Language: Fortran',
+    'Language: Jovial',
+    'Language: Pascal',
+    'Language: VHDL',
+    'Control Flow',
+  );
+}
+
+sub description { return "Number of return points within a function ";}
+
+# This section returns the rational and examples to be given to the user through Understand
+sub detailed_description {
+  return  <<"END_DESC"
+
+<p><b>Developer's Note</b></p>
+If this check is being used on a file with Tempate functions, Delayed Template Parsing must be disabled.
+To do this go to Project-&gt;Configure Project-&gt;C++(Strict), then ensure Delayed Template Parsing is unchecked. 
+</p>
+
+
+Complexify of a function, Maintainability of a function, When does a function return.
+0 = a function without a specific return statement 
+Valid Range: 0-1
+
+END_DESC
+}
+
+sub test_language {
+  my $language = shift;
+  return $language =~ /C\+\+/; #Handles C and C++
+}
+
+sub test_entity { return 1;}
+
+sub test_global { return 0;}
+
+
+sub define_options{
+  my $check = shift;
+  $check->option->checkbox("ignore","Ignore Constructors and Destructors",0);
+  $check->option->checkbox("ignoreInactive","Ignore inactive code",0);
+}
+
+
+# This function takes a lexeme and an end function reference and determines if we are inside a lambda function
+# If we are inside a lambda function, then we walk through it and return a new lexeme
+sub passLambda {
+
+  my $parent = shift;
+  my $lexeme = shift;
+  my $lambdas = shift;
+  my @allDefines = @$lambdas;
+  
+  foreach my $define ( @allDefines ) {
+
+    my $end = $define->ent->ref( 'C End' );
+    next unless $end;
+
+    my $inLambda = 0;
+    $inLambda = 1 if $lexeme->line_begin > $define->line and $lexeme->line_begin < $end->line;
+    $inLambda = 1 if $lexeme->line_begin == $define->line and $lexeme->line_begin != $end->line and $lexeme->column_begin >= $define->column;
+    $inLambda = 1 if $lexeme->line_begin == $end->line and $lexeme->line_begin != $define->line and $lexeme->column_begin <= $end->column;
+    $inLambda = 1 if $lexeme->line_begin == $end->line and $lexeme->line_begin == $define->line and $lexeme->column_begin >= $define->column and $lexeme->column_begin <= $end->column;
+
+    # If we are inside a lambda, move through that lambda
+    if ( $inLambda ) {
+
+      while ( $lexeme->line_begin > $define->line ) {
+        $lexeme = $lexeme->previous;
+      }
+      while ( $lexeme->column_begin > $define->column or $lexeme->line_begin < $define->line ) {
+        $lexeme = $lexeme->previous;
+      }
+    }
+
+  }
+  return $lexeme;
+}
+
+
+sub check {
+  my $check = shift; 
+  my $file = shift; 
+  return unless $file->kind->check("c file");
+
+  # Currently lambda functions are filtered because we lack implicit type detection in the Strict parser
+  my @funcEnds =$file->filerefs("end","function ~lambda");
+  return unless @funcEnds;
+  
+  my $lexer = $file->lexer();
+  return unless $lexer;
+  
+  #Start at the end of the function and walk through it backwards;
+  FUNCTIONLOOP:foreach my $funcEnd (@funcEnds){
+
+    # Determine if we are testing this function
+    next if($check->option->lookup("ignore") && $funcEnd->ent->parent && $funcEnd->ent->parent->name() eq $funcEnd->ent->name());
+    next if($funcEnd->ent->name =~ /^~/);
+    my $start = $funcEnd->ent->ref("definein");
+    next unless $start;
+
+    # Skip functions defined with MACROS
+    next if $start->line == $funcEnd->line;
+    
+    # Initialize tracking variables and options
+    my $atEnd = 0;
+    my $statementCount;
+    my $exitCount;
+    my $lexeme = $lexer->lexeme($funcEnd->line,$funcEnd->column);
+    my $ignoreInactiveCode = $check->option->lookup("ignoreInactive");
+    my @lambdas = $funcEnd->ent->refs( 'C Define', 'C Lambda Function' );
+
+    # This test is for inline and lambda function compatibility
+    while( ( $lexeme ) && ( ( $lexeme->line_begin > $start->line ) || ( $lexeme->line_begin == $start->line && $lexeme->column_begin >= $start->column ) ) ){
+      
+      # Determine if this lexeme should be tested give the user options
+      my $testLexeme = !( $ignoreInactiveCode and $lexeme->inactive );
+
+      # lambdas break this check so we detect if we are in one and move the lexeme past it if we are
+      $lexeme = passLambda( $funcEnd, $lexeme, \@lambdas ) if $testLexeme and @lambdas+0;
+
+      # Count function exits and statements
+      $exitCount++ if $lexeme->token eq "Keyword" && $lexeme->text =~ /Exit|return|goto/i and $testLexeme;
+      $statementCount++ if $lexeme->token eq "Punctuation" && $lexeme->text =~ /[;}]/ and $testLexeme;
+      if ($statementCount && $statementCount == 2 && $exitCount){
+        $atEnd = 1;
+      }
+
+    }continue{
+      #$check->violation($funcEnd->ent,$file,$lexeme->line_begin,$lexeme->column_begin,$lexeme->text);
+      $lexeme=$lexeme->previous;
+    }
+
+    # Determine which violation to throw, if any
+    if ($exitCount && $exitCount > 1){
+      $check->violation($funcEnd->ent,$file,$start->line,$start->column,MULT);
+    }elsif(! $exitCount && $funcEnd->ent->type !~ /\bvoid\b/  ){
+      $check->violation($funcEnd->ent,$file,$start->line,$start->column,NOEXIT);
+    }elsif($exitCount==1 && ! $atEnd){
+      $check->violation($funcEnd->ent,$file,$start->line,$start->column,NOTEND);
+    }
+  }
+}
