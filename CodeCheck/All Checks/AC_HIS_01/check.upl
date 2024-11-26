@@ -1,0 +1,101 @@
+use base ("Understand::Codecheck");
+use strict;
+use constant ERR1 => 'Comment Density Too Low (%1%)';
+use constant OPT1 => "Minimum Comment Percentage";
+
+sub register_tr_text {
+  my $check = shift;
+  $check->add_tr_text(ERR1);
+  $check->add_tr_text(OPT1);
+}
+
+sub checkID { return "AC_HIS_01";}
+
+sub name { return "All Checks\\Comment Density (COMF)";}
+
+sub tags {
+  return (
+    'Language: Ada',
+    'Language: C',
+    'Language: C++',
+    'Language: C#',
+    'Language: Fortran',
+    'Language: Jovial',
+    'Language: Pascal',
+    'Language: VHDL',
+    'Comments',
+  );
+}
+
+sub description {
+  return "Number of comments to the number of statements";
+}
+
+sub detailed_description {
+  return  <<"END_DESC"
+Relationship of the number of comments (outside of and within functions) to the number of statements. Purpose: Comprehensibility, clarity in the code. With violation documentation to decide on the acceptance or rejection. According to HIS definition the value cannot be &gt; 1. However Understand takes into account that some lines are both code and comments so values can be &gt; 1.  
+<br><br>
+Acceptable Range &gt; 0.2 (20%)
+<br><br>
+Developer's Note: This check cannot pick up PHP/Javascript functions that are embedded in an html file. They must be placed in a separate .php or .js file.
+END_DESC
+}
+
+sub test_language {
+  return 1;
+}
+
+sub test_entity {
+  return 1;
+}
+
+sub define_options{
+ my $check = shift;
+ $check->option->integer("minimumPercentComments",OPT1,20);
+ $check->option->checkbox( 'fileLevel', 'File Level test ( Default tests each function )', 0 );
+}
+
+sub check {
+  my $check = shift;
+  my $file = shift;
+  return unless $file->kind->check("file");
+  
+  my @definerefs = $file->filerefs("define, ada declare body, vhdl declare","ada entry, ada function, ada procedure, ada protected, ada task,"
+   ."c function,"
+   ."csharp method,"
+   ."fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+   ."java method,"
+   ."jovial subroutine,"
+   ."pascal compunit, pascal function, pascal procedure,"
+   ."vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
+   ."web function, web method",1);
+  my $minPercent = $check->option->lookup("minimumPercentComments");
+  
+  if ( $check->option->lookup("fileLevel") ) {
+
+      my $newrctc = $file->metric("ratiocommenttocode");
+      $newrctc = sprintf "%.2f", $newrctc;
+      my $ccRatio = $newrctc * 100;
+      if ($ccRatio < $minPercent){
+        $check->violation( $file, $file, 0, 0, ERR1, $ccRatio );
+      }
+
+  } else {
+  
+    foreach my $ref (@definerefs){
+      my $ent = $ref->ent;
+      my $precedingComments = split(/\n/,$ent->comments("before","raw"));
+  		my $comments = $ent->metric("countlinecomment");
+  		my $totalComments = $comments+$precedingComments;
+  		my $code = $ent->metric("countlinecode");
+  		my $newrctc = $ent->metric("ratiocommenttocode");
+  		$newrctc = $totalComments/$code if $code>0 && $precedingComments;
+  		$newrctc = sprintf "%.2f", $newrctc;
+      my $ccRatio = $newrctc * 100;
+      if ($ccRatio < $minPercent){
+        $check->violation($ent,$ref->file,$ref->line,-1,ERR1,$ccRatio);
+      }
+    }
+
+  }
+}
