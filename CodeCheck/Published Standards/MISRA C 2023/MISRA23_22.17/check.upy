@@ -1,0 +1,153 @@
+ERR1 = "Mutex is not locked in this thread"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.17')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.17': "Published Standards/MISRA C 2023/22.17 No thread shall unlock a mutex or call cnd_wait() or cnd_timedwait() for a mutex it has not locked before"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_22.17': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_22.17': """
+<p><b>Amplification</b></p>
+<p>A mutex shall only be unlocked by a thread if it has been locked by that thread before.</p>
+
+<p>The cnd_wait() and cnd_timedwait() functions shall only be called by a thread on a mutex that is locked
+by that thread.</p>
+
+<p><b>Rationale</b></p>
+<p>Unlocking a mutex which has not been locked by the calling thread is undefined behaviour. Calling
+cnd_wait() or cnd_timedwait() with mutex argument mtx requires that the mutex pointed to by mtx be
+locked by the calling thread.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">mtx_t Ra;
+mtx_t Rb;
+cnd_t Cnd1;
+cnd_t Cnd2;
+
+int32_t t1( void *ignore ) /* Thread 1 */
+{
+ mtx_lock ( &Ra );
+ mtx_unlock( &Ra ); /* Compliant */
+ mtx_unlock( &Ra ); /* Non-compliant - mutex is not locked */
+ cnd_wait ( &Cnd1, &Ra ); /* Non-compliant - mutex is not locked */
+ mtx_unlock( &Rb); /* Non-compliant - mutex either not locked, or
+ ... is locked by different thread */
+ cnd_wait ( &Cnd2, &Rb ); /* Non-compliant - mutex either not locked, or
+ ... is locked by different thread */
+ return 0;
+}
+
+int32_t t2( void *ignore ) /* Thread 2 */
+{
+ mtx_lock ( &Rb );
+ doSomething();
+ mtx_unlock ( &Rb ); /* Compliant */
+ return 0;
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 4.13, Rule 22.1, Rule 22.18</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        mtxs = {} # key: ent id, value: false if unlocked, true if locked
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda call_ref: call_ref.line()):
+            lexer = file.lexer(lookup_ents=True)
+            
+            if call_ref.ent().name() == "mtx_lock":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+                            
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.ent() and (str(lex.ent().type()) == "mtx_t"):
+                        mtxs[lex.ent().id()] = True
+                        break
+
+                    lex = lex.next(True, True)
+
+            elif call_ref.ent().name() == "mtx_unlock":
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+                            
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.ent() and (str(lex.ent().type()) == "mtx_t"):
+                        if (lex.ent().id() in mtxs and not mtxs[lex.ent().id()]) or (lex.ent().id() not in mtxs):
+                            check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                        elif lex.ent().id() in mtxs:                                
+                            mtxs[lex.ent().id()] = False
+                        break
+
+                    lex = lex.next(True, True)
+
+            elif call_ref.ent().name() in ["cnd_wait", "cnd_timedwait"]:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+                            
+                        if not on_param:
+                            break
+                    elif (on_param == 1) and lex.ent() and (str(lex.ent().type()) == "mtx_t"):
+                        if (lex.ent().id() in mtxs and not mtxs[lex.ent().id()]) or (lex.ent().id() not in mtxs):
+                            check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                        break
+
+                    lex = lex.next(True, True)
