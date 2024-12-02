@@ -20,6 +20,12 @@ def shifted(locations, amount):
     locs.append(Location(loc.file, loc.line + amount))
   return locs
 
+def listContains(full, sub):
+  for el in sub:
+    if el not in full:
+      return False
+  return True
+
 class Match:
   '''Track the start locations and length of a duplication'''
   def __init__(self, locations, length):
@@ -167,8 +173,8 @@ class Matches:
           if len(locs) == w:
             nextId = childId
             break
-          shift = match.length - self.lines
-          branchMatch.setdefault(nextId,[]).append((Match(locs, self.lines), childId))
+          shift = self.lines - match.length
+          branchMatch.setdefault(id,[]).append((Match(shifted(locs,shift), match.length), childId))
 
       if not hadBranch or nextId == id:
         nextId = None
@@ -190,24 +196,35 @@ class Matches:
       while i1 < maxI: # for each match starting with key
         i2 = 0
         m1, k2 = branchMatch[k1][i1]
+        exact = []
+        partial = []
+        shiftedlocs = shifted(m1.locations,m1.length - self.lines + 1)
         maxI2 = len(branchMatch.get(k2, []))
         while i2 < maxI2: # for each next possible match
           m2, k3 = branchMatch[k2][i2]
-          if m2.locations == shifted(m1.locations,1): # merge?
-            break
+          if m2.locations == shiftedlocs: # merge?
+            exact.append(i2)
+          elif listContains(m2.locations, shiftedlocs):
+            partial.append(i2)
           i2 += 1
+        if exact:
+          i2 = exact[0]
+        elif partial:
+          i2 = partial[0]
         if i2 < maxI2: # merge
+          m2, k3 = branchMatch[k2][i2]
           m1.grow(m2.length - self.lines + 1) # merge match 2 into match 1
           branchMatch[k1][i1] = (m1, k3)      # update match 1 in dictionary
-          del branchMatch[k2][i2]             # remove match 2 in dictionary
+          if m1.weight() == m2.weight():
+            del branchMatch[k2][i2]           # remove match 2 in dictionary
 
-          # Stay at current index to see if this match can continue growing.
-          # Just in case, check if removed item was from current list and update
-          # indices accordingly
-          if k1 == k2:
-            maxI -= 1
-            if i1 > i2:
-              i1 -= 1
+            # Stay at current index to see if this match can continue growing.
+            # Just in case, check if removed item was from current list and update
+            # indices accordingly
+            if k1 == k2:
+              maxI -= 1
+              if i1 > i2:
+                i1 -= 1
         else:
           # This match cannot grow, move on to the next one
           i1 += 1
@@ -217,9 +234,6 @@ class Matches:
     for k, v1 in branchMatch.items():
       for v in v1:
         m = v[0]
-        # an unmerged but continuing branch is one longer, so grow
-        if v[1] is not None:
-          m.grow(1)
         matchlist.append(m)
 
     return matchlist
