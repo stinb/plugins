@@ -1,0 +1,168 @@
+ERR1 = 'The pointer returned by %1 must not be used following a subsequent call to the same function'
+
+
+def ids():
+    return ('MISRA23_25.5.3', 'MISRA23_21.20')
+
+
+def name(id):
+    return {
+        'MISRA23_25.5.3': 'Published Standards/MISRA C++ 2023/25.5.3 The pointer returned by the C++ Standard Library functions asctime, ctime, gmtime, localtime, localeconv, getenv, setlocale or strerror must not be used following a subsequent call to the same function',
+        'MISRA23_21.20': 'Published Standards/MISRA C 2023/21.20 The pointer returned by the C++ Standard Library functions asctime, ctime, gmtime, localtime, localeconv, getenv, setlocale or strerror must not be used following a subsequent call to the same function',       
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_25.5.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Mandatory',
+            'Libraries',
+        ],
+        'MISRA23_21.20': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_25.5.3': """
+<p><b>Amplification</b></p>
+<p>Calls to setlocale may change the values accessible through a pointer that was previously returned
+by localeconv.</p>
+<p>For the purposes of this rule:</p>
+<p>● A call to setlocale following a call to localeconv are treated as if they are calls to the same
+function; and</p>
+<p>● Calls to asctime and ctime are treated as if they are calls to the same function; and</p>
+<p>● Calls to gmtime and localtime are treated as if they are calls to the same function.</p>
+<p>Note: calls to setlocale or localeconv within a different thread of execution may lead to violations
+of this rule.</p>
+
+<p><b>Rationale</b></p>
+<p>The C++ Standard Library functions asctime, ctime, gmtime, localtime, localeconv, getenv,
+setlocale and strerror return a pointer to an object within the library’s implementation. The
+implementation is permitted to use static buffers for any of these objects and a second call (which
+may occur in a different thread) to the same function may modify the contents of the buffer. The value
+accessed through a pointer held by the program before a subsequent call to a function may therefore
+change unexpectedly.</p>
+<p>Note: the C++ Standard states that the behaviour of the functions covered by this rule is specified in
+the related version of ISO 9899 [6].</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1()
+{
+ const struct lconv * lc = localeconv();
+ std::string copy { lc-&gt;int_curr_symbol };
+ const char * res = std::setlocale ( LC_MONETARY, "fr_FR" );
+ std::cout &lt;&lt; lc-&gt;int_curr_symbol; // Non-compliant - use after setlocale called
+ std::cout &lt;&lt; copy; // Compliant - copy made before call
+ std::cout &lt;&lt; res; // Compliant - no subsequent call before use
+}</code></pre>
+
+<p><b>Developer's Note</b></p>
+<p>Calls to different threads will not be flagged by this check.</p>
+
+<p><b>See also</b></p>
+<p>Rule 25.5.1</p>
+""",
+
+        'MISRA23_21.20': """
+<p><b>Amplification</b></p>
+<p>For the purposes of this rule:</p>
+<p>● a call to setlocale function following a call to localeconv function shall be treated as if
+they are calls to the same function.</p>
+<p>● the asctime and ctime functions shall be treated as if they are the same function.</p>
+<p>● the gmtime and localtime functions shall be treated as if they are the same function.</p>
+
+<p><b>Rationale</b></p>
+<p>The Standard Library functions asctime, ctime, gmtime, localtime, localeconv, getenv, setlocale and
+strerror return a pointer to an object within the Standard Library. Implementations are permitted to
+use static buffers for any of these objects and a second call to the same function may modify the
+contents of the buffer. The value accessed through a pointer held by the program before a
+subsequent call to a function may therefore change unexpectedly.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1( void )
+{
+ const char *res1;
+ const char *res2;
+ char copy[ 128 ];
+
+ res1 = setlocale ( LC_ALL, 0 );
+ ( void ) strcpy ( copy, res1 );
+ res2 = setlocale ( LC_MONETARY, "French" );
+ printf ( "%s\\n", res1 ); /* Non-compliant - use after subsequent call */
+ printf ( "%s\\n", copy ); /* Compliant - copy made before subsequent call */
+ printf ( "%s\\n", res2 ); /* Compliant - no subsequent call before use */
+}</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    func_key = {
+        "strerror": 0,
+        "getenv": 1,
+        "setlocale": 2, "localeconv": 2,
+        "asctime": 3, "ctime": 3,
+        "gmtime": 4, "localtime": 4,
+    }
+        
+    for func_ref in file.filerefs("Define", "Function"):
+        assign_ents = {} # key: 0 (strerror), 1 (getenv), 2 (setlocal, localeconv) 3 (asctime, ctime) 4 (gmtime, localtime), value: ent of ptr assigned to
+        
+        for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda r: r.line()):
+            if call_ref.ent().name() not in ["asctime", "ctime", "gmtime", "localtime", "localeconv", "getenv", "setlocale", "strerror"]:
+                continue
+
+            key = func_key[call_ref.ent().name()]
+            prev_ent = None
+            flag_refs = []
+            
+            if key in assign_ents:
+                for ref in assign_ents[key].refs(""):
+                    if ref.ent().id() != func_ref.ent().id():
+                        continue
+                    elif ref.line() > call_ref.line():
+                        flag_refs.append(ref)
+
+            for assign_ref in call_ref.ent().refs("Assignby Ptr"):
+                if assign_ref.ent().parent().id() != func_ref.ent().id():
+                    continue
+
+                if (assign_ref.line() == call_ref.line()) and (assign_ref.column() == call_ref.column()):
+                    if key in assign_ents and (assign_ents[key].id() == assign_ref.ent().id()):
+                        flag_refs.clear()
+                    elif key in assign_ents:
+                        prev_ent = assign_ents[key]
+                        
+                    assign_ents[key] = assign_ref.ent()
+                    break
+
+            for ref in flag_refs:
+                check.violation(prev_ent, file, ref.line(), ref.column(), ERR1, call_ref.ent().name())
+
+    
+    
+    
+    
+    
