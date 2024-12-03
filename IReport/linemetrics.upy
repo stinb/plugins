@@ -1,0 +1,219 @@
+import understand
+
+FILE_KIND_STR="file ~unresolved ~unknown"
+FUNCTION_KIND_STR="function ~unresolved, method ~unresolved, procedure ~unresolved"
+ENT_METRICS=[
+  "CountLine",
+  "CountLineCode",
+  "CountLineComment",
+  "CountLineInactive",
+  "CountLinePreprocessor",
+  "CountLineBlank",
+  "RatioCommentToCode"
+]
+ARCH_METRICS=ENT_METRICS
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Line Metrics"
+
+def description():
+  return '''Line Metrics
+    <p>This plugin displays line metrics for the project, architectures, and
+    files.</p>'''
+
+
+def test_global(db):
+  return True
+
+def test_architecture(arch):
+  return True
+
+def test_entity(ent):
+  return ent.kind().check(FILE_KIND_STR)
+
+def init(report, target):
+  """
+  Optional method, define options that can be changed by the user
+  """
+  report.options().checkbox("chart","Show Chart",True)
+
+  if isinstance(target, understand.Arch):
+    report.options().checkbox("filePages","Show File Pages with Function Details",False)
+  if isinstance(target, understand.Db):
+    report.options().radio_vert("mode", "Mode", ["Files Only", "File Pages with Function Details", "Functions Only"], "Files Only")
+
+def pages(report, target):
+  pages = []
+
+  if isinstance(target, understand.Arch):
+    pages.append(target.longname())
+    # Architectures have a page for each child architecture
+    for child in descendents(target):
+      pages.append(child.longname())
+    if report.options().lookup("filePages"):
+      # If the option is set, then pages also exist for each file
+      visited = set()
+      for ent in target.ents(True):
+        if ent in visited or not ent.kind().check(FILE_KIND_STR):
+          continue
+        visited.add(ent)
+        pages.append(str(ent.id()))
+
+  elif isinstance(target, understand.Db):
+    # Home Page
+    pages.append("")
+    # File Pages
+    if report.options().lookup("mode") == "File Pages with Function Details":
+      for ent in sorted(db.ents(FILE_KIND_STR), key = lambda e: e.relname()):
+        pages.append(str(ent.id()))
+
+  # Entities do not have pages
+  return pages
+
+# Report generation
+def generate(report, target, page):
+  """
+  Required, generate the report
+  """
+  if isinstance(target, understand.Arch):
+    # Architecture BreadCrumbs
+    start = target.longname().split('/')
+    arch = target
+    ent = None
+    if page and page.isdigit():
+      ent = report.db().ent_from_id(int(page))
+      if ent:
+        for a in report.db().archs(ent):
+          if a.longname().startswith(target.longname()):
+            arch = a
+            break;
+    elif page and target.longname() != page:
+      for child in descendents(target):
+        if child.longname() == page:
+          arch = child
+          break
+
+    all = arch.longname().split('/')
+    pageIdList = []
+    pageNameList = []
+    for i in range(len(start)-1, len(all)):
+      pageIdList.append('/'.join(all[0:i+1]))
+      pageNameList.append(all[i])
+    if ent:
+      pageIdList.append(str(ent.id()))
+      pageNameList.append(ent.name())
+    report.breadcrumbs(pageIdList, len(pageIdList) - 1, pageNameList)
+
+    if ent:
+      entityPage(report, ent)
+    else:
+      archPage(report, arch)
+
+  if isinstance(target, understand.Db):
+    if page and page.isdigit():
+      # Database BreadCrumbs
+      ent = report.db().ent_from_id(int(page))
+      if ent:
+        report.breadcrumbs(["", str(ent.id())], 1, ["Line Metrics", ent.relname()])
+        entityPage(report, ent)
+        return
+    dbPage(report, target)
+
+  # Entities
+  if isinstance(target, understand.Ent):
+    entityPage(report, target)
+
+def linechart(report, target):
+  if not report.options().lookup("chart"):
+    return
+
+  try:
+    report.draw(target, "Line Breakdown")
+  except Exception as e:
+    report.print("Unable to draw \"Biggest Children\" chart: ")
+    report.print(str(e))
+
+def metricsTable(report, metriclist, targetlist, link=False, filenameformat="long"):
+  tbldesc = """ [{ "name" : "Name", "filtertype": "string", "sort" : "ascending" } """
+  for metric in metriclist:
+    tbldesc += ",{ \"name\": \"" + metric + "\", \"filtertype\": \"numeric\"}"
+  tbldesc += "]"
+  report.table(tbldesc)
+
+  for target in targetlist:
+    report.tablecell()
+    if isinstance(target, understand.Arch):
+      report.pagelink(target.longname())
+      report.print(target.name())
+    else:
+      isfile = target.kind().check(FILE_KIND_STR)
+      if isfile and link:
+        report.pagelink(str(target.id()))
+      if not isfile or filenameformat == "long":
+        report.print(target.longname())
+      elif filenameformat == "relative":
+        report.print(target.relname())
+      else:
+        report.print(target.name())
+    report.pagelink()
+    for m in metriclist:
+      report.tablecell()
+      val = target.metric(m)
+      if val is not None:
+        report.print(str(val))
+  report.table()
+
+def entityPage(report, file):
+  linechart(report, file)
+  ents = []
+  for ref in file.filerefs("define", FUNCTION_KIND_STR, True):
+    ents.append(ref.ent())
+  if ents:
+    metricsTable(report, ENT_METRICS, ents)
+  else:
+    report.print("No functions defined in file")
+
+def archPage(report, arch):
+  linechart(report, arch)
+  children = arch.children()
+  if children:
+    report.heading(2)
+    report.print("Child Architectures")
+    report.heading()
+    metricsTable(report, ARCH_METRICS, children, True)
+
+  ents = arch.ents();
+  if ents:
+    report.heading(2)
+    report.print("Entities")
+    report.heading()
+    metricsTable(report, ENT_METRICS, ents, report.options().lookup("filePages"), "short")
+
+  if not ents and not children:
+    report.print("Architecture is empty")
+
+def dbPage(report, db):
+  linechart(report, db)
+  mode = report.options().lookup("mode")
+  if mode == "Functions Only":
+    report.heading(2)
+    report.print("Functions")
+    report.heading()
+    metricsTable(report, ENT_METRICS, db.ents(FUNCTION_KIND_STR))
+  else:
+    report.heading(2)
+    report.print("Files")
+    report.heading()
+    metricsTable(report, ENT_METRICS, db.ents(FILE_KIND_STR),
+                 mode == "File Pages with Function Details",
+                 "relative")
+
+def descendents(arch):
+  all = []
+  for child in arch.children():
+    all.append(child)
+    all.extend(descendents(child))
+  return all
