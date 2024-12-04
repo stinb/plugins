@@ -418,11 +418,15 @@ def test_language(language):
 
 def define_options(check):
     ignoreEnums = check.id() in {'MISRA08_6-4-6', 'M6-4-6', 'CPP_C031'}
+    last = check.id() not in {'MISRA12_16.4', 'MISRA23_16.4'}
     check.options().checkbox('ignoreEnums', 'Ignore enums if all have cases', ignoreEnums)
+    check.options().checkbox('last', 'Default label must be last', last)
 
 
 def check(check, file):
     ignoreEnums = check.options().lookup('ignoreEnums')
+    last = check.options().lookup('last')
+    lexer = None
 
     for ref in file.filerefs('Define', 'Function', True):
         ent = ref.ent()
@@ -436,7 +440,7 @@ def check(check, file):
         for switch in cfg.nodes():
 
             # Skip unless node is switch missing a default clause at the end
-            if switch.kind() != 'switch' or lastNodeIsDefault(switch, ref.file(), ignoreEnums):
+            if switch.kind() != 'switch' or lastNodeIsDefault(switch, ref.file(), ignoreEnums, last, lexer):
                 continue
 
             # Get } if using the strict parser, and the switch keyword for fuzzy
@@ -447,14 +451,32 @@ def check(check, file):
             check.violation(ent, ref.file(), endSwitch.line_end(), endSwitch.column_end(), ERR1)
 
 
-def lastNodeIsDefault(switch, file, ignoreEnums):
+def lastNodeIsDefault(switch, file, ignoreEnums, last, lexer):
     # Basic case
     if switch.children()[-1].kind() == 'switch-default':
         return True
+    elif not last:
+        for child in switch.children():
+            if child.kind() == 'switch-default':
+                if not lexer:
+                    if not file.lexer():
+                        return
+                    lexer = file.lexer(True)
+                lex = lexer.lexeme(child.line_begin(), child.column_begin())
+                if lex and lex.text() == 'default':
+                    lex = lex.next(True, True)
+                    if lex and lex.text() == ':':
+                        lex = lex.next(True, True)
+                        if lex and lex.text() not in {'}', 'default', 'case', ';'}:
+                            return True
+                    
 
     # Optional case: each enumerator has a case
     if ignoreEnums:
-        lexer = file.lexer(True)
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer(True)
 
         # Get enum type
         lex = lexer.lexeme(switch.line_begin(), switch.column_begin())

@@ -32,5 +32,5 @@ void f()
     case GREEN:
       break;
 
-  } // UndCC_Violation(strict)
+  } // UndCC_Violation(strict, last)
 }

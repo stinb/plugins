@@ -53,5 +53,5 @@ void h()
     case BLUE:
       next = RED;
       break;
-  }                   /* UndCC_Violation(strict)  */
+  }                   /* UndCC_Violation(strict, last)  */
 }

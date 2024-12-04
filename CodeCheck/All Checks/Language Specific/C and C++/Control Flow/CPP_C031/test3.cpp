@@ -81,7 +81,7 @@ void violation2()
   switch (0) {
     default : break;
     case 0 : ;
-  }                 // UndCC_Violation - case after default
+  }                 // UndCC_Violation(strict, ignore) - case after default
 }
 
 void violation3()
