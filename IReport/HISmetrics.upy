@@ -1,0 +1,185 @@
+import understand
+
+FILE_KIND_STR="file ~unresolved ~unknown"
+FUNCTION_KIND_STR=("ada entry, ada function, ada procedure, ada protected, ada task,"
+  "c function,"
+  "csharp method,"
+  "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+  "java method,"
+  "jovial subroutine,"
+  "pascal compunit, pascal function, pascal procedure,"
+  "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
+  "web function, web method")
+
+HIS_NAMES=["COMF", "PATH", "GOTO", "v(G)", "CALLING", "CALLS", "PARAM", "STMT",
+           "LEVEL", "RETURN", "VOCF", "AP_CG_CYCLE", "SCHG", "SDEL", "SNEW", "S"]
+
+def name():
+  return "HIS Metrics"
+
+def description():
+  return '''<p>Display the Hersteller Software Initiative metrics for functions</p>
+  <p>When run on a function, display the HIS metrics for that function. When
+  run on a file, architecture, or project, show a table with the HIS metrics
+  as columns and a row for each function.</p>
+  <p>See https://emenda.com/his/ for HIS Metrics. This report includes the
+  following metrics:</p>
+  <h3>HIS Metrics - Understand Metric</h3>
+  <ul>
+  <li>Comment Density (COMF) - RatioCommentsWithBeforeToCode</li>
+  <li>Number of paths (PATH) - CountPath</li>
+  <li>Number of Goto Statements (GOTO) - CountGoTo</li>
+  <li>Cyclomatic Complexity (v(G)) - cyclomatic variant controlled with option</li>
+  <li>Number of Calling Functions (CALLING) - CountCallbyUnique</li>
+  <li>Number of Called Functions (CALLS) - CountCallsUnique</li>
+  <li>Number of Function Parameters (PARAM) - CountParams</li>
+  <li>Number of Instructions (STMT) - CountStmt</li>
+  <li>Number of Call Levels (LEVEL) - MaxCallDepth (-1 if cycles/recursion)</li>
+  <li>Number of Return points (RETURN) - CountEarlyExit</li>
+  <li>Language Scope (VOCF) - LanguageScope</li>
+  <li>Number of recursions (AP_CG_CYCLE) - MinRecursiveDepth (0 if not recursive)</li>
+  </ul>
+
+  <p>If a comparison database has been set, then the following additional metrics
+  are included. Note that the reported metrics are all line based, not statement
+  based.</p>
+  <ul>
+  <li>Statements Changed (SCHG) - CountLineChanged</li>
+  <li>Statements Deleted (SDEL) - CountLineRemoved</li>
+  <li>New Statements (SNEW) - CountLineNew</li>
+  <li>Stability Index (S) - (1 - PercentChanged), inverted so 1.0 is stable</li>
+  </ul>
+  '''
+
+def test_global(db):
+  return True
+
+def test_architecture(arch):
+  return True
+
+def test_entity(ent):
+  # file or entity kind
+  return ent.kind().check(FILE_KIND_STR + "," + FUNCTION_KIND_STR)
+
+def init(report, target):
+  report.options().choice("cyclomatic","Cyclomatic Metric", ["Cyclomatic","CyclomaticModified","CyclomaticStrict","CyclomaticStrictModified"],"CyclomaticModified")
+  report.options().checkbox("cmp", "Show comparison metrics if comparison database is available", True)
+
+  report.options().label("thresholdslbl",("Highlight values that exceed the "
+                                        "following thresholds. COMF and S "
+                                        "are percentages (ie 20 means 20% or"
+                                        "a threshold of 0.2)"))
+  report.options().integer("COMF","Minimum Comment Density (COMF) - RatioCommentsWithBeforeToCode",20)
+  report.options().integer("PATH","Maximum Number of paths (PATH) - CountPath",80)
+  report.options().integer("GOTO","Maximum Number of Goto Statements (GOTO) - CountGoTo",0)
+  report.options().integer("v(G)","Maximum Cyclomatic Complexity (v(G)) - selected above",20)
+  report.options().integer("CALLING","Maximum Number of Calling Functions (CALLING) - CountCallbyUnique",5)
+  report.options().integer("CALLS","Maximum Number of Called Functions (CALLS) - CountCallsUnique",7)
+  report.options().integer("PARAM","Maximum Number of Function Parameters (PARAM) - CountParams", 5)
+  report.options().integer("STMT","Maximum Number of Instructions (STMT) - CountStmt",50)
+  report.options().integer("LEVEL","Maximum Number of Call Levels (LEVEL) - MaxCallDepth",4)
+  report.options().integer("RETURN","Maximum Number of return points (RETURN) - CountEarlyExit (so recommendation is 0)",0)
+  report.options().integer("VOCF","Maximum Language Scope (VOCF) - LanguageScope",4)
+  report.options().integer("AP_CG_CYCLE","Maximum Number of recursions (AP_CG_CYCLE) - MinRecursiveDepth",0)
+  report.options().integer("SCHG","Maximum Statements Changed (SCHG) - CountLineChanged",100)
+  report.options().integer("SDEL","Maximum Statements Deleted (SDEL) - CountLineRemoved",100)
+  report.options().integer("SNEW","Maximum New Statements (SNEW) - CountLineNew",100)
+  report.options().integer("S","Minimum Stability Index (S) - (1 - PercentChanged)",50)
+
+
+# Report generation
+def generate(report, target, page):
+  """
+  Required, generate the report
+  """
+  ents = set()
+
+  if isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check(FUNCTION_KIND_STR):
+        ents.add(ent)
+      elif ent.kind().check(FILE_KIND_STR):
+        file_ents(ent, ents)
+
+  elif isinstance(target, understand.Db):
+    ents = target.ents(FUNCTION_KIND_STR)
+
+  # Entities
+  elif isinstance(target, understand.Ent):
+    if target.kind().check(FUNCTION_KIND_STR):
+      report.table(["Metric","Value"])
+      his_metrics(report, target, True)
+      report.table()
+      return
+    file_ents(target, ents)
+
+  end = None
+  if not report.options().lookup("cmp") or not report.db().comparison_db():
+    end = -4
+  tbldesc = """ [{ "name" : "Name", "filtertype": "string", "sort" : "ascending" } """
+  for metric in HIS_NAMES[:end]:
+    tbldesc += ",{ \"name\": \"" + metric + "\", \"filtertype\": \"numeric\"}"
+  tbldesc += "]"
+  report.table(tbldesc)
+  for ent in ents:
+    his_metrics(report, ent)
+  report.table()
+
+def file_ents(file, ents):
+  for ref in file.filerefs("define, ada declare body, vhdl declare", FUNCTION_KIND_STR, True):
+    ents.add(ref.ent())
+
+def his_metrics(report, func, columns=False):
+  vals = [
+    func.metric("RatioCommentsWithBeforeToCode"),
+    func.metric("CountPath"),
+    func.metric("CountGoTo"),
+    func.metric(report.options().lookup("cyclomatic")),
+    func.metric("CountCallbyUnique"),
+    func.metric("CountCallsUnique"),
+    func.metric("CountParams"),
+    func.metric("CountStmt"),
+    func.metric("MaxCallDepth"),
+    func.metric("CountEarlyExit"),
+    func.metric("LanguageScope"),
+    func.metric("MinRecursiveDepth")
+  ]
+
+  if report.options().lookup("cmp"):
+    vals.extend([
+      func.metric("CountLineChanged"),
+      func.metric("CountLineRemoved"),
+      func.metric("CountLineNew"),
+      func.metric("PercentChanged")
+    ])
+    # Invert percent changed so 0 is bad and 1 is good for stability index
+    # PercentChanged will end in % so strip that from the string
+    if vals[-1] is not None:
+      vals[-1] = "{:.2f}".format((100.0 - float(vals[-1][:-1]))/100.0)
+
+  if not columns:
+    report.tablecell()
+    report.print(func.longname())
+
+  for i, val in enumerate(vals):
+    if columns:
+      report.tablecell()
+      report.print(HIS_NAMES[i])
+
+    report.tablecell()
+    if val is None:
+      continue
+
+    threshold = report.options().lookup(HIS_NAMES[i])
+    if threshold is not None:
+      if isinstance(val, str):
+        if HIS_NAMES[i] == "VOCF":
+          if float(val) > threshold:
+            report.fontcolor("#e45721")
+        elif float(val) * 100 < threshold:
+          report.fontcolor("#e45721")
+      elif val > threshold:
+        report.fontcolor("#e45721")
+
+    report.print(str(val))
+    report.fontcolor()
