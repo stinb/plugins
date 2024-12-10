@@ -1,0 +1,176 @@
+# The bar layout this graph plugin uses requires build 1191 or later
+
+import bisect
+import math
+import understand
+
+FUNCTION_KIND_STR=("ada entry, ada function, ada procedure, ada protected, ada task,"
+  "c function,"
+  "csharp method,"
+  "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+  "java method,"
+  "jovial subroutine,"
+  "pascal compunit, pascal function, pascal procedure,"
+  "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
+  "web function, web method")
+FILE_KIND_STR="file ~unresolved ~unknown"
+BINS=10
+
+def name():
+  return "Functions Metric Histogram"
+
+def description():
+  return '''<p>Display a histogram of metric values for functions.</p>
+    <p>For a file, architecture, or project, create a histogram of the function
+    values for the selected metric (defaults to Cyclomatic).</p>
+  '''
+
+def test_architecture(arch):
+  return True;
+
+def test_entity(ent):
+  return ent.kind().check("file ~unknown ~unresolved")
+
+def test_global(db):
+  return True
+
+def init(graph, target):
+  metlist = understand.Metric.list(FUNCTION_KIND_STR)
+  # Because understand.Metric.list(kindstring) does not have a database argument
+  # it won't contain metric plugins (whose test_available function provides
+  # a database). Even if it did take a database, it would only list
+  # enabled plugins. So, it's not ideal, but manually list metric plugins that
+  # ireports using this histogram may request.
+  metlist.extend([
+    # HIS Metrics
+    "RatioCommentsWithBeforeToCode",
+    "CountGoTo",
+    "CountCallbyUnique",
+    "CountCallsUnique",
+    "CountParams",
+    "MaxCallDepth",
+    "CountEarlyExit",
+    "LanguageScope",
+    "MinRecursiveDepth",
+    "StabilityIndex",
+
+    # Diff Metrics
+    "CountLineChanged",
+    "CountLineRemoved",
+    "CountLineNew",
+  ])
+
+  graph.options().define("Metric", metlist, "Cyclomatic")
+  graph.options().define("RankDir", ["LR", "RL", "TB", "BT"], "BT")
+  graph.options().define("Node Labels", ["Off", "On"], "Off")
+  graph.options().define("Log Scale", ["Off", "On", "Auto"], "Auto")
+
+  graph.options().define("Threshold", ["None", "Max Integer", "Max Percent", "Min Integer", "Min Percent"], "None")
+
+  # Messy, since we really just want to pass in an integer, but support integers
+  # between 0 and 100
+  cutoffs = []
+  for i in range(0,101):
+    cutoffs.append(str(i))
+  graph.options().define("Cutoff", cutoffs, "0")
+
+def draw(graph, target):
+  graph.set("layout", "bar") # Override default layout algorithm (Usually dot)
+  graph.set("rankdir", graph.options().lookup("RankDir"))
+  graph.default("color", "#4e8cb9", "node")
+  graph.default("fillcolor", "#4e8cb9", "node")
+  graph.default("fontcolor", "#FFFFFF", "node")
+
+  ents = set()
+  if isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check(FUNCTION_KIND_STR):
+        ents.add(ent)
+      elif ent.kind().check(FILE_KIND_STR):
+        file_ents(ent, ents)
+  elif isinstance(target, understand.Db):
+    ents = target.ents(FUNCTION_KIND_STR)
+  elif isinstance(target, understand.Ent):
+    file_ents(target, ents)
+
+  vals = []
+  minimum = None
+  maximum = None
+  metric = graph.options().lookup("Metric")
+  isfloat = False
+  for func in ents:
+    v = func.metric(metric)
+    if v is not None:
+      if isinstance(v,str):
+        if v.endswith('%'):
+          v = v[:-1]
+        v = float(v)
+        isfloat = True
+      vals.append(v)
+      if minimum is None or v < minimum:
+        minimum = v
+      if maximum is None or v > maximum:
+        maximum = v
+
+  if not vals:
+    return # nothing to draw
+
+  binwidth = (maximum - minimum) / BINS
+  if not isfloat:
+    binwidth = max(int(binwidth), 1)
+  bins = [minimum]
+  while bins[-1] <= maximum:
+    bins.append(minimum + binwidth*len(bins))
+
+  cnts = [0] * len(bins)
+  for v in vals:
+    idx = bisect.bisect_left(bins, v)
+    if idx > 0 and bins[idx] != v:
+      idx -= 1
+    cnts[idx] += 1
+
+  logopt = graph.options().lookup("Log Scale")
+  if logopt == "Auto":
+    # use log scale if range is greater than two orders of magnitude. Add 1 to
+    # min to account for 0
+    logscale = min(cnts) + 1 < max(cnts)/100
+  else:
+    logscale = logopt == "On"
+
+  # Create stacked bar chart from counts
+  node_labels = graph.options().lookup("Node Labels") == "On"
+  for i in range(len(bins)-1):
+    c = graph.cluster(" {:.2g} ".format(bins[i]))
+    if not cnts[i]:
+      continue
+
+    area = cnts[i]
+    n = c.node(str(cnts[i])) if node_labels else c.node()
+    if isfloat:
+      n.set("tooltip", "{} function(s) with {} value >= {:.2f} and < {:.2f}".format(area,metric,bins[i],bins[i+1]))
+    else:
+      n.set("tooltip", "{} function(s) with {} value >= {} and < {}".format(area,metric,bins[i],bins[i+1]))
+
+    if logscale:
+      area = math.log10(area) + 1 # make sure area is greater than 0
+    n.set("area", str(area))
+
+    if fails_threshold(graph, bins[i]):
+      n.set("color", "#e45721")
+      n.set("fillcolor", "#e45721")
+
+def file_ents(file, ents):
+  for ref in file.filerefs("define, ada declare body, vhdl declare", FUNCTION_KIND_STR, True):
+    ents.add(ref.ent())
+
+def fails_threshold(graph, value):
+  threshold = graph.options().lookup("Threshold")
+  if threshold == "None":
+    return False # No thresholding, does not fail
+
+  cutoff = int(graph.options().lookup("Cutoff"))
+  if threshold.endswith("Percent"):
+    cutoff = cutoff / 100.0
+  if threshold.startswith("Max"):
+    return value > cutoff
+  return value < cutoff

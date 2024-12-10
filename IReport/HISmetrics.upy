@@ -11,13 +11,36 @@ FUNCTION_KIND_STR=("ada entry, ada function, ada procedure, ada protected, ada t
   "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
   "web function, web method")
 
-HIS_NAMES=["COMF", "PATH", "GOTO", "v(G)", "CALLING", "CALLS", "PARAM", "STMT",
-           "LEVEL", "RETURN", "VOCF", "AP_CG_CYCLE", "SCHG", "SDEL", "SNEW", "S"]
+# (Acronymn, Name, Understand ID, Details, Max True, Default)
+HIS_INFO=[
+  ("COMF", "Comment Density", "RatioCommentsWithBeforeToCode", "", False, 20),
+  ("PATH", "Number of Paths", "CountPath", "", True, 80),
+  ("GOTO", "Number of Goto Statements", "CountGoTo", "", True, 0),
+  ("v(G)", "Cyclomatic Complexity", "", "cyclomatic variant controlled with option", True, 20),
+  ("CALLING", "Number of Calling Functions", "CountCallbyUnique", "", True, 5),
+  ("CALLS", "Number of Called Functions", "CountCallsUnique", "", True, 7),
+  ("PARAM", "Number of Function Parameters", "CountParams", "", True, 5),
+  ("STMT", "Number of Instructions", "CountStmt", "", True, 50),
+  ("LEVEL", "Number of Call Levels","MaxCallDepth", "-1 if cycles/recursion. WARNING: Expanding call trees can take a long time", True, 4),
+  ("RETURN", "Number of Return points", "CountEarlyExit", "only counts early returns, so expected is 0", True, 0),
+  ("VOCF", "Language Scope", "LanguageScope", "", True, 4),
+  ("AP_CG_CYCLE", "Number of recursions", "MinRecursiveDepth", "0 if function is not recursive. WARNING: Expanding call trees can take a long time", True, 0),
+  ("SCHG", "Statements Changed", "CountLineChanged", "", True, 100),
+  ("SDEL", "Statements Deleted", "CountLineRemoved", "", True, 100),
+  ("SNEW", "New Statements", "CountLineNew", "", True, 100),
+  ("S", "Stability Index", "StabilityIndex", "", False, 50)
+]
+
+CMP_IDS = ["CountLineChanged", "CountLineRemoved", "CountLineNew", "StabilityIndex"]
 
 def name():
   return "HIS Metrics"
 
 def description():
+  options = []
+  for acronym, name, id, details, dir, threshold in HIS_INFO:
+    options.append("<li>{} ({}) - {} {}</li>".format(name, acronym, id, details))
+
   return '''<p>Display the Hersteller Software Initiative metrics for functions</p>
   <p>When run on a function, display the HIS metrics for that function. When
   run on a file, architecture, or project, show a table with the HIS metrics
@@ -25,31 +48,13 @@ def description():
   <p>See https://emenda.com/his/ for HIS Metrics. This report includes the
   following metrics:</p>
   <h3>HIS Metrics - Understand Metric</h3>
-  <ul>
-  <li>Comment Density (COMF) - RatioCommentsWithBeforeToCode</li>
-  <li>Number of paths (PATH) - CountPath</li>
-  <li>Number of Goto Statements (GOTO) - CountGoTo</li>
-  <li>Cyclomatic Complexity (v(G)) - cyclomatic variant controlled with option</li>
-  <li>Number of Calling Functions (CALLING) - CountCallbyUnique</li>
-  <li>Number of Called Functions (CALLS) - CountCallsUnique</li>
-  <li>Number of Function Parameters (PARAM) - CountParams</li>
-  <li>Number of Instructions (STMT) - CountStmt</li>
-  <li>Number of Call Levels (LEVEL) - MaxCallDepth (-1 if cycles/recursion)</li>
-  <li>Number of Return points (RETURN) - CountEarlyExit</li>
-  <li>Language Scope (VOCF) - LanguageScope</li>
-  <li>Number of recursions (AP_CG_CYCLE) - MinRecursiveDepth (0 if not recursive)</li>
-  </ul>
+  <ul> {} </ul>
 
   <p>If a comparison database has been set, then the following additional metrics
   are included. Note that the reported metrics are all line based, not statement
   based.</p>
-  <ul>
-  <li>Statements Changed (SCHG) - CountLineChanged</li>
-  <li>Statements Deleted (SDEL) - CountLineRemoved</li>
-  <li>New Statements (SNEW) - CountLineNew</li>
-  <li>Stability Index (S) - (1 - PercentChanged), inverted so 1.0 is stable</li>
-  </ul>
-  '''
+  <ul> {} </ul>
+  '''.format("".join(options[:-4]), "".join(options[-4:]))
 
 def test_global(db):
   return True
@@ -61,30 +66,27 @@ def test_entity(ent):
   # file or entity kind
   return ent.kind().check(FILE_KIND_STR + "," + FUNCTION_KIND_STR)
 
+def support_abort():
+  return True
+
 def init(report, target):
+  def_disabled = CMP_IDS
+  if not isinstance(target, understand.Ent) or target.kind().check(FILE_KIND_STR):
+    report.options().checkbox("charts", "Show Charts", True)
+    # Don't calculate these by default for all functions because they take a long time
+    def_disabled.append("MaxCallDepth")
+    def_disabled.append("MinRecursiveDepth")
+
   report.options().choice("cyclomatic","Cyclomatic Metric", ["Cyclomatic","CyclomaticModified","CyclomaticStrict","CyclomaticStrictModified"],"CyclomaticModified")
-  report.options().checkbox("cmp", "Show comparison metrics if comparison database is available", True)
 
   report.options().label("thresholdslbl",("Highlight values that exceed the "
                                         "following thresholds. COMF and S "
-                                        "are percentages (ie 20 means 20% or"
+                                        "are percentages (ie 20 means 20% or "
                                         "a threshold of 0.2)"))
-  report.options().integer("COMF","Minimum Comment Density (COMF) - RatioCommentsWithBeforeToCode",20)
-  report.options().integer("PATH","Maximum Number of paths (PATH) - CountPath",80)
-  report.options().integer("GOTO","Maximum Number of Goto Statements (GOTO) - CountGoTo",0)
-  report.options().integer("v(G)","Maximum Cyclomatic Complexity (v(G)) - selected above",20)
-  report.options().integer("CALLING","Maximum Number of Calling Functions (CALLING) - CountCallbyUnique",5)
-  report.options().integer("CALLS","Maximum Number of Called Functions (CALLS) - CountCallsUnique",7)
-  report.options().integer("PARAM","Maximum Number of Function Parameters (PARAM) - CountParams", 5)
-  report.options().integer("STMT","Maximum Number of Instructions (STMT) - CountStmt",50)
-  report.options().integer("LEVEL","Maximum Number of Call Levels (LEVEL) - MaxCallDepth",4)
-  report.options().integer("RETURN","Maximum Number of return points (RETURN) - CountEarlyExit (so recommendation is 0)",0)
-  report.options().integer("VOCF","Maximum Language Scope (VOCF) - LanguageScope",4)
-  report.options().integer("AP_CG_CYCLE","Maximum Number of recursions (AP_CG_CYCLE) - MinRecursiveDepth",0)
-  report.options().integer("SCHG","Maximum Statements Changed (SCHG) - CountLineChanged",100)
-  report.options().integer("SDEL","Maximum Statements Deleted (SDEL) - CountLineRemoved",100)
-  report.options().integer("SNEW","Maximum New Statements (SNEW) - CountLineNew",100)
-  report.options().integer("S","Minimum Stability Index (S) - (1 - PercentChanged)",50)
+  for acronym, name, id, details, dir, threshold in HIS_INFO:
+    report.options().label(acronym +"_label", "{} ({}) - {} {}".format(name, acronym,id, details))
+    report.options().checkbox(acronym + "_enable", "Enable", id not in def_disabled)
+    report.options().integer(acronym, "Maximum" if dir else "Minimum", threshold)
 
 
 # Report generation
@@ -108,21 +110,73 @@ def generate(report, target, page):
   elif isinstance(target, understand.Ent):
     if target.kind().check(FUNCTION_KIND_STR):
       report.table(["Metric","Value"])
+      end = None if report.options().lookup("cmp") else -4
       his_metrics(report, target, True)
       report.table()
       return
     file_ents(target, ents)
 
-  end = None
-  if not report.options().lookup("cmp") or not report.db().comparison_db():
-    end = -4
+  if report.options().lookup("charts"):
+    report.heading(2)
+    report.print("Charts")
+    report.heading()
+
+  tried_cmp = False
+
   tbldesc = """ [{ "name" : "Name", "filtertype": "string", "sort" : "ascending" } """
-  for metric in HIS_NAMES[:end]:
-    tbldesc += ",{ \"name\": \"" + metric + "\", \"filtertype\": \"numeric\"}"
+  for acronym, name, id, details, dir, threshold in HIS_INFO:
+    if not report.options().lookup(acronym + "_enable"):
+      continue
+
+    if id in CMP_IDS and not tried_cmp:
+      # Request the comparison database to open it if it isn't open already
+      report.db().comparison_db()
+      tried_cmp = True
+
+    if report.options().lookup("charts"):
+      if not id:
+        id = report.options().lookup("cyclomatic")
+      threshold = report.options().lookup(acronym)
+      opts = "Node Labels=On;Metric="+id
+      if threshold is not None and threshold >= 0 and threshold <= 100:
+        if dir:
+          opts += ";Threshold=Max Integer;Cutoff={}".format(threshold)
+          threshold = "<= {}".format(threshold)
+        else:
+          opts += ";Threshold=Min Percent;Cutoff={}".format(threshold)
+          threshold = ">= {:.2f}".format(threshold / 100.0)
+      else:
+        threshold = ""
+      report.heading(4)
+      report.align("center")
+      report.print("{} ({}) {} - {} {}".format(name, acronym, threshold, id, details))
+      report.heading()
+      report.align()
+
+      try:
+        report.draw(target, "Functions Metric Histogram", opts)
+      except Exception as e:
+        report.print(str(e))
+
+    tbldesc += ",{ \"name\": \"" + acronym + "\", \"filtertype\": \"numeric\"}"
   tbldesc += "]"
+
+  if report.options().lookup("charts"):
+    report.heading(2)
+    report.print("Functions")
+    report.heading()
+
   report.table(tbldesc)
-  for ent in ents:
+  prog_max = len(ents)
+  last_prog = 0
+  for i, ent in enumerate(ents):
     his_metrics(report, ent)
+    if report.is_aborted():
+      return
+    cur_prog = int(i / prog_max * 100) # percentage
+    if cur_prog > last_prog:
+      report.progress(cur_prog)
+      last_prog = cur_prog
   report.table()
 
 def file_ents(file, ents):
@@ -130,50 +184,37 @@ def file_ents(file, ents):
     ents.add(ref.ent())
 
 def his_metrics(report, func, columns=False):
-  vals = [
-    func.metric("RatioCommentsWithBeforeToCode"),
-    func.metric("CountPath"),
-    func.metric("CountGoTo"),
-    func.metric(report.options().lookup("cyclomatic")),
-    func.metric("CountCallbyUnique"),
-    func.metric("CountCallsUnique"),
-    func.metric("CountParams"),
-    func.metric("CountStmt"),
-    func.metric("MaxCallDepth"),
-    func.metric("CountEarlyExit"),
-    func.metric("LanguageScope"),
-    func.metric("MinRecursiveDepth")
-  ]
+  his_ids = []
+  vals = []
+  for item in HIS_INFO:
+    if not report.options().lookup(item[0] + "_enable"):
+      continue
 
-  if report.options().lookup("cmp"):
-    vals.extend([
-      func.metric("CountLineChanged"),
-      func.metric("CountLineRemoved"),
-      func.metric("CountLineNew"),
-      func.metric("PercentChanged")
-    ])
-    # Invert percent changed so 0 is bad and 1 is good for stability index
-    # PercentChanged will end in % so strip that from the string
-    if vals[-1] is not None:
-      vals[-1] = "{:.2f}".format((100.0 - float(vals[-1][:-1]))/100.0)
+    id = item[2]
+    if not id:
+      id = report.options().lookup("cyclomatic")
+    vals.append(func.metric(id))
+    his_ids.append(item[0])
 
   if not columns:
     report.tablecell()
+    report.entity(func)
     report.print(func.longname())
+    report.entity()
 
-  for i, val in enumerate(vals):
+  for his_id, val in zip(his_ids, vals):
     if columns:
       report.tablecell()
-      report.print(HIS_NAMES[i])
+      report.print(his_id)
 
     report.tablecell()
     if val is None:
       continue
 
-    threshold = report.options().lookup(HIS_NAMES[i])
+    threshold = report.options().lookup(his_id)
     if threshold is not None:
       if isinstance(val, str):
-        if HIS_NAMES[i] == "VOCF":
+        if his_id == "VOCF":
           if float(val) > threshold:
             report.fontcolor("#e45721")
         elif float(val) * 100 < threshold:
