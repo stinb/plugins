@@ -1,12 +1,12 @@
 void test( int x, y, z) 
 {
-	switch ( x ) // UndCC_Violation(1)
+	switch ( x ) // UndCC_Violation
 	{
 	 default: 
 	 x = 0;
 	 break;
 	}
-	switch ( y ) // UndCC_Violation(1)
+	switch ( y ) // UndCC_Violation
 	{
 	 case 1:{}
 	 default: 
