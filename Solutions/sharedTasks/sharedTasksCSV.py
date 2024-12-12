@@ -47,9 +47,9 @@ def entComparator(a: Ent, b: Ent) -> int:
 entComparator = functools.cmp_to_key(entComparator)
 
 
-def printEnt(report: IReport, ent: Ent):
+def printEnt(report: IReport, ent: Ent, options: dict[str, str | bool]):
     report.entity(ent)
-    report.print(ent.name())
+    report.print(getLongName(ent, options))
     report.entity()
 
 
@@ -108,7 +108,7 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
             continue
 
         # Info for each column for all rows of the object
-        objectName = obj.name()
+        objectName = getLongName(obj, options)
         shared = 'x' if len(fromTasksFiltered) > 1 else '-'
 
         # Make rows for each incoming edge to the object
@@ -118,7 +118,7 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
             # Info for each column for all rows of the edge
             protected = 'x' if refStr(edgeObj['ref']) in interruptDisabledRefs else '-'
             function = edgeObj['scope']
-            functionName = edgeObj['scope'].name()
+            functionName = getLongName(edgeObj['scope'], options)
             reference = []
             for kindname in edgeObj['kindnames']:
                 reference.append(kindname[0])
@@ -140,13 +140,13 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
 
                 # Make the clickable row for interactive report
                 if report:
-                    printEnt(report, obj)
+                    printEnt(report, obj, options)
                     report.print(f', {shared}, {protected}, ')
-                    printEnt(report, function)
+                    printEnt(report, function, options)
                     report.print(f', {reference}, ')
                     printFile(report, file)
                     report.print(', ')
-                    printEnt(report, task)
+                    printEnt(report, task, options)
                     if entFields:
                       report.print(', ' + ', '.join(entFields))
                     report.print('\n')
@@ -222,7 +222,6 @@ def printArguments(options: tuple[Option]):
     for option in options:
         # Key and value
         print(f'    -{option.key} VALUE')
-        print(f'        {option.value}')
 
         # Skip if no default value
         if not option.default:
@@ -251,10 +250,10 @@ def printHelpAndExit(expected: str | None = None, actual: str | None = None):
 
     else:
         print('Required arguments:')
-        printArguments(CSV_OPTIONS)
+        printArguments(REQUIRED_CLI_OPTIONS)
         print()
         print('Optional arguments:')
-        printArguments(REQUIRED_CLI_OPTIONS)
+        printArguments(CSV_OPTIONS)
 
     exit()
 
@@ -271,7 +270,7 @@ def parseArguments() -> dict[str, str | bool]:
     argKey: str | None = None
     for arg in sys.argv[1:]:
         # Help argument
-        if arg in {'-h', '-help', 'help'}:
+        if arg in {'-h', '-help', '--help', 'help'}:
             printHelpAndExit()
 
         # Argument key
@@ -304,9 +303,11 @@ def parseArguments() -> dict[str, str | bool]:
                 printHelpAndExit(f'value for -{optionKey}', arg)
         # Option type: string from choices
         elif option.choices:
-            lowerChoices = set(map(str.lower, option.choices))
-            if arg in lowerChoices:
-                result[optionKey] = arg
+            argLower = arg.lower()
+            for choice in option.choices:
+                if argLower == choice.lower():
+                    result[optionKey] = choice
+                    break
             # Fail if the choice was bad
             else:
                 printHelpAndExit(f'value for -{optionKey}', arg)
