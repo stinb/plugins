@@ -479,6 +479,49 @@ def buildEdgeInfo(
 
     interruptDisabledRefs = findInterruptDisabledRefs(db, enableDisableFunctions, options)
 
+    # Decide whether the nodes are shared
+    sharedObjects: dict[Ent, bool] = dict()
+    fromRootsFiltered = set()
+    for edgeObj in edgeInfo.values():
+        ent = edgeObj['ent']
+        if ent not in sharedObjects:
+            # See how many root functions each node it's from
+            fromRootsFiltered.clear()
+            if ent.kind().check(OBJ_ENT_KINDS):
+                edgeKeys = incoming[ent] if ent in incoming else set()
+                for edgeKey in edgeKeys:
+                    info = edgeInfo[edgeKey]
+                    if not info['filtered'] and refStr(info['ref']) not in interruptDisabledRefs:
+                        fromRootsFiltered.update(info['from'])
+            sharedObjects[ent] = len(fromRootsFiltered) > 1
+        # Remember that it's shared
+        edgeObj['shared'] = sharedObjects[ent]
+
+    # If shared only, then delete edges to non-shared objects
+    if options[OBJECTS] == 'Shared only':
+        for edgeKey, edgeObj in edgeInfo.copy().items():
+            scope = edgeObj['scope']
+            ent = edgeObj['ent']
+            # Skip if not a shared object
+            if edgeObj['shared'] or not ent.kind().check(OBJ_ENT_KINDS):
+                continue
+            # Delete incoming edges leading to a dead end
+            edgeKeysToDeleteStack: list[str] = [edgeKey]
+            while edgeKeysToDeleteStack:
+                # Pop the edge from the stack
+                edgeKey = edgeKeysToDeleteStack.pop()
+                scope = edgeInfo[edgeKey]['scope']
+                ent = edgeInfo[edgeKey]['ent']
+                # If there are no other outgoing edges (siblings)
+                if len(outgoing[scope]) == 1:
+                    # Push the incoming edges to the stack
+                    for otherEdgeKey in incoming[scope]:
+                        edgeKeysToDeleteStack.append(otherEdgeKey)
+                # Delete the edge
+                outgoing[scope].remove(edgeKey)
+                incoming[ent].remove(edgeKey)
+                del edgeInfo[edgeKey]
+
     return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
 
 

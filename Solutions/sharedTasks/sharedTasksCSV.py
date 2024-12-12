@@ -245,7 +245,7 @@ def printHelpAndExit(expected: str | None = None, actual: str | None = None):
         print('Error parsing arguments:')
         print(f'    expected: {expected}')
         if actual:
-            print(f'    actual:   {actual}')
+            print(f'    actual:   "{actual}"')
         print('    help: [\'-h\']')
 
     else:
@@ -304,13 +304,15 @@ def parseArguments() -> dict[str, str | bool]:
         # Option type: string from choices
         elif option.choices:
             argLower = arg.lower()
+            allowedChoice = False
             for choice in option.choices:
                 if argLower == choice.lower():
                     result[optionKey] = choice
+                    allowedChoice = True
                     break
             # Fail if the choice was bad
-            else:
-                printHelpAndExit(f'value for -{optionKey}', arg)
+            if not allowedChoice:
+                printHelpAndExit(f'value for -{optionKey} from {option.choices}', arg)
         # Option type: string
         else:
             result[optionKey] = arg
