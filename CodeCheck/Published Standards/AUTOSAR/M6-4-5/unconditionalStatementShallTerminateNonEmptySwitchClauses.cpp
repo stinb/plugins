@@ -24,6 +24,14 @@ int main () {
 	default: // UndCC_Violation
 	  ;       
   }
+  switch(x_645) // UndCC_Valid
+  {
+  case 0:
+    if (b_645) {
+      return;
+    }
+    break;
+  }
 }
 
 
