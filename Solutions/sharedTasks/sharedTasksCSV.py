@@ -330,7 +330,11 @@ def parseArguments() -> dict[str, str | bool]:
     # Add missing optional arguments
     for option in CSV_OPTIONS:
         if option.key not in result:
-            result[option.key] = option.default
+            if option.choices == OPTION_BOOL_CHOICES:
+                value = option.default == OPTION_BOOL_TRUE
+            else:
+                value = option.default
+            result[option.key] = value
 
     return result
 

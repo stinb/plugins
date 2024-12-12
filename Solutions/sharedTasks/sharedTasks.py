@@ -280,9 +280,17 @@ def getEdgeInfo(
         scope = root if options[REFERENCE] == 'Simple' else fun
         ent = ref.ent()
 
-        edgeKey = str(scope) + ' ' + str(ent)
+        edgeKey = f'{scope.id()} {ent.id()}'
 
-        kindname = ref.kindname().split(' ').pop()
+        kindname = ref.kind().longname()
+        if 'Use' in kindname:
+            kindname = 'Use'
+        elif 'Set' in kindname:
+            kindname = 'Set'
+        elif 'Modify' in kindname:
+            kindname = 'Modify'
+        elif 'Call' in kindname:
+            kindname = 'Call'
 
         # Add to edge info
         if edgeKey not in edgeInfo:
@@ -315,7 +323,7 @@ def getEdgeInfo(
             scope = call.scope()
             ent = call.ent()
 
-            edgeKey = str(scope) + ' ' + str(ent)
+            edgeKey = f'{scope.id()} {ent.id()}'
 
             # Add to edge info
             if edgeKey not in edgeInfo:
