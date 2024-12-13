@@ -146,12 +146,6 @@ else if ( flag_2 )
 def test_entity(file):
   return file.kind().check('header file,code file')
 
-# Optional - Return True if this check should be run on the entire project
-# regardless of what files are selected. Should only be used for
-# project-level checks
-def test_global():
-  return False
-
 def test_language(language):
   return language == 'C++'
 
@@ -162,67 +156,31 @@ def check(check, file):
     lexer = file.lexer()
 
     for lexeme in lexer.lexemes():
-        # Find 'if' statements
-        if lexeme.text() == 'if':
-            lastClose = None
-            prevLex = lexeme.previous(True, True)
-            # Skip if no 'if else'
-            if prevLex and prevLex.text() == 'else':
-                continue
-            # Skip to opening curly brace or end of single line 'if' statements
-            while lexeme and not re.search(r'^{|;$', lexeme.text()):
-                if lexeme.text() == '(':
-                    lexeme = Modules.findClose(lexeme)
-                if lexeme:
-                    lexeme = lexeme.next(True, True)
-
-            # Go to closing curly brace
-            if lexeme and lexeme.text() == '{':
-                lexeme = Modules.findClose(lexeme)
-                if lexeme:
-                    lexeme = lexeme.next(True, True)
-
-            # Go to next lexeme if single line 'if' statement
-            elif lexeme and lexeme.text() == ';':
+        # Look for else ifs and find opening '{' or lack thereof
+        if lexeme.text() == 'else':
+            lexeme = lexeme.next(True, True)
+            if lexeme and lexeme.text() == 'if':
                 lexeme = lexeme.next(True, True)
-
-            ok = True
-            if lexeme:
-                # Pass through 'else if' statements and mark ok if an 'else' statement is found
-                while lexeme and lexeme.text() == 'else':
-                    lexeme = lexeme.next(True, True)
-                    ok = True
-                    if lexeme and lexeme.text() == 'if':
-                        ok = False
+                if lexeme and lexeme.text() == '(':
+                    lexeme = Modules.findClose(lexeme)
+                    if lexeme:
                         lexeme = lexeme.next(True, True)
-                        while lexeme and not re.search(r'^{|;$', lexeme.text()):
-                            if lexeme.text() == '(':
+                        if lexeme:
+                            if lexeme.text() == '{':
                                 lexeme = Modules.findClose(lexeme)
-                            lexeme = lexeme.next(True, True)
+                                if lexeme:
+                                    lastClose = lexeme
+                                    lexeme = lexeme.next(True, True)
+                                    # Throw violation if not followed by 'else'
+                                    if lexeme and lexeme.text() != "else":
+                                        check.violation(file, file, lastClose.line_begin(), lastClose.column_begin(), ERR1)
+                            else:
+                                while lexeme and lexeme.text() != ';':
+                                    lexeme = lexeme.next(True, True)
+                                if lexeme:
+                                    lastClose = lexeme
+                                    lexeme = lexeme.next(True, True)
+                                    # Throw violation if not followed by 'else'
+                                    if lexeme and lexeme.text() != "else":
+                                        check.violation(file, file, lastClose.line_begin(), lastClose.column_begin(), ERR1)
 
-                        if lexeme and lexeme.text() == '{':
-                            lexeme = Modules.findClose(lexeme)
-                            if lexeme:
-                                # Save closing curly brace for violation location
-                                lastClose = lexeme
-                                lexeme = lexeme.next(True, True)
-
-                        elif lexeme and lexeme.text() == ';':
-                            lexeme = lexeme.next(True, True)
-
-                        # Skip through preprocessor that could be in between 'else if' and 'else' statements
-                        if lexeme and lexeme.token() == 'Preprocessor':
-                            while lexeme and not re.search(r'^{|}|;$', lexeme.text()):
-                                if lexeme.text() == 'else' and lexeme.token() != 'Preprocessor':
-                                    break
-
-                                lexeme = lexeme.next(True, True)
-
-
-                    
-                if not ok:
-                    if not lastClose:
-                        lastClose = lexeme.previous(True, True)
-
-                    check.violation(file, file, lastClose.line_begin(), lastClose.column_begin(), ERR1)
-                                    
