@@ -161,14 +161,14 @@ def check1(fileReport: dict, defineRefs: list[Ref], args: argparse.Namespace):
         # Do the check
         ent = ref.ent()
         precedingComments = len(ent.comments('before', True))
-        comments = ent.metric(['countlinecomment'])['countlinecomment']
+        comments = ent.metric(['CountLineComment'])['CountLineComment']
         if not comments:
             comments = 0
         totalComments = comments + precedingComments
-        code = ent.metric(['countlinecode'])['countlinecode']
+        code = ent.metric(['CountLineCode'])['CountLineCode']
         if not code:
             code = 0
-        newrctc = ent.metric(['ratiocommenttocode'])['ratiocommenttocode']
+        newrctc = ent.metric(['RatioCommentToCode'])['RatioCommentToCode']
         if not newrctc:
             newrctc = 0
         if code > 0 and precedingComments:
