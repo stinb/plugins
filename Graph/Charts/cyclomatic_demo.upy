@@ -1,6 +1,8 @@
-# Graph using codecheck
+import understand
 
-colors = [ "#4e8cb9", "#569f38", "#90c4e4","#a1d870","#e46721"]
+COLORS = [ "#4e8cb9", "#569f38", "#90c4e4","#a1d870","#e46721"]
+FUNCTION_KIND_STR="function,method,procedure,basic sub"
+FILE_KIND_STR="file ~unresolved ~unknown"
 
 def name():
   return "Most Complex Functions"
@@ -18,27 +20,60 @@ def description():
     promoting better code quality and maintainability.</p>
   '''
 
+def test_architecture(arch):
+  return True;
+
+def test_entity(ent):
+  return ent.kind().check("file ~unknown ~unresolved")
+
 def test_global(db):
   return True
 
+def init(graph, target):
+  graph.options().define("Metric", ["Cyclomatic", "CyclomaticModified", "CyclomaticStrict", "CyclomaticStrictModified"], "Cyclomatic")
+  # Messy, since we really just want to pass in an integer, but support integers
+  # between 3 and 21
+  cutoffs = []
+  for i in range(3,22):
+    cutoffs.append(str(i))
+  graph.options().define("Top", cutoffs, "7")
+
 # Report generation
-def draw(graph, db):
+def draw(graph, target):
   graph.set("layout", "flatbubble") # Override default layout algorithm (Usually dot)
   graph.default("fontcolor", "#FFFFFF", "node")
 
   complexity = dict()
-  for ent in db.ents("function,method,procedure,basic sub"):
-    val = ent.metric("Cyclomatic")
+  ents = set()
+  if isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check(FUNCTION_KIND_STR):
+        ents.add(ent)
+      elif ent.kind().check(FILE_KIND_STR):
+        file_ents(ent, ents)
+  elif isinstance(target, understand.Db):
+    ents = target.ents(FUNCTION_KIND_STR)
+  elif isinstance(target, understand.Ent):
+    file_ents(target, ents)
+
+  met = graph.options().lookup("Metric")
+  for ent in ents:
+    val = ent.metric(met)
     if val:
       complexity[ent] = val
 
   cur = 0
+  top = int(graph.options().lookup("Top"))
   for ent, val in sorted(complexity.items(),key=lambda item: item[1], reverse=True):
     n = graph.node(str(val))
     n.set("area",str(val))
     n.sync(ent)
-    n.set("color", colors[cur % len(colors)])
-    n.set("fillcolor", colors[cur % len(colors)])
+    n.set("color", COLORS[cur % len(COLORS)])
+    n.set("fillcolor", COLORS[cur % len(COLORS)])
     cur += 1
-    if cur >= 7:
+    if cur >= top:
       break # Only show top values
+
+def file_ents(file, ents):
+  for ref in file.filerefs("define, ada declare body, vhdl declare", FUNCTION_KIND_STR, True):
+    ents.add(ref.ent())

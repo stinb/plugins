@@ -61,3 +61,13 @@ def descendents(arch):
     all.append(child)
     all.extend(descendents(child))
   return all
+
+def entsByKind(arch, entKindString, expandFiles = True, recursive=False):
+  ents = set()
+  for ent in arch.ents(recursive):
+    if ent.kind().check(entKindString):
+      ents.add(ent)
+    elif expandFiles and ent.kind().check("file ~unknown ~unresolved"):
+      for ref in ent.filerefs("define, ada declare body", entKindString, True):
+        ents.add(ref.ent())
+  return ents
