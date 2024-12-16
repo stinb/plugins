@@ -1,0 +1,231 @@
+import understand
+
+FILE_KIND_STR="file ~unresolved ~unknown"
+FUNCTION_KIND_STR=("ada entry, ada function, ada procedure, ada protected, ada task,"
+  "c function,"
+  "csharp method,"
+  "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+  "java method,"
+  "jovial subroutine,"
+  "pascal compunit, pascal function, pascal procedure,"
+  "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
+  "web function, web method")
+
+# (Acronymn, Name, Understand ID, Details, Max True, Default)
+HIS_INFO=[
+  ("COMF", "Comment Density", "RatioCommentsWithBeforeToCode", "", False, 20),
+  ("PATH", "Number of Paths", "CountPath", "", True, 80),
+  ("GOTO", "Number of Goto Statements", "CountGoTo", "", True, 0),
+  ("v(G)", "Cyclomatic Complexity", "", "cyclomatic variant controlled with option", True, 20),
+  ("CALLING", "Number of Calling Functions", "CountCallbyUnique", "", True, 5),
+  ("CALLS", "Number of Called Functions", "CountCallsUnique", "", True, 7),
+  ("PARAM", "Number of Function Parameters", "CountParams", "", True, 5),
+  ("STMT", "Number of Instructions", "CountStmt", "", True, 50),
+  ("LEVEL", "Number of Call Levels","MaxCallDepth", "-1 if cycles/recursion. WARNING: Expanding call trees can take a long time", True, 4),
+  ("RETURN", "Number of Return points", "CountEarlyExit", "only counts early returns, so expected is 0", True, 0),
+  ("VOCF", "Language Scope", "LanguageScope", "", True, 4),
+  ("NOMV", "MISRA HIS Subset Violations", "HISNOMV", "Violations must be in Violation Browser to be detected", True, 0),
+  ("AP_CG_CYCLE", "Number of recursions", "MinRecursiveDepth", "0 if function is not recursive. WARNING: Expanding call trees can take a long time", True, 0),
+  ("SCHG", "Statements Changed", "CountLineChanged", "", True, 100),
+  ("SDEL", "Statements Deleted", "CountLineRemoved", "", True, 100),
+  ("SNEW", "New Statements", "CountLineNew", "", True, 100),
+  ("S", "Stability Index", "StabilityIndex", "", False, 50)
+]
+
+CMP_IDS = ["CountLineChanged", "CountLineRemoved", "CountLineNew", "StabilityIndex"]
+
+def name():
+  return "HIS Metrics"
+
+def description():
+  options = []
+  for acronym, name, id, details, dir, threshold in HIS_INFO:
+    options.append("<li>{} ({}) - {} {}</li>".format(name, acronym, id, details))
+
+  return '''<p>Display the Hersteller Software Initiative metrics for functions</p>
+  <p>When run on a function, display the HIS metrics for that function. When
+  run on a file, architecture, or project, show a table with the HIS metrics
+  as columns and a row for each function.</p>
+  <p>See https://emenda.com/his/ for HIS Metrics. This report includes the
+  following metrics:</p>
+  <h3>HIS Metrics - Understand Metric</h3>
+  <ul> {} </ul>
+
+  <p>If a comparison database has been set, then the following additional metrics
+  are included. Note that the reported metrics are all line based, not statement
+  based.</p>
+  <ul> {} </ul>
+  '''.format("".join(options[:-4]), "".join(options[-4:]))
+
+def test_global(db):
+  return True
+
+def test_architecture(arch):
+  return True
+
+def test_entity(ent):
+  # file or entity kind
+  return ent.kind().check(FILE_KIND_STR + "," + FUNCTION_KIND_STR)
+
+def support_abort():
+  return True
+
+def init(report, target):
+  def_disabled = CMP_IDS
+  def_disabled.append("HISNOMV")
+  if not isinstance(target, understand.Ent) or target.kind().check(FILE_KIND_STR):
+    report.options().checkbox("charts", "Show Charts", True)
+    report.options().checkbox("table", "Show Table", True)
+    # Don't calculate these by default for all functions because they take a long time
+    def_disabled.append("MaxCallDepth")
+    def_disabled.append("MinRecursiveDepth")
+
+  report.options().choice("cyclomatic","Cyclomatic Metric", ["Cyclomatic","CyclomaticModified","CyclomaticStrict","CyclomaticStrictModified"],"CyclomaticModified")
+
+  report.options().label("thresholdslbl",("Highlight values that exceed the "
+                                        "following thresholds. COMF and S "
+                                        "are percentages (ie 20 means 20% or "
+                                        "a threshold of 0.2)"))
+  for acronym, name, id, details, dir, threshold in HIS_INFO:
+    report.options().label(acronym +"_label", "{} ({}) - {} {}".format(name, acronym,id, details))
+    report.options().checkbox(acronym + "_enable", "Show {}".format(acronym), id not in def_disabled)
+    report.options().integer(acronym, "{} {}".format("Maximum" if dir else "Minimum", acronym), threshold)
+
+
+# Report generation
+def generate(report, target, page):
+  """
+  Required, generate the report
+  """
+  ents = set()
+
+  if isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check(FUNCTION_KIND_STR):
+        ents.add(ent)
+      elif ent.kind().check(FILE_KIND_STR):
+        file_ents(ent, ents)
+
+  elif isinstance(target, understand.Db):
+    ents = target.ents(FUNCTION_KIND_STR)
+
+  # Entities
+  elif isinstance(target, understand.Ent):
+    if target.kind().check(FUNCTION_KIND_STR):
+      report.table(["Metric","Value"])
+      end = None if report.options().lookup("cmp") else -4
+      his_metrics(report, target, True)
+      report.table()
+      return
+    file_ents(target, ents)
+
+  if report.options().lookup("charts"):
+    report.heading(2)
+    report.print("Charts")
+    report.heading()
+
+  tried_cmp = False
+
+  tbldesc = """ [{ "name" : "Name", "filtertype": "string", "sort" : "ascending" } """
+  for acronym, name, id, details, dir, threshold in HIS_INFO:
+    if not report.options().lookup(acronym + "_enable"):
+      continue
+
+    if id in CMP_IDS and not tried_cmp:
+      # Request the comparison database to open it if it isn't open already
+      report.db().comparison_db()
+      tried_cmp = True
+
+    if report.options().lookup("charts"):
+      if not id:
+        id = report.options().lookup("cyclomatic")
+      threshold = report.options().lookup(acronym)
+      opts = "Node Labels=On;Metric="+id
+      if threshold is not None and threshold >= 0 and threshold <= 100:
+        if dir:
+          opts += ";Threshold=Max Integer;Cutoff={}".format(threshold)
+          threshold = "<= {}".format(threshold)
+        else:
+          opts += ";Threshold=Min Percent;Cutoff={}".format(threshold)
+          threshold = ">= {:.2f}".format(threshold / 100.0)
+      else:
+        threshold = ""
+      report.heading(4)
+      report.align("center")
+      report.print("{} ({}) {} - {} {}".format(name, acronym, threshold, id, details))
+      report.heading()
+      report.align()
+
+      try:
+        report.draw(target, "Functions Metric Histogram", opts)
+      except Exception as e:
+        report.print(str(e))
+
+    tbldesc += ",{ \"name\": \"" + acronym + "\", \"filtertype\": \"numeric\"}"
+  tbldesc += "]"
+
+  if not report.options().lookup("table"):
+    return
+
+  report.heading(2)
+  report.print("Functions")
+  report.heading()
+
+  report.table(tbldesc)
+  prog_max = len(ents)
+  last_prog = 0
+  for i, ent in enumerate(ents):
+    his_metrics(report, ent)
+    if report.is_aborted():
+      return
+    cur_prog = int(i / prog_max * 100) # percentage
+    if cur_prog > last_prog:
+      report.progress(cur_prog)
+      last_prog = cur_prog
+  report.table()
+
+def file_ents(file, ents):
+  for ref in file.filerefs("define, ada declare body, vhdl declare", FUNCTION_KIND_STR, True):
+    ents.add(ref.ent())
+
+def his_metrics(report, func, columns=False):
+  his_ids = []
+  vals = []
+  for item in HIS_INFO:
+    if not report.options().lookup(item[0] + "_enable"):
+      continue
+
+    id = item[2]
+    if not id:
+      id = report.options().lookup("cyclomatic")
+    vals.append(func.metric(id))
+    his_ids.append(item[0])
+
+  if not columns:
+    report.tablecell()
+    report.entity(func)
+    report.print(func.longname())
+    report.entity()
+
+  for his_id, val in zip(his_ids, vals):
+    if columns:
+      report.tablecell()
+      report.print(his_id)
+
+    report.tablecell()
+    if val is None:
+      continue
+
+    threshold = report.options().lookup(his_id)
+    if threshold is not None:
+      if isinstance(val, str):
+        if his_id == "VOCF":
+          if float(val) > threshold:
+            report.fontcolor("#e45721")
+        elif float(val) * 100 < threshold:
+          report.fontcolor("#e45721")
+      elif val > threshold:
+        report.fontcolor("#e45721")
+
+    report.print(str(val))
+    report.fontcolor()

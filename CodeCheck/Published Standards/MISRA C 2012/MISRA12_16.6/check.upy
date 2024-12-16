@@ -1,0 +1,198 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 12/09/24
+
+import re
+import Modules
+
+ERR1 = 'Switch statement has less than two switch-clauses'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_16.6', 'MISRA23_16.6', 'MISRA08_6-4-8', 'CPP_C032')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_16.6': 'Published Standards/MISRA C 2012/' + """\
+16.6 Every switch statement shall have at least two switch-clauses""",
+        'MISRA23_16.6': 'Published Standards/MISRA C 2023/' + """\
+16.6 Every switch statement shall have at least two switch-clauses""",
+        'MISRA08_6-4-8': 'Published Standards/MISRA-C++ 2008/' + """\
+6-4-8 Every switch statement shall have at least one case clause""",
+        'CPP_C032': 'All Checks/Language Specific/C and C++/Control Flow/' + """\
+ Every switch statement shall have at least two switch-clauses""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_16.6': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA23_16.6': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA08_6-4-8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'CPP_C032': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Rationale</b></p>
+<p>A switch statement with a single path is redundant and may be indicative of
+a programming error.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">switch ( x )
+{
+default: /* Non-compliant - switch is redundant */
+x = 0;
+break;
+}
+switch ( y )
+{
+case 1:
+default: /* Non-compliant - switch is redundant */
+y = 0;
+break;
+}
+switch ( z )
+{
+case 1:
+z = 2;
+break;
+default: /* Compliant */
+z = 0;
+break;
+}</pre></code>
+<p><b>See also</b></p>
+<p>Rule 16.1</p>
+"""
+    desc1 = """\
+<p><b>Developer's Note:</b></p>
+In order to accomidate switch statements where the cases are build using MACROs, the "Save macro expansion text" option must be turned on. This option is under Project-&gt;Configure Project-&gt;C++/C++(Strict) under the Optimize section, there is a check box called "Save macro expansion text".
+</p>
+
+<p><b>Rationale</b></p>
+A <i>switch</i> statement with no <i>case-clauses</i> is redundant.</p>
+<br>
+<p><b>Example</b></p><pre><code language="C++">  switch ( x )
+  {
+                 // Non-compliant
+    default:
+      break;
+  }
+</code></pre>"""
+
+    return {
+        'MISRA12_16.6': desc,
+        'MISRA23_16.6': desc,
+        'MISRA08_6-4-8': desc1,
+        'CPP_C032': desc1
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def define_options(check):
+    clauses = 1 if check.id() in {'MISRA08_6-4-8', 'CPP_C032'} else 2
+    default = True if clauses == 2 else False
+    check.option().integer('clauses', 'Minimum required clauses', clauses)
+    check.option().checkbox('default', 'Include default clause', default)
+
+def check(check, file):
+    if not re.search(r'switch', file.contents()):
+        return
+    if not file.lexer():
+        return
+    lexer = file.lexer()
+    lexeme = lexer.first()
+    while lexeme:
+        if lexeme.text() == 'switch' and lexeme.token() == 'Keyword':
+            lexeme = checkMultipleClauses(check, lexeme, file)
+        else:
+            lexeme = lexeme.next(True, True)
+
+def checkMultipleClauses(check, lexeme, file):
+    errLine = lexeme.line_begin()
+    errColumn = lexeme.column_begin()
+    clauses = 0
+    minClauses = check.option().lookup('clauses')
+    default = check.option().lookup('default')
+    clauseKeywords = ['case', 'default'] if default else ['case']
+    action = False
+    while lexeme and lexeme.text() != '{':
+        lexeme = lexeme.next(True, True)
+
+    if lexeme:
+        # Go until the closing curly brace of the switch statement
+        close = Modules.findClose(lexeme)
+        done = isDone(lexeme, close)
+        while lexeme and not done:
+            skip = False
+            lastLex = lexeme
+            # Check case and default labels
+            if lexeme.token() == 'Keyword' and (lexeme.text() in clauseKeywords):
+                # Go to the :
+                while not done and not skip and lexeme and lexeme.text() != ':':
+                    lexeme = lexeme.next(True, True)
+                    done = isDone(lexeme, close)
+                # Find statement
+                while not done and lexeme and lexeme.text() in ['}', '{', ';', ':']:
+                    lexeme = lexeme.next(True, True)
+                    done = isDone(lexeme, close)
+                if lexeme and lexeme.text() not in ['case', 'default']:
+                    clauses += 1
+                    skip = True
+
+            # Recurse through any switches inside current switch
+            elif lexeme.token() == 'Keyword' and lexeme.text() == 'switch':
+                lexeme = checkMultipleClauses(check, lexeme, file)
+
+            # If lexeme didn't change then get next lexeme
+            elif lexeme.line_begin() == lastLex.line_begin() and lexeme.column_begin() == lastLex.column_begin():
+                lexeme = lexeme.next(True, True)
+            done = isDone(lexeme, close)
+
+    if clauses < minClauses:
+        check.violation(file, file, errLine, errColumn, ERR1)
+    return lexeme
+
+
+def isDone(lexeme, close):
+    if lexeme and close:
+        if (lexeme.line_begin() >= close.line_begin() and lexeme.column_begin() >= close.line_begin()) or lexeme.line_begin() > close.line_begin():
+            return True
+        else:
+            return False
+    else:
+        return True

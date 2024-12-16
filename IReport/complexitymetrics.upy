@@ -1,0 +1,215 @@
+import archpages
+import metricreports
+import understand
+
+FILE_KIND_STR="file ~unresolved ~unknown"
+FUNCTION_KIND_STR="function ~unresolved, method ~unresolved, procedure ~unresolved"
+
+BUILTIN_ARCH_PREFIX=[("Sum ","Sum"), ("Average ","Avg"), ("Max ", "Max")]
+BUILTIN_ARCH_PREFIX_DEF=["Sum"]
+
+# (Name, id, note, ent_is_default, arch_prefixes, arch_default_prefix)
+COMPLEXITY_METRICS=[
+  ("McCabe Cyclomatic Complexity [aka CC]","Cyclomatic","",True, BUILTIN_ARCH_PREFIX, BUILTIN_ARCH_PREFIX_DEF),
+  ("Modified McCabe Cyclomatic Complexity [aka CC3]","CyclomaticModified","",True, BUILTIN_ARCH_PREFIX, BUILTIN_ARCH_PREFIX_DEF),
+  ("Strict McCabe Cyclomatic Complexity [aka CC2]","CyclomaticStrict","",True, BUILTIN_ARCH_PREFIX, BUILTIN_ARCH_PREFIX_DEF),
+  ("Essential Complexity","Essential","",True, BUILTIN_ARCH_PREFIX, BUILTIN_ARCH_PREFIX_DEF),
+  ("Max Nesting","MaxNesting","",True, [("","")], [""]),
+  ("Paths Log(x)","CountPathLog","",True, [], []),
+  ("Paths [aka NPATH]","CountPath","note value is truncated at 999,999,999",False, [],[]),
+  ("Stict Modified Cyclomatic Complexity","CyclomaticStrictModified","",False, BUILTIN_ARCH_PREFIX, []),
+  ("Essential Strict Modified Complexity","EssentialStrictModified","note only applies to Ada",False, [],[]),
+  ("Knots","Knots","",False, [], []),
+  ("Max Essential Knots","MaxEssentialKnots","",False, [], []),
+  ("Min Essential Knots","MinEssentialKnots","",False, [], []),
+  ("Sonar's Cognitive Complexity","CognitiveComplexity","note this is a metric plugin and may take a longer time to calculate",False, [], []),
+]
+
+
+def name():
+  return "Complexity Metrics"
+
+def description():
+  ent_def = []
+  ent_other = []
+  arch_def = []
+  arch_other = []
+  for name, id, note, ent_is_default, arch_prefixes, arch_default_prefixes in COMPLEXITY_METRICS:
+    enote = note
+    if enote:
+      enote = " - " + enote
+    entText = "<li>{} ({}){}</li>".format(name,id,enote)
+    if ent_is_default:
+      ent_def.append(entText)
+    else:
+      ent_other.append(entText)
+
+    for a_name, a_prefix in arch_prefixes:
+      atext = "<li>{} ({}){}</li>".format(a_name + name, a_prefix + id,enote)
+      if a_prefix in arch_default_prefixes:
+        arch_def.append(atext)
+      else:
+        arch_other.append(atext)
+
+  return '''For the functions in the target project, architecture, or file, report complexity metrics
+    <p>The function complexity metrics reported by default are:</p>
+    <ul> {} </ul>
+
+    <p>Additional function cyclomatic metrics that can be included are:</p>
+    <ul> {} </ul>
+
+    <p>For project, architecture, and file groups, the following cyclomatic
+       metrics are reported by default</p>
+    <ul> {} </ul>
+
+    <p>And the following additional metrics are available</p>
+    <ul> {} </ul>
+    '''.format("".join(ent_def), "".join(ent_other), "".join(arch_def), "".join(arch_other))
+
+
+def test_global(db):
+  return True
+
+def test_architecture(arch):
+  return True
+
+def test_entity(ent):
+  return ent.kind().check(FILE_KIND_STR)
+
+def init(report, target):
+  report.options().checkbox("chart","Show Chart",True)
+
+  if isinstance(target, understand.Db):
+    report.options().radio_vert("mode", "Mode", ["Files Only", "File Pages with Function Details", "Functions Only"], "Files Only")
+
+  notes = []
+  amets = []
+  report.options().label("entmets", "Function Metrics")
+  for name, id, note, ent_is_default, arch_prefixes, arch_default_prefixes in COMPLEXITY_METRICS:
+    entText = "{} ({}){}".format(name,id,"*" if note else "")
+    report.options().checkbox(id, entText, ent_is_default)
+
+    if note:
+      notes.append("* {} - {}".format(id, note))
+
+    for a_name, a_prefix in arch_prefixes:
+      atext = "{} ({}){}".format(a_name + name, a_prefix + id,"*" if note else "")
+      amets.append(('a' + a_prefix + id, atext, a_prefix in arch_default_prefixes))
+
+  report.options().label("amets", "Summary Metrics")
+  for id, name, checked in amets:
+    report.options().checkbox(id, name, checked)
+
+  report.options().label("notes", '\n'.join(notes))
+
+def pages(report, target):
+  pages = []
+
+  if isinstance(target, understand.Arch):
+    pages = archpages.pageslist(target, report.options().lookup("filePages"), FILE_KIND_STR)
+
+  elif isinstance(target, understand.Db):
+    # Home Page
+    pages.append("")
+    # File Pages
+    if report.options().lookup("mode") == "File Pages with Function Details":
+      for ent in sorted(target.ents(FILE_KIND_STR), key = lambda e: e.relname()):
+        pages.append(str(ent.id()))
+
+  # Entities do not have pages
+  return pages
+
+# Report generation
+def generate(report, target, page):
+  """
+  Required, generate the report
+  """
+  if isinstance(target, understand.Arch):
+    ptarget = archpages.breadcrumbs(report, target, page)
+    if isinstance(ptarget, understand.Ent):
+      entityPage(report, ptarget)
+    else:
+      archPage(report, ptarget)
+
+  if isinstance(target, understand.Db):
+    if page and page.isdigit():
+      # Database BreadCrumbs
+      ent = report.db().ent_from_id(int(page))
+      if ent:
+        report.breadcrumbs(["", str(ent.id())], 1, ["Complexity Metrics", ent.relname()])
+        entityPage(report, ent)
+        return
+    dbPage(report, target)
+
+  # Entities
+  if isinstance(target, understand.Ent):
+    entityPage(report, target)
+
+def complexitychart(report, target):
+  if not report.options().lookup("chart"):
+    return
+
+  try:
+    report.draw(target, "Most Complex Functions")
+  except Exception as e:
+    report.print("Unable to draw chart: " + str(e))
+
+def funcMetrics(report):
+  mets = []
+  for name, id, note, ent_is_default, arch_prefixes, arch_default_prefixes in COMPLEXITY_METRICS:
+    if report.options().lookup(id):
+      mets.append(id)
+  return mets
+
+def sumMetrics(report):
+  mets = []
+  for name, id, note, ent_is_default, arch_prefixes, arch_default_prefixes in COMPLEXITY_METRICS:
+    for a_name, a_prefix in arch_prefixes:
+      if report.options().lookup('a' + a_prefix + id):
+        mets.append(a_prefix + id)
+  return mets
+
+def entityPage(report, file):
+  complexitychart(report, file)
+  ents = []
+  for ref in file.filerefs("define", FUNCTION_KIND_STR, True):
+    ents.append(ref.ent())
+  if ents:
+    metricreports.metricsTable(report, funcMetrics(report), ents)
+  else:
+    report.print("No functions defined in file")
+
+def archPage(report, arch):
+  complexitychart(report, arch)
+  children = arch.children()
+  if children:
+    report.heading(2)
+    report.print("Child Architectures")
+    report.heading()
+    metricreports.metricsTable(report, sumMetrics(report), children, True)
+
+  ents = archpages.entsByKind(arch, FILE_KIND_STR, False, False)
+  if ents:
+    report.heading(2)
+    report.print("Entities")
+    report.heading()
+    metricreports.metricsTable(report, sumMetrics(report), ents, True, "short")
+
+  if not ents and not children:
+    report.print("Architecture is empty")
+
+def dbPage(report, db):
+  complexitychart(report, db)
+  mode = report.options().lookup("mode")
+  if mode == "Functions Only":
+    report.heading(2)
+    report.print("Functions")
+    report.heading()
+    metricreports.metricsTable(report, funcMetrics(report), db.ents(FUNCTION_KIND_STR))
+  else:
+    report.heading(2)
+    report.print("Files")
+    report.heading()
+    metricreports.metricsTable(report, sumMetrics(report), db.ents(FILE_KIND_STR),
+                               mode == "File Pages with Function Details",
+                               "relative")

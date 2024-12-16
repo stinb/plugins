@@ -43,7 +43,7 @@ OPTION_BOOL_CHOICES = [OPTION_BOOL_TRUE, OPTION_BOOL_FALSE]
 COMMON_OPTIONS = (
     Option(FILTER_MODIFY_SET_ONLY, 'Filter out modify/set only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FILTER_USE_ONLY, 'Filter out use only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
-    Option(MEMBER_FUNCTIONS, 'Member functions', ['Longer name', 'Long name', 'Name'], 'Long name'),
+    Option(MEMBER_FUNCTIONS, 'Member functions', ['Long name', 'Name'], 'Long name'),
     Option(MEMBER_OBJECT_PARENTS, 'Member object parents', OPTION_BOOL_CHOICES, OPTION_BOOL_TRUE),
     Option(MEMBER_OBJECTS, 'Member objects', ['Long name', 'Name', 'Off'], 'Long name'),
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
@@ -83,10 +83,10 @@ def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
         if MEMBER_FUNCTIONS not in options:
             return ent.name()
         optionValue = options[MEMBER_FUNCTIONS]
-        if optionValue == 'Longer name':
-            return getLongerName(ent, ent.parent())
-        elif optionValue == 'Long name':
+        if optionValue == 'Long name':
             return ent.longname()
+        else:
+            return ent.name()
     # Member object parent
     elif entKind.check('Member Object'):
         if MEMBER_OBJECTS not in options:
@@ -96,20 +96,6 @@ def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
             return ent.longname()
 
     return result
-
-
-def getLongerName(ent: Ent, parentEnt: Ent) -> str:
-    longname = ent.longname()
-
-    parent = ent.parent()
-    if not parent:
-        return longname
-
-    parentTypes = parent.ents('Typed')
-    if len(parentTypes) != 1:
-        return longname
-
-    return f'{parentTypes[0].name()}::{longname}'
 
 
 def getFnOrObjRefs(
@@ -182,11 +168,10 @@ def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -
 
     for otherFunction in [function] + function.ents('Instanceof'):
         # Global objects
-        if memberObjectParents:
-            for ref in otherFunction.refs(OBJ_REF_KINDS, 'Global Object'):
-                if entHasMembers(ref.ent()):
-                    continue
-                result.append(ref)
+        for ref in otherFunction.refs(OBJ_REF_KINDS, 'Global Object'):
+            if not memberObjectParents and entHasMembers(ref.ent()):
+                continue
+            result.append(ref)
         # Members of global objects
         if memberObjects:
             for ref in otherFunction.refs(OBJ_REF_KINDS, 'Member Object'):
@@ -280,9 +265,17 @@ def getEdgeInfo(
         scope = root if options[REFERENCE] == 'Simple' else fun
         ent = ref.ent()
 
-        edgeKey = str(scope) + ' ' + str(ent)
+        edgeKey = f'{scope.id()} {ent.id()}'
 
-        kindname = ref.kindname().split(' ').pop()
+        kindname = ref.kind().longname()
+        if 'Use' in kindname:
+            kindname = 'Use'
+        elif 'Set' in kindname:
+            kindname = 'Set'
+        elif 'Modify' in kindname:
+            kindname = 'Modify'
+        elif 'Call' in kindname:
+            kindname = 'Call'
 
         # Add to edge info
         if edgeKey not in edgeInfo:
@@ -315,7 +308,7 @@ def getEdgeInfo(
             scope = call.scope()
             ent = call.ent()
 
-            edgeKey = str(scope) + ' ' + str(ent)
+            edgeKey = f'{scope.id()} {ent.id()}'
 
             # Add to edge info
             if edgeKey not in edgeInfo:
@@ -478,6 +471,49 @@ def buildEdgeInfo(
                 filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
 
     interruptDisabledRefs = findInterruptDisabledRefs(db, enableDisableFunctions, options)
+
+    # Decide whether the nodes are shared
+    sharedObjects: dict[Ent, bool] = dict()
+    fromRootsFiltered = set()
+    for edgeObj in edgeInfo.values():
+        ent = edgeObj['ent']
+        if ent not in sharedObjects:
+            # See how many root functions each node it's from
+            fromRootsFiltered.clear()
+            if ent.kind().check(OBJ_ENT_KINDS):
+                edgeKeys = incoming[ent] if ent in incoming else set()
+                for edgeKey in edgeKeys:
+                    info = edgeInfo[edgeKey]
+                    if not info['filtered'] and refStr(info['ref']) not in interruptDisabledRefs:
+                        fromRootsFiltered.update(info['from'])
+            sharedObjects[ent] = len(fromRootsFiltered) > 1
+        # Remember that it's shared
+        edgeObj['shared'] = sharedObjects[ent]
+
+    # If shared only, then delete edges to non-shared objects
+    if options[OBJECTS] == 'Shared only':
+        for edgeKey, edgeObj in edgeInfo.copy().items():
+            scope = edgeObj['scope']
+            ent = edgeObj['ent']
+            # Skip if not a shared object
+            if edgeObj['shared'] or not ent.kind().check(OBJ_ENT_KINDS):
+                continue
+            # Delete incoming edges leading to a dead end
+            edgeKeysToDeleteStack: list[str] = [edgeKey]
+            while edgeKeysToDeleteStack:
+                # Pop the edge from the stack
+                edgeKey = edgeKeysToDeleteStack.pop()
+                scope = edgeInfo[edgeKey]['scope']
+                ent = edgeInfo[edgeKey]['ent']
+                # If there are no other outgoing edges (siblings)
+                if len(outgoing[scope]) == 1:
+                    # Push the incoming edges to the stack
+                    for otherEdgeKey in incoming[scope]:
+                        edgeKeysToDeleteStack.append(otherEdgeKey)
+                # Delete the edge
+                outgoing[scope].remove(edgeKey)
+                incoming[ent].remove(edgeKey)
+                del edgeInfo[edgeKey]
 
     return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
 

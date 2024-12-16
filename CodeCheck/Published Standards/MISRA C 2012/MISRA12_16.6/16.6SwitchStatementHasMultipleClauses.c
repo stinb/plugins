@@ -13,12 +13,12 @@ void test( int x, y, z)
 	 y = 0;
 	 break;
 	}
-	switch ( z )
+	switch ( z ) /* UndCC_Valid */
 	{
 	 case 1:
 	 z = 2;
 	 break;
-	 default: /* UndCC_Valid */
+	 default:
 	 z = 0;
 	 break;
 	}
