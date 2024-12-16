@@ -1,0 +1,89 @@
+import metricreports
+import understand
+
+FILE_KIND_STR="file ~unresolved ~unknown"
+FUNCTION_KIND_STR="function ~unresolved, method ~unresolved, procedure ~unresolved"
+
+# (Acronymn, Name, Understand ID)
+HALSTEAD_INFO=[
+  ("n1", "Distinct Operators", "HalsteadDistinctOperators"),
+  ("n2", "Distinct Operands", "HalsteadDistinctOperands"),
+  ("N1", "Total Operators", "HalsteadTotalOperators"),
+  ("N2", "Total Operands", "HalsteadTotalOperands"),
+  ("N", "Length (N1 + N2)", "HalsteadLength"),
+  ("n", "Vocabulary (n1 + n2)", "HalsteadVocabulary"),
+  ("V", "Volume (N * log2(n))", "HalsteadVol"),
+  ("D", "Difficulty ((n1 / 2) * (N2 / n2))", "HalsteadDifficulty"),
+  ("E", "Effort (D * V)", "HalsteadEffort"),
+]
+
+def name():
+  return "Halstead Metrics"
+
+def description():
+  options = []
+  for acronym, name, id in HALSTEAD_INFO:
+    options.append("<li>{}, {} - {}</li>".format(acronym, name, id))
+
+  return '''<p>Display the Halstead metrics for functions</p>
+  <p>When run on a function, display the Halstead metrics for that function. When
+  run on a file, architecture, or project, show a table with the Halstead metrics
+  as columns and a row for each function.</p>
+  <h3>Halstead Metrics - Understand Metric</h3>
+  <ul> {} </ul>
+  '''.format("".join(options))
+
+def test_global(db):
+  return True
+
+def test_architecture(arch):
+  return True
+
+def test_entity(ent):
+  # file or entity kind
+  return ent.kind().check(FILE_KIND_STR + "," + FUNCTION_KIND_STR)
+
+def support_abort():
+  return True
+
+def init(report, target):
+  for acronym, name, id in HALSTEAD_INFO:
+    report.options().checkbox(id, "Show {}, {}".format(acronym, name),True)
+
+
+# Report generation
+def generate(report, target, page):
+  """
+  Required, generate the report
+  """
+  metrics = []
+  names = dict()
+  for acronym, name, id in HALSTEAD_INFO:
+    if report.options().lookup(id):
+      metrics.append(id)
+      names[id] = acronym
+
+  ents = set()
+
+  if isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check(FUNCTION_KIND_STR):
+        ents.add(ent)
+      elif ent.kind().check(FILE_KIND_STR):
+        file_ents(ent, ents)
+
+  elif isinstance(target, understand.Db):
+    ents = target.ents(FUNCTION_KIND_STR)
+
+  # Entities
+  elif isinstance(target, understand.Ent):
+    if target.kind().check(FUNCTION_KIND_STR):
+      metricreports.targetMetricsTable(report, target, metrics, names)
+      return
+    file_ents(target, ents)
+
+  metricreports.metricsTable(report, metrics, ents, names=names)
+
+def file_ents(file, ents):
+  for ref in file.filerefs("define, ada declare body, vhdl declare", FUNCTION_KIND_STR, True):
+    ents.add(ref.ent())
