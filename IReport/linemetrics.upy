@@ -4,16 +4,49 @@ import understand
 
 FILE_KIND_STR="file ~unresolved ~unknown"
 FUNCTION_KIND_STR="function ~unresolved, method ~unresolved, procedure ~unresolved"
-ENT_METRICS=[
-  "CountLine",
-  "CountLineCode",
-  "CountLineComment",
-  "CountLineInactive",
-  "CountLinePreprocessor",
-  "CountLineBlank",
-  "RatioCommentToCode"
+
+# (id, name, enabled, languages)
+LINE_METRICS=[
+  ("CountLine", "Lines", True, None),
+  ("CountLineHtml", "Lines (HTML)", False, ["Web"]),
+  ("CountLineJavascript", "Lines (JavaScript)", False, ["Web"]),
+  ("CountLinePhp", "Lines (PHP)", False, ["Web"]),
+
+  ("CountLineCode", "Code Lines", True, None),
+  ("CountLineCodeDecl", "Declarative Code Lines", False, None),
+  ("CountLineCodeExe", "Executable Code Lines", False, None),
+  ("CountLineCodeWithInactive", "Code Lines (Includes Inactive)", False, ["C++"]),
+  ("CountLineCodeJavascript",   "Code Lines (JavaScript)", False, ["Web"]),
+  ("CountLineCodePhp",          "Code Lines (PHP)", False, ["Web"]),
+
+
+  ("CountLineComment", "Comment Lines", True, None),
+  ("CountLineCommentWithInactive", "Comment Lines (Includes Inactive)", False, ["C++"]),
+  ("CountLineCommentHtml",         "Comment Lines (HTML)", False, ["Web"]),
+  ("CountLineCommentJavascript",   "Comment Lines (JavaScript)", False, ["Web"]),
+  ("CountLineCommentPhp",          "Comment Lines (PHP)", False, ["Web"]),
+
+  ("CountLineInactive", "Inactive Lines", True, None),
+  ("CountLinePreprocessor", "Preprocessor Lines", True, None),
+
+  ("CountLineBlank", "Blank Lines", True, None),
+  ("CountLineBlankWithInactive", "Blank Lines (Includes Inactive)", False, ["C++"]),
+  ("CountLineBlankHtml",         "Blank Lines (HTML)", False, ["Web"]),
+  ("CountLineBlankJavascript",   "Blank Lines (JavaScript)", False, ["Web"]),
+  ("CountLineBlankPhp",          "Blank Lines (PHP)", False, ["Web"]),
+
+  ("RatioCommentToCode", "Ratio Comment to Code", True, None),
+
+  ("CountSemicolon", "Semicolons", False, None),
+  ("CountStmt", "Statements", False, None),
+  ("CountStmtDecl", "Declarative Statements", False, None),
+  ("CountStmtDeclJavascript", "Declarative Statements (JavaScript)", False, ["Web"]),
+  ("CountStmtDeclPhp", "Declarative Statements (PHP)", False, ["Web"]),
+  ("CountStmtEmpty", "Empty Statements", False, None),
+  ("CountStmtExe", "Executable Statements", False, None),
+  ("CountStmtExeJavascript", "Executable Statements (JavaScript)", False, ["Web"]),
+  ("CountStmtExePhp", "Executable Statements (PHP)", False, ["Web"]),
 ]
-ARCH_METRICS=ENT_METRICS
 
 def name():
   """
@@ -22,9 +55,24 @@ def name():
   return "Line Metrics"
 
 def description():
+  ent_def = []
+  ent_other = []
+  for id, name, enabled, languages in LINE_METRICS:
+    entText = "<li>{} - {}</li>".format(name,id)
+    if enabled:
+      ent_def.append(entText)
+    else:
+      ent_other.append(entText)
+
   return '''Line Metrics
     <p>This plugin displays line metrics for the project, architectures, and
-    files.</p>'''
+    files. The metrics reported by default are:</p>
+    <ul> {} </ul>
+
+    <p>Additional available metrics are:</p>
+    <ul> {} </ul>
+
+    '''.format("".join(ent_def), "".join(ent_other))
 
 
 def test_global(db):
@@ -49,6 +97,14 @@ def init(report, target):
     report.options().checkbox("filePages","Show File Pages with Function Details",False)
   if isinstance(target, understand.Db):
     report.options().radio_vert("mode", "Mode", ["Files Only", "File Pages with Function Details", "Functions Only"], "Files Only")
+
+  dblangs = report.db().language()
+
+  report.options().label("entmets", "Metrics")
+  for id, name, enabled, languages in LINE_METRICS:
+    if languages and not any(lang in dblangs for lang in languages):
+      continue
+    report.options().checkbox(id, "{} - {}".format(name,id), enabled)
 
 def pages(report, target):
   pages = []
@@ -100,8 +156,19 @@ def linechart(report, target):
   try:
     report.draw(target, "Line Breakdown")
   except Exception as e:
-    report.print("Unable to draw \"Biggest Children\" chart: ")
-    report.print(str(e))
+    report.print("Unable to draw chart: " + str(e))
+
+def metrics(report):
+  dblangs = report.db().language()
+  mets = []
+  names = dict()
+  for id, name, enabled, languages in LINE_METRICS:
+    if languages and not any(lang in dblangs for lang in languages):
+      continue
+    if report.options().lookup(id):
+      mets.append(id)
+      names[id] = name
+  return mets, names
 
 def entityPage(report, file):
   linechart(report, file)
@@ -109,14 +176,15 @@ def entityPage(report, file):
   for ref in file.filerefs("define", FUNCTION_KIND_STR, True):
     ents.append(ref.ent())
   if ents:
-    metricreports.metricsTable(report, ENT_METRICS, ents)
+    mets, names = metrics(report)
+    metricreports.metricsTable(report, mets, ents, names=names)
   else:
     report.print("No functions defined in file")
 
 def archPage(report, arch):
   linechart(report, arch)
   children = arch.children()
-  ents = arch.ents();
+  ents = arch.ents()
 
   prog_max = 100
   prog_min = 0
@@ -124,17 +192,18 @@ def archPage(report, arch):
     clen = len(children)
     prog_max = prog_min = clen / (clen + len(ents)) * 100
 
+  mets, names = metrics(report)
   if children:
     report.heading(2)
     report.print("Child Architectures")
     report.heading()
-    metricreports.metricsTable(report, ARCH_METRICS, children, True, prog_max=prog_max)
+    metricreports.metricsTable(report, mets, children, True, prog_max=prog_max, names=names)
 
   if ents:
     report.heading(2)
     report.print("Entities")
     report.heading()
-    metricreports.metricsTable(report, ENT_METRICS, ents, report.options().lookup("filePages"), "short", prog_min=prog_min)
+    metricreports.metricsTable(report, mets, ents, report.options().lookup("filePages"), "short", prog_min=prog_min, names=names)
 
   if not ents and not children:
     report.print("Architecture is empty")
@@ -146,11 +215,13 @@ def dbPage(report, db):
     report.heading(2)
     report.print("Functions")
     report.heading()
-    metricreports.metricsTable(report, ENT_METRICS, db.ents(FUNCTION_KIND_STR))
+    mets, names = metrics(report)
+    metricreports.metricsTable(report, mets, db.ents(FUNCTION_KIND_STR), names=names)
   else:
     report.heading(2)
     report.print("Files")
     report.heading()
-    metricreports.metricsTable(report, ENT_METRICS, db.ents(FILE_KIND_STR),
+    mets, names = metrics(report)
+    metricreports.metricsTable(report, mets, db.ents(FILE_KIND_STR),
                                mode == "File Pages with Function Details",
-                               "relative")
+                               "relative", names=names)
