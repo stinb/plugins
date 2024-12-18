@@ -43,7 +43,7 @@ OPTION_BOOL_CHOICES = [OPTION_BOOL_TRUE, OPTION_BOOL_FALSE]
 COMMON_OPTIONS = (
     Option(FILTER_MODIFY_SET_ONLY, 'Filter out modify/set only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FILTER_USE_ONLY, 'Filter out use only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
-    Option(MEMBER_FUNCTIONS, 'Member functions', ['Long name', 'Name'], 'Long name'),
+    Option(MEMBER_FUNCTIONS, 'Member functions', ['Longer name', 'Long name', 'Name'], 'Long name'),
     Option(MEMBER_OBJECT_PARENTS, 'Member object parents', OPTION_BOOL_CHOICES, OPTION_BOOL_TRUE),
     Option(MEMBER_OBJECTS, 'Member objects', ['Long name', 'Name', 'Off'], 'Long name'),
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
@@ -83,7 +83,9 @@ def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
         if MEMBER_FUNCTIONS not in options:
             return ent.name()
         optionValue = options[MEMBER_FUNCTIONS]
-        if optionValue == 'Long name':
+        if optionValue == 'Longer name':
+            return getLongerName(ent, ent.parent())
+        elif optionValue == 'Long name':
             return ent.longname()
         else:
             return ent.name()
@@ -96,6 +98,20 @@ def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
             return ent.longname()
 
     return result
+
+
+def getLongerName(ent: Ent, parentEnt: Ent) -> str:
+    longname = ent.longname()
+
+    parent = ent.parent()
+    if not parent:
+        return longname
+
+    parentTypes = parent.ents('Typed')
+    if len(parentTypes) != 1:
+        return longname
+
+    return f'{parentTypes[0].name()}::{longname}'
 
 
 def getFnOrObjRefs(
