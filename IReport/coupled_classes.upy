@@ -1,0 +1,103 @@
+
+CLASS_KINDS = "c class, c struct, c union"
+
+def name():
+  return "Coupled Classes Metric"
+
+def test_entity(ent):
+  return ent.kind().check(CLASS_KINDS)
+
+def description():
+  return '''List the coupled classes contributing to the CountClassCoupled metric.
+    <p>The CountClassCoupled metric is great for knowing how many coupled
+    classes there are. But what if you need to know which classes exactly
+    a given class is coupled to? Or what the references are that cause the
+    coupling? This ireport displays the answers to those questions.</p>
+  '''
+
+def init(report, ent):
+  report.options().checkbox("refs","Show References",False)
+
+# Report generation
+def generate(report, ent):
+  # Find base classes
+  related = set()
+  toVisit = [ent]
+  while toVisit:
+    par = toVisit.pop(0)
+    if par not in related:
+      related.add(par)
+      for ref in par.refs("c base", unique=True):
+        toVisit.append(ref.ent())
+
+  # find children
+  toVisit = []
+  for ref in ent.refs("c declare, c define", "c member", True):
+    toVisit.append(ref.ent())
+
+  children = set()
+  while toVisit:
+    child = toVisit.pop(0)
+    if child in children:
+      continue
+    children.add(child)
+    if child.kind().check(CLASS_KINDS):
+      related.add(child) # nested class
+    for childref in child.refs("c declare, c define", unique=False):
+      toVisit.append(childref.ent())
+
+  referenced = dict()
+  for child in children:
+    # Find referenced classes
+    for ref in child.refs("c use,c set,c call,c modify,c typed", unique=True):
+      refClass = None
+      typeRef = ref.ent().ref("typed")
+      if ref.ent().kind().check(CLASS_KINDS):
+        refClass = ref.ent()
+      elif ref.ent().parent() and ref.ent().parent().kind().check(CLASS_KINDS):
+        refClass = ref.ent().parent()
+      elif typeRef and typeRef.ent().kind().check(CLASS_KINDS):
+        refClass = typeRef.ent()
+      elif typeRef and typeRef.ent().parent() and typeRef.ent().parent().kind().check(CLASS_KINDS):
+        refClass = typeRef.ent().parent()
+
+      if refClass:
+        referenced.setdefault(refClass,[]).append(ref)
+
+  show_refs = report.options().lookup("refs")
+  count = 0
+  for k,v in sorted(referenced.items(), key = lambda item: item[0].longname() ):
+    if k in related:
+      continue
+    count = count + 1
+    if show_refs:
+      report.heading(3)
+    report.print("{}: ".format(count))
+    report.entity(k)
+    report.print("{}\n".format(k.longname()))
+    report.entity()
+
+    if show_refs:
+      report.heading()
+      for ref in sorted(v, key = lambda r: (r.file().relname(), r.line(), r.column())):
+        report.entity(ref.scope())
+        report.print(ref.scope().name())
+        report.entity()
+
+        report.hover(ref.kind().longname())
+        report.print(" {} ".format(ref.kind().name()))
+        report.hover()
+
+        report.entity(ref.ent())
+        report.print(ref.ent().name())
+        report.entity()
+
+        report.print(" at ")
+
+        report.entity(ref.file())
+        report.print(ref.file().relname())
+        report.entity()
+
+        report.syncfile(ref.file().longname(), ref.line(), ref.column())
+        report.print(" ({}:{})\n".format(ref.line(), ref.column()))
+        report.syncfile()
