@@ -1,0 +1,158 @@
+# The sfdp layout this graph plugin uses requires build 1165 or later
+
+import understand
+
+COLORS = ["#90c4e4", "#afd870", "#fcad56", "#4e8cb9", "#569f38", "#e45721", "#133a52", "#315015", "#71290d", "#acd3eb", "#c6e39a", "#fcc281", "#5aa7d7", "#84c968", "#fa8504", "#2774a4", "#47641b", "#b54216"]
+CLASS_KINDS="class, struct, union"
+
+def name():
+  """
+  Required, the name of the graph.
+  """
+  return "Class Dependencies"
+
+def description():
+  return '''Show class dependencies in the same style as the File Dependencies Graph
+    <p>Each class is a node and edges are dependencies between classes. The
+    coloring of classes is determined by the architecture used to make the
+    graph. The size of nodes can be configured to different metrics and
+    defaults to CountLineCode.
+    </p>
+    '''
+
+
+def test_architecture(arch):
+  return True
+
+
+def init(graph, arch):
+
+  # Options
+  graph.options().define("Size By", ["CountLine", "CountLineCode", "CountDeclMethod", "CountDeclMethodAll"], "CountLineCode");
+  graph.options().define("Arch Labels", ["Off", "On"], "On")
+  graph.options().define("Hide Nodes With No Dependencies", ["Off", "On"], "On")
+
+  # Create a Legend for coloring by architecture
+  maxRows = len(COLORS)
+  color = 0
+
+  archList = [arch] + arch.children()
+  recursive = False
+  for a in archList:
+    if a.ents(recursive):
+      graph.legend().define(a.longname(), "circle", a.name(), COLORS[color%len(COLORS)], COLORS[color%len(COLORS)], color % maxRows, int(color / maxRows))
+      color += 1
+    recursive = True
+
+
+def draw(graph, arch):
+  """
+  Draw the graph
+
+  The second argument can be a database, an architecture or an entity depending
+  on whether the graph was created at a project, architecture, or entity level.
+  """
+  graph.set("layout", "sfdp") # Override default layout algorithm (Usually dot)
+  graph.set("overlap_scaling", "6")
+  graph.set("overlap", "prism")
+
+  graph.default("htmllabels", "on") # Understand attribute to interpret labels as html
+  graph.default("shape","circle","node")
+  graph.default("arrowhead", "none", "edge")
+
+  metric = graph.options().lookup("Size By")
+  metdict = dict()
+  minval = None
+  maxval = None
+
+  # Determine the entities (and their colors) in the graph
+  entToArch = dict()
+  archList = [arch] + arch.children()
+  archNames = []
+  recursive = False
+  color = 0
+  for a in archList:
+    entList = classEntities(a, recursive)
+    for e in entList:
+      entToArch[e] = color
+      metval = e.metric(metric)
+      if metval is not None:
+        if minval is None or metval < minval:
+          minval = metval
+        if maxval is None or metval > maxval:
+          maxval = metval
+        metdict[e] = metval
+    if entList:
+      # The formatting for File Dependencies Graph is achieved by an html label,
+      # which uses a semi-transparent background color. From a plugin, it's not
+      # possible to determine light mode / dark mode changes so this assumes
+      # light mode. Normally, transparent colors are expected to be RRGGBBAA
+      # format because they're interpreted by the graph layout engine. However
+      # colors inside html style arguments are interpreted only by QT which
+      # uses AARRGGBB.
+      archNames.append('<span style="font-weight:600; color:{}; background-color:{};">{}</span>'.format(COLORS[color%len(COLORS)], "#8FFFFFFF", a.name()))
+      color += 1
+    recursive = True
+
+  # Node creation
+  nodedict = dict()
+  def entNode(ent):
+    if ent in nodedict:
+      return nodedict[ent]
+    node = graph.node("",ent) # No labels
+
+    # Color By Architecture
+    c = COLORS[entToArch.get(ent,0)%len(COLORS)]
+    node.set("color",c)
+    node.set("fillcolor",c)
+
+    # Size by number of commits
+    metval = metdict.get(ent)
+    s = "0.025" # Minimum size if value unknown
+    if metval is not None and maxval:
+      s = str(0.025 + ((metval - minval) / maxval * (0.25 - 0.025)))
+    node.set("width",s)
+    node.set("height",s)
+    nodedict[ent] = node
+    return node
+
+  # Build graph
+  singletons = graph.options().lookup("Hide Nodes With No Dependencies") == "Off"
+  edgecounts = dict()
+  for ent, colorIdx in entToArch.items():
+    if singletons:
+      tail = entNode(ent)
+    for e2 in ent.depends().keys():
+      if e2 not in entToArch:
+        continue # Entity not in requested entities
+      tail = entNode(ent)
+      edge = graph.edge(tail, entNode(e2))
+      edge.set("color", COLORS[colorIdx%len(COLORS)] + "2F") # Make edges semi-transparent
+      edgecounts[ent] = edgecounts.get(ent, 0) + 1
+      edgecounts[e2] = edgecounts.get(e2, 0) + 1
+
+  # If arch labels, use the node with the most edges to label the architecture
+  # since visually that will probably be the most dense area of that architecture's
+  # color.
+  if graph.options().lookup("Arch Labels") == "On":
+    bestnode = dict()
+    for ent, archId in entToArch.items():
+      if archId not in bestnode or edgecounts.get(ent, 0) > edgecounts.get(bestnode[archId], 0):
+        bestnode[archId] = ent
+    for archId, ent in bestnode.items():
+      if ent in nodedict:
+        nodedict[ent].set("xlabel", archNames[archId])
+
+
+def classEntities(arch, recursive):
+  classents = set()
+  for ent in arch.ents(recursive):
+    if ent.kind().check(CLASS_KINDS):
+      classents.add(ent)
+    elif ent.kind().check("file"):
+      for ref in ent.filerefs("define", CLASS_KINDS, True):
+        classents.add(ref.ent())
+  return classents
+
+
+
