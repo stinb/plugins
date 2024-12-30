@@ -1,22 +1,34 @@
 #include <memory>
 
-// Define the QT namespace
-namespace QT {
-enum ConnectionType { AutoConnection, DirectConnection, QueuedConnection, BlockingQueuedConnection, UniqueConnection };
-}
-
 // Define the Qt namespace
 namespace Qt {
-using ConnectionType = QT::ConnectionType;
+  enum ConnectionType { AutoConnection, DirectConnection, QueuedConnection, BlockingQueuedConnection, UniqueConnection };
 }
 
 class QObject;
 
+struct QMetaObject {
+  class Connection {};
+};
+
+class QMetaMethod {
+public:
+  QMetaMethod(void (QObject::*)(QObject *));
+
+  template <class F>
+  QMetaMethod(F &&lambda) {}
+};
 
 class QObject {
 public:
-  const char * destroyed(QObject *obj);
-  static void connect(const QObject *sender, const char *signal, const QObject *receiver, Qt::ConnectionType type);
+  void destroyed(QObject *obj);
+
+  static QMetaObject::Connection connect(
+    const QObject *sender,
+    const QMetaMethod &signal,
+    const QObject *receiver,
+    const QMetaMethod &method,
+    Qt::ConnectionType type = Qt::AutoConnection);
 };
 
 template<typename T> class QSharedPointer {
@@ -43,4 +55,3 @@ void f(Class *ctx)
   QObject::connect(ptr_a.data(), &Class::destroyed, ctx, [ptr_a] {}); // UndCC_Violation
   QObject::connect(&*ptr_b, &Class::destroyed, ctx, [ptr_b] {});      // UndCC_Violation
 }
-
