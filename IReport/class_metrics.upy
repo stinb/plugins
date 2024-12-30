@@ -1,0 +1,125 @@
+import metricreports
+import understand
+
+FILE_KIND_STR="file ~unresolved ~unknown"
+CLASS_KIND_STR=("basic module, basic type,"
+  "c class, c struct, c union,"
+  "csharp type,"
+  "java file, java type, java package,"
+  "pascal class, pascal interface,"
+  "python class,"
+  "web javascript class, web php class, web php interface, web php trait")
+
+# (id, name, enabled, languages)
+LANGUAGES=["Basic", "C++", "C#", "Java", "Pascal", "Python", "Web"]
+LANG_EXCEPT_PYTHON=["Basic", "C++", "C#", "Java", "Pascal", "Web"]
+CLASS_METRICS=[
+  ("CountClassBase", "Base Classes [aka IFANIN]", True, None),
+  ("CountClassDerived", "Derived Classes [aka NOC]", True, None),
+  ("CountDeclClassMethod", "Class Methods", True, LANG_EXCEPT_PYTHON),
+  ("CountDeclClassVariable", "Class Variables [aka NV]", True, LANG_EXCEPT_PYTHON),
+  ("CountDeclInstanceMethod", "Instance Methods [aka NIM]", True, None),
+  ("CountDeclInstanceVariable", "Instance Variables [aka NIV]", True, None),
+
+  ("CountDeclInstanceVariableInternal", "Internal Instance Variables", False, ["C#"]),
+  ("CountDeclInstanceVariablePrivate", "Private Instance Variables", False, ["C++", "C#", "Web"]),
+  ("CountDeclInstanceVariableProtected",   "Protected Instance Variables", False, ["C++", "C#", "Web"]),
+  ("CountDeclInstanceVariableProtectedInternal", "Protected Internal Instance Variables", False, ["C#"]),
+  ("CountDeclInstanceVariablePublic", "Public Instance Variables", False, ["C++", "C#", "Web"]),
+
+  ("CountDeclMethod", "Methods [aka WMC]", True, None),
+  ("CountDeclMethodAll", "All Methods [aka RFC, NM]", True, None),
+
+  ("CountDeclMethodConst", "Const Methods", False, ["C++"]),
+  ("CountDeclMethodDefault", "Default Methods", False, ["Java"]),
+  ("CountDeclMethodFriend", "Friend Methods [aka NF, NFM]", False, ["C++"]),
+  ("CountDeclMethodInternal", "Internal Methods", False, ["C#"]),
+  ("CountDeclMethodPrivate", "Private Methods [aka NPRM]", False, LANG_EXCEPT_PYTHON),
+  ("CountDeclMethodProtected", "Protected Methods", False, LANG_EXCEPT_PYTHON),
+  ("CountDeclMethodProtectedInternal", "Protected Internal Methods", False, ["C#"]),
+  ("CountDeclMethodPublic", "Public Methods [aka PM, NPM]", False, LANG_EXCEPT_PYTHON),
+  ("CountDeclMethodStrictPrivate", "Strict Private Methods", False, ["Pascal"]),
+  ("CountDeclMethodStrictPublished", "Strict Published Methods", False, ["Pascal"]),
+
+  ("CountDeclProperty", "Properties", True, ["C#","Pascal"]),
+  ("CountDeclPropertyAuto", "Auto-Implemented Properties", False, ["C#"]),
+
+  ("CountClassCoupled", "Coupled Classes [aka CBO]", False, ["Basic", "C++", "C#", "Java", "Pascal", "Python"]),
+  ("MaxInheritanceTree", "Max Inheritance Tree [aka DIT]", True, ["C++","C#","Java","Pascal","Python","Web"]),
+  ("PercentLackOfCohesion", "Percent Lack of Cohesion", True, ["Basic", "C++", "C#", "Java", "Pascal"]),
+  ("PercentLackOfCohesionModified", "Percent Lack of Cohesion Modified", False, ["Basic","C#","Java","Pascal"]),
+  ("CountClassCoupledModified", "Coupled Classes Modified", False, ["Basic","C#","Java","Pascal","Python"]),
+]
+
+def name():
+  return "Class Metrics"
+
+def description():
+  options = []
+  for id, name, enabled, langs in CLASS_METRICS:
+    options.append("<li>{} ({})</li>".format(name, id))
+
+  return '''<p>Display metrics for classes</p>
+  <p>Create a table with each class metric as a column and each class in
+  the file, architecture, or database as a row. Metric availability varies
+  by project languages</p>
+  <h3>Available Metrics</h3>
+  <ul> {} </ul>
+  '''.format("".join(options))
+
+def test_global(db):
+  return True
+
+def test_architecture(arch):
+  return True
+
+def test_entity(ent):
+  if not ent.kind().check(FILE_KIND_STR):
+    return False
+  ents=set()
+  file_ents(ent, ents)
+  return len(file_ents) > 0
+
+def support_abort():
+  return True
+
+def init(report, target):
+  dblangs = report.db().language()
+  for id, name, enabled, languages in CLASS_METRICS:
+    if languages and not any(lang in dblangs for lang in languages):
+      continue
+    report.options().checkbox(id, "Show {} ({})".format(id, name),enabled)
+
+
+def generate(report, target, page):
+  metrics = []
+  names = dict()
+  dblangs = report.db().language()
+  for id, name, enabled, languages in CLASS_METRICS:
+    if languages and not any(lang in dblangs for lang in languages):
+      continue
+    if report.options().lookup(id):
+      metrics.append(id)
+      names[id] = name
+
+  ents = set()
+
+  if isinstance(target, understand.Arch):
+    for ent in target.ents(True):
+      if ent.kind().check(CLASS_KIND_STR):
+        ents.add(ent)
+      elif ent.kind().check(FILE_KIND_STR):
+        file_ents(ent, ents)
+
+  elif isinstance(target, understand.Db):
+    ents = target.ents(CLASS_KIND_STR)
+
+  # Entities
+  elif isinstance(target, understand.Ent):
+    file_ents(target, ents)
+
+  metricreports.metricsTable(report, metrics, ents, names=names)
+
+def file_ents(file, ents):
+  for ref in file.filerefs("define, ada declare body, vhdl declare", CLASS_KIND_STR, True):
+    ents.add(ref.ent())
