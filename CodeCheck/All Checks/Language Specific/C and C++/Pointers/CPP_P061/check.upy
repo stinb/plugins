@@ -38,39 +38,36 @@ def test_language(language):
     return language == 'C++'
 
 def check(check, file):
-    if not re.search(r'qobject::connect', file.contents().lower()):
+    if not re.search(r'connect', file.contents().lower()):
         return
-
-    if not file.lexer():
-        return
-    lexer = file.lexer()
-    lex = lexer.first()
-    while lex and not lex.ent():
-        lex = lex.next(True, True)
-
-    lexemes = lexer.lexemes()
-    for lexeme in lexemes:
-        # Find QObject connect call with the lexer
-        if lexeme.text().lower() == 'qobject':
+    refs = file.filerefs('Call', 'Function')
+    for ref in refs:
+        if ref.ent().longname() != 'QObject::connect':
+            continue
+        if not file.lexer():
+            return
+        lexer = file.lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        if lexeme and lexeme.text().lower() == 'connect':
             lexeme = lexeme.next(True, True)
-            if lexeme and lexeme.text() == '::':
-                lexeme = lexeme.next(True, True)
-                if lexeme and lexeme.text().lower() == 'connect':
-                    lexeme = lexeme.next(True, True)
-                    # Go to closing parenthesis
-                    if lexeme and lexeme.text() == '(':
-                        close = Modules.findClose(lexeme)
-                        if close:
-                            commas = 0
-                            ent = None
-                            # Count each comma and check the 1st and 4th parameters
-                            while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
-                                if lexeme.text() == ',':
-                                    commas += 1
-                                elif commas == 0 and lexeme.ent() and not ent and re.search(r'shared_ptr|sharedpointer|\*', lexeme.ent().freetext("UnderlyingType").lower()):
-                                    ent = lexeme.ent().longname()
-                                elif commas == 3 and lexeme.ent() and ent == lexeme.ent().longname():
+            # Go to closing parenthesis
+            if lexeme and lexeme.text() == '(':
+                close = Modules.findClose(lexeme)
+                if close:
+                    commas = 0
+                    ent = None
+                    # Count each comma and check the 1st and 4th parameters
+                    while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                        if lexeme.text() == ',':
+                            commas += 1
+                        elif commas == 0 and lexeme.ent() and lexeme.ent().freetext("UnderlyingType") and not ent and re.search(r'shared_ptr|sharedpointer', lexeme.ent().freetext("UnderlyingType").lower()):
+                            ent = lexeme.ent().longname()
+                        elif commas == 3 and lexeme.text() == '[':
+                            close = Modules.findClose(lexeme)
+                            while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                                if lexeme.ent() and ent == lexeme.ent().longname():
                                     check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1, ent)
-                                    break
-
                                 lexeme = lexeme.next(True, True)
+                            break
+
+                        lexeme = lexeme.next(True, True)
