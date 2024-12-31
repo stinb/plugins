@@ -1,15 +1,5 @@
+import kind_util
 import understand
-
-FILE_KIND_STR="file ~unresolved ~unknown"
-FUNCTION_KIND_STR=("ada entry, ada function, ada procedure, ada protected, ada task,"
-  "c function,"
-  "csharp method,"
-  "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
-  "java method,"
-  "jovial subroutine,"
-  "pascal compunit, pascal function, pascal procedure,"
-  "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
-  "web function, web method")
 
 # (Acronymn, Name, Understand ID, Details, Max True, Default)
 HIS_INFO=[
@@ -58,14 +48,14 @@ def description():
   '''.format("".join(options[:-4]), "".join(options[-4:]))
 
 def test_global(db):
-  return True
+  return kind_util.can_contain_functions(db)
 
 def test_architecture(arch):
-  return True
+  return kind_util.can_contain_functions(arch)
 
 def test_entity(ent):
   # file or entity kind
-  return ent.kind().check(FILE_KIND_STR + "," + FUNCTION_KIND_STR)
+  return ent.kind().check(kind_util.FUNCTION_KIND_STR) or kind_util.can_contain_functions(ent)
 
 def support_abort():
   return True
@@ -73,7 +63,7 @@ def support_abort():
 def init(report, target):
   def_disabled = CMP_IDS
   def_disabled.append("HISNOMV")
-  if not isinstance(target, understand.Ent) or target.kind().check(FILE_KIND_STR):
+  if not isinstance(target, understand.Ent) or not target.kind().check(kind_util.FUNCTION_KIND_STR):
     report.options().checkbox("charts", "Show Charts", True)
     report.options().checkbox("table", "Show Table", True)
     # Don't calculate these by default for all functions because they take a long time
@@ -97,27 +87,15 @@ def generate(report, target, page):
   """
   Required, generate the report
   """
-  ents = set()
-
-  if isinstance(target, understand.Arch):
-    for ent in target.ents(True):
-      if ent.kind().check(FUNCTION_KIND_STR):
-        ents.add(ent)
-      elif ent.kind().check(FILE_KIND_STR):
-        file_ents(ent, ents)
-
-  elif isinstance(target, understand.Db):
-    ents = target.ents(FUNCTION_KIND_STR)
-
   # Entities
-  elif isinstance(target, understand.Ent):
-    if target.kind().check(FUNCTION_KIND_STR):
-      report.table(["Metric","Value"])
-      end = None if report.options().lookup("cmp") else -4
-      his_metrics(report, target, True)
-      report.table()
-      return
-    file_ents(target, ents)
+  if isinstance(target, understand.Ent) and target.kind().check(kind_util.FUNCTION_KIND_STR):
+    report.table(["Metric","Value"])
+    end = None if report.options().lookup("cmp") else -4
+    his_metrics(report, target, True)
+    report.table()
+    return
+
+  ents = kind_util.list_functions(target)
 
   if report.options().lookup("charts"):
     report.heading(2)
@@ -183,10 +161,6 @@ def generate(report, target, page):
       report.progress(cur_prog)
       last_prog = cur_prog
   report.table()
-
-def file_ents(file, ents):
-  for ref in file.filerefs("define, ada declare body, vhdl declare", FUNCTION_KIND_STR, True):
-    ents.add(ref.ent())
 
 def his_metrics(report, func, columns=False):
   his_ids = []
