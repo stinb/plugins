@@ -1,6 +1,6 @@
 import understand
 
-FUNCTION_KIND_STR=("ada entry, ada function, ada procedure, ada protected, ada task,"
+FUNCTION_KIND_STR_WITH_UNRESOLVED=("ada entry, ada function, ada procedure, ada protected, ada task,"
   "c function,"
   "csharp method,"
   "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
@@ -9,19 +9,40 @@ FUNCTION_KIND_STR=("ada entry, ada function, ada procedure, ada protected, ada t
   "pascal compunit, pascal function, pascal procedure,"
   "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
   "web function, web method")
+FUNCTION_KIND_STR=("ada entry ~unresolved, ada function ~unresolved, ada procedure ~unresolved, ada protected ~unresolved, ada task ~unresolved,"
+  "c function ~unresolved,"
+  "csharp method ~unresolved,"
+  "fortran block data ~unresolved, fortran function ~unresolved, fortran interface ~unresolved, fortran program ~unresolved, fortran subroutine ~unresolved,"
+  "java method ~unresolved,"
+  "jovial subroutine ~unresolved,"
+  "pascal compunit ~unresolved, pascal function ~unresolved, pascal procedure ~unresolved,"
+  "vhdl procedure ~unresolved, vhdl function ~unresolved, vhdl process ~unresolved, vhdl architecture ~unresolved,"
+  "web function ~unresolved, web method ~unresolved")
 
 CLASS_LANGUAGES=["Basic", "C++", "C#", "Java", "Pascal", "Python", "Web"]
-CLASS_KIND_STR=("basic module, basic type,"
+CLASS_KIND_STR_WITH_UNRESOLVED=("basic module, basic type,"
   "c class, c struct, c union,"
   "csharp type,"
   "java file, java type, java package,"
   "pascal class, pascal interface,"
   "python class,"
   "web javascript class, web php class, web php interface, web php trait")
+CLASS_KIND_STR=("basic module ~unresolved, basic type ~unresolved,"
+  "c class ~unresolved, c struct ~unresolved, c union ~unresolved,"
+  "csharp type ~unresolved,"
+  "java file ~unresolved, java type ~unresolved, java package ~unresolved,"
+  "pascal class ~unresolved, pascal interface ~unresolved,"
+  "python class ~unresolved,"
+  "web javascript class ~unresolved, web php class ~unresolved, web php interface ~unresolved, web php trait ~unresolved")
 
+FILE_KIND_STR_WITH_UNRESOLVED="file"
 FILE_KIND_STR="file ~unresolved ~unknown"
 
-PYTHON_PACKAGE_STR="python package ~unknown"
+# It's still possible to not be able to create a lexer for resolved
+# files or functions if the file is out of date.
+LEXER_ENTS_KIND_STR=FUNCTION_KIND_STR+","+FILE_KIND_STR
+
+PYTHON_PACKAGE_KIND_STR="python package ~unknown"
 
 def can_contain_functions(target):
   return isinstance(target, understand.Db) or \
@@ -29,10 +50,11 @@ def can_contain_functions(target):
          (isinstance(target, understand.Ent) and \
            (target.kind().check(FILE_KIND_STR) or \
             target.kind().check(CLASS_KIND_STR) or \
-            target.kind().check(PYTHON_PACKAGE_STR)))
+            target.kind().check(PYTHON_PACKAGE_KIND_STR)))
 
-def list_functions(target, arch_recursive=True):
-  return list_by_kind(target, FUNCTION_KIND_STR, arch_recursive=arch_recursive, expand_classes=True)
+def list_functions(target, arch_recursive=True, include_unresolved=False):
+  kstr = FUNCTION_KIND_STR_WITH_UNRESOLVED if include_unresolved else FUNCTION_KIND_STR
+  return list_by_kind(target, kstr, arch_recursive=arch_recursive, expand_classes=True)
 
 def can_contain_classes(target, db=None, test_ents=True):
   if db is None and isinstance(target, understand.Db):
@@ -47,19 +69,21 @@ def can_contain_classes(target, db=None, test_ents=True):
          isinstance(target, understand.Arch) or \
          (isinstance(target, understand.Ent) and \
            (target.kind().check(FILE_KIND_STR) or \
-            target.kind().check(PYTHON_PACKAGE_STR)) and \
+            target.kind().check(PYTHON_PACKAGE_KIND_STR)) and \
            (not test_ents or len(list_classes(target)) > 0))
 
-def list_classes(target, arch_recursive=True):
-  return list_by_kind(target, CLASS_KIND_STR, arch_recursive=arch_recursive)
+def list_classes(target, arch_recursive=True, include_unresolved=False):
+  kstr = CLASS_KIND_STR_WITH_UNRESOLVED if include_unresolved else CLASS_KIND_STR
+  return list_by_kind(target, kstr, arch_recursive=arch_recursive)
 
 def can_contain_files(target):
   return isinstance(target, understand.Db) or \
          isinstance(target, understand.Arch) or \
          (isinstance(target, understand.Ent) and \
-            target.kind().check(PYTHON_PACKAGE_STR))
+            target.kind().check(PYTHON_PACKAGE_KIND_STR))
 
-def list_files(target, arch_recursive=True):
+def list_files(target, arch_recursive=True, include_unresolved=False):
+  kstr = FILE_KIND_STR_WITH_UNRESOLVED if include_unresolved else FILE_KIND_STR
   return list_by_kind(target, FILE_KIND_STR, arch_recursive=arch_recursive, expand_files=False)
 
 def list_by_kind(target, ent_kind_str, arch_recursive=True, expand_files=True, expand_classes=False, expand_python_packages=True):
@@ -86,7 +110,7 @@ def list_by_kind(target, ent_kind_str, arch_recursive=True, expand_files=True, e
   for ent in start:
     if ent.kind().check(ent_kind_str):
       ents.add(ent)
-    elif ent.kind().check(PYTHON_PACKAGE_STR):
+    elif ent.kind().check(PYTHON_PACKAGE_KIND_STR):
       python_packages.add(ent)
     elif ent.kind().check(FILE_KIND_STR):
       files.add(ent)
