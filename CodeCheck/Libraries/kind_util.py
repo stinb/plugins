@@ -7,6 +7,7 @@ FUNCTION_KIND_STR_WITH_UNRESOLVED=("ada entry, ada function, ada procedure, ada 
   "java method,"
   "jovial subroutine,"
   "pascal compunit, pascal function, pascal procedure,"
+  "python function,"
   "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
   "web function, web method")
 FUNCTION_KIND_STR=("ada entry ~unresolved, ada function ~unresolved, ada procedure ~unresolved, ada protected ~unresolved, ada task ~unresolved,"
@@ -16,6 +17,7 @@ FUNCTION_KIND_STR=("ada entry ~unresolved, ada function ~unresolved, ada procedu
   "java method ~unresolved,"
   "jovial subroutine ~unresolved,"
   "pascal compunit ~unresolved, pascal function ~unresolved, pascal procedure ~unresolved,"
+  "python function ~unresolved,"
   "vhdl procedure ~unresolved, vhdl function ~unresolved, vhdl process ~unresolved, vhdl architecture ~unresolved,"
   "web function ~unresolved, web method ~unresolved")
 
