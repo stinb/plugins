@@ -140,6 +140,8 @@ class SizeColorMetricChart:
           continue
         self.color_scale.update_val_range(cval)
       nodes.append( (sval, cval, t) )
+      if graph.is_aborted():
+        return
 
     if not nodes:
       return
@@ -211,6 +213,8 @@ class SizeColorMetricChart:
         child_cval, child_sval = draw_hierarchical_recurse(child)
         cur_cval = max(cur_cval, child_cval)
         cur_sval += und_colors.to_float(child_sval)
+      if graph.is_aborted():
+        return
 
       # Add the entity nodes
       for node in self.target_node_children(target):
@@ -226,6 +230,8 @@ class SizeColorMetricChart:
           cval = und_colors.to_float(cval)
           cur_cval = max(cur_cval, cval)
         self.create_node(cluster, sval, cval, node)
+        if graph.is_aborted():
+          return
 
       # Set the color for this architecture
       self.color_scale.set_colors(cluster, cur_cval if self.color_metric else None)

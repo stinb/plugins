@@ -53,6 +53,8 @@ def draw_entity_histogram(graph, ents, metric, tooltip_kindstr="", bin_count=BIN
         minimum = v
       if maximum is None or v > maximum:
         maximum = v
+    if graph.is_aborted():
+      return
 
   if not vals:
     return # nothing to draw
