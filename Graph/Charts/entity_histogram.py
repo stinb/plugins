@@ -2,6 +2,8 @@
 
 import bisect
 import math
+import locale
+locale.setlocale(locale.LC_ALL, '')
 
 BINS=10
 AUTO_LOG_RANGE=25
@@ -87,16 +89,13 @@ def draw_entity_histogram(graph, ents, metric, tooltip_kindstr="", bin_count=BIN
   # Create stacked bar chart from counts
   node_labels = graph.options().lookup("Node Labels") == "On"
   for i in range(len(bins)-1):
-    c = graph.cluster(" {:.2g} ".format(bins[i]))
+    c = graph.cluster(" {} ".format(format_number(bins[i], isfloat)))
     if not cnts[i]:
       continue
 
     area = cnts[i]
-    n = c.node(str(cnts[i])) if node_labels else c.node()
-    if isfloat:
-      n.set("tooltip", "{}{}with {} value >= {:.2f} and < {:.2f}".format(area,tooltip_kindstr,metric,bins[i],bins[i+1]))
-    else:
-      n.set("tooltip", "{}{}with {} value >= {} and < {}".format(area,tooltip_kindstr,metric,bins[i],bins[i+1]))
+    n = c.node(format_number(cnts[i], False)) if node_labels else c.node()
+    n.set("tooltip", "{}{}with {} value >= {} and < {}".format(format_number(area,False),tooltip_kindstr,metric,format_number(bins[i],isfloat,True),format_number(bins[i+1],isfloat,True)))
 
     if logscale:
       area = math.log10(area) + 1 # make sure area is greater than 0
@@ -117,3 +116,10 @@ def fails_threshold(graph, value):
   if threshold.startswith("Max"):
     return value > cutoff
   return value < cutoff
+
+def format_number(val, isfloat, tooltip=False):
+  if isfloat:
+    return "{:.2f}".format(val)
+  elif len(str(val)) > 5 and not tooltip:
+    return "{:g}".format(val)
+  return "{:n}".format(val)
