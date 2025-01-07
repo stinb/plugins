@@ -1,0 +1,61 @@
+# This plugin relies on local imports that must be copied if this plugin
+# is copied.
+
+import kind_util
+from metric_charts import SizeColorMetricChart, list_function_metrics
+import understand
+
+def name():
+  return "Class Contents Treemap"
+
+def description():
+  return '''Visualize the functions in C++ class by visibility'''
+
+def test_entity(ent):
+  return ent.kind().check("c class ~unknown ~unresolved")
+
+def init(graph, target):
+  metlist = list_function_metrics()
+  graph.options().define("Size Metric", metlist, "CountLine")
+  graph.options().define("Color Metric", metlist, "Cyclomatic")
+  SizeColorMetricChart.define_options(graph)
+
+def draw(graph, target):
+  graph.set("layout", "treemap") # Override default layout algorithm (Usually dot)
+
+  chart = ClassVisibility(graph, target)
+  chart.hierarchical_draw(graph, target)
+
+class ClassVisibility(SizeColorMetricChart):
+  def __init__(self, graph, target):
+    self.class_ent = target
+    cmetric = graph.options().lookup("Color Metric")
+    smetric = graph.options().lookup("Size Metric")
+    super().__init__(graph, smetric, cmetric)
+    self.color_scale.gradient_fill = True
+
+  def target_parent(self, target):
+    if target == self.class_ent:
+      return None
+    return self.class_ent
+
+  def target_cluster_children(self, target):
+    if target == self.class_ent:
+      return ["Public", "Private", "Protected"]
+    return []
+
+  def target_node_children(self, target, recursive=False):
+    if not recursive and target == self.class_ent:
+      return []
+    kstr = "member function"
+    if target != self.class_ent:
+      kstr += " " + target
+    ents = []
+    for ref in self.class_ent.refs("define,declare", kstr, True):
+      ents.append(ref.ent())
+    return ents
+
+  def cluster_label(self, target):
+    if target == self.class_ent:
+      return target.name()
+    return target
