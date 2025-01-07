@@ -12,13 +12,21 @@ NOT_ALLOWED = {'malloc', 'calloc', 'realloc', 'free', 'free_sized',
 'free_aligned_sized', 'aligned_alloc', 'operator new', 'operator new',
 'operator new[]', 'operator delete', 'operator delete[]'}
 
+STD_LIB_NOT_ALLOWED = {'make_unique', 'make_shared', 'allocate_shared', 'shared_ptr', 'weak_ptr',
+                       'vector', 'deque', 'list', 'stack', 'queue', 'priority_queue', 'string', 'basic_string',
+                       'map', 'multimap', 'set', 'multiset', 'unordered_map', 'unordered_multimap', 'unordered_set', 'unordered_multiset', 
+                       'stable_sort', 'partial_sort_copy', 'uninitialized_copy', 'uninitialized_fill', 'for_each',
+                       'allocator', 'function', 'polymorphic_allocator', 'new_delete_resource', 'memory_resource', 'monotonic_buffer_resource', 'raw_storage_iterator',
+                       'runtime_error', 'current_exception', 'rethrow_exception', 'logic_error', 'invalid_argument', 'out_of_range', 'length_error', 'bad_alloc', 'bad_cast', 'bad_typeid',
+                       'basic_streambuf', 'ostringstream', 'istringstream', 'stringstream', 'filebuf',
+                       'thread', 'async', 'promise', 'future', 'packaged_task', 'shared_mutex', 'condition_variable'}
 
 visited = set()
 includesStdlib = dict()
 
 
 def ids():
-    return ('POWER_OF_TEN_03', 'CPP_M019')
+    return ('POWER_OF_TEN_03', 'CPP_M019', 'MISRA23_21.6.1')
 
 
 def name(id):
@@ -27,6 +35,7 @@ def name(id):
 3 No Dynamic Memory Allocation''',
         'CPP_M019': '''All Checks/Language Specific/C and C++/Memory Allocation/\
 No Dynamic Memory Allocation''',
+        'MISRA23_21.6.1': "Published Standards/MISRA C++ 2023/21.6.1 Dynamic memory should not be used",
     }[id]
 
 
@@ -43,10 +52,40 @@ def tags(id):
             'Language: C++',
             'Memory Allocation'
         ],
+        'MISRA23_21.6.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Memory Allocation',
+        ],
     }.get(id)
 
 
-def detailed_description():
+def detailed_description(id):
+    if id == "MISRA23_21.6.1":
+        return '''
+<p><b>Amplification</b></p>
+<p>Dynamic memory refers to any object with dynamic storage duration that is managed using operator
+new (excluding the non-allocating placement versions), operator delete, the functions calloc,
+malloc, realloc, aligned_alloc and free, or any platform-specific memory allocation or deallocation function.</p>
+<p>Uses of dynamic memory may occur implicitly (e.g., when throwing exceptions or using C++ Standard
+Library classes). Therefore, any instantiation of a C++ Standard Library entity having a template
+argument that is a specialization of std::allocator is a violation of this rule, as is any call to a C++
+Standard Library function that may use dynamic memory.</p>
+
+<p><b>Rationale</b></p>
+<p>It is acknowledged that applications may need to use dynamic memory, leading to violations of this
+rule. Any uses of dynamic memory need to be justified through supporting documentation that explains
+how the issues that have been identi9ed in Section 4.21.6 are managed within the project.</p>
+<p>Note: a project may reclassify this rule (see MISRA Compliance [1]) if the risks related to the use
+of dynamic memory are considered to be unacceptable.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">auto i = std::make_unique&lt; int32_t &gt;( 42 ); // Non-compliant
+auto j = std::vector&lt; int32_t &gt; {}; // Non-compliant</code></pre>
+'''
+
     return '''\
 <p>Do not use dynamic memory allocation after initialization.</p>
 
@@ -114,17 +153,27 @@ def test_global():
 def test_language(language):
     return language == 'C++'
 
+def define_options(check):
+    flag_stdlibfuncs = check.id() == "MISRA23_21.6.1"
+    check.option().checkbox('flag_stdlibfuncs', 'Flag any call to a C++ Standard Library function that may use dynamic memory', flag_stdlibfuncs)
 
 def check(check, file):
+    flag_stdlibfuncs = check.options().lookup('flag_stdlibfuncs')
+
     for ref in file.filerefs('Call', 'Function'):
         ent = ref.ent()
 
         # Skip if function is allowed
         if ent.name() not in NOT_ALLOWED:
-            continue
-
+            if (flag_stdlibfuncs and ent.name() in STD_LIB_NOT_ALLOWED):
+                pass
+            else:
+                continue
+        
+        if (flag_stdlibfuncs and ent.name() in STD_LIB_NOT_ALLOWED):
+            pass
         # If C allocation function
-        if not re.match(r'operator ', ent.name()):
+        elif not re.match(r'operator ', ent.name()):
             # Skip if it's defined here or stdlib isn't included
             if ent.kind().check('Static') or not fileIncludeStdlib(file):
                 continue
