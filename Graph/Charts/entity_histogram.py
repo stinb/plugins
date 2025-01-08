@@ -41,15 +41,9 @@ def draw_entity_histogram(graph, ents, metric, tooltip_kindstr="", bin_count=BIN
   vals = []
   minimum = None
   maximum = None
-  isfloat = False
   for ent in ents:
-    v = ent.metric(metric)
+    v = ent.metric(metric, format="raw")
     if v is not None:
-      if isinstance(v,str):
-        if v.endswith('%'):
-          v = v[:-1]
-        v = float(v)
-        isfloat = True
       vals.append(v)
       if minimum is None or v < minimum:
         minimum = v
@@ -61,6 +55,7 @@ def draw_entity_histogram(graph, ents, metric, tooltip_kindstr="", bin_count=BIN
   if not vals:
     return # nothing to draw
 
+  isfloat = isinstance(minimum, float)
   binwidth = (maximum - minimum) / bin_count
   if not isfloat:
     binwidth = max(int(binwidth + 0.5), 1)

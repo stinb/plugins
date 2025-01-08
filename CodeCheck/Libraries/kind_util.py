@@ -1,5 +1,10 @@
 import understand
 
+# These kind strings are designed to be non-overlapping. So things
+# like "Web Javascript Function Class" that could match FUNCTION_KIND_STR
+# or CLASS_KIND_STRING are excluded from both. Use the FUNCTION_LIKE_KIND_STR /
+# CLASS_LIKE_KIND_STR to allow overlaps.
+
 FUNCTION_KIND_STR_WITH_UNRESOLVED=("ada entry, ada function, ada procedure, ada protected, ada task,"
   "c function,"
   "csharp method,"
@@ -9,7 +14,7 @@ FUNCTION_KIND_STR_WITH_UNRESOLVED=("ada entry, ada function, ada procedure, ada 
   "pascal compunit, pascal function, pascal procedure,"
   "python function,"
   "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
-  "web function, web method")
+  "web ~class function, web method")
 FUNCTION_KIND_STR=("ada entry ~unresolved, ada function ~unresolved, ada procedure ~unresolved, ada protected ~unresolved, ada task ~unresolved,"
   "c function ~unresolved,"
   "csharp method ~unresolved,"
@@ -19,7 +24,9 @@ FUNCTION_KIND_STR=("ada entry ~unresolved, ada function ~unresolved, ada procedu
   "pascal compunit ~unresolved, pascal function ~unresolved, pascal procedure ~unresolved,"
   "python function ~unresolved,"
   "vhdl procedure ~unresolved, vhdl function ~unresolved, vhdl process ~unresolved, vhdl architecture ~unresolved,"
-  "web function ~unresolved, web method ~unresolved")
+  "web ~class function ~unresolved, web method ~unresolved")
+FUNCTION_LIKE_KIND_STR = FUNCTION_KIND_STR + ", web javascript function class ~unresolved"
+FUNCTION_LIKE_KIND_STR_WITH_UNRESOLVED = FUNCTION_KIND_STR_WITH_UNRESOLVED + ", web javascript function class"
 
 CLASS_LANGUAGES=["Basic", "C++", "C#", "Java", "Pascal", "Python", "Web"]
 CLASS_KIND_STR_WITH_UNRESOLVED=("basic module, basic type,"
@@ -28,14 +35,16 @@ CLASS_KIND_STR_WITH_UNRESOLVED=("basic module, basic type,"
   "java file, java type, java package,"
   "pascal class, pascal interface,"
   "python class,"
-  "web javascript class, web php class, web php interface, web php trait")
+  "web javascript class ~function, web php class, web php interface, web php trait")
 CLASS_KIND_STR=("basic module ~unresolved, basic type ~unresolved,"
   "c class ~unresolved, c struct ~unresolved, c union ~unresolved,"
   "csharp type ~unresolved,"
-  "java file ~unresolved, java type ~unresolved, java package ~unresolved,"
+  "java type ~unresolved, java package ~unresolved,"
   "pascal class ~unresolved, pascal interface ~unresolved,"
   "python class ~unresolved,"
-  "web javascript class ~unresolved, web php class ~unresolved, web php interface ~unresolved, web php trait ~unresolved")
+  "web javascript class ~function ~unresolved, web php class ~unresolved, web php interface ~unresolved, web php trait ~unresolved")
+CLASS_LIKE_KIND_STR = CLASS_KIND_STR + ", web javascript function class ~unresolved, java file ~unresolved"
+CLASS_LIKE_KIND_STR_WITH_UNRESOLVED = CLASS_KIND_STR_WITH_UNRESOLVED + ", web javascript function class, java file"
 
 FILE_KIND_STR_WITH_UNRESOLVED="file"
 FILE_KIND_STR="file ~unresolved ~unknown"

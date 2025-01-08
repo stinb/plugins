@@ -2,51 +2,33 @@ import kind_util
 import und_colors
 import understand
 
-
-# These metric list functions are meant to include as much as possible so that
-# chart requests can be made for any metrics. A lot of the listed metrics may
-# not be applicable for specific database languages, or may be disabled.
-#
-# Also note that because understand.Metric.list(kindstring) does not have a
-# database argument it won't contain metric plugins (whose test_available
-# function provides a database). Even if it did take a database, it would only
-# list enabled plugins. So, it's not ideal, but these functions manually list
-# metric plugins known to be used by ireports.
+# Metric list functions (requires build 1215 or later):
+# - Set filter to False to include disabled metrics because these charts are
+#   intended to be callable from iReports which may request metrics which
+#   aren't enabled.
+# - Provide a database so that metric plugins can be found by kindstring.
+#   Note this will exclude some metrics that won't apply to the database
+#   (builtin metrics are language filtered, so CountLinePhp won't appear
+#   unless Web is a language. Metric Plugins may filter based on the
+#   database, like Git metrics won't be listed if the database doesn't
+#   have a git repository.
+# - Note that Diff metrics will only appear if a database is passed
+#   in understand.Db.comparison_db() was called and returned a valid db.
 def list_function_metrics(db):
-  metlist = understand.Metric.list(kind_util.FUNCTION_KIND_STR)
-  metlist.extend([
-    # HIS Metrics
-    "RatioCommentsWithBeforeToCode",
-    "CountGoTo",
-    "CountCallbyUnique",
-    "CountCallsUnique",
-    "CountParams",
-    "MaxCallDepth",
-    "CountEarlyExit",
-    "LanguageScope",
-    "MinRecursiveDepth",
-    "StabilityIndex",
-    "HISNOMV",
-
-    # Diff Metrics
-    "CountLineChanged",
-    "CountLineRemoved",
-    "CountLineNew",
-  ])
-  return metlist
+  return understand.Metric.list(kind_util.FUNCTION_KIND_STR, db=db, filter=False)
 
 def list_class_metrics(db):
-  metlist = understand.Metric.list(kind_util.CLASS_KIND_STR)
-  return metlist
+  return understand.Metric.list(kind_util.CLASS_KIND_STR, db=db, filter=False)
 
 def list_file_metrics(db):
-  metlist = understand.Metric.list(kind_util.FILE_KIND_STR)
-  return metlist
+  return understand.Metric.list(kind_util.FILE_KIND_STR, db=db, filter=False)
 
 def list_arch_metrics(db):
   # There is no equivalent understand.Metric.list for architecture metrics,
   # however, for built-in metrics, architecture and db metrics are the same
   metlist = db.metrics()
+  # Plugin metrics that are not enabled would still need to be added manually
+  # here.
   return metlist
 
 class SizeColorMetricChart:
