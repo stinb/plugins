@@ -1,0 +1,93 @@
+import kind_util
+import metricreports
+import understand
+
+# (id, enabled, languages)
+AVERAGE_METRICS=[
+  ("AvgCountLine", True, None),
+  ("AvgCountLineBlank", True, None),
+  ("AvgCountLineBlankWithInactive", False, ["C++"]),
+  ("AvgCountLineCode", True, None),
+  ("AvgCountLineCodeWithInactive", False, ["C++"]),
+  ("AvgCountLineComment", True, None),
+  ("AvgCountLineCommentWithInactive", False, ["C++"]),
+
+  ("AvgCyclomatic", True, None),
+  ("AvgCyclomaticModified", True, None),
+  ("AvgCyclomaticStrict", True, None),
+  ("AvgCyclomaticStrictModified", False, None),
+
+  ("AvgEssential", True, None),
+  ("AvgEssentialStrictModified", False, ["Ada"]),
+]
+
+def name():
+  return "Average Metrics"
+
+def description():
+  options = []
+  for id, enabled, langs in AVERAGE_METRICS:
+    options.append("<li>{} ({})</li>".format(understand.Metric.name(id), id))
+
+  return '''<p>Display average metrics for files or classes</p>
+  <p>Create a table with each metric as a column and each file/class in
+  the architecture or database as a row. </p>
+  <h3>Available Metrics</h3>
+  <ul> {} </ul>
+  '''.format("".join(options))
+
+def test_global(db):
+  return kind_util.can_contain_files(db)
+
+def test_architecture(arch):
+  return kind_util.can_contain_files(arch)
+
+def test_entity(ent):
+  return kind_util.can_contain_files(ent)
+
+def support_abort():
+  return True
+
+def init(report, target):
+  mets = []
+  met_opts=[]
+  dblangs = report.db().language()
+  for id, enabled, languages in AVERAGE_METRICS:
+    if languages and not any(lang in dblangs for lang in languages):
+      continue
+    mets.append(id)
+    met_opts.append((id, "Show {} ({})".format(understand.Metric.name(id), id),enabled))
+
+  report.options().radio_horiz("kind", "Entities", ["Files", "Classes"], "Files")
+  report.options().checkbox("chart", "Show Chart", True)
+  report.options().choice("size_metric", "Size Metric", mets, "AvgCountLine")
+  report.options().choice("color_metric", "Color Metric", ["None"] + mets, "AvgCyclomatic")
+
+  for id, txt, enabled in met_opts:
+    report.options().checkbox(id, txt,enabled)
+
+
+def generate(report, target, page):
+  metrics = []
+  names = dict()
+  dblangs = report.db().language()
+  for id, enabled, languages in AVERAGE_METRICS:
+    if languages and not any(lang in dblangs for lang in languages):
+      continue
+    if report.options().lookup(id):
+      metrics.append(id)
+      name = understand.Metric.name(id)
+      name = name.replace("Average ", "")
+      names[id] = name
+
+  is_files = report.options().lookup("kind") == "Files"
+  if report.options().lookup("chart"):
+    try:
+      gname = "Files Metric Chart" if is_files else "Classes Metric Chart"
+      report.draw(target, gname, "Size Metric={};Color Metric={};Maximum Nodes Shown=15".format(
+        report.options().lookup("size_metric"), report.options().lookup("color_metric")))
+    except Exception as e:
+      report.print("Could not draw chart: {}".format(str(e)))
+
+  ents = kind_util.list_files(target) if is_files else kind_util.list_classes(target, include_unresolved=True)
+  metricreports.metricsTable(report, metrics, ents, names=names, filenameformat="relative")
