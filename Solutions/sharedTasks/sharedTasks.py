@@ -150,7 +150,7 @@ def isGeneralMemberOfGlobal(ent: Ent) -> bool:
     parentKind = parent.kind()
     if parentKind.check('Global Object'):
         return True
-    elif parentKind.check('Member Object') and isMemberOfGlobal(parentInstance):
+    elif parentKind.check('Member Object') and isMemberOfGlobal(parent):
         return True
 
     return False
