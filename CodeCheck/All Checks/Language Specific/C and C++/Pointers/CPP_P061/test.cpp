@@ -31,12 +31,20 @@ public:
     Qt::ConnectionType type = Qt::AutoConnection);
 };
 
+
 template<typename T> class QSharedPointer {
 public:
+  T* operator->() const{
+    return nullptr;
+  }
+  void doSomething(){}
   T *data() const;
 };
 
-class Class : public QObject {};
+class Class : public QObject {
+public:
+  void doSomething(){}
+};
 
 void f(Class *ctx)
 {
@@ -54,4 +62,9 @@ void f(Class *ctx)
   // Captured pointer data is the same as the signaling pointer data
   QObject::connect(ptr_a.data(), &Class::destroyed, ctx, [ptr_a] {}); // UndCC_Violation
   QObject::connect(&*ptr_b, &Class::destroyed, ctx, [ptr_b] {});      // UndCC_Violation
+  
+
+  QObject::connect(ptr_a.data(), &Class::destroyed, ctx, [=] {ptr_a->doSomething();}); // UndCC_Violation
+  QObject::connect(nullptr, &Class::destroyed, ctx, [] {QSharedPointer<Class> ptr_c; // UndCC_Valid
+      });
 }
