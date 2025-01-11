@@ -4,10 +4,11 @@
 import re
 
 ERR1 = 'Nested Comment: /* found inside C-style comment'
+ERR2 = 'Character sequence /* or // used within a comment'
 
 # The ID for the check
 def ids():
-    return ('RECOMMENDED_09', 'CPP_C002', 'MISRA04_2.3', 'MISRA08_2-7-1', 'M2-7-1', 'MISRA23_5.7.1')
+    return ('RECOMMENDED_09', 'CPP_C002', 'MISRA04_2.3', 'MISRA08_2-7-1', 'M2-7-1', 'MISRA23_5.7.1', 'MISRA12_3.1', 'MISRA23_3.1')
 
 # The short name of the check
 def name(id):
@@ -18,6 +19,8 @@ def name(id):
         'MISRA08_2-7-1': 'Published Standards/MISRA-C++ 2008/2-7-1 The character sequence &#47;* shall not be used within a C-style comment.', \
         'M2-7-1': 'Published Standards/AUTOSAR/The character sequence &#47;* shall not be used within a C-style comment.', \
         'MISRA23_5.7.1': 'Published Standards/MISRA C++ 2023/5.7.1 The character sequence &#47;* shall not be used within a C-style comment', \
+        'MISRA12_3.1': 'Published Standards/MISRA C 2012/3.1 The character sequences &#47;* and &#47;&#47; shall not be used within a comment',
+        'MISRA23_3.1': 'Published Standards/MISRA C++ 2023/3.1 The character sequences &#47;* and &#47;&#47; shall not be used within a comment',
     }[id] \
 
 
@@ -60,6 +63,20 @@ def tags(id):
             'Language: C',
             'Language: C++',
             'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Comments',
+        ],
+        'MISRA12_3.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Comments',
+        ],
+        'MISRA23_3.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
             'Category: Required',
             'Comments',
         ],
@@ -158,6 +175,79 @@ because the end comment marker is missing, the call to Perform_Critical_Safety_F
 will not be executed.
 </p>
 """,
+        'MISRA12_3.1': """
+<p><b>Rationale</b></p>
+<p>If a comment starting sequence, /* or //, occurs within a /* comment, is it quite likely to be caused
+by a missing */ comment ending sequence.</p>
+<p>If a comment starting sequence occurs within a // comment, it is probably because a region of code
+has been commented-out using //.</p>
+
+<p><b>Exception</b></p>
+<p>The sequence // is permitted within a // comment.</p>
+
+<p><b>Example</b></p>
+<p>Consider the following code fragment:</p>
+<pre><code language="C++">/* some comment, end comment marker accidentally omitted
+  &lt;&lt;new Page&gt;&gt;
+  Perform_Critical_Safety_Function( X );
+  /* this comment is non-compliant */</code></pre>
+
+<p>In reviewing the page containing the call to the function, the assumption is that it is executed code.
+Because of the accidental omission of the end comment marker, the call to the safety critical function
+will not be executed.</p>
+
+<p>In the following C99 example, the presence of // comments changes the meaning of the program:</p>
+<pre><code language="C++">x = y // /*
+ + z
+ // */
+ ;</code></pre>
+
+<p>This gives x = y + z; but would have been x = y; in the absence of the two // comment start
+sequences.</p>
+
+<p><b>See also</b></p>
+<p>Dir 4.4</p>
+""",
+            'MISRA23_3.1': """
+<p><b>Rationale</b></p>
+<p>If a comment starting sequence, /* or //, occurs within a /* comment, is it quite likely to be caused
+by a missing */ comment ending sequence.</p>
+<p>If a comment starting sequence occurs within a // comment, it is probably because a region of code
+has been commented-out using //.</p>
+
+<p><b>Exception</b></p>
+<p>1. Uniform resource identifiers, of the form {scheme}://{path}, are permitted within comments.</p>
+<p>2. The sequence // is permitted within a // comment.</p>
+
+<p><b>Example</b></p>
+<p>Consider the following code fragment:</p>
+<pre><code language="C++">/* some comment, end comment marker accidentally omitted
+  &lt;&lt;new Page&gt;&gt;
+  Perform_Critical_Safety_Function( X );
+  /* this comment is non-compliant */</code></pre>
+
+<p>In reviewing the page containing the call to the function, the assumption is that it is executed code.
+Because of the accidental omission of the end comment marker, the call to the safety critical function
+will not be executed.</p>
+
+<p>In the following C99 example, the presence of // comments changes the meaning of the program:</p>
+<pre><code language="C++">x = y // /*
+ + z
+ // */
+ ;</code></pre>
+
+<p>This gives x = y + z; but would have been x = y; in the absence of the two // comment start
+sequences.</p>
+<p>The following example demonstrates the use of a URI in a comment, and is compliant by exception 1.</p>
+<pre><code language="C++">/*
+** The MISRA C:2012 example suite can be found at
+** https://gitlab.com/MISRA/MISRA-C/MISRA-C-2012
+*/
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 4.4</p>
+""",
     }[id]
 
 # Tests the type of file
@@ -170,11 +260,20 @@ def test_global():
 def test_language(language):
     return language == 'C++'
 
+def define_options(check):
+    flag_slashes = (check.id() in ['MISRA12_3.1', 'MISRA23_3.1']) 
+
+    check.option().checkbox('flag_slashes', 'Include the character sequence //', flag_slashes)
+
+
 def check(check, file):
     lexer = file.lexer(False)
     lexemes = lexer.lexemes()
+    flag_slashes = check.option().lookup('flag_slashes')
 
     for lexeme in lexemes:
-        if lexeme.token() == 'Comment' and re.search(r'^/\*.*/\*', lexeme.text(), re.DOTALL):
+        if flag_slashes and (lexeme.token() == "Comment") and re.search(r"^/\*[\s\S]*?(/\*|(?<!:)//)", lexeme.text()):
+            check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR2)
+        elif lexeme.token() == 'Comment' and re.search(r'^/\*.*/\*', lexeme.text(), re.DOTALL):
             violation = check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
             violation.add_fixit_hint(lexeme.line_begin(), lexeme.column_begin(), lexeme.line_end(), lexeme.column_end() + 1, '/*' + re.sub(r'/\*', '  ', lexeme.text()))
