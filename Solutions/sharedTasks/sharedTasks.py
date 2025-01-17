@@ -329,7 +329,7 @@ def getEdgeInfo(
             # Add to edge info
             if edgeKey not in edgeInfo:
                 edgeInfo[edgeKey] = {
-                    'root': ent in tasks,
+                    'root': scope in tasks,
                     'scope': scope,
                     'ent': ent,
                     'kindnames': set(),
@@ -511,6 +511,9 @@ def buildEdgeInfo(
         for edgeKey, edgeObj in edgeInfo.copy().items():
             scope = edgeObj['scope']
             ent = edgeObj['ent']
+            # Skip if not at the end
+            if ent in outgoing:
+                continue
             # Skip if not a shared object
             if edgeObj['shared'] or not ent.kind().check(OBJ_ENT_KINDS):
                 continue
