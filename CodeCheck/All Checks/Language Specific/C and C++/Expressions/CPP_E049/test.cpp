@@ -10,9 +10,8 @@ int main() {
   int e = 1; /* UNDCC_Valid */
   int f, g, h; // UNDCC_Valid
   int i = 1, j = 2;  // UndCC_FalsePos
-  #ifdef __UNDERSTAND_FUZZY_PARSE__
-  int k = 1, 2, l = 2; // UNDCC_Violation
-  enum m { 1, 2, 3}; // UNDCC_Valid
-  int[] n = {1, 2, 3}; // UNDCC_Valid
-  #endif
+  int k = (1, 2), l = 2; // UNDCC_Violation and FalsePos
+  enum m { o = 1, p=2, q=3}; // UNDCC_Valid
+  int n[] = {1, 2, 3}; // UNDCC_Valid
 }
+
