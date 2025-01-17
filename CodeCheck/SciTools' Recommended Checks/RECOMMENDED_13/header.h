@@ -1,6 +1,6 @@
 int foo(); /* ignored, undefined prototype */
 int valid();
-int violation (); // UndCC_Violation(1)
+int violation (); // UndCC_Violation
 int main();
 class someclass{
   ~someclass();

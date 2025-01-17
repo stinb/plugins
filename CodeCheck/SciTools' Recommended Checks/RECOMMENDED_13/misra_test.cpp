@@ -48,7 +48,7 @@ namespace B
     struct C2
     {
     };
-    static void swap(C2 &, C2 &); // UndCC_Violation(1)
+    static void swap(C2 &, C2 &); // UndCC_FalseNeg
 }
 namespace
 {
