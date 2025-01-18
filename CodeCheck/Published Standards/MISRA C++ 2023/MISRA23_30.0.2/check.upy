@@ -1,0 +1,226 @@
+import re
+
+
+ERR1 = "Reads and writes on the same file stream shall be separated by a positioning operation"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_30.0.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_30.0.2': "Published Standards/MISRA C++ 2023/30.0.2 Reads and writes on the same file stream shall be separated by a positioning operation"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_30.0.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_30.0.2': """
+<p><b>Amplification</b></p>
+<p>An explicit, interleaving stream positioning operation shall be used between input operations and
+output operations on a std::basic_filebuf.</p>
+<p>This rule applies to direct and indirect calls (e.g. from std::fstream) to std::basic_filebuf. </p>
+<p>Note: for the purposes of this rule, a call to fflush after an output operation is considered to be an
+explicit file positioning operation.</p>
+
+<p><b>Rationale</b></p>
+<p>The C FILE * abstraction, used as the underlying system file input/output for std::basic_filebuf,
+holds a single file position that is used when reading from or writing to the file. Using an input operation
+on a FILE * immediately after an output operation (or vice versa) results in undefined behaviour, unless
+an interleaving file positioning operation is used to update the file’s position.</p>
+<p>In addition, a streambuf object keeps separate buffer positions for reading and writing characters
+from its internal buffer. A basic_filebuf object is only guaranteed to synchronize the separate
+internal streambuf read and write positions that it maintains when a positioning operation is called
+when alternating between reading and writing (and vice versa). Failure to include such a positioning
+operation leads to undefined behaviour.</p>
+<p>The accessible positioning operations for streambuf are pubseekoff and pubseekpos, whilst for
+file streams they are tellg, seekg, tellp, and seekp. One of these functions shall be called when
+switching from output to input, or vice versa.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void show_fstream_non_compliant()
+{
+ std::fstream f { "hello.txt" };
+ f &lt;&lt; "Hello world!\n" &lt;&lt; std::flush; // flush is not a positioning operation
+ std::string s {};
+ std::getline( f, s ); // Non-compliant - undefined behaviour
+}
+
+void show_fstream_compliant()
+{
+ std::fstream f { "hello.txt" };
+ f &lt;&lt; "Hello world!\n";
+ std::string s {};
+ f.seekg( 0, std::ios_base::beg );
+ std::getline(f, s); // Compliant - s holds "Hello world!"
+}</code></pre>
+
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_file(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+
+    while lex and (lex.text() != ";"):
+        if (lex.token() == "Identifier") and lex.ent():
+            utype = lex.ent().freetext("UnderlyingType")
+
+            if re.search("fstream|basic_filebuf", str(utype)):
+                return lex.ent()
+
+        lex = lex.next(True, True)
+
+    return None
+
+
+def get_file_op(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+
+    while lex and (lex.text() != ";"):
+        if (lex.token() == "Identifier") and lex.ent():
+            utype = lex.ent().freetext("UnderlyingType")
+
+            if re.search("fstream|basic_filebuf", str(utype)):
+                return lex.ent()
+
+        lex = lex.previous(True, True)
+
+    return None
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        # key: ent id of file, value: 0 if write, 1 if on read, 2 if intervening flush
+        file_ents = {}
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda c: c.line()):
+            # file creation:
+            if call_ref.ent().name().startswith("~"):
+                continue
+            elif re.search("fstream|basic_filebuf", call_ref.ent().name()):
+                ent_file = get_file(call_ref)
+
+                if not file:
+                    continue
+
+                file_ents[ent_file.id()] = None
+
+            # file read
+            elif call_ref.ent().name() == "getline":
+                lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+                on_param = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif lex.ent() and lex.ent().id() in file_ents:
+                        if file_ents[lex.ent().id()] == 0:
+                            check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                        file_ents[lex.ent().id()] = 1
+
+                    lex = lex.next(True, True)
+            elif call_ref.ent().name() == "operator>>":
+                ent_file = get_file_op(call_ref)
+
+                if ent_file and ent_file.id() in file_ents:
+                    if file_ents[ent_file.id()] == 0:
+                        check.violation(ent_file, file, call_ref.line(), call_ref.column(), ERR1)
+
+                    file_ents[ent_file.id()] = 1
+            elif call_ref.ent().name() in ["get", "read", "readsome", "peek", "ignore", "putback", "unget", "eof"]:
+                lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+                lex = lex.previous()
+
+                if lex.text() not in [".", "->"]:
+                    continue
+
+                lex = lex.previous()
+
+                if lex.ent() and lex.ent().id() in file_ents:
+                    if file_ents[lex.ent().id()] == 0:
+                        check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                    file_ents[lex.ent().id()] = 1
+
+            # file write
+            elif call_ref.ent().name() == "operator<<":
+                ent_file = get_file_op(call_ref)
+
+                if ent_file and ent_file.id() in file_ents:
+                    if file_ents[ent_file.id()] == 1:
+                        check.violation(ent_file, file, call_ref.line(), call_ref.column(), ERR1)
+
+                    file_ents[ent_file.id()] = 0
+
+            elif call_ref.ent().name() in ["write", "put"]:
+                lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+                lex = lex.previous()
+
+                if lex.text() not in [".", "->"]:
+                    continue
+
+                lex = lex.previous()
+
+                if lex.ent() and lex.ent().id() in file_ents:
+                    if file_ents[lex.ent().id()] == 1:
+                        check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+
+                    file_ents[lex.ent().id()] = 0
+
+            # file positioning operations
+            if call_ref.ent().name() in ["tellg", "seekg", "tellp", "seekp", "pubseekoff", "pubseekpos", "fflush"]:
+                lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+                lex = lex.previous()
+
+                if lex.text() not in [".", "->"]:
+                    continue
+
+                lex = lex.previous()
+
+                if lex.ent() and lex.ent().id() in file_ents:
+                    file_ents[lex.ent().id()] = 2
+
+
+
+        
+            
+
+
+            
