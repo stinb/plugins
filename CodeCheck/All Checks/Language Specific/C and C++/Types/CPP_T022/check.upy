@@ -2,6 +2,7 @@ import re
 
 ERR1 = 'Integer converted to pointer.'
 ERR2 = 'Pointer to void converted to another pointer type.'
+ERR3 = 'Enum converted to another pointer type.'
 
 # The ID for the check
 def ids():
@@ -163,11 +164,26 @@ def test_global():
 def test_language(language):
     return language == 'C++'
 
+def define_options(check):
+    integer = True
+    enum = True
+    if check.id() in ['M5-2-8', 'MISRA08_5-2-8', 'CPP_T022', 'MISRA23_8.2.6']:
+        integer = False
+        if check.id() == 'MISRA23_8.2.6':
+            enum = False
+
+
+    check.option().checkbox('integer', 'Allow conversions from integer type', integer)
+    check.option().checkbox('enum', 'Allow conversions from enumerated type', enum)
+
 def is_ptr_type(type):
     return True if re.search(r"\*", type) else False
 
 def is_int_type(ent):
     return True if re.search(r"int", str(get_base_type_int(ent))) else False
+
+def is_enum_type(ent):
+    return True if re.search(r"enum", str(get_base_type_enum(ent)).lower()) else False
 
 def is_void_ptr_type(ent):
     if ent.type() and is_ptr_type(ent.type()):
@@ -197,7 +213,20 @@ def get_base_type_int(ent):
             ent = typed_ref.ent()
     return ent
 
+def get_base_type_enum(ent):
+    seen = set()
+    while ent not in seen:
+        seen.add(ent)
+        if re.search(r"enum", ent.kind().longname().lower()):
+            return str(ent.kind().longname().lower())
+        typed_ref = ent.ref("Typed")
+        if typed_ref:
+            ent = typed_ref.ent()
+    return ent
+
 def check(check, file):
+    integer = check.option().lookup("integer")
+    enum = check.option().lookup("enum")
     #get all local obj
     for ref in file.filerefs("Define","~Unresolved ~Unknown Object", True):
         lex = file.lexer().lexeme(ref.line(), ref.column())
@@ -210,7 +239,9 @@ def check(check, file):
             # get object used for C Assign Ptr
             ptr_assigned = ref.ent().ref("C Assign Ptr")
             # if ptr_assigned is an integer or void ptr
-            if ptr_assigned.ent() and is_int_type(ptr_assigned.ent()):
+            if not integer and ptr_assigned.ent() and is_int_type(ptr_assigned.ent()):
                 check.violation(ref.ent(), file, ptr_assigned.line(), ptr_assigned.column(), ERR1)
             elif ptr_assigned.ent() and is_void_ptr_type(ptr_assigned.ent()) and not is_void_ptr_type(ref.ent()):
                 check.violation(ref.ent(), file, ptr_assigned.line(), ptr_assigned.column(), ERR2)
+            elif not enum and ptr_assigned.ent() and is_enum_type(ptr_assigned.ent()):
+                check.violation(ref.ent(), file, ptr_assigned.line(), ptr_assigned.column(), ERR3)
