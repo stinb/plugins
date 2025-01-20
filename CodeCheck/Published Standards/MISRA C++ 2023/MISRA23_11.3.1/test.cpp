@@ -24,4 +24,4 @@ struct S
 using namespace std::literals;
 const char s1[] = "abcd";   // UndCC_Valid by exception
 char s2[] = "abcd";         // UndCC_Violation
-const auto best = "abcd"sv; // UndCC_Valid
+const auto best = "abcd"; // UndCC_Valid
