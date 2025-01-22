@@ -47,7 +47,7 @@ class SizeColorMetricChart:
     if legend is not None:
       graph.options().define("Legend", ["None", "top", "left", "right", "bottom"], legend)
     if layout_target is not None:
-      layouts = ["flatbubble", "treemap"]
+      layouts = ["flatbubble", "treemap", "pie"]
       if isinstance(layout_target, understand.Arch):
         layouts.extend(["hiearchical_treemap", "sunburst"])
       graph.options().define("Layout", layouts, "flatbubble")
@@ -76,6 +76,8 @@ class SizeColorMetricChart:
         graph.set("layout","sunburst")
         graph.set("r1","36")
         graph.set("rstep", "18")
+      elif layout == "pie":
+        graph.set("layout","sunburst")
       else:
         graph.set("layout", layout) #flatbubble
 
