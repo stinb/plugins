@@ -4,6 +4,8 @@
 
 import understand
 
+import kind_util
+
 metDict = {
   "CountCCViol" : ["CodeCheck Violations", "The number of CodeCheck violations"],
   "CountCCViolType" : ["CodeCheck Violation Types", "The number of distinct violation types (distinct check ids)"],
@@ -52,13 +54,13 @@ def test_entity(metric, ent):
   """
   Optional, return True if metric can be calculated for the given entity.
   """
-  return ent.kind().check("file ~unknown ~unresolved");
+  return ent.kind().check(kind_util.LEXER_ENTS_KIND_STR);
 
 def test_architecture(metric, arch):
   """
   Optional, return True if metric can be calculated for the given architecture.
   """
-  return arch.longname().startswith("Directory Structure/") or arch.name() == "Directory Structure"
+  return True
 
 def test_global(metric, db):
   """
@@ -89,7 +91,7 @@ def test_available(metric,entkindstr):
   """
   # Kind check if requested
   if entkindstr:
-    my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
+    my_kinds = set(kind_util.LEXER_ENTS_KIND_STR)
     test_kinds = set(understand.Kind.list_entity(entkindstr))
     return len(my_kinds.intersection(test_kinds)) > 0
 
@@ -113,10 +115,12 @@ def value(metric, target):
   """
   viols = []
   if isinstance(target, understand.Arch):
-    for file in target.ents(True):
-      viols += file.violations()
-  else:
+    for ent in target.ents(True):
+      viols += ent_violations(ent)
+  elif isinstance(target, understand.Db):
     viols = target.violations()
+  else:
+    viols = ent_violations(target)
 
   # Since this is for CodeCheck only, remove analysis errors and warnings
   filtered = []
@@ -173,3 +177,25 @@ def lines(metric, file):
       linedict[line] = len(types)
 
   return linedict
+
+def ent_violations(ent):
+  if ent.kind().check("file ~unresolved ~unknown"):
+    return ent.violations()
+
+  if not ent.kind().check(kind_util.FUNCTION_KIND_STR):
+    return [] # Violations not supported
+
+  defref = ent.ref("begin")
+  if not defref:
+    defref = ent.ref("definein, body declarein")
+  endref = ent.ref("end")
+  if not defref or not endref or defref.file() != endref.file():
+    return []
+
+  viols = []
+  for v in defref.file().violations():
+    if v.line() >= defref.line() and v.line() <= endref.line():
+      viols.append(v)
+  return viols
+
+
