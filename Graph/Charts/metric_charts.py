@@ -27,8 +27,14 @@ def list_arch_metrics(db):
   # There is no equivalent understand.Metric.list for architecture metrics,
   # however, for built-in metrics, architecture and db metrics are the same
   metlist = db.metrics()
-  # Plugin metrics that are not enabled would still need to be added manually
-  # here.
+  # Plugin metrics need to be manually added
+  metlist.extend([
+    "CountArchEnts",
+    "CountArchEntsRecursive",
+    "ArchCurDepth",
+    "ArchMaxChildDepth",
+    "CountArchChildren"
+  ])
   return metlist
 
 class SizeColorMetricChart:
