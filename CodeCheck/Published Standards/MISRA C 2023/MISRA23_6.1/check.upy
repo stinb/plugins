@@ -1,0 +1,153 @@
+ERR1 = "Bit-field %1 declared with an inappropriate type"
+
+
+def ids():
+    return ('MISRA12_6.1', 'MISRA23_6.1')
+
+
+def name(id):
+    return {
+        'MISRA12_6.1': "Published Standards/MISRA C 2012/6.1 Bit-fields shall only be declared with an appropriate type",
+        'MISRA23_6.1': "Published Standards/MISRA C 2023/6.1 Bit-fields shall only be declared with an appropriate type",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_6.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Bit-fields',
+        ],
+        'MISRA23_6.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Bit-fields',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA12_6.1': """
+<p><b>Amplification</b></p>
+<p>The appropriate bit-field types are:</p>
+<p>• C90: either unsigned int or signed int;</p>
+<p>• C99: one of:</p>
+<p>- either unsigned int or signed int;</p>
+<p>- another explicitly signed or explicitly unsigned integer type that is permitted by the
+implementation;</p>
+<p>- _Bool.</p>
+<p>Note: It is permitted to use typedefs to designate an appropriate type.</p>
+
+<p><b>Rationale</b></p>
+<p>Using int is implementation-defined because bit-fields of type int can be either signed or unsigned.</p>
+<p>The use of enum, short, char or any other type for bit-fields is not permitted in C90 because the
+behaviour is undefined.</p>
+<p>In C99, the implementation may define other integer types that are permitted in bit-field declarations.</p>
+
+<p><b>Example</b></p>
+<p>The following example is applicable to C90 and to C99 implementations that do not provide any
+additional bit-field types. It assumes that the int type is 16-bit.</p>
+<pre><code language="C++">typedef unsigned int UINT_16;
+
+struct s {
+ unsigned int b1:2; /* Compliant */
+ int b2:2; /* Non-compliant - plain int not permitted */
+ UINT_16 b3:2; /* Compliant - typedef designating unsigned int */
+ signed long b4:2; /* Non-compliant even if long and int are the
+ * same size */
+};</code></pre>
+
+<p><b>Developer's Note</b></p>
+<p>This check is mostly functional when using the Strict parser. The only known issue when using Strict is 
+this check will throw a false positive for explicitly signed bit-fields. A common work around is to use
+a typedef for explicity signed values.</p>
+""",
+    'MISRA23_6.1': """
+<p><b>Amplification</b></p>
+<p>The appropriate bit-field types are:</p>
+<p>• C90: either unsigned int or signed int;</p>
+<p>• C99: one of:</p>
+<p>- either unsigned int or signed int;</p>
+<p>- another explicitly signed or explicitly unsigned integer type that is permitted by the
+implementation;</p>
+<p>- _Bool.</p>
+<p>Note: It is permitted to use typedefs to designate an appropriate type.</p>
+
+<p><b>Rationale</b></p>
+<p>Using int is implementation-defined because bit-fields of type int can be either signed or unsigned.</p>
+<p>The use of enum, short, char or any other type for bit-fields is not permitted in C90 because the
+behaviour is undefined.</p>
+<p>In C99 and later, the implementation may define other integer types that are permitted in bit-field
+declarations.</p>
+
+<p><b>Example</b></p>
+<p>The following example is applicable to implementations that do not provide any additional bit-field
+types. It assumes that the int type is 16-bit.</p>
+
+<pre><code language="C++">typedef unsigned int UINT_16;
+
+struct s {
+ unsigned int b1:2; /* Compliant */
+ int b2:2; /* Non-compliant - plain int not permitted */
+ UINT_16 b3:2; /* Compliant - typedef designating unsigned int */
+ signed long b4:2; /* Non-compliant even if long and int are the
+ * same size */
+};</code></pre>
+
+<p><b>Developer's Note</b></p>
+<p>This check is mostly functional when using the Strict parser. The only known issue when using Strict is 
+this check will throw a false positive for explicitly signed bit-fields. A common work around is to use
+a typedef for explicity signed values.</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.option().checkbox('c99', 'Enable this option if C99 Standard is used (default is C90)', False)
+
+
+def check(check, file):
+    c99 = check.options().lookup('c99')
+    
+    for def_ref in file.filerefs("Define, Declare", "Object"):
+        if not def_ref.ent().freetext("BitField"):
+            continue
+
+        utype = str(def_ref.ent().freetext("UnderlyingType"))
+
+        if utype == "unsigned int":
+            continue
+        elif utype == "int":
+            lex = file.lexer(lookup_ents=False).lexeme(def_ref.line(), def_ref.column())
+            ent_type = str(def_ref.ent().type())
+
+            while lex and (lex.text() != ent_type):
+                lex = lex.previous(True, True)
+
+            lex = lex.previous(True, True)
+
+            if lex.text() not in ["signed", "unsigned"]:
+                check.violation(def_ref.ent(), file, def_ref.line(), def_ref.column(), ERR1, def_ref.ent().name())
+        elif c99 and (utype == "_Bool"):
+            continue
+        else:
+            check.violation(def_ref.ent(), file, def_ref.line(), def_ref.column(), ERR1, def_ref.ent().name())
+            
