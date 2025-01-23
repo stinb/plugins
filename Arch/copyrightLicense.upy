@@ -1,0 +1,421 @@
+"""
+Create a Copyright and License architecture based on copyright and license comments.
+"""
+import understand
+import os
+import tempfile
+import re
+import subprocess
+from pathlib import PurePath
+from pathlib import Path
+
+output_file=None  #Set this to override where the debug outputfile is saved
+byHand=False #This gets automatically set to true if running this script manually for testing
+
+def name():
+  return "Copyright and License"
+
+def description():
+  return '''
+Create a Copyright and License architecture based on copyright and license comments.
+
+<p>This plugin scans through your project's files and constructs a "Copyright and License" architecture. It identifies copyright 
+holders and licencing by searching for copyright and license comments within the files. The plugin employs pattern matching to extract the copyright 
+ and license information efficiently.</p>
+
+<p>By mapping files to their respective copyright holders and licensing, the plugin provides insights into the ownership and 
+licensing structure of your codebase. This architecture can prove valuable in understanding the legal and intellectual 
+property aspects of your project.</p>
+<br>
+<b>Example Copyright and License Architecture with File Dependency Graph:</b><br>
+<img src=".doc/copyright.png">
+
+'''
+
+def build(arch, db):
+  global output_file
+  lastRun={}
+  newLines=[]
+  changedFiles=[]
+
+  #find the file path for the DB
+  db_path = db.name()
+  root_path = str(Path(db_path).parents[0])
+  
+  #generate a dict() containing every file in the project where
+  #key = ent and value = a set() containing every license associated with that file
+  file_list = generate_file_list(db, root_path)
+
+
+  #Save the output file to the temp directory unless a different path is specified
+  if (output_file==None and byHand):
+    projectName=PurePath(db.name()).stem
+    output_file = tempfile.gettempdir()+os.sep+projectName+"_licensing_arch.txt"
+
+  fileList = db.ents("file ~unknown ~unresolved")
+
+  startinfo = None
+  if os.name == 'nt':
+    startinfo = subprocess.STARTUPINFO()
+    startinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+  #Loop through each file in the project
+  for i, file in enumerate(fileList):
+
+    if (byHand):
+      #Show Status if running manually
+      if(i % 10 == 0):
+        sys.stdout.write('\r')
+        percent=i/(len(fileList))
+        sys.stdout.write("%.2f%%" % (percent * 100))
+        sys.stdout.flush()
+
+    fullpath = PurePath(file.longname())
+    parentDir = str(fullpath.parent)
+    fullpath=str(fullpath)
+    copyrightLicense = "None"
+
+    result= re.search(r"copyright\s+([^\n]+)",file.contents(),flags=re.IGNORECASE)
+
+    if(not result):
+     result= re.search(r"©\s+([^\n]+)",file.contents())
+    if(result):
+      copyrightLicense = result.group(1)
+      if copyrightLicense.startswith("law"):
+        copyrightLicense = "None"
+      copyrightLicense = re.sub(r"^\(c\)",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"^[\s\d\-,]+",'', copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"^by",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"<\S+@\S+\.\S+>",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"\(\S+@\S+\.\S+\)",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"<http\S+>",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"\(http\S+\)",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"http\S+",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"/",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"All rights reserved",'',copyrightLicense,flags=re.IGNORECASE)
+      copyrightLicense = re.sub(r"&\S+;",'',copyrightLicense,flags=re.IGNORECASE) #HTML Special characters
+      copyrightLicense = re.sub(r"\d\d\d\d\s*,*\s*",'',copyrightLicense,flags=re.IGNORECASE) #years
+
+      copyrightLicense = re.sub(r"-->*$",'',copyrightLicense,flags=re.IGNORECASE) #Strip trailing dashes
+      copyrightLicense = re.sub(r"[\.,;'\"\s]*$",'',copyrightLicense,flags=re.IGNORECASE) #strip Trailing punctuation
+
+
+      copyrightLicense = copyrightLicense.strip(' ')
+
+      newLines.append(fullpath+"="+copyrightLicense)
+
+    if(not byHand and copyrightLicense != "None"):
+      arch.map(file, "Copyrights/" + copyrightLicense)
+    elif not byHand:
+      arch.map(file, "Copyrights/No Copyright")
+    #loop through the file list and add each file to it's respective license architecture
+    for license in file_list[file]:
+      #if license == "No License":
+        #print(not copyrightLicense)
+      if copyrightLicense == "None" and license == 'No License':
+        arch.map(file,"No License and No Copyright")
+
+      else:
+        arch.map(file,"Licenses/" + str(license))
+
+  if (byHand):
+    #write the date to the file
+    with open(output_file, 'w') as filehandle:
+      for listitem in newLines:
+        filehandle.write('%s\n' % listitem)
+
+
+def generate_file_list(db, root_path):
+    #Possble licenses to search for, edit the array at the very bottom to update
+    license_whitelist = generate_license_array()
+
+    #create a dictionary containing every file's filepath in the project where
+    #key = the file path and value = a set() containing every license associated with that file
+    file_list = dict()
+
+    #generate_file_list can handle an arch object or a db object passed in the "arch" parameter
+    #check for an arch object, if not an arch, handle it as a db object
+    for file in db.files():
+        file_list[file] = set()
+
+    #look for license files in the project and store them in a dict where
+    #key = file path and value = license name
+    license_files = find_license_files(root_path, license_whitelist)
+
+    #Check each file to see if it is part of a license
+    for file in file_list:
+        for license_path in license_files:
+            directory = os.path.dirname(license_path)
+            if directory in file.longname():
+                file_list[file].add(str(license_files[license_path]))
+                
+    #check each file to see if the comments mention a license
+    for file in file_list:
+        comment = file.comments()
+        split_comments = comment.split("\n")
+        for line in split_comments:
+            if "license" in line:
+                for license in license_whitelist:
+                    if license in line:
+                        file_list[file].add(license)
+        if len(file_list[file]) == 0:
+            file_list[file].add("No License")
+    return file_list
+
+#Takes a directory and a white list of licenses to search for and returns a dict() where
+#key = the os path to the license file and value = the name of the license
+def find_license_files(root_path, license_whitelist):
+    license_files = {}
+    license_file_options = {"license", "readme", "copying"}
+    
+    for root, _, files in os.walk(root_path):
+        # Filter files that contain any of the keywords in license_file_options
+        relevant_files = [name for name in files if any(option in name.lower() for option in license_file_options)]
+        
+        for name in relevant_files:
+            license_path = os.path.join(root, name)
+            license_type = license_file_name(license_path, license_whitelist)
+            if license_type:
+                license_files[license_path] = license_type
+                
+    return license_files
+
+
+#Takes a path(str) to a potential license file and a whitelist([]) of possible licenses and 
+#searches the license file for potential licenses
+#returns the name of a license(str) if found otherwise returns false
+def license_file_name(path, whitelist):
+    name = os.path.basename(path)
+    if name.lower().endswith('.license'):
+        base = Path(name).stem
+        for license in whitelist:
+            if base.lower() == license.lower():
+                return license
+        return base
+    
+    if name.lower().startswith(('license','copying','build')) or name.lower().endswith(('.readme','build')):
+        file = open(path, 'r')
+        list_lines = file.readlines()
+        for line in list_lines:
+            if 'license' in line:
+                for license in whitelist:
+                    if license in line:
+                        return license
+                    else:
+                        return False
+
+
+
+#Add license names to search for to license_array[]
+def generate_license_array():
+    license_array = ["0BSD", "3dfx Glide License", "3D-Slicer", 
+        "AAL", "Abstyles", "Academic Free License", 
+        "Academy of Motion Picture Arts and Sciences BSD", "AdaCore", "Adaptive Public License", 
+        "Adobe", "ADSL", "Affero General Public License", 
+        "AFL", "Afmparse", "AGPL", 
+        "Aladdin", "Amazon Digital Services License", "AMD", 
+        "AML", "AMPAS", "ANTLR", 
+        "Any OSI License", "any-OSI", "Apache", 
+        "APAFML", "APL", "App::s2p License", 
+        "Apple MIT License", "Apple", "App-s2p", 
+        "APSL", "Arphic", "Artistic", 
+        "ASWF", "Attribution Assurance License", "Baekmuk", 
+        "Bahyph", "Barr", "bcrypt-Solar-Designer", 
+        "Beerware", "Bitstream", "BitTorrent", 
+        "blessing", "Blue Oak", "Boehm-Demers-Weiser GC License", 
+        "Boehm-GC", "Boost Software", "Borceux", 
+        "Brian Gladman", "BSD", "BSL", 
+        "Business Source License", "BUSL", "bzip2 and libbzip2", 
+        "bzip2", "CAL", "Caldera", 
+        "Catharon", "CATOSL", "CC0", 
+        "CC-BY", "CC-PDDC", "CDDL", 
+        "CDL", "CDLA-Permissive", "CeCILL Free Software License Agreement", 
+        "CERN Open Hardware Licence", "CFITSIO", "check-cvs", 
+        "checkmk", "Clarified Artistic License", "ClArtistic", 
+        "Clips", "CMU License", "CNRI Jython License", 
+        "Code Project Open License", "COIL", "Common Development and Distribution License", 
+        "Common Documentation License", "Common Lisp LOOP License", "Common Public Attribution License", 
+        "Common Public License", "Common Vulnerability Enumeration ToU License", "Community Data License Agreement Permissive", 
+        "Community Specification", "Community-Spec", "Computational Use of Data Agreement", 
+        "Computer Associates Trusted Open Source", "Condor Public", "Condor", 
+        "Copyfree Open Innovation License", "copyleft-next", "Cornell Lossless JPEG License", 
+        "Cornell-Lossless-JPEG", "CPAL", "CPL", 
+        "CPOL", "Creative Commons Attribution", "Cronyx", 
+        "Crossword", "Cryptographic Autonomy License", "CrystalStacker", 
+        "CUA Office Public License", "CUA-OPL", "Cube License", 
+        "C-UDA", "curl License", "cve-tou", 
+        "Data licence Germany", "David M. Gay dtoa License", "DEC-3-Clause", 
+        "Detection Rule License", "Deutsche Freie Software Lizenz", "D-FSL", 
+        "diffmark", "DL-DE-BY", "DL-DE-ZERO", 
+        "Do What The F*ck You Want To Public License", "DOC License", "DocBook Schema License", 
+        "Dotseqn", "DRL", "DSDP", 
+        "dtoa", "dvipdfm", "dvipdfm License", 
+        "ECL", "Eclipse Public License", "Educational Community License", 
+        "EFL", "eGenix", "Eiffel Forum License", 
+        "Elastic License", "Elastic", "Enlightenment License", 
+        "enna License", "Entessa", "EPICS", 
+        "EPL", "Erlang Public License", "ErlPL", 
+        "Etalab Open License", "etalab", "EUDatagrid", 
+        "EUPL", "European Union Public License", "Eurosym", 
+        "Fair License", "FBM", "FDK-AAC", 
+        "feh License", "Ferguson Twofish", "Frameworx", 
+        "Fraunhofer FDK AAC Codec Library", "FreeBSD", "FreeImage", 
+        "Freetype Project License", "FSF All Permissive License", "FSF Unlimited License", 
+        "FSFAP", "FSFUL", "FSFULLR", 
+        "FSFULLRWD", "FTL", "Furuseth", 
+        "Fuzzy Bitmap License", "fwlw", "GCR-docs", 
+        "GD", "GFDL", "Giftware", 
+        "GL2PS", "Glide", "Glulxe", 
+        "GLWTPL", "Gnome GCR Documentation License", "GNU Affero", 
+        "gnuplot", "Good Luck With That Public License", "GPL", 
+        "Graphics Gems License", "Graphics-Gems", "gSOAP Public License", 
+        "gSOAP", "gtkbook", "gtkbook License", 
+        "Gutmann", "Haskell Language Report License", "HaskellReport", 
+        "hdparm", "Hewlett-Packard 1986 License", "HIDAPI", 
+        "Hippocratic License", "Historical Permission Notice and Disclaimer", "HP-1986", 
+        "HP-1989", "HPND", "HTML Tidy License", 
+        "HTMLTIDY", "IBM Public License", "ICU License", 
+        "IEC Code Components End-user licence agreement", "IJG", "ImageMagick", 
+        "iMatix", "Imlib2", "Independent JPEG Group License", 
+        "Info-ZIP", "Inner Net License", "Inner-Net", 
+        "Intel", "Intel ACPI Software License Agreement", "Intel Open Source License", 
+        "Intel-ACPI", "Interbase Public License", "Interbase", 
+        "IPA", "IPA Font License", "IPL", 
+        "ISC", "ISC License", "ISC-Veillard", 
+        "Jam", "Jam License", "Japan Network Information Center License", 
+        "JasPer", "JPL Image Use Policy", "JPNIC", 
+        "JSON License", "Kastrup", "Kazlib", 
+        "Knuth CTAN", "Knuth-CTAN", "LAL", 
+        "LaTeX Project", "Latex2e", "Lawrence Berkeley National Labs BSD variant license", 
+        "Leptonica", "Lesser General Public License For Linguistic Resources", "LGPL", 
+        "LGPLLR", "Libpng", "libselinux", 
+        "libtiff", "libutil-David-Nugent", "Licence Art Libre", 
+        "Licence Libre du Québec", "LiLiQ-P", "LiLiQ-R", 
+        "LiLiQ-Rplus", "Linux Kernel Variant of OpenIB.org license", "Linux man-pages", 
+        "Linux-OpenIB", "LOOP", "LPD Documentation License", 
+        "LPD-document", "LPL", "LPPL", 
+        "lsof License", "Lucent Public License", "Lucida Bitmap Fonts License", 
+        "LZMA SDK License", "Mackerras 3-Clause - acknowledgment variant", "magaz", 
+        "mailprio", "MakeIndex License", "Martin Birgmeier License", 
+        "Martin-Birgmeier", "Matrix Template Library License", "McPhee Slideshow License", 
+        "McPhee-slideshow", "metamail", "Michigan/Merit Networks License", 
+        "Microsoft Limited Public License", "Microsoft Public License", "Microsoft Reciprocal License", 
+        "Minpack", "MirOS", "MIT", 
+        "MIT Festival Variant", "MIT Khronos - old variant", "MIT No Attribution", 
+        "MIT Open Group variant", "MIT testregex Variant", "MIT Tom Wu Variant", 
+        "MIT-0", "MIT-advertising", "MIT-CMU", 
+        "MIT-enna", "MIT-feh", "MIT-Festival", 
+        "MIT-Khronos-old", "MIT-Modern-Variant", "MITNFA", 
+        "MIT-open-group", "MIT-testregex", "MIT-Wu", 
+        "MMIXware", "Motosoto", "Mozilla Public License", 
+        "MPEG Software Simulation", "MPEG-SSG", "mpi Permissive License", 
+        "mpich2", "mpi-permissive", "MPL", 
+        "mplus", "MS-LPL", "MS-PL", 
+        "MS-RL", "MTLL", "Mulan Permissive Software License", 
+        "MulanPSL", "Multics", "Mup License", 
+        "NAIST", "Nara Institute of Science and Technology License", "NASA Open Source Agreement", 
+        "NASA", "Naumen", "NBPL", 
+        "NCBI Public Domain Notice", "NCBI-PD", "NCGL-UK", 
+        "NCL", "NCL Source Code License", "NCSA", 
+        "Net Boolean Public License", "NetCDF", "Nethack General Public License", 
+        "Netizen Open Source License", "Netscape Public License", "Newsletr", 
+        "NGPL", "NICTA", "NIST Public Domain Notice", 
+        "NIST", "NIST-PD", "NLOD", 
+        "NLPL", "No Limit Public License", "Nokia", 
+        "Non-Commercial Government Licence", "Non-Profit Open Software License", "Norwegian Licence for Open Government Data", 
+        "NOSL", "Noweb", "NPL", 
+        "NPOSL", "NRL", "NTP", 
+        "OAR License", "OCCT-PL", "OCLC", 
+        "ODbL", "ODC", "OFFIS", 
+        "OFL", "OGC Software License", "OGC", 
+        "OGDL-Taiwan", "OGL-Canada", "OGL-UK", 
+        "OGTSL", "OLDAP", "OLFL", 
+        "OML", "Open CASCADE Technology Public License", "Open Data Commons Attribution License", 
+        "Open Data Commons Open Database License", "Open Data Commons Public Domain Dedication & License", "Open Government Licence", 
+        "Open Group Test Suite License", "Open LDAP", "Open Logistics Foundation License", 
+        "Open Market License", "Open Public License", "Open Publication License", 
+        "Open Software License", "Open Use of Data Agreement", "OpenPBS", 
+        "OpenSSL", "OpenVision", "OPL", 
+        "OPL-UK", "OPUBL", "OSET Public License", 
+        "OSET-PL", "OSL", "O-UDA", 
+        "PADL", "Parity", "PDDL", 
+        "Peer Production License", "PHP License", "Pixar", 
+        "pkgconf", "Plexus", "PNG Reference Library", 
+        "pnmstitch", "PolyForm Noncommercial License", "PolyForm Small Business License", 
+        "PolyForm-Noncommercial", "PolyForm-Small-Business", "PostgreSQL License", 
+        "PPL", "PSF-2.0", "psfrag", 
+        "psfrag License", "psutils", "psutils License", 
+        "Python ldap License", "Python License", "Python Software Foundation License", 
+        "python-ldap", "Q Public License", "Qhull", 
+        "QPL", "radvd", "Rdisc", 
+        "RealNetworks Public Source License", "Reciprocal Public License", "Red Hat eCos Public License", 
+        "RHeCos", "Ricoh Source Code Public License", "RPL", 
+        "RPSL", "RSA Message-Digest License", "RSA-MD", 
+        "RSCPL", "Ruby License", "Ruby pty extension license", 
+        "Ruby-pty", "Sax Public Domain Notice", "Saxpath", 
+        "SAX-PD", "SCEA Shared Source License", "Scheme Language Report License", 
+        "Scheme Widget Library (SWL) Software License Agreement", "SchemeReport", "SciTools", "Scientific Toolworks",
+        "Secure Messaging Protocol Public License", 
+        "Sendmail License", "Server Side Public License", "SGI Free Software License", 
+        "SGI OpenGL License", "SGI-B", "SGI-OpenGL", 
+        "SGP4 Permission Notice", "SHL", "SIL Open Font License", 
+        "SimPL", "Simple Public License", "SISSL", 
+        "SL License", "Sleepycat", "SMLNJ", 
+        "SMPPL", "SNIA", "snprintf", 
+        "softSurfer", "Solderpad Hardware License", "Soundex", 
+        "Spencer License", "SPL", "SQLite Blessing", 
+        "SSH OpenSSH license", "SSH short notice", "ssh-keyscan", 
+        "SSH-OpenSSH", "SSH-short", "SSLeay", 
+        "SSPL", "Standard ML of New Jersey License", "SugarCRM", 
+        "Sun Industry Standards Source License", "Sun PPP License", "Sun Public License", 
+        "Sun-PPP", "SunPro", "SWL", 
+        "swrule", "Sybase Open Watcom Public License", "Symlinks", 
+        "Systemics BSD variant license", "Systemics W3Works BSD variant license", "Taiwan Open Government Data License", 
+        "TAPR Open Hardware License", "TAPR-OHL", "TCL", 
+        "TCL/TK License", "TCP Wrappers License", "TCP-wrappers", 
+        "Technische Universitaet Berlin License", "TermReadKey", "TermReadKey License", 
+        "Text-Tabs+Wrap License", "TGPPL", "The MirOS Licence", 
+        "The Parity Public License", "The Unlicense", "THOR Public License", 
+        "threeparttable", "Time::ParseDate License", "TMate", 
+        "TORQUE", "TOSL", "TPDL", 
+        "TPL", "Transitive Grace Period Public Licence", "Trusster Open Source License", 
+        "TTWL", "TTYP0", "TU-Berlin", 
+        "Ubuntu Font Licence", "UCAR", "UCL", 
+        "ulem", "UMich-Merit", "Unicode License", 
+        "United Kingdom Open Parliament Licence", "Universal Permissive License", "University of Illinois/NCSA Open Source License", 
+        "UnixCrypt", "Unlicense", "UPL", 
+        "Upstream Compatibility License", "URT-RLE", "Utah Raster Toolkit Run Length Encoded License", 
+        "Vim License", "VOSTROM", "Vovida Software License", 
+        "VSL", "W3C", "W3C Software Notice and Document License", 
+        "W3C Software Notice and License", "W3C-19980720", "W3C-20150513", 
+        "w3m License", "Watcom", "Widget Workshop License", 
+        "Widget-Workshop", "Wsuipa", "WTFPL", 
+        "X.Net License", "X11 License", "Xdebug License", 
+        "Xdebug", "Xerox", "Xfig", 
+        "XFree86", "xinetd", "xkeyboard-config", 
+        "xlock", "Xnet", "xpp", 
+        "XSkat", "xzoom", "Yahoo! Public License", 
+        "YPL", "Zed License", "Zeeff", 
+        "Zend License", "Zimbra", "Zlib", 
+        "zlib/libpng License with Acknowledgement", "zlib-acknowledgement", "Zope Public License"]
+    
+    return license_array
+
+
+### Not executed when run as a plugin within Understand
+### For manual execution/debugging
+### e.g.  upython copyright.upy myproject.und
+import sys
+import time
+import understand
+startTime = time.time()
+if __name__ == '__main__':
+  args = sys.argv
+  db = understand.open(args[1])
+  byHand=True
+  build("",db)
+  executionTime = (time.time() - startTime)
+  sys.stdout.write('\r')
+  sys.stdout.flush()
+  print("Architectures saved to "+output_file)
+  print('Execution time in seconds: ' + str(executionTime))
