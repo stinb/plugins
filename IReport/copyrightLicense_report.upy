@@ -1,0 +1,154 @@
+from pathlib import Path
+import datetime
+import understand
+
+
+def name():
+  return "Copyright and License Report"
+
+def description():
+  return '''Generate a report displaying copyright and licensing information for the project
+    <p>This report scans the source code for copyright and licenses, and displays several graphs
+    to illustrate the frequency and dependency of the copyrighted and licensed code
+    </p>
+
+    <p>To view the dependency graphs you must run the "Copyright and License Architecture"
+    Automatic Architecture under Architectures > New Automatic Architecture >
+    Copyright and License Architecture. This will create a new architecture in your project
+    called "Copyright and License Architecture".</p>
+  '''
+
+def test_global(db):
+    return True
+
+def test_architecture(arch):
+  return False
+
+# Report generation
+def generate(report, db):
+    current_datetime = datetime.datetime.now()
+    formatted_date = current_datetime.strftime("%B %d, %Y %H:%M:%S")
+
+    # Heading
+    report.heading(1)
+    report.print("Licensing Report\n")
+    report.print(db.name()+"\n")
+    report.print(str(formatted_date)+"\n")
+    report.print("\n")
+    report.print("\n")
+    report.print("Most Used Licenses")
+    report.heading()
+    licenseArch = report.db().lookup_arch("Copyright and License")
+    if not licenseArch:
+        report.print("""These graphs rely on having a Copyright and License Architecture. 
+                If there are no graphs showing here, allow Copyright and License Architecture
+                in the Plugin Manager and go to: Architectures->Create Automatic Architecture->Copyright and License""")
+        return
+
+    report.draw(licenseArch, "Tutorial: Biggest Children - Architecture Sunburst")
+    
+    
+    report.heading(1)
+    report.print("\n")
+    report.print("\n")
+    report.print("License Dependency Graphs")
+    report.print("\n")
+    report.print("\n")
+   
+    if licenseArch:
+        licenseArchChildren = licenseArch.children()
+
+    try:
+        report.draw(licenseArch, "Dependencies")
+        report.print("\n")
+        report.print("\n")
+        report.draw(licenseArch, "File Dependencies")
+    except Exception as e:
+        report.print("""These graphs rely on having a Copyright and License Architecture. 
+                If there are no graphs showing here, allow Copyright and License Architecture
+                in the Plugin Manager and go to: Architectures->Create Automatic Architecture->Copyright and License""")
+        pass
+
+    report.heading()
+
+    #find the file path for the DB
+    db_path = report.db().name()
+    root_path = str(Path(db_path).parents[0])
+
+    
+
+    #Print the license totals
+    report.heading(2)
+    report.print("License and Copyright Summary")
+    report.heading()
+    report.table(["License Name", "Number of Files", "Lines of Code"])
+
+    # Set objects for each node to variables to control what order they are printed
+    for childHeader in licenseArchChildren:
+        if childHeader.name() == 'Copyrights':
+            copyrightChild = childHeader
+        elif childHeader.name() == 'Licenses':
+            licenseChild = childHeader
+        elif childHeader.name() == 'No License and No Copyright':
+            noLicenseOrCopyright = childHeader
+
+    # Print all summaries
+    printSummary(report, str(noLicenseOrCopyright.name()), str(len(noLicenseOrCopyright.ents())), str(noLicenseOrCopyright.metric("CountLineCode")))
+    for child in licenseChild.children() + copyrightChild.children():
+        if child.name() in ['No License', 'No Copyright']:
+            printSummary(report, str(child.name()), str(len(child.ents())), str(child.metric("CountLineCode")))
+    for child in licenseChild.children() + copyrightChild.children():
+        if child.name() not in ['No License', 'No Copyright']:
+            printSummary(report, str(child.name()), str(len(child.ents())), str(child.metric("CountLineCode")))
+
+    report.table()
+
+    #Print a table for each license with associated files
+    for childHeader in licenseArchChildren:
+        if childHeader.name() == 'No License and No Copyright':
+            printTable(report, child, childHeader.name() + " Files")
+            break
+    for childHeader in licenseArchChildren:
+        if childHeader.name() == 'Copyrights':
+            for child in childHeader.children():
+                if child.name() == "No Copyright":
+                    printTable(report, child, child.name() + " Files")
+
+        elif childHeader.name() == 'Licenses':
+            for child in childHeader.children():
+                if child.name() == "No License":
+                    printTable(report, child, child.name() + " Files")
+
+    for childHeader in licenseArchChildren:
+        if childHeader.name() == 'Copyrights':
+            for child in childHeader.children():
+                if child.name() != "No Copyright":
+                    printTable(report, child, child.name() + " Copyrighted Files")
+
+        elif childHeader.name() == 'Licenses':
+            for child in childHeader.children():
+                if child.name() != "No License":
+                    printTable(report, child, child.name() + " Licensed Files")
+
+# Prints a summary of a license, copyright, or lack thereof and its number of files and lines of code
+def printSummary(report, name, numFiles, numLines):
+    report.tablecell()
+    report.print(name)
+    report.tablecell()
+    report.print(numFiles)
+    report.tablecell()
+    report.print(numLines)
+    unlicensed = True
+
+# Prints a table for each license, copyright, or lack thereof and each file that fits said description
+def printTable(report, child, title):
+    report.heading(2)
+    report.print("\n")
+    report.print("\n")
+    report.print(title)
+    report.heading()
+    report.table(["File"])
+    for file in child.ents():
+        report.tablecell()
+        report.print(file.relname())
+    report.table()
