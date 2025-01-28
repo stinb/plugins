@@ -18,7 +18,7 @@ class Option:
 
 
 # Ref kinds and ent kinds
-FUN_REF_KINDS = 'Call, Assign FunctionPtr'
+FUN_REF_KINDS = 'Call, Assign FunctionPtr, Use Ptr'
 OBJ_ENT_KINDS = 'Object'
 OBJ_REF_KINDS = 'Modify, Set, Use'
 
