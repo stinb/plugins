@@ -444,7 +444,7 @@ def parseArch(arch: Arch) -> (dict, dict, set[str]):
                     if not checkIsCallable(ent):
                         continue
                     if ent not in tasks:
-                      tasks[ent] = dict()
+                        tasks[ent] = dict()
                     tasks[ent][field] = fieldGroup.name()
 
             # Tasks
