@@ -1,0 +1,94 @@
+ERR1 = "The built-in unary + operator should not be used"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_8.3.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_8.3.2': "Published Standards/MISRA C++ 2023/8.3.2 The built-in unary + operator should not be used"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_8.3.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_8.3.2': """
+<p><b>Rationale</b></p>
+<p>The built-in unary + operator triggers integral promotion, but otherwise performs no other operation.
+When its operand is a function name or lambda, decay to a function pointer is triggered. The use of
+static_cast is recommended instead as it makes it clear that these conversions are present.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">auto x = + u8a; // Non-compliant - triggers promotion to int
+auto pf = +[](){}; // Non-compliant - pf is a void(*)()
+
+x = +1; // Non-compliant
+x =+ 1; // Non-compliant - unary +, not +=
+
+enum A : uint8_t { one };
+enum B : uint8_t { two };
+
+uint8_t operator+( B b ) { return b; }
+
+auto a = +one; // Non-compliant
+auto b = +two; // Rule does not apply
+auto c = operator+( two ); // Rule does not apply</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    lex = lexer.first()
+
+    call_unaryplus = []
+
+    for ref in file.filerefs("Call", "Function"):
+        if ref.ent().name() != "operator+":
+            continue
+
+        pos = int(ref.line()) + int(ref.column())        
+        call_unaryplus.append(pos)
+
+
+    while lex:
+        if lex.text() == "+":
+            pos = int(lex.line_begin()) + int(lex.column_begin())
+            prev_lex = lex.previous(True, True)
+
+            if pos in call_unaryplus or (prev_lex.text() == "operator"):
+                pass
+            elif prev_lex.token() in ["Operator", "Keyword"] and (prev_lex.text() not in ["]", "this"]):
+                check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+        lex = lex.next(True, True)
