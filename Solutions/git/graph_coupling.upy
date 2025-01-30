@@ -5,7 +5,7 @@
 import git_util
 import understand
 
-colors = ["#90c4e4", "#afd870", "#fcad56", "#4e8cb9", "#569f38", "#e45721"]
+colors = ["#90c4e4", "#afd870", "#fcad56", "#4e8cb9", "#569f38", "#e45721", "#133a52", "#315015", "#71290d", "#acd3eb", "#c6e39a", "#fcc281", "#5aa7d7", "#84c968", "#fa8504", "#2774a4", "#47641b", "#b54216"]
 
 def name():
   """
@@ -42,6 +42,7 @@ def init(graph, arch):
   # Force a cutoff. If there are too many edges, the UI will freeze trying to
   # draw them all.
   graph.options().define("Minimum Coupling %", ["50","60","70","75","80","90"], "50");
+  graph.options().define("Arch Labels", ["Off", "On"], "On")
 
   # Create a Legend for coloring by architecture
   maxRows = len(colors)
@@ -67,12 +68,14 @@ def draw(graph, arch):
   graph.set("overlap_scaling", "6")
   graph.set("overlap", "prism")
 
+  graph.default("htmllabels", "on") # Understand attribute to interpret labels as html
   graph.default("shape","circle","node")
   graph.default("arrowhead", "none", "edge")
 
   # Determine the entities (and their colors) in the graph
   fileToArch = dict()
   archList = [arch] + arch.children()
+  archNames = []
   recursive = False
   color = 0
   for a in archList:
@@ -80,6 +83,15 @@ def draw(graph, arch):
     for e in entList:
       fileToArch[e] = color
     if entList:
+      # The formatting for File Dependencies Graph is achieved by an html label,
+      # which uses a semi-transparent background color. From a plugin, it's not
+      # possible to determine light mode / dark mode changes so this assumes
+      # light mode. Normally, transparent colors are expected to be RRGGBBAA
+      # format because they're interpreted by the graph layout engine. However
+      # colors inside html style arguments are interpreted only by QT which
+      # uses AARRGGBB.
+      archNames.append('<span style="font-weight:600; color:{}; background-color:{};">{}</span>'.format(colors[color%len(colors)], "#8FFFFFFF", a.name()))
+
       color += 1
     recursive = True
 
@@ -123,6 +135,7 @@ def draw(graph, arch):
     return node
 
   cutoff = float(graph.options().lookup("Minimum Coupling %")) / 100
+  edgecounts = dict()
   # Build Graph
   for file in fileToArch.keys():
     # Find weight of this file's coupling
@@ -141,4 +154,18 @@ def draw(graph, arch):
         if weight >= (cutoff * s): # Add edges with coupling greater than cutoff
           edge = graph.edge(tail,fileNode(toFile))
           edge.set("color", c + "2F") # Make edges semi-transparent
+          edgecounts[file] = edgecounts.get(file, 0) + 1
+          edgecounts[toFile] = edgecounts.get(toFile, 0) + 1
+
+  # If arch labels, use the node with the most edges to label the architecture
+  # since visually that will probably be the most dense area of that architecture's
+  # color.
+  if graph.options().lookup("Arch Labels") == "On":
+    bestnode = dict()
+    for file, archId in fileToArch.items():
+      if archId not in bestnode or edgecounts.get(file, 0) > edgecounts.get(bestnode[archId], 0):
+        bestnode[archId] = file
+    for archId, file in bestnode.items():
+      if file in fileToNode:
+        fileToNode[file].set("xlabel", archNames[archId])
 
