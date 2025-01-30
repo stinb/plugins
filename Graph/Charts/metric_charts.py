@@ -33,7 +33,15 @@ def list_arch_metrics(db):
     "CountArchEntsRecursive",
     "ArchCurDepth",
     "ArchMaxChildDepth",
-    "CountArchChildren"
+    "CountArchChildren",
+    "GitCohesion",
+    "GitCommits",
+    "GitAuthors",
+    "GitOwnership",
+    "GitMajorContributors",
+    "GitMinorContributors",
+    "GitDaysSinceCreated",
+    "GitDaysSinceLastModified"
   ])
   return metlist
 
