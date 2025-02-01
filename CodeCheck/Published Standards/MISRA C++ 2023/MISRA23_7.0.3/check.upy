@@ -1,0 +1,176 @@
+import re
+
+
+ERR1 = "The numerical value of a character shall not be used"
+INT_TYPES = ["int", "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t", "int64_t", "uint64_t"]
+UNUSABLE_OPS = ["&&", "||", "!", "++", "--", "+", "-", "*", "/", "%"]
+COMPARISON_OPS = ["==", "!=", "<", ">", "<=", ">="]
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_7.0.3')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_7.0.3': "Published Standards/MISRA C++ 2023/7.0.3 The numerical value of a character shall not be used"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_7.0.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',            
+            'Variables',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_7.0.3': """
+<p><b>Amplification</b></p>
+<p>There shall be no implicit or explicit conversion to or from an expression with character category.</p>
+<p>This rule does not apply to unevaluated operands, or to the operands of an equality operator when both
+have the same character type.</p>
+
+<p><b>Rationale</b></p>
+<p>Types in the character category are used to represent characters, not integers. The meaning of the
+integer value of a character type depends on behaviour outside of the program and the C++ language,
+such as the encoding that is being used.</p>
+<p>When other operations on characters are necessary, such as determining if a character is lower case,
+C++ Standard Library functions provide solutions that are safer than the arithmetic manipulation of
+character values.</p>
+<p>Where the underlying numeric representation of character data is required, such as when generating
+a hash, appropriate conversion functions are provided by std::char_traits<>.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">char a = 'a'; // Rule does not apply - no conversion
+char b = '\\r'; // Rule does not apply - no conversion
+char c = 10; // Non-compliant - implicit conversion from int to char
+
+int8_t d = 'a'; // Non-compliant
+uint8_t e = '\\r'; // Non-compliant
+signed char f = 11; // Rule does not apply - type has integral category
+
+using CT = std::char_traits&lt; char &gt;;
+
+char g = L'Æ'; // Non-compliant - conversion between character types
+char h = a - '0'; // Non-compliant - promotion to int, conversion to char
+
+if ( g && h ) // Non-compliant - two conversions to bool
+if ( a != 'q' ) // Rule does not apply - comparing the same types
+if ( CT::eq( a, 'q' ) ) // Rule does not apply - no conversion
+
+std::optional&lt; char &gt; o;
+if ( o == 'r' ) // Rule does not apply - no conversion
+
+decltype( 's' + 't' ) w; // Rule does not apply - unevaluated operand
+
+auto i = static_cast&lt; CT::int_type &gt;( 'a' ); // Non-compliant - explicitly
+ // converted to CT::int_type
+
+auto j = CT::to_int_type( 'a' ); // Rule does not apply
+ // - no conversion
+
+if ( ( a &gt;= '0' ) && ( a &lt;= '9' ) ) // Non-compliant - promotion to int
+if ( !CT::lt( a, '0' ) && !CT::lt( '9', a ) ) // Compliant version of the above
+
+if ( 0 == std::isdigit( a ) ) // Non-compliant - conversion to int
+if ( std::isdigit( a, std::locale {} ) ) // Compliant version of the above
+
+void f1 ( std::istream & is )
+{
+ auto i = is.get();
+ 
+ if ( CT::not_eof( i ) )
+ {
+ char c1 = i; // Non-compliant - int to char
+ char c2 = CT::to_char_type( i ); // Compliant version of the above
+ }
+}</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object"):
+        utype = obj_ref.ent().freetext("UnderlyingType")
+        init_text = obj_ref.ent().freetext("InitText")
+
+        if obj_ref.ent().type() in INT_TYPES:
+            if init_text and re.search(r"^'\D+'", str(init_text)):
+                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+        elif utype and utype in INT_TYPES and re.search(r"cast<.+>\('\D+'\)", str(init_text)):
+            check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+        elif obj_ref.ent().type() == "char":
+            if init_text and init_text.isdigit():
+                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+            elif re.search("^L'.*'", str(init_text)):
+                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+
+    for ass_ref in file.filerefs("Assign Value", "Object"):
+        utype = ass_ref.ent().freetext("UnderlyingType")
+        init_text = ass_ref.ent().freetext("InitText")
+        ent_scope = ass_ref.scope()
+        scope_utype = ent_scope.freetext("UnderlyingType")
+
+        if ass_ref.ent().type() in INT_TYPES or utype and utype in INT_TYPES:
+            if ent_scope and (ent_scope.type() == "char") or (scope_utype == "char"):
+                check.violation(ass_ref.ent(), file, ass_ref.line(), ass_ref.column(), ERR1)
+        elif (ass_ref.ent().type() == "char") or (utype == "char"):
+            if ent_scope and (ent_scope.type() in INT_TYPES) or (scope_utype in INT_TYPES):
+                check.violation(ass_ref.ent(), file, ass_ref.line(), ass_ref.column(), ERR1)
+
+    for use_ref in file.filerefs("Use", "Object"):
+        utype = use_ref.ent().freetext("UnderlyingType")
+
+        if (use_ref.ent().type() == "char") or (utype == "char"):
+            lex = file.lexer().lexeme(use_ref.line(), use_ref.column())
+            next_lex = lex.next(True, True)
+            prev_lex = lex.previous(True, True)
+
+            if next_lex.text() in UNUSABLE_OPS or prev_lex.text() in UNUSABLE_OPS:
+                check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+            elif next_lex.text() in COMPARISON_OPS:
+                next_lex = next_lex.next(True, True)
+
+                if next_lex.ent():
+                    utype = next_lex.ent().freetext("UnderlyingType")
+
+                    if next_lex.ent().type() in INT_TYPES or (utype and utype in INT_TYPES):
+                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+                elif (next_lex.token() == "String") and re.search("^'.'", next_lex.text()):
+                    if next_lex.text().strip("'").isdigit():
+                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+            elif prev_lex.text() in COMPARISON_OPS:                    
+                prev_lex = prev_lex.previous(True, True)
+
+                if prev_lex.ent():
+                    utype = prev_lex.ent().freetext("UnderlyingType")
+
+                    if prev_lex.ent().type() in INT_TYPES or (utype and utype in INT_TYPES):
+                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+                elif (prev_lex.token() == "String") and re.search("^'.'", prev_lex.text()):
+                    if prev_lex.text().strip("'").isdigit():
+                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
