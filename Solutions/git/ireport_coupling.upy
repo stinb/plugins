@@ -1,9 +1,3 @@
-def description():  
-  return '''Report Coupling between a file and others based on shared commits.
-    <p>This report shows the coupling between files within a Git repository, based on the number of shared commits.  
-    <p>It helps identify files that are frequently changed together, potentially indicating a high degree of interdependence. '''
-
-
 # A report for git coupling
 # This depends on git_util.py
 
@@ -14,6 +8,13 @@ def name():
   Required, the name of the ireport.
   """
   return "Git Coupling"
+
+def description():
+  return '''Report Coupling between files based on shared commits.
+    <p>This report shows the coupling between files within a Git repository,
+    based on the number of shared commits. It helps identify files that are
+    frequently changed together, potentially indicating a high degree of
+    interdependence. </p> '''
 
 
 #
@@ -46,43 +47,72 @@ def generate(report, target):
   commits = set(fileToCommits.get(target))
   total = len(commits)
 
-  cutoffs = [ total * 0.5, total * 0.3, total * 0.25, total * 0.05, 0 ]
-  counts = [0, 0, 0, 0, 0]
+  colors = ["#e45721", "#fcad56", "#4e8cb9", "#afd870", "#569f38"]
+  cutoffs = [ total * 0.5, total * 0.4, total * 0.3, total * 0.2, total *0.1 ]
 
   coupling = dict()
   for file, commitList in fileToCommits.items():
     if file == target:
       continue
     c = len(commits.intersection(set(commitList)))
-    if c > 0:
+    if c > cutoffs[-1] and c > 5:
       coupling[file] = c
-      for i in range(len(cutoffs)):
-        if c >= cutoffs[i]:
-          counts[i] += 1
-          break
 
-  report.bold()
-  report.print(target.relname())
-  report.nobold()
-  report.print(": {} Commits, {} Coupled Files\n\n".format(total, len(coupling)))
+  report.heading(2)
+  report.print("{} Coupled Files ({} Commits)\n\n".format(len(coupling), total))
+  report.heading()
 
-  labels = [">= 50%", "[33,50) %", "[25,33) %", "[5,25)", "Less than 5%"]
-  runningTotal = [0]
-  for i in range(len(counts)-1):
-    runningTotal.append(runningTotal[-1] + counts[i])
-  runningTotal.append(0)
 
-  cur = 0
-  cnt = 0
-  for k,v in sorted(coupling.items(), key=lambda item: item[1], reverse=True):
-    while cnt == runningTotal[cur]:
-      report.tree(1)
-      report.print("Coupling {} ({} Files)".format(labels[cur], counts[cur]))
-      cur +=1
+  if not coupling:
+    return
 
-    report.tree(2, cnt == 0)
-    report.entity(k)
-    report.print(k.relname())
+  report.draw(target, "Git Coupling Pie Chart",title="Coupling")
+
+  report.print(("Tip: Files that change together without obvious dependencies "
+                "can indicate design problems."))
+
+  report.table("""
+    [{
+      "name" : "File",
+      "filtertype": "string"
+     },{
+      "name" : "Commits",
+      "filtertype": "numeric",
+      "sort": "descending"
+     },{
+      "name" : "Percentage",
+      "filtertype": "numeric"
+     },{
+      "name" : "To Dependency References",
+      "filtertype": "numeric"
+     },{
+      "name" : "From Dependency References",
+      "filtertype": "numeric"
+    }]""")
+
+  to_deps = target.depends()
+  from_deps = target.dependsby()
+
+  for file,cnt in sorted(coupling.items(), key=lambda item: item[1], reverse=True):
+
+    report.tablecell()
+    report.entity(file)
+    report.print(file.relname())
     report.entity()
-    report.print(" - {} Commits ({:.2f}%)".format(v, v/total*100))
-    cnt += 1
+
+    report.tablecell()
+    report.print(str(cnt))
+
+    report.tablecell()
+    cidx = 0
+    while cnt < cutoffs[cidx]:
+      cidx += 1
+    report.fontcolor(colors[cidx])
+    report.print("{:.2f}%".format(cnt / total * 100))
+    report.fontcolor()
+
+    report.tablecell()
+    report.print(str(len(to_deps.get(file, []))))
+
+    report.tablecell()
+    report.print(str(len(from_deps.get(file, []))))
