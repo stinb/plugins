@@ -33,9 +33,7 @@ if(undPath):
   print("  found at ",undPath)
   if 'pc-win64' in undPath:
     os.add_dll_directory(undPath)
-  else:
-    pythonDir = os.path.normcase(undPath+"Python")
-    sys.path.append(pythonDir)
+    
 else:
   print("Checking for Understand in PATH: Fail")
   print ("  Error: Add scitools/bin/[SYSTEM] to PATH and restart your session")
