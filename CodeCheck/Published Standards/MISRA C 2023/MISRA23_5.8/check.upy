@@ -1,0 +1,117 @@
+ERR1 = "'%1' is defined with external linkage in %2"
+
+
+def ids():
+    return ('MISRA23_5.8')
+
+
+def name(id):
+    return {
+        'MISRA23_5.8': "Published Standards/MISRA C 2012/5.8 Identifiers that define objects or functions with external linkage shall be unique",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_5.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Identifiers',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_5.8': """
+<p><b>Amplification</b></p>
+<p>An identifier used as an external identifier shall not be used for any other purpose in any name space
+or translation unit, even if it denotes an object with no linkage.</p>
+
+<p><b>Rationale</b></p>
+<p>Enforcing uniqueness of identifier names in this manner helps avoid confusion. Identifiers of objects
+that have no linkage need not be unique since there is minimal risk of such confusion.</p>
+
+<p><b>Example</b></p>
+<p>In the following example, file1.c and file2.c are both part of the same project.</p>
+<pre><code language="C++">/* file1.c */
+int32_t count; /* "count" has external linkage */
+void foo ( void ) /* "foo" has external linkage */
+{
+ int16_t index; /* "index" has no linkage */
+}
+
+/* file2.c */
+static void foo ( void ) /* Non-compliant - "foo" is not unique
+{ * (it is already defined with external
+ * linkage in file1.c) */
+ int16_t count; /* Non-compliant - "count" has no linkage
+ * but clashes with an identifier with
+ * external linkage */
+ int32_t index; /* Compliant - "index" has no linkage */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 5.3</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return False
+
+
+def test_global():
+    return True
+
+
+def check(check):
+    db = check.db()
+    extern_ents = {} # key: func_name, value: ent.id()
+    files = db.ents("code file, header file")
+
+    # Global
+    for file in files:
+        for def_ref in file.filerefs("Define, Declare ~Implicit", "Function ~Member ~Static, Global Object ~Static"):
+            if (def_ref.ent().parent() and not def_ref.ent().parent().kind().check("File")) or def_ref.scope().kind().check("Function"):
+                continue
+
+            if def_ref.ent().name() in extern_ents:
+                if extern_ents[def_ref.ent().name()] != def_ref.ent().id():
+                    ext_ent = db.ent_from_id(extern_ents[def_ref.ent().name()])
+
+                    if ext_ent.parent() and def_ref.ent().parent() and (ext_ent.parent().id() == def_ref.ent().parent().id()):
+                        continue
+
+                    lex = def_ref.file().lexer().lexeme(def_ref.line(), def_ref.column())
+                
+                    if lex.ent() and lex.ent().kind().check("Macro"):
+                        continue
+
+                    def_in = ext_ent.ref("Definein, Declarein")
+                    check.violation(def_ref.ent(), def_ref.file(), def_ref.line(), def_ref.column(), ERR1, def_ref.ent().name(), def_in.ent().longname())
+            else:
+                extern_ents[def_ref.ent().name()] = def_ref.ent().id()
+
+    # Local
+    for file in files:
+        for def_ref in file.filerefs("Define, Declare ~Implicit", "Static Function ~Member, Local Object"):
+            if def_ref.ent().name() in extern_ents and def_ref.ent().id() != extern_ents[def_ref.ent().name()]:
+                ext_ent = db.ent_from_id(extern_ents[def_ref.ent().name()])
+
+                if ext_ent.parent() and def_ref.ent().parent() and (ext_ent.parent().id() == def_ref.ent().parent().id()):
+                    continue
+                    
+                lex = def_ref.file().lexer().lexeme(def_ref.line(), def_ref.column())
+                
+                if lex.ent() and lex.ent().kind().check("Macro"):
+                    continue
+
+                def_in = ext_ent.ref("Definein, Declarein")
+                check.violation(def_ref.ent(), def_ref.file(), def_ref.line(), def_ref.column(), ERR1, def_ref.ent().name(), def_in.ent().longname())
