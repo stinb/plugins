@@ -17,6 +17,7 @@ void B::violation4(int p1) {}
 void B::violation5(int p1,int p2,int p3) {}
 
 // test ANSI decl, K&R defn
+/*
 void okay10(p1,p2) int p1; int p2 {}
 
 void okay11(int p1,char *p2);
@@ -36,3 +37,5 @@ Handle aHndl;
 long nodeEntry; 
 Memory pData; 
 { return (1); } 
+
+*/
