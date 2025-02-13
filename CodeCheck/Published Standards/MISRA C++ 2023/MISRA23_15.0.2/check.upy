@@ -1,0 +1,217 @@
+import re
+
+
+ERR1 = "The copy/move constructor does not have an appropriate signature"
+ERR2 = "The copy/move assignment operator does not have an appropriate signature"
+ERR3 = "The copy/move constructor should not have additional parameters with default arguments"
+ERR4 = "The copy/move assignment operator should not have additional parameters with default arguments"
+ERR5 = "The copy/move assignment operator does not have the correct return type"
+ERR6 = "The copy/move assignment operator needs the '&' qualifier"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_15.0.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_15.0.2': "Published Standards/MISRA C++ 2023/15.0.2 User-provided copy and move member functions of a class should have appropriate signatures"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_15.0.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',            
+            'Functions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_15.0.2': """
+<p><b>Amplification</b></p>
+<p>For a class X, the copy constructor, move constructor, copy assignment operator and move
+assignment operator, if user-provided, should have the following signatures:</p>
+<pre><code language="C++">X( X const & ); // Copy constructor
+X( X && ) noexcept; // Move constructor
+X & operator=( X const & ) &; // Copy assignment operator
+X & operator=( X && ) & noexcept; // Move assignment operator</code></pre>
+
+<p>It is permitted to:</p>
+<p>● Add constexpr to any of these operations;</p>
+<p>● Add explicit to the constructors;</p>
+<p>● Add noexcept (which may be conditional) to the copy operations.</p>
+<p>Note: const X & is also permitted as an alternative to X const &.</p>
+
+<p><b>Rationale</b></p>
+<p>A constructor taking the class itself by non-const reference parameter (X &) is considered to be a copy
+constructor. However, this parameter style means it is possible to modify the argument object, which
+would be unlikely to meet developer expectations.</p>
+<p>The use of copy and move constructors with parameters having default arguments makes it harder
+to review the code. Therefore, delegating to constructors supporting these extra parameters should
+be used in preference to the use of default arguments.</p>
+<p>The situation is similar for a copy assignment operator taking the right-hand-side operand by nonconst reference. For copy-assignment, the C++ Standard permits the right-hand-side parameter to be
+pass-by-value; this is not allowed by this rule.</p>
+<p>Assignment operators should return an lvalue-reference to the assigned-to object in order to allow
+chaining of assignments. However, without reference qualification, the assignment may be to a
+temporary object with the risk that a potentially dangling lvalue-reference to that temporary object
+may be exposed. Using an lvalue-reference returned from assignment to a temporary object to access
+the temporary object results in undefined behaviour as the temporary object will have been destroyed
+before the access takes place.</p>
+<p>Throwing from within a move operation makes it unclear what the state of the moved-from object is
+expected to be. Declaring these functions as noexcept makes it clear they will not throw, which is
+compatible with exception-safe code.</p>
+
+<p><b>Exception</b></p>
+<p>User-provided assignment operators are allowed to be declared with the return type void as this
+prevents use of the result of the assignment operator, easing compliance with Rule 8.18.2.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">struct UniqueManager
+{
+ UniqueManager() = default;
+ UniqueManager( UniqueManager && ) noexcept; // Compliant
+ UniqueManager & operator=( UniqueManager && ) noexcept; // Non-compliant -
+}; // needs & qualifier
+
+struct Manager
+{
+ Manager( Manager const & other ) noexcept( false ); // Compliant
+ Manager( Manager const & other, char c ); // Not a copy-constructor
+ Manager( Manager && other, char c = 'x' ) noexcept; // Non-compliant -
+}; // move constructor
+
+struct ScopedManager
+{
+ ScopedManager();
+ ~ScopedManager();
+ ScopedManager & operator=( ScopedManager && ) = delete; // Rule does not apply
+};
+
+struct Bad
+{
+ Bad( Bad volatile const & ); // Non-compliant - volatile
+ virtual Bad & operator=( Bad const & ) &; // Non-compliant - virtual
+};</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.18.2, Rule 15.0.1</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class, Struct"):
+        class_name = class_ref.ent().name()
+
+        for func_ref in class_ref.ent().refs("Define ~Delete, Declare ~Delete ~Implicit", "Member Function"):
+            param_ctr = 0
+            invalid = False
+            non_compliant = False
+            func_type = 0 # 1: copy const, 2: move const, 3: copy assop, 4: move assop
+            
+            if func_ref.ent().name() == class_name:
+                for param_ref in func_ref.ent().refs("Define, Declare", "Parameter"):
+                    param_type = str(param_ref.ent().type())
+                    param_ctr += 1
+                    
+                    if (param_ctr == 1) and param_type and param_type.endswith(f"{class_name} &"):
+                        if re.search(rf"const \S*{class_name} &", param_type):
+                            func_type = 1
+                        elif re.search("const .* &", param_type):
+                            non_compliant = True
+                    elif (param_ctr == 1) and param_type and param_type.endswith(f"{class_name} &&"):
+                        if re.search(rf"\S*{class_name} &&", param_type):
+                            func_type = 2
+                        elif re.search(".* &&", param_type):
+                            non_compliant = True
+                    elif (func_type > 0) and (param_ctr > 1) and param_ref.ent().freetext("InitText"):
+                        check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR3)
+                        break
+                    elif (func_type > 0) and (param_ctr > 1) and not param_ref.ent().freetext("InitText"):
+                        invalid = True
+                        break
+
+                if invalid:
+                    continue
+                elif non_compliant or ((func_type == 2) and (func_ref.ent().freetext("Noexcept") is None)) or (func_type > 0 and func_ref.ent().kind().check("Virtual")):
+                    check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR1)                       
+
+            elif func_ref.ent().name() == "operator=":
+                for param_ref in func_ref.ent().refs("Define, Declare", "Parameter"):
+                    param_type = str(param_ref.ent().type())
+                    param_ctr += 1
+
+                    if (param_ctr == 1) and param_type and param_type.endswith(f"{class_name} &"):
+                        if re.search(rf"const \S*{class_name} &", param_type):
+                            func_type = 3
+                        elif re.search("const .* &", param_type):
+                            non_compliant = True
+                    elif (param_ctr == 1) and param_type and param_type.endswith(f"{class_name} &&"):
+                        if re.search(rf"\S*{class_name} &&", param_type):
+                            func_type = 4
+                        elif re.search(".* &&", param_type):
+                            non_compliant = True
+                    elif (func_type > 0) and (param_ctr > 1) and param_ref.ent().freetext("InitText"):
+                        check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR4)
+                        break
+                    elif (func_type > 0) and (param_ctr > 1) and not param_ref.ent().freetext("InitText"):
+                        invalid = True
+                        break
+
+                if invalid:
+                    continue
+                elif non_compliant or ((func_type == 4) and (func_ref.ent().freetext("Noexcept") is None)) or (func_type > 0 and func_ref.ent().kind().check("Virtual")):
+                    check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR2)
+                elif func_type > 0:
+                    lex = func_ref.file().lexer(lookup_ents=False).lexeme(func_ref.line(), func_ref.column())
+                    on_param = 0
+                    after_param = False
+                    non_compliant = True
+
+                    func_type = str(func_ref.ent().type())
+
+                    if func_type not in [f"{class_name} &", "void"]:
+                        check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR5)
+                        continue
+
+                    while lex:
+                        if lex.text() == "(":
+                            on_param += 1
+                        elif lex.text() == ")":
+                            on_param -= 1
+
+                            if not on_param:
+                                after_param = True
+                        elif not on_param and lex.text() in "{;":
+                            break
+                        elif after_param and (lex.text() == "&") and (lex.token() == "Operator"):
+                            non_compliant = False
+                            break
+
+                        lex = lex.next(True, True)    
+
+                    if non_compliant:
+                        check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR6)
