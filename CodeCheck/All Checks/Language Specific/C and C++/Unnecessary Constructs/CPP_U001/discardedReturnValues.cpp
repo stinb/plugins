@@ -39,6 +39,8 @@ struct ReturnsObj {
   ReturnsValue *obj();
 };
 void Test2() {
-  ReturnsObj R = new ReturnsObj;
-  R->returns_value(); // UndCC_Violation
+  ReturnsObj * R = new ReturnsObj;
+  ReturnsValue * S = R->obj();
+  S->returns_value(); // UndCC_Violation
 }
+

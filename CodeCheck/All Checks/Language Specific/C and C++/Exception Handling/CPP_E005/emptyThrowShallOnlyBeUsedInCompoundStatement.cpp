@@ -1,4 +1,5 @@
-try  void f1 ( void )
+#include <cstdint>
+void f1 ( void )
 {
   try
   {
@@ -6,17 +7,17 @@ try  void f1 ( void )
   }
   catch ( int32_t i ) // int will be handled here first
   {
-	if ( i > 0 )
-	{
-	  throw; // and then re-thrown - Compliant
-	}
+    if ( i > 0 )
+    {
+      throw; // and then re-thrown - Compliant
+    }
   }
 }
 void g1 ( void )
 {
   try
   {
-	f1 ( );
+    f1 ( );
   }
   catch ( int32_t i )
   {
@@ -39,3 +40,4 @@ void g2 ( void )
     // ...
   }
 }
+
