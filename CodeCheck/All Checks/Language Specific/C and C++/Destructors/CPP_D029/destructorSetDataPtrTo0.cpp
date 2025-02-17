@@ -1,3 +1,4 @@
+#include <cstddef>
 // Test: Destructor must set all ptr data members to 0
 
 class Class1 {
@@ -23,3 +24,4 @@ Class1::~Class1()
   violation1C = 0x0;
   violation1D = okay1E = 0;
 };
+
