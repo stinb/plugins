@@ -1,11 +1,13 @@
+#include <cstdio>
 #define M(A) printf ( #A )
-void main ( )
+int main ( )
 {
   /* UndCC_Violation */ M (
 #ifdef SW
-  "Message 1"
+    "Message 1"
 #else
-  "Message 2"
+    "Message 2"
 #endif
   );
 }
+
