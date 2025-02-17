@@ -1,3 +1,4 @@
+#include <cstdint>
 int32_t main( )
 {
   try
@@ -13,5 +14,6 @@ int32_t main( )
 
 int32_t wmain( ) // UndCC_Violation
 {
-	return 0;  
+  return 0;  
 }
+
