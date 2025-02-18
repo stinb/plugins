@@ -19,7 +19,7 @@ int main()
    char *str2 = static_cast<char *>(malloc(strlen(str1))); // UndCC_Violation
 
    SSS *s1 = static_cast<SSS *>(calloc(4, sizeof(SSS))); // UndCC_Violation
-   if (s1 == reinterpret_cast<SSS *>(ENOMEM))
+   if (s1 == reinterpret_cast<SSS *>(-1))
       printf("Error ENOMEM: Insufficient memory available\n");
 
    strcpy(str2, str1);
@@ -41,3 +41,4 @@ void f1 ( )
    int32_t * i = new int32_t; // UndCC_Violation
    delete i;                  // UndCC_Violation
 }
+
