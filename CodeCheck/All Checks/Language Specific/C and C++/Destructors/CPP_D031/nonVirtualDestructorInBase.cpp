@@ -22,6 +22,7 @@ class Okay4 {
 
 // OKAY: implicit destructor is also virtual.
 class Okay4A: public Okay4 {
+  ~Okay4A();
 };
 // OKAY: destructor is still virtual.
 class Okay4B: public Okay4 {
