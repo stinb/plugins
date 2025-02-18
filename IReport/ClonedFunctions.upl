@@ -1,0 +1,298 @@
+use base ("Understand::IReport");
+use Tie::RefHash;
+use List::Util qw(min max);
+use Time::HiRes qw(gettimeofday tv_interval);
+
+my $verbose = 0;
+
+sub name { return "Cloned Functions"; }
+
+sub test_entity { 
+    my $ent = shift;
+    return $ent->kind->check("method ~unknown ~unresolved, function ~unknown ~unresolved, fortran subroutine ~unknown ~unresolved, fortran main program ~unknown ~unresolved, ada procedure ~unknown ~unresolved");
+}
+
+sub description {
+	return "Using user defined limits, this plugin will find functions that are similar, or the same, as other functions in the project.";
+}
+
+sub test_global { return 1; }
+
+sub support_progress { return 1; }
+
+sub support_abort { return 1; }
+our $abort_called;
+
+sub abort{ $abort_called = 1; }
+
+sub init {
+  my $report = shift;
+  $abort_called = 0;
+  $report->option->label("", "Similarity of entities to be identified as clones:");
+  $report->option->integer("ContentSimilarity", "    Contents Similarity (0~100) >=", 75);
+  $report->option->integer("NameSimilarity", "    Function Name Similarity (0~100) >=", 30);
+  $report->option->label("", "(Optional) Token length of entities to be searched:");
+  $report->option->integer("TokenLengthMin", "    Min Token Length >", 10);
+  $report->option->integer("TokenLengthMax", "    Max Token Length <", 64);
+}
+
+sub generate {
+  my $report = shift;
+  my $target_ent = shift;
+  
+  my $t0 = [gettimeofday];
+
+  my $opt_content_similarity = $report->option->lookup("ContentSimilarity") / 100;
+  my $opt_name_similarity = $report->option->lookup("NameSimilarity") / 100;
+  my $opt_token_length_min = $report->option->lookup("TokenLengthMin");
+  my $opt_token_length_max = $report->option->lookup("TokenLengthMax");
+    
+  my @ents = $report->db->ents("method ~unknown ~unresolved, function ~unknown ~unresolved, fortran subroutine ~unknown ~unresolved, fortran main program ~unknown ~unresolved, ada procedure ~unknown ~unresolved");
+  my $num = @ents;
+  my $cur = 1;
+  my @entities = ();
+  foreach my $ent (@ents) {
+    next if ($report->db->language =~ /C#/i) && ($ent->longname =~ /^System|^Microsoft/i);
+    my $tokens;
+    my $definein = $ent->ref("definein");
+    if ($definein) {
+      my $file = $definein->file;
+      my $lineNum = $definein ? $definein->line : 1;
+      my $endLine = $ent->ref("end") ? $ent->ref("end")->line : $lineNum;
+      my $lexer = $file->lexer;
+      next unless $lexer;
+      
+      my $stream = $lexer->lexeme($lineNum, 0);
+      while ($stream && $stream->line_end <= $endLine) {
+        my $token;
+        while ($stream && $stream->token ne 'Newline') {
+          my $t = $stream->token;
+          if ($t eq 'Identifier')     { $token .= 'I' }
+          elsif ($t eq 'Operator')       { $token .= 'O' }
+          elsif ($t eq 'Keyword')        { $token .= 'K' }
+          elsif ($t eq 'Literal')        { $token .= 'T' }
+          elsif ($t eq 'String')         { $token .= 'S' }
+          elsif ($t eq 'Preprocessor')   { $token .= 'P' }
+          elsif ($t eq 'Punctuation')    { $token .= 'U' }
+          #elsif ($t eq 'Comment')        { $token .= 'M' }
+          #elsif ($t eq 'Newline')        { $token .= 'N' }
+          #elsif ($t eq 'Whitespace')     { $token .= 'W' }
+          #elsif ($t eq 'Continuation')   { $token .= 'C' }
+          #elsif ($t eq 'Label')          { $token .= 'L' }
+          #elsif ($t eq 'EOF')            { $token .= 'E' }
+          else { $token .= '' }
+          $stream = $stream->next;
+        }
+        $tokens .= $token;
+        if (defined($stream))
+        {
+            $stream = $stream->next;
+        }
+      }
+      push @entities, { ent => \$ent, token => \$tokens } if length($tokens) > $opt_token_length_min && length($tokens) < $opt_token_length_max;
+    }
+    $report->progress(int($cur++ / $num * 50));
+  }
+  
+  my @targets = @entities;
+  @entities = grep { ${$_->{ent}}->id == $target_ent->id } @entities if $target_ent;
+  my @clones;
+  $num = @entities;
+  $cur = 1;
+  
+  my %seen;
+  foreach my $src (sort { length(${$a->{token}}) <=> length(${$b->{token}}) } @entities) {
+    my $s_ent = ${$src->{ent}};
+    my $s_token = ${$src->{token}};
+    my $s_tokenlen = length($s_token);
+    
+    shift @targets unless $target_ent;
+    foreach my $target (@targets) {
+      my $t_ent = ${$target->{ent}};
+      my $t_token = ${$target->{token}};
+      my $t_tokenlen = length($t_token);
+      
+      next if $s_ent->id == $t_ent->id;
+      
+      my $name_distance = distance_bv($s_ent->name, $t_ent->name);
+      my $name_dissimilarity = max(length($s_ent->name), length($t_ent->name)) * (1 - $opt_name_similarity);
+      if ($name_distance <= $name_dissimilarity) {
+        my $tokenlen = max(length($s_token), length($t_token));
+        my $content_distance = distance_bv($s_token, $t_token);
+        my $content_similarity = $content_distance == 0 ? 1 : 1 - ($content_distance / $tokenlen);
+        if ($content_similarity > $opt_content_similarity) {
+          my $id = join '|', sort { $a <=> $b } ($s_ent->id, $t_ent->id);
+          next if $seen{$id};
+          $seen{$id} = 1;
+          
+          if ($verbose) {
+            push @clones, { s_ent => \$s_ent, s_token => \$s_token, t_ent => \$t_ent, t_token => \$t_token, distance => $content_distance, tokenlen => $tokenlen, similarity => $content_similarity };
+          } else {
+            push @clones, { s_ent => \$s_ent, t_ent => \$t_ent, distance => $content_distance, tokenlen => $tokenlen, similarity => $content_similarity };
+          }
+        }
+      }
+    }
+    $report->progress(int(50 + $cur++ / $num * 50));
+  }
+  undef @entities;
+  undef @targets;
+  
+  $report->bold();
+  $report->print("Threshold:\n");
+  $report->print("    Content Similarity >= ".$report->option->lookup("ContentSimilarity")."\n");
+  $report->print("    Function Name Similarity >= ".$report->option->lookup("NameSimilarity")."\n");
+  $report->print("Search Entities:\n");
+  $report->print("    Min Token Length > ".$report->option->lookup("TokenLengthMin")."\n");
+  $report->print("    Max Token Length < ".$report->option->lookup("TokenLengthMax")."\n\n");
+  $report->nobold();
+  
+  if ($target_ent) {
+    $report->bold();
+    $report->print("Source Entity:\n");
+    $report->nobold();
+    $report->entity($target_ent);
+    $report->print($target_ent->name."(".$target_ent->parameters.")  ");
+    $report->entity();
+    $report->print($target_ent->ref("definein")->file->relname."\n\n");
+  }
+  
+  $report->bold();
+  $report->print("Process elapsed time: ");
+  $report->print(tv_interval($t0) ." sec.\n");
+  $report->print(scalar(@clones)." clones found.\n\n");
+  $report->nobold();
+  
+  foreach my $clone ( sort { $a->{distance} <=> $b->{distance} } @clones ) {
+    $report->print("Content Similarity: ");
+    $report->fontcolor("red");
+    $report->print(sprintf("%.02f%\n", $clone->{similarity} * 100));
+    $report->fontcolor("black");
+    
+    $report->print("Token Distance: ");
+    $report->print($clone->{distance}."\n");
+    
+    if ($verbose) {
+      $report->print(${$clone->{s_token}}." (".length(${$clone->{s_token}}).")\n");
+      $report->print(${$clone->{t_token}}." (".length(${$clone->{t_token}}).")\n");
+    }
+    unless ($target_ent) {
+      $report->entity(${$clone->{s_ent}});
+      $report->print(${$clone->{s_ent}}->name."(".${$clone->{s_ent}}->parameters.")  ");
+      $report->entity();
+      $report->print(${$clone->{s_ent}}->ref("definein")->file->relname."\n");
+    }
+    $report->entity(${$clone->{t_ent}});
+    $report->print(${$clone->{t_ent}}->name."(".${$clone->{t_ent}}->parameters.")  ");
+    $report->entity();
+    $report->print(${$clone->{t_ent}}->ref("definein")->file->relname."\n");
+    
+    $report->compare(${$clone->{s_ent}}, ${$clone->{t_ent}});
+    $report->print("[View Comparison]\n\n");
+    $report->compare();
+  }
+}
+
+sub distance {
+  my ($s, $t, $replacecost) = @_;
+  
+  return 0 if $s eq $t;
+  return length($s) if !$t || length($t) == 0;
+  return length($t) if !$s || length($s) == 0;
+  
+  my $s_length = length($s);
+  my $t_length = length($t);
+  
+  my (@v0, @v1);
+  my ($i, $j);
+  for ($i = 0; $i < $t_length + 1; $i++) {
+    $v0[$i] = $i;
+  }
+  for ($i = 0; $i < $s_length; $i++) {
+    $v1[0] = $i + 1;
+    for ($j = 0; $j < $t_length; $j++) {
+      my $cost = substr($s, $i, 1) eq substr($t, $j, 1) ? 0 : $replacecost;
+      $v1[$j + 1] = min($v1[$j] + 1, $v0[$j + 1] + 1, $v0[$j] + $cost);
+    }
+    for ($j = 0; $j < $t_length + 1; $j++) {
+      $v0[$j] = $v1[$j];
+    }
+  }
+  return $v1[$t_length];
+}
+
+sub distance_bv {
+  my ($s, $t) = @_;
+  
+  my @a = split //, $s;
+  my @b = split //, $t;
+  my ($amin, $amax, $bmin, $bmax) = (0, $#a, 0, $#b);
+  
+  my $max_width = int 0.999+log(~0)/log(2);
+  
+  while ($amin <= $amax and $bmin <= $bmax and $a[$amin] eq $b[$bmin]) {
+    $amin++;
+    $bmin++;
+  }
+  while ($amin <= $amax and $bmin <= $bmax and $a[$amax] eq $b[$bmax]) {
+    $amax--;
+    $bmax--;
+  }
+  
+  return abs(@a - @b) if ($amax < $amin) || ($bmax < $bmin);
+  
+  # Use bit-vector algorithm
+  my $positions;
+  if (($amax - $amin) < $max_width ) {
+    $positions->{$a[$_ + $amin]} |= 1 << $_ for 0..($amax - $amin);
+    
+    my $m = $amax - $amin + 1;
+    my $diff = $m;
+    
+    my $m_mask = 1 << $m - 1;
+    
+    my $VP = 0;
+    $VP |= 1 << $_ for 0..($m - 1);
+    
+    my $VN = 0;
+    
+    my ($y,$u,$X,$D0,$HN,$HP);
+    
+    for my $j (0..($bmax - $bmin)) {
+      $y = $positions->{$b[$j + $bmin]} // 0;
+      $X = $y | $VN;
+      $D0 = (($VP + ($X & $VP)) ^ $VP) | $X;
+      $HN = $VP & $D0;
+      $HP = $VN | ~($VP | $D0);
+      $X  = ($HP << 1) | 1;
+      $VN = $X & $D0;
+      $VP = ($HN << 1) | ~($X | $D0);
+      
+      $diff++ if ($HP & $m_mask);
+      $diff-- if ($HN & $m_mask);
+    }
+    return $diff;
+  }
+  
+  # Use dynamic programming algorithm
+  else {
+    my (@v0, @v1);
+    my ($i, $j);
+    for ($i = 0; $i < length($t) + 1; $i++) {
+      $v0[$i] = $i;
+    }
+    for ($i = 0; $i < length($s); $i++) {
+      $v1[0] = $i + 1;
+      for ($j = 0; $j < length($t); $j++) {
+        my $cost = substr($s, $i, 1) eq substr($t, $j, 1) ? 0 : 1;
+        $v1[$j + 1] = min($v1[$j] + 1, $v0[$j + 1] + 1, $v0[$j] + $cost);
+      }
+      for ($j = 0; $j < length($t) + 1; $j++) {
+        $v0[$j] = $v1[$j];
+      }
+    }
+    return $v1[length($t)];
+  }
+}
+
+

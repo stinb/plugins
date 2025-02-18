@@ -1,0 +1,60 @@
+use base ("Understand::IReport");
+use Tie::RefHash;
+
+sub name { return "Large Functions"; }
+
+sub description {
+	return "Report functions which go beyond thresholds that user set for count metrices like CountLine, CountLineCode, Countstmt.";
+}
+
+sub test_entity { return -1; }
+
+sub test_global { return 1; }
+
+sub support_progress { return 1; }
+
+sub init {
+    my $report = shift;
+    $report->option->radio_vert("Metric", "Count Metirc", ["CountLine","CountLineCode","CountLineCodeExe","CountStmt","CountStmtExe"], "CountLine");
+    $report->option->integer("Threshold", "Threshold", 100);
+}
+
+sub generate {
+    my $report = shift;
+
+    my $metric = $report->option->lookup("Metric");
+
+    my $threshold = $report->option->lookup("Threshold");
+    $threshold = 1 if ($threshold < 1);
+
+    tie my %funcs, 'Tie::RefHash';
+    my $func;
+    my @funcs = $report->db->ents("function, method, fortran subroutine, fortran main program, ada procedure");
+    foreach $func (@funcs) {
+        my $var = $func->metric($metric);
+        $funcs{$func} = $var if $var && $var >= $threshold;
+    }
+
+    $report->bold();
+    $report->print(scalar(keys %funcs)."/".scalar(@funcs)." entities, ");
+    $report->print("$metric >= $threshold\n");
+    $report->nobold();
+    $report->print("\n");
+
+    my $num = keys %funcs;
+    my $cur = 1;
+    foreach my $ent (sort {
+        $funcs{$b} <=> $funcs{$a}
+        || lc($b->longname()) cmp lc($a->longname());
+    } keys %funcs) {
+        $report->progress($cur++ / $num * 100);
+        $func = $ent;
+        $report->fontcolor("red");
+        $report->print($funcs{$ent}." " x 5);
+        $report->fontcolor("black");
+        $report->entity($func);
+        $report->print($func->longname());
+        $report->entity();
+        $report->print("\n");
+    }
+}
