@@ -20,7 +20,7 @@ class Okay {
   };
   void Okay4();
 };
-Okay::Okay4() {
+void Okay::Okay4() {
   func(); // 1
   func(); // 2
   func(); // 3
@@ -47,3 +47,4 @@ class Violation {
     func(); // 6
   }
 };
+
