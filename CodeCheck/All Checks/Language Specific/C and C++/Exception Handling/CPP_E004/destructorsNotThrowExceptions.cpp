@@ -25,8 +25,8 @@ class Okay1B {
 };
 
 // Okay: called functions are defined as no throw.
-class Okay1B {
-  ~Okay1B() {
+class Okay1BB {
+  ~Okay1BB() {
     nothrows1();
   }
 };
@@ -79,3 +79,4 @@ class Violation1D {
     throws1(); // UndCC_Violation
   }
 };
+
