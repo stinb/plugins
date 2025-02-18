@@ -1,0 +1,134 @@
+#############################################################################################
+# Custom iReport Script for Luigi Galati
+# 
+# Purpose: Interactive Report that shows first-level data flow in Ada as a filterable table
+# 
+# Author: Jordan Colbeth, SciTools Inc.
+# Date: 2/17/2025
+#
+#############################################################################################
+
+import re
+
+def name():
+  return "Ada Data Flow Table"
+
+def test_entity(ent):
+  return ent.kind().check("Ada Object, Ada Package")
+
+def description():
+  return '''A utility script to display first-level affected objects for each Ada object.
+    <p>The table columns are: </p>
+    <ul>
+      <li>Package</li>
+      <li>Object</li>
+      <li>Object Kind</li>
+      <li>Affected Package</li>
+      <li>Affected Object</li>
+    </ul>
+    </p>
+  '''
+
+# Report generation
+def generate(report, ent):
+  report.heading(2)
+  report.print("Ada Data Flow Table")
+  report.heading()
+
+  report.table("""
+    [{
+      "name" : "Package",
+      "filtertype": "string"
+     },{
+      "name" : "Object",
+      "filtertype": "string"
+     },{
+      "name" : "Object Kind",
+      "filtertype": "string"
+     },{
+      "name" : "Affected Package",
+      "filtertype": "string"
+     },{
+      "name" : "Affected Object",
+      "filtertype": "string"
+     }]""")
+
+  db = report.db()
+
+  ents = db.ents("Ada Object ~unresolved ~unknown")
+
+  for ent in ents:
+
+    # skip built-in objects
+    if re.search(r"^Ada\.", ent.longname()):
+      continue
+    if re.search(r"^System\.", ent.longname()):
+      continue
+    if re.search(r"^Interfaces\.", ent.longname()):
+      continue
+    if re.search(r"^GNAT\.", ent.longname()):
+      continue
+    if ent.parent().name() == "ASCII":
+      continue
+    if ent.kind().longname() == "Ada Constant Object Deferred":
+      continue
+    if ent.kind().longname() == "Ada Loop Object Local":
+      continue
+
+    # loop through each assignby ref for each object, generate table cells
+    assignby_refs = ent.refs("Ada Assignby Value ~CallParamFormal")
+    callparam_refs = ent.refs("Ada CallParamFormal Assignby Value")
+
+    if not (assignby_refs or callparam_refs):
+      # print package
+      printCellValue(report, ent.parent().name())
+      # print object
+      printCellValue(report, ent.name())
+      # print object kind
+      printCellValue(report, ent.kind().longname())
+      # print affected package
+      printCellValue(report, "-")
+      # print affected object
+      printCellValue(report, "-")
+
+
+    else:
+      # handle assignby refs
+      if assignby_refs:
+        for assignby_ref in assignby_refs:
+          affected_ent = assignby_ref.ent()
+
+          # print package
+          printCellValue(report, ent.parent().name())
+          # print object
+          printCellValue(report, ent.name())
+          # print object kind
+          printCellValue(report, ent.kind().longname())
+          # print affected package
+          printCellValue(report, affected_ent.parent().name())
+          # print affected object
+          printCellValue(report, affected_ent.name())
+
+      # handle callparam refs
+      if callparam_refs:
+        for callparam_ref in callparam_refs:
+          affected_ent = callparam_ref.ent().ref("Ada Assignby Value").ent()
+
+          # print package
+          printCellValue(report, ent.parent().name())
+          # print object
+          printCellValue(report, ent.name())
+          # print object kind
+          printCellValue(report, ent.kind().longname())
+          # print affected package
+          printCellValue(report, affected_ent.parent().name())
+          # print affected object
+          printCellValue(report, affected_ent.name())
+
+def printCellValue(report, val):
+  report.tablecell()
+  if val is not None:
+    report.print(str(val))
+
+
+
