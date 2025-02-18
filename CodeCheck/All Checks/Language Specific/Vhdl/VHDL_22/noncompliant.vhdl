@@ -42,11 +42,14 @@ begin
             data_out <= (others => '0');
         elsif rising_edge(clk) then
             -- Normal operation, perform conditional signal assignment using 'when'
-            data_out <= (others => '0'); -- Default value
+            data_out <= data_in;  -- Default value should be the last condition
 
-            data_out <= "0000_0001" when data_in = "0000_0000" else
-                        "1111_1110" when data_in = "1111_1111" else
-                        data_in; -- Set data_out based on conditions
+            if data_in = "0000_0000" then
+                data_out <= "0000_0001";
+            elsif data_in = "1111_1111" then
+                data_out <= "1111_1110";
+            end if;
         end if;
     end process;
 end Behavioral;
+
