@@ -26,5 +26,5 @@ class ViolationDerived: public ViolationBase {
   int Violation1(); // UndCC_Violation
   int Violation2(); // UndCC_Violation
   int Violation3() {} // UndCC_Violation
-}
+};
 int ViolationDerived::Violation2() {}
