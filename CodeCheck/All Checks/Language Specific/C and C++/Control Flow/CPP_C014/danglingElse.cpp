@@ -23,8 +23,9 @@ void okay3()
 {
   if (1)
     if (2)
-      else
-        ;
+      ;
+    else
+      ;
   else
     ;
 }
@@ -96,3 +97,4 @@ void	nestedValid()
     }
   ;
 }
+
