@@ -1,0 +1,173 @@
+# Compliance Report
+
+import understand
+
+TABLE_COLS=[
+  "Check",
+  "Severity",
+  "File",
+  "Line",
+  "Column",
+  "Entity",
+  "Violation",
+  "Ignored",
+  "Justification",
+  "Category"
+]
+
+def name():
+  return "Custom CodeCheck Results Table"
+
+def description():
+  return '''A basic results table script intended for customization.
+    <p>This version shows how to add the a column for the check "Category"
+    to the Results Table. How was it added?</p>
+
+    <ol>
+    <li> Add "Category" to the list of table columns at the top of the script </li>
+    <li> Add these three lines of code to the bottom of the generate function:<br>
+<pre>if "Category" in columns:
+  report.tablecell()
+  report.print(tagValue(inspection, v.check_id(), "Category:", tagCache))</pre>
+    </li>
+    <li> If desired, add your new column to the list of default columns in
+    the init function</li>
+    </ol>
+
+    Try it yourself with these steps:
+    <ol>
+    <li> Click the customize button from the plugin manager </li>
+    <li> Change the name of the script so it doesn't conflict with this one </li>
+    <li> Save the script with your changes </li>
+    <li> Scripts are cached, so your new script won't appear in the plugin
+    manager until you manually refresh the script cache with the refresh
+    button or relaunch Understand. This also applies to any script changes.
+    Scripts won't appear in the plugin manager if they have syntax errors.</li>
+    <li> Enable your plugin from the plugin manager</li>
+    <li> Run your plugin from the context menu of an inspection </li>
+    </ol>
+    '''
+def test_inspection(inspection):
+  return inspection.config() # Configuration required for severity
+
+def init(report):
+  report.options().checkbox_vert("ignores",  "Violation Table Show", [
+    "Not Ignored", # Possible Ignores
+    "Annotation",
+    "Comment",
+    "Baseline",
+    "User",
+    "Excluded"],
+    ["Not Ignored"]) # Default Ignores
+  report.options().checkbox_vert("columns",  "Violation Table Columns", TABLE_COLS,[
+    "Check", # Default Columns
+    "File",
+    "Line",
+    "Entity",
+    "Violation",
+    "Category"])
+
+# Report generation
+def generate(report, inspection):
+  columns = report.options().lookup("columns")
+  ignores = set(report.options().lookup("ignores"))
+
+  # Create the report table using the enabled columns
+  tbldesc = []
+  for col in TABLE_COLS:
+    if col in columns:
+      tbldesc.append("{ \"name\": \"" + col + "\", \"filtertype\":\"" +filterType(col) + "\"}")
+  report.table("[" + ",".join(tbldesc) + "]")
+
+  # Caches
+  tagCache = dict()
+  fileCache = dict()
+  if "File" in columns:
+    for file in report.db().files():
+      fileCache[file.longname()] = file
+
+
+  # Populate table with violations
+  for v in inspection.violations():
+
+    # Test if violation should be shown in the table
+    violation_ignores = set()
+    for ignore_src, note in v.ignores():
+      violation_ignores.add(ignore_src)
+    if not violation_ignores:
+      violation_ignores.add("Not Ignored")
+    if not (ignores & violation_ignores):
+      continue # Not showing this violation
+
+    # Add the columns
+
+    if "Check" in columns:
+      report.tablecell()
+      report.print(v.check_id())
+
+    if "Severity" in columns:
+      report.tablecell()
+      report.print(tagValue(inspection, v.check_id(), "Severity:", tagCache))
+
+    if "File" in columns:
+      report.tablecell()
+      report.entity(fileCache.get(v.file()))
+      report.print(v.file())
+      report.entity()
+
+    if "Line" in columns:
+      report.tablecell()
+      report.syncfile(v.file(), v.line(), v.column())
+      report.print(str(v.line()))
+      report.syncfile()
+
+    if "Column" in columns:
+      report.tablecell()
+      report.print(str(v.column()))
+
+    if "Entity" in columns:
+      report.tablecell()
+      if name := v.ent_uniquename():
+        if ent := report.db().lookup_uniquename(name):
+          report.entity(ent)
+          report.print(ent.longname())
+          report.entity()
+
+    if "Violation" in columns:
+      report.tablecell()
+      report.print(v.text())
+
+    if "Ignored" in columns:
+      report.tablecell()
+      if v.ignores():
+        report.print(v.ignores()[0][0])
+
+    if "Justification" in columns:
+      report.tablecell()
+      if v.ignores():
+        report.print(v.ignores()[0][1])
+
+    if "Category" in columns:
+      report.tablecell()
+      report.print(tagValue(inspection, v.check_id(), "Category:", tagCache))
+
+def filterType(column):
+  # Edit this function if a numerical column is added
+  if column in ["Line", "Column"]:
+    return "numeric"
+  return "string"
+
+def tagValue(inspection, id, tag, tagCache):
+  if tag in tagCache and id in tagCache[tag]:
+    return tagCache[tag][id]
+
+  for t in inspection.config().check_tags(id):
+    if t.startswith(tag):
+      value = t[len(tag):].strip()
+      tagCache.setdefault(tag,{})[id] = value
+      return value
+
+  tagCache.setdefault(tag,{})[id] = ""
+  return ""
+
+
