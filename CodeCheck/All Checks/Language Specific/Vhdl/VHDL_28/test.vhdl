@@ -21,7 +21,7 @@ begin
     end process labeled_process;
 
     -- Unlabeled process
-    process(clk, reset)
+    process(clk, reset) -- UndCC_Violation
     begin
         if reset = '1' then
             output_unlabeled <= '0';
