@@ -18,7 +18,8 @@ class Option:
 
 
 # Ref kinds and ent kinds
-FUN_REF_KINDS = 'Call, Assign FunctionPtr, Use Ptr'
+FUN_REF_KINDS = 'Call, Assign FunctionPtr'
+FUN_REF_KINDS_OPTION = ', Use Ptr'
 OBJ_ENT_KINDS = 'Object'
 OBJ_REF_KINDS = 'Modify, Set, Use'
 
@@ -33,6 +34,7 @@ MEMBER_OBJECT_PARENTS = 'memberObjectParents'
 MEMBER_OBJECTS = 'memberObjects'
 OBJECTS = 'objects'
 REFERENCE = 'reference'
+FUNCTION_POINTER = 'functionPointer'
 
 # Option values and choices of values
 OPTION_BOOL_TRUE = 'On'
@@ -48,6 +50,7 @@ COMMON_OPTIONS = (
     Option(MEMBER_OBJECTS, 'Member objects', ['Long name', 'Name', 'Off'], 'Long name'),
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
     Option(REFERENCE, 'Reference', ['All', 'Simple'], 'All'),
+    Option(FUNCTION_POINTER, 'Function Pointer', ['Off', 'On'], 'Off'),
 )
 
 
@@ -119,7 +122,11 @@ def getFnOrObjRefs(
         enableDisableFunctions: dict,
         options: dict[str, str | bool] | None = None) -> list[Ref]:
 
-    refs = function.refs(FUN_REF_KINDS)
+    refKinds = FUN_REF_KINDS
+    if options[FUNCTION_POINTER] == 'On':
+        refKinds += FUN_REF_KINDS_OPTION
+
+    refs = function.refs(refKinds)
     refs += globalObjRefs(function, options)
     for ref in function.refs('Use', 'Macro'):
         if ref.ent() in enableDisableFunctions:
@@ -319,7 +326,11 @@ def getEdgeInfo(
         outgoing[scope].add(edgeKey)
 
     # Function calls
-    for call in fun.refs(FUN_REF_KINDS, '~Unknown ~Unresolved', True):
+    refKinds = FUN_REF_KINDS
+    if options[FUNCTION_POINTER] == 'On':
+        refKinds += FUN_REF_KINDS_OPTION
+
+    for call in fun.refs(refKinds, '~Unknown ~Unresolved', True):
         if options[REFERENCE] == 'All':
             scope = call.scope()
             ent = call.ent()
