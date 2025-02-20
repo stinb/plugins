@@ -1,0 +1,179 @@
+# A Metrics Plugin that reads lcov info format
+
+import understand
+
+CLASS_KINDS = "c class, c struct, c union"
+
+def ids():
+  return ["CountClassCoupledBatch"]
+
+def name(id):
+  return "Coupled Classes (Batch)"
+
+def description(id):
+  return """<p>A version of C++ Coupled Classes for batch export</p>
+
+  <p>Is your metrics export taking a long time? If you're using a C++ project
+  with lots of classes, then CountClassCoupled is likely the problem. All
+  built-in class metrics are calculated on demand, and CountClassCoupled is
+  the slowest of them.<p>
+
+  <p>This plugin calculates the value for every class in the project and then
+  returns the cached values. So, it's a longer wait for the first value, but
+  substantially faster for subsequent values. It's designed to improve batch
+  export speed.</p>
+
+  <p>Note that the optimizations for batch speed can result in different values
+  from the built-in metric for these cases:</p>
+
+  <ul>
+
+  <li>If there is more than one member function with the exact same long
+  name. For example:
+  <pre>
+  // file1.h
+  class A { void foo(); };
+
+  // file1.cpp
+  void A::foo() {...} // coupled to class B
+
+  // file2.h
+  class A { void foo(); };
+
+  // file2.cpp
+  void A::foo() {...} // coupled to class C
+  </pre>
+  In this case, the CountClassCoupled metric for the class A entities
+  may be 2 and 0 instead of 1 and 1 because both of the definitions of
+  A::foo() may get attributed to the same class A entity.</li>
+
+  <li>If there are same-named type aliases with different definitions.
+  For example: <pre>using same_name = ...</pre></li>
+
+  </ul>
+  """
+
+def is_integer(id):
+   return True
+
+def test_entity(metric, ent):
+  return ent.kind().check(CLASS_KINDS) and hasattr(metric, "cache")
+
+
+def test_available(metric,entkindstr):
+  if not hasattr(metric, "cache"):
+    return False
+
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity(CLASS_KINDS))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  # C/C++ CountClassCoupled only
+  return "C" in metric.db().language()
+
+def value(metric, target_ent):
+  und_cache = metric.cache()
+  if not und_cache:
+    return
+
+  if not und_cache.is_empty():
+    return und_cache.value(ent=target_ent)
+
+  db = metric.db()
+
+  # Calculate for every class in the project
+  allFiles = db.files()
+
+  # First pass, find all class types
+  classTypes = dict()
+  for file in allFiles:
+    visited = set()
+    for ref in file.filerefs("c typed"):
+      # The C++ version only uses the first typed reference found for each scope
+      # if there are multiple typed references, so track visited.
+      if ref.scope() in visited:
+       continue
+      visited.add(ref.scope())
+      if ref.ent().kind().check(CLASS_KINDS):
+        classTypes[ref.scope()] = ref.ent()
+      elif ref.ent().parent() and ref.ent().parent().kind().check(CLASS_KINDS):
+        classTypes[ref.scope()] = ref.ent().parent()
+
+  # Second pass, find related and referenced classes
+  baseClasses = dict()    # related
+  nestedClasses = dict()  # related and a child
+  referenced = dict()     # referenced
+
+  for file in allFiles:
+    # Track Base Classes
+    for ref in file.filerefs("c base"):
+      baseClasses.setdefault(ref.scope(), set()).add(ref.ent())
+
+    # Track class nesting. Nested classes in the C++ version have to be member
+    # classes, not just CLASS_KINDS.
+    for ref in file.filerefs("c declare, c define", "c member class, c member struct, c member union"):
+      if ref.scope().kind().check(CLASS_KINDS):
+        nestedClasses.setdefault(ref.scope(), set()).add(ref.ent())
+
+    # Find references between entities
+    entMap = dict()
+    for ref in file.filerefs("c use,c set,c call,c modify,c typed", unique=False):
+      entMap.setdefault(ref.scope(),dict()).setdefault(ref.ent(),[]).append(ref)
+
+    # Map entities to classes
+    for scope, ents in entMap.items():
+      orig = scope.longname()
+      # Scope searches entire parent chain for a class parent
+      while scope and not scope.kind().check(CLASS_KINDS):
+        scope = scope.parent()
+      if scope:
+        for ent, refList in ents.items():
+          # Referenced entity uses same logic as before, checking only itself,
+          # and it's parent for a class or class typedef
+          refClass = None
+          if ent.kind().check(CLASS_KINDS):
+            refClass = ent
+          elif ent.parent() and ent.parent().kind().check(CLASS_KINDS):
+            refClass = ent.parent()
+          elif ent in classTypes:
+            refClass = classTypes.get(ent)
+          elif ent.parent() in classTypes:
+            refClass = classTypes.get(ent.parent())
+          if refClass:
+            referenced.setdefault(scope, set()).add(refClass)
+
+  # Calculate Count Class Coupled for each class
+  for classEnt in sorted(db.ents( "c class ~unresolved ~unknown,c struct ~unresolved ~unknown,c union ~unresolved ~unknown"), key = lambda ent: ent.longname()):
+    # Add all base classes to related
+    related = set()
+    toVisit = [classEnt]
+    while toVisit:
+      base = toVisit.pop(0)
+      if base not in related:
+        related.add(base)
+        for nextBase in baseClasses.get(base, set()):
+          toVisit.append(nextBase)
+
+    # loop over nested classes
+    classReferenced = set()
+    toVisit = [classEnt]
+    visited = set()
+    while toVisit:
+      curClass = toVisit.pop(0)
+      if curClass not in visited:
+        visited.add(curClass)
+        # Build referenced list
+        classReferenced |= referenced.get(curClass,set())
+        for nested in nestedClasses.get(curClass, set()):
+          related.add(nested) # Nested classes are related
+          toVisit.append(nested) # Nested class referenced classes count toward parent
+
+    # Count class coupled is the number of referenced classes that were not
+    # related (base or nested)
+    countClassCoupled = len(classReferenced - related)
+    und_cache.insert(countClassCoupled, ent=classEnt)
+
+  return und_cache.value(ent=target_ent)
+
