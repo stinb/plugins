@@ -20,7 +20,7 @@ int main() {
   obj->on_complete([obj]() { // UndCC_Violation(0)
     obj->clean_something_up();
   });
-  obj->on_complete([obj1]() { // UndCC_Valid
+  obj->on_complete([obj1]() { // UndCC_Violation(0)
     obj1->clean_something_up();
   });
   // executor->submit(obj); // You'll need to define executor
