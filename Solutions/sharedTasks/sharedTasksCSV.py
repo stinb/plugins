@@ -81,7 +81,10 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
     # header
     headerFields = [field for field in TASK_FIELDS if field in foundFields]
 
-    header = 'Global Object, Shared, Protected, Function, Reference(M=Modify/S=Set/U=Use), File, Task'
+    referenceString = "Reference(M=Modify/S=Set/U=Use)"
+    if options[FUNCTION_POINTER] == 'On':
+        referenceString = "Reference(M=Modify/S=Set/U=Use/C=Call)"
+    header = 'Global Object, Shared, Protected, Function, ' + referenceString + ', File, Task'
     if headerFields:
       header += ', ' + ', '.join(field.capitalize() for field in headerFields)
     header += '\n'

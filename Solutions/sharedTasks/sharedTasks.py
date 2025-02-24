@@ -22,6 +22,7 @@ FUN_REF_KINDS = 'Call, Assign FunctionPtr'
 FUN_REF_KINDS_OPTION = ', Use Ptr'
 OBJ_ENT_KINDS = 'Object'
 OBJ_REF_KINDS = 'Modify, Set, Use'
+OBJ_REF_KINDS_OPTION = ', Deref Call'
 
 # Patterns to look for in sub-architectures
 TASK_FIELDS = ('priority', 'core')
@@ -191,13 +192,17 @@ def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -
 
     for otherFunction in [function] + function.ents('Instanceof'):
         # Global objects
-        for ref in otherFunction.refs(OBJ_REF_KINDS, 'Global Object'):
+        refKinds = OBJ_REF_KINDS
+        if options[FUNCTION_POINTER] == 'On':
+            refKinds += OBJ_REF_KINDS_OPTION
+            
+        for ref in otherFunction.refs(refKinds, 'Global Object'):
             if not memberObjectParents and entHasMembers(ref.ent()):
                 continue
             result.append(ref)
         # Members of global objects
         if memberObjects:
-            for ref in otherFunction.refs(OBJ_REF_KINDS, 'Member Object'):
+            for ref in otherFunction.refs(refKinds, 'Member Object'):
                 if not isMemberOfGlobal(ref.ent()):
                     continue
                 result.append(ref)
