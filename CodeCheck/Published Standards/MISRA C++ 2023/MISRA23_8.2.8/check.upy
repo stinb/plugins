@@ -1,0 +1,114 @@
+ERR1 = "An object pointer type shall not be cast to an integral type other than std::uintptr_t or std::intptr_t"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_8.2.8')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_8.2.8': "Published Standards/MISRA C++ 2023/8.2.8 An object pointer type shall not be cast to an integral type other than std::uintptr_t or std::intptr_t"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_8.2.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',            
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_8.2.8': """
+<p><b>Amplification</b></p>
+<p>The type-id used in the cast-expression shall explicitly specify std::uintptr_t or std::intptr_t.</p>
+
+<p><b>Rationale</b></p>
+<p>The types std::uintptr_t and std::intptr_t are the only types that are guaranteed to be able
+to represent all possible values of an object pointer type.</p>
+<p>Note: these types are optional and may not be available in all implementations, in which case a
+deviation will need to be raised against this rule.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">struct S;
+void f1( S * s )
+{
+ auto p0 = reinterpret_cast&lt; std::uintptr_t &gt;( s ); // Compliant
+ auto p1 = reinterpret_cast&lt; unsigned long &gt;( s ); // Non-compliant
+ using hashPtr_t = std::uintptr_t;
+ auto p2 = reinterpret_cast&lt; hashPtr_t &gt;( s ); // Non-compliant
+}
+
+template&lt; typename T &gt; void f2( S * s )
+{
+ auto p = reinterpret_cast&lt; T &gt;( s ); // Non-compliant - T is not explicitly
+} // std::uintptr_t
+
+template void f2&lt; std::uintptr_t &gt;( S * s );</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.18.2, Rule 15.0.1</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object, Parameter"):
+        if not str(obj_ref.ent().type()).endswith("*"):
+            continue
+
+        for ass_ref in obj_ref.ent().refs("Assignby"):
+            lex = ass_ref.file().lexer().lexeme(ass_ref.line(), ass_ref.column())
+
+            if lex.ent() and lex.ent().kind().check("Macro"):
+                continue
+
+            while lex and lex.text() not in ["=", ";", ass_ref.ent().name()]:
+                if (lex.text() == "reinterpret_cast") and (lex.token() == "Keyword"):
+                    on_type = 0
+                    compliant = False
+
+                    while lex:
+                        if lex.text() == "<":
+                            on_type += 1
+                        elif lex.text() == ">":
+                            on_type -= 1
+
+                            if not on_type:
+                                break
+                        elif on_type and lex.text() in ["uintptr_t", "intptr_t"] and (lex.token() == "Identifier"):
+                            compliant = True
+                            break                            
+
+                        lex = lex.next(True, True)
+
+                    if not compliant:
+                        check.violation(obj_ref.ent(), ass_ref.file(), ass_ref.line(), ass_ref.column(), ERR1)
+
+                    break
+
+                lex = lex.previous(True, True)
+                        
