@@ -1,0 +1,118 @@
+import re
+
+
+ERR1 = "A program shall not take the address of '%1'"
+ERR2 = "'%1' shall not be used"
+ERR3 = "Non-placement form of '%1' shall not be used"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_21.6.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_21.6.2': "Published Standards/MISRA C++ 2023/21.6.2 Dynamic memory shall be managed automatically"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_21.6.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',            
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_21.6.2': """
+<p><b>Amplification</b></p>
+<p>A program shall not take the address of or use:</p>
+<p>1. Any non-placement form of new or delete;</p>
+<p>2. Any of the functions malloc, calloc, realloc, aligned_alloc, free;</p>
+<p>3. Any member function named allocate or deallocate enclosed by namespace std;</p>
+<p>4. std::unique_ptr::release.</p>
+
+<p><b>Rationale</b></p>
+<p>The use of dynamic memory requires the tracking of any memory resources that are allocated to
+ensure that they are released appropriately (no memory leaks, no double frees, use of a matching
+deallocation function). This is likely to be error prone (possibly leading to undefined behaviour) if it is
+not managed automatically using facilities such as std::make_unique or std::vector.</p>
+<p>In addition, C-style allocation is not type safe and does not invoke constructors or destructors.</p>
+<p>Note: the use of placement new, which is non-allocating, is restricted by Rule 21.6.3.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class A { /* ... */ };
+
+auto p1 = static_cast&lt; A * >( malloc( sizeof( A ) ) ); // Non-compliant
+auto p2 = new A; // Non-compliant
+auto p3 = std::make_unique&lt; A &gt;(); // Compliant
+auto p4 = p3.release(); // Non-compliant
+
+void f1( std::pmr::memory_resource & mr, A * p )
+{
+ void * iptr = mr.allocate( sizeof( A ) ); // Non-compliant
+ delete p; // Non-compliant - undefined behaviour if p was allocated using new[]
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.6.1, Rule 21.6.3</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ass_ref in file.filerefs("Assign Ptr"):
+        if ass_ref.ent().name() in ["malloc", "calloc", "realloc", "aligned_alloc", "allocate", "deallocate"] or (ass_ref.ent().longname() == "std::unique_ptr::release"):
+            check.violation(ass_ref.ent(), file, ass_ref.line(), ass_ref.column(), ERR1, ass_ref.ent().name())
+
+    for call_ref in file.filerefs("Call", "Unresolved Function"):
+        if call_ref.ent().name() == "free":
+            check.violation(call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR2, "free")
+
+    new_delete = re.findall("new|delete", file.contents())
+
+    if not new_delete:
+        return
+    
+    lex = file.lexer().first()
+    ctr = 0
+
+    while lex and (ctr != len(new_delete)):
+        if (lex.text() == "delete") and (lex.token() == "Keyword"):
+            ctr += 1
+
+            if lex.previous(True, True).text() != "=":
+                check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR3, "delete")
+        elif (lex.text() == "new") and (lex.token() == "Keyword"):
+            ctr +=1 
+
+            while lex.token() != "Identifier":
+                lex = lex.next(True, True)
+
+            if lex.ent() and not str(lex.ent().type()).endswith("*"):
+                check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR3, "new")
+
+        lex = lex.next(True, True)
