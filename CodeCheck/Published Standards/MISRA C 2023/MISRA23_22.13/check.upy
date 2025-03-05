@@ -1,0 +1,104 @@
+ERR1 = "%1 does not have an appropriate storage duration"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.13')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.13': "Published Standards/MISRA C 2023/22.13 Thread objects, thread synchronization objects and thread-specific storage pointers shall have appropriate storage duration"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_22.13': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Threads',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_22.13': """
+<p><b>Amplification</b></p>
+<p>Objects of type thrd_t, mtx_t, cnd_t, and tss_t shall not have automatic storage duration nor thread
+storage duration.</p>
+
+<p>The cnd_wait() and cnd_timedwait() functions shall only be called by a thread on a mutex that is locked
+by that thread.</p>
+
+<p><b>Rationale</b></p>
+<p>Determining the lifetime of non-static objects which depend on thread execution state is difficult and
+error-prone. In particular, sharing objects of automatic storage duration between threads and using
+them to control concurrent execution can cause undefined behaviour due to accessing them outside
+of their lifetime.</p>
+<p>Usage of a static pool of synchronization resources is common practice in many safety-related
+operating systems, including ARINC-653 [45], AUTOSAR [46] and OSEK [47].</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">mtx_t Ra; /* Compliant */
+
+int32_t t1( void *ptr ) /* Thread entry */
+{
+ ...
+ mtx_lock ( &Ra);
+ mtx_lock ( (mtx_t*)ptr ); /* Lifetime of Rb might have ended
+ ... pointer might be dangling */
+ ...
+ mtx_unlock( (mtx_t*)ptr ); /* Lifetime of Rb might have ended
+ ... pointer might be dangling */
+ mtx_unlock( &Ra);
+}
+
+void main( void )
+{
+ thrd_t id1; /* Non-compliant */
+ mtx_t Rb; /* Non-compliant */
+ mtx_init ( &Ra, mtx_plain );
+ mtx_init ( &Rb, mtx_plain );
+ thrd_create( &id1, t1, &Rb );
+}</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object"):
+        if obj_ref.ent().type() not in ["thrd_t", "mtx_t", "cnd_t", "tss_t"]:
+            continue
+        
+        if obj_ref.ent().kind().check("Local"):
+            check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1, obj_ref.ent().name())
+            continue
+
+        lex = file.lexer(lookup_ents=False).lexeme(obj_ref.line(), obj_ref.column())
+
+        while lex and ((lex.line_begin() == obj_ref.line()) and (lex.text() != ";")):
+            if (lex.text() == "_Thread_local") and (lex.token() == "Identifier"):
+                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1, obj_ref.ent().name())
+
+            lex = lex.previous(True, True)
+            
