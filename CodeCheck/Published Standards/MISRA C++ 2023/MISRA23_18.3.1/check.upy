@@ -1,0 +1,185 @@
+import re
+
+
+ERR1 = "There should be at least one exception handler to catch all otherwise unhandled exceptions"
+ERR2 = "A function call within 'main' that is outside of the try-block must not propagate exceptions"
+ERR3 = "A function call within catch handlers must not propagate exceptions"
+
+# The ID for the check
+def ids():
+    return ('MISRA23_18.3.1')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_18.3.1': "Published Standards/MISRA C++ 2023/18.3.1 There should be at least one exception handler to catch all otherwise unhandled exceptions"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_18.3.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',            
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_18.3.1': """
+<p><b>Amplification</b></p>
+<p>The function main should include a try-catch with a catch ( ... ) handler.</p>
+<p>The catch handlers of this try-block, and any code within main that is outside of this try-block, should
+not attempt to propagate an exception. To make this rule decidable, any call to a function having a
+potentially-throwing exception specification ([except.spec]/3) is assumed to propagate an exception.</p>
+<p>For the purposes of this rule, where a development environment allows a function other than main
+to be nominated as the entry point of the program, that function shall be treated as if it were main.</p>
+
+<p><b>Rationale</b></p>
+<p>If a program throws an exception that is not caught, the program terminates in an implementation-defined manner. In particular, it is implementation-defined whether the call stack is unwound before
+termination, meaning that some destructors may not be executed. By enforcing the provision of a
+“last-ditch catch-all”, the developer can ensure that the program terminates in a consistent manner.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">int main() // Compliant
+{
+ try
+ {
+ // Program code
+ }
+ catch ( specific_type & e ) // Optional, explicit handler(s) are permitted
+ {
+ // Handle expected exceptions
+ }
+ catch ( ... ) // Catch-all handler should be provided
+ {
+ // Handle unexpected exceptions
+ }
+ return 0;
+}
+
+void logError( char const * message );
+
+int main() // Compliant
+try
+{
+ // Program code
+}
+catch ( ... ) // Catch-all handler
+{
+ try
+ {
+ logError( "Unexpected" );
+ }
+ catch (...)
+ {
+ // Logging also threw
+ }
+}
+int main() // Non-compliant - handler may throw
+try
+{
+ // Program code
+}
+catch ( ... ) // Catch-all handler
+{
+ logError( "Unexpected"); // Potentially throwing function may lead to
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 18.4.1, Rule 18.5.1, Rule 18.5.2</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        if func_ref.ent().name() not in ["main", "_tmain", "wmain", "WinMain"]:
+            continue
+
+        if not re.search(r"catch \(\.\.\.\)", func_ref.ent().contents()):
+            check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR1)
+        else:
+            lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+            on_func = 0
+
+            while lex:
+                if lex.text() == "{":
+                    on_func += 1
+                elif lex.text() == "}":
+                    on_func -= 1
+
+                    if not on_func:
+                        break
+                elif lex.text() == "try":
+                    lex = scan_try(lex, check, file)
+                elif lex.text() == "catch":
+                    lex = scan_catch(lex, check, file)
+                elif on_func and lex.ent() and lex.ent().kind().check("Function") and lex.ref() and lex.ref().kind().check("Callby") and not lex.ent().freetext('Noexcept'):
+                    check.violation(lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR2)
+
+                lex = lex.next(True, True)
+
+
+def scan_try(try_lex, check, file):
+    on_try = 0
+                        
+    while try_lex:
+        if try_lex.text() == "{":
+            on_try += 1
+        elif try_lex.text() == "}":
+            on_try -= 1
+
+            if not on_try:
+                return try_lex
+        elif on_try and (try_lex.text() == "try"):
+            try_lex = scan_try(try_lex, check, file)
+        elif on_try and (try_lex.text() == "catch"):
+            try_lex = scan_catch(try_lex, check, file)
+        
+        try_lex = try_lex.next(True, True)
+
+def scan_catch(catch_lex, check, file):
+    on_catch = 0
+    catch_all = False
+
+    while catch_lex:
+        if not on_catch and (catch_lex.text() == "("):
+            if catch_lex.next(True, True).text() == "...":
+                catch_all = True
+        elif catch_lex.text() == "{":
+            on_catch += 1
+        elif catch_lex.text() == "}":
+            on_catch -= 1
+
+            if not on_catch:
+                return catch_lex
+        elif (on_catch == 1) and catch_all and catch_lex.ent() and catch_lex.ent().kind().check("Function") and catch_lex.ref() and catch_lex.ref().kind().check("Callby") and not catch_lex.ent().freetext('Noexcept'):
+            check.violation(catch_lex.ent(), file, catch_lex.line_begin(), catch_lex.column_begin(), ERR3)
+        elif on_catch and (catch_lex.text() == "try"):
+            catch_lex = scan_try(catch_lex, check, file)
+        elif on_catch and (catch_lex.text() == "catch"):
+            catch_lex = scan_catch(catch_lex, check, file)
+
+        catch_lex = catch_lex.next(True, True)
+
