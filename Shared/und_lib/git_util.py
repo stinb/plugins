@@ -1,4 +1,5 @@
 # Utility file for getting git information, used by git plugins.
+import datetime
 import os
 import understand
 import subprocess
@@ -193,4 +194,36 @@ def kindstringHasGit(plugin, entkindstr):
 
   # Git repository was found, so git metrics are available
   return True
+
+def daysSinceModifiedLineDict(file, db):
+  blame, wd = runProcessInDbDir(["git", "blame", "-p", file.longname()], db)
+  if not blame:
+    return dict()
+
+  commitToAge = dict()
+  lineToCommit = dict()
+  today = datetime.date.today()
+  nextLineIsHeader = True
+  curCommit = None
+  for line in blame.splitlines():
+    if nextLineIsHeader:
+      # CommitHash OriginalLineNum CurLineNum OptionalLineCount
+      parts = line.strip().split()
+      curCommit = parts[0]
+      lineToCommit[int(parts[2])] = curCommit
+      nextLineIsHeader = False
+    elif line.startswith('\t'):
+      nextLineIsHeader = True
+    elif line.startswith("author-time"):
+      # Maybe try to parse the time zone? It's not an argument for date
+      # so it probably isn't necessary for days past
+      d = datetime.date.fromtimestamp(int(line.split()[-1]))
+      delta = today - d
+      commitToAge[curCommit] = delta.days
+
+  lineToAge = dict()
+  for line, commit in lineToCommit.items():
+    if commit in commitToAge:
+      lineToAge[line] = commitToAge[commit]
+  return lineToAge
 

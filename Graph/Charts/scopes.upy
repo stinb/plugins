@@ -1,0 +1,121 @@
+import und_lib.graphs.und_colors as und_colors
+import und_lib.git_util as git_util
+
+def name():
+  return "Scopes Sunburst"
+
+def description():
+  return '''Visualize the scope hierarchy in a file with a sunburst chart. '''
+
+def test_entity(ent):
+  return ent.kind().check("file ~unknown ~unresolved")
+
+def init(graph, target):
+
+  graph.options().define("Colors", ["Random", "Violations", "Days Since Modified"], "Random")
+
+def draw(graph, file):
+  graph.set("layout","sunburst")
+  graph.set("r1","36")
+  graph.set("rstep", "18")
+
+  refs = file.filerefs("end, begin, define, ada declare")
+  refs.sort(key=lambda ref: (ref.line(), ref.column()))
+  ends = dict()
+  for ref in refs:
+    if ref.kind().check("end"):
+      ends[ref.ent()] = ref
+
+  children = { file: [] }
+  scopes = [file]
+  for ref in refs:
+    if ref.kind().check("end"):
+      scopes.pop() # end scope
+    elif ref.ent() in ends:
+      # begin scope
+      children.setdefault(scopes[-1], []).append((ref, ends.pop(ref.ent())))
+      scopes.append(ref.ent())
+
+  # Make graph
+  colors, colorvals = createColors(graph, children, file)
+  addToGraph(graph, file, 1, file.metric("CountLine"), children, colors, colorvals)
+
+def addToGraph(par, ent, sline, eline, children, colors, colorvals):
+  cstr = ""
+  if ent in colorvals:
+    cstr = "\n{} {}".format(colorvals[ent], par.options().lookup("Colors"))
+  if ent in children:
+    c = par.cluster()
+    colors.set_colors(c, colorvals.get(ent))
+    c.set("tooltip", "{} ({}, {}){}".format(ent.name(), sline, eline, cstr))
+    line = sline
+    for sref, eref in children.get(ent):
+      if line < sref.line():
+        addToGraph(c, None, line, sref.line(), children, colors, colorvals)
+      addToGraph(c, sref.ent(), sref.line(), eref.line(), children, colors, colorvals)
+      line = eref.line()
+    if line < eline:
+      addToGraph(c, None, line, eline, children, colors, colorvals)
+  else:
+    # No children, create node instead of cluster
+    n = par.node()
+    n.set("area", str(eline - sline + 1))
+    if ent:
+      n.sync(ent)
+      n.set("tooltip", "{} ({}, {}){}".format(ent.name(), sline, eline, cstr))
+      colors.set_colors(n, colorvals.get(ent))
+    else:
+      n.set("color", "none")
+      n.set("fillcolor", "none")
+
+def createColors(graph, children, file):
+  copt = graph.options().lookup("Colors")
+  colorvals = dict()
+  if copt == "Violations":
+    vlinedict = dict()
+    for v in file.violations():
+      vlinedict[v.line()] = vlinedict.get(v.line(),0) + 1
+    if vlinedict:
+      colorsFromLineDict(colorvals, file, 1, file.metric("CountLine"), children, vlinedict, sum)
+  elif copt == "Days Since Modified":
+    linedict = git_util.daysSinceModifiedLineDict(file, graph.db())
+    if linedict:
+      colorsFromLineDict(colorvals, file, 1, file.metric("CountLine"), children, linedict, min)
+
+  if not colorvals:
+    colors = und_colors.DiscreteColorScale()
+    return colors, colorvals
+
+  colors = und_colors.ColorScale()
+  colors.min_color = (0, 0, 255) if copt != "Days Since Modified" else (255, 0, 0)
+  colors.max_color = (255, 0, 0) if copt != "Days Since Modified" else (0, 0, 255)
+  for v in colorvals.values():
+    colors.update_val_range(v)
+  return colors, colorvals
+
+def colorsFromLineDict(colorvals, ent, sline, eline, children, linedict, comb):
+  def update_color_vals(line):
+    if comb != sum and line not in linedict:
+      return
+    v = linedict.get(line, 0)
+    if ent in colorvals:
+      colorvals[ent] = comb([colorvals[ent], v])
+    else:
+      colorvals[ent] = v
+
+  if ent in children:
+    line = sline
+    for sref, eref in children.get(ent):
+      while line < sref.line():
+        update_color_vals(line)
+        line = line + 1
+
+      colorsFromLineDict(colorvals, sref.ent(), sref.line(), eref.line(), children, linedict, comb)
+      line = eref.line() + 1
+    while line < eline:
+      update_color_vals(line)
+      line = line + 1
+  else:
+    for line in range(sline, eline + 1):
+      update_color_vals(line)
+
