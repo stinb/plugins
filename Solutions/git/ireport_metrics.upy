@@ -1,0 +1,133 @@
+import und_lib.reports.arch_pages as archpages
+import und_lib.kind_util as kind_util
+import und_lib.reports.metrics_table as metricreports
+import understand
+
+# (id, name, enabled, languages)
+GIT_METRICS=[
+  ("GitCommits", True),
+  ("GitDaysSinceCreated", False),
+  ("GitDaysSinceLastModified", True),
+
+  ("GitAuthors", True),
+  ("GitOwnership", True),
+  ("GitMajorContributors", True),
+  ("GitMinorContributors", True),
+
+  ("GitCoupledFiles", False),
+  ("GitAvgCoupling", False),
+  ("GitMaxCoupling", False),
+  ("GitStrongCoupledFiles", False),
+  ("GitCohesion", False)
+]
+
+def name():
+  return "Git Metrics"
+
+def description():
+  mets = []
+  for id, enabled in GIT_METRICS:
+    enabled_str = ", on by default" if enabled else ""
+    mets.append("<li>{} ({}){}</li>".format(understand.Metric.name(id),id, enabled_str))
+
+  return '''Git File/Architecture Metrics
+    <p>This plugin displays Git metrics for files in the target project or
+    architecture. The following metrics are available:</p>
+    <ul> {} </ul>
+    '''.format("".join(mets))
+
+
+def test_global(db):
+  return kind_util.can_contain_files(db)
+
+def test_architecture(arch):
+  return kind_util.can_contain_files(arch)
+
+def support_abort():
+  return True
+
+def init(report, target):
+  report.options().checkbox("chart","Show Chart",True)
+
+  report.options().label("metrics_label", "Metrics")
+  for id, enabled in GIT_METRICS:
+    report.options().checkbox(id, "{} ({})".format(understand.Metric.name(id),id), enabled)
+
+def pages(report, target):
+  pages = []
+
+  # Only architectures have multiple pages
+  if isinstance(target, understand.Arch):
+    pages = archpages.pageslist(target)
+
+  return pages
+
+# Report generation
+def generate(report, target, page):
+  """
+  Required, generate the report
+  """
+  if isinstance(target, understand.Arch):
+    ptarget = archpages.breadcrumbs(report, target, page)
+    archPage(report, ptarget)
+
+  else:
+    dbPage(report, target)
+
+
+def showchart(report, target):
+  if not report.options().lookup("chart"):
+    return
+
+  if isinstance(target, understand.Db):
+    target = target.lookup_arch("Directory Structure")
+
+  try:
+    report.draw(target, "Files Metric Chart", "Layout=sunburst;Legend=top;Size Metric=CountLine;Color Metric=GitDaysSinceLastModified", title="Sunburst Heatmap")
+  except Exception as e:
+    report.print("Unable to draw chart: " + str(e))
+
+def metrics(report):
+  mets = []
+  names = dict()
+  for id, enabled in GIT_METRICS:
+    if report.options().lookup(id):
+      mets.append(id)
+      names[id] = understand.Metric.name(id)
+  return mets, names
+
+def archPage(report, arch):
+  showchart(report, arch)
+  children = arch.children()
+  ents = kind_util.list_files(arch, arch_recursive=False)
+
+  prog_max = 100
+  prog_min = 0
+  if ents and children:
+    clen = len(children)
+    prog_max = prog_min = clen / (clen + len(ents)) * 100
+
+  mets, names = metrics(report)
+  if children:
+    report.heading(2)
+    report.print("Child Architectures")
+    report.heading()
+    metricreports.metricsTable(report, mets, children, True, prog_max=prog_max, names=names)
+
+  if ents:
+    report.heading(2)
+    report.print("Files")
+    report.heading()
+    metricreports.metricsTable(report, mets, ents, False, "short", prog_min=prog_min, names=names)
+
+  if not ents and not children:
+    report.print("Architecture is empty")
+
+def dbPage(report, db):
+  showchart(report, db)
+
+  report.heading(2)
+  report.print("Files")
+  report.heading()
+  mets, names = metrics(report)
+  metricreports.metricsTable(report, mets, db.ents(kind_util.FILE_KIND_STR), False, "relative", names=names)
