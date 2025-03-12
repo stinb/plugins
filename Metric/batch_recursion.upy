@@ -1,0 +1,127 @@
+import und_lib.kind_util as kind_util
+import understand
+
+def ids():
+  return ["IsRecursive","IsRecursiveUsePtr"]
+
+def name(id):
+  if id == "IsRecursive":
+    return "Recursive"
+  if id == "IsRecursiveUsePtr":
+    return "Recursive (Pointers)"
+
+def description(id):
+  if id == "IsRecursive":
+    return '''<p>Return 0, 1, or 2 for not recursive, directly recursive, or indirectly recursive</p>
+    <p>This is a batch metric. The first time it is called, it will
+    scan the entire project to find all recursive functions. Future calls read
+    from a cache.</p>
+
+    <p>This is a simple version of the metric that follows all calls, including
+    virtual calls, and does not follow function pointers. It most closely matches
+    the HIS check for recursion. For a more detailed recursion metric, use
+    IsRecursiveUsePtr. For a non-batch recursion metric, use MinRecursiveDepth.
+    </p>
+    '''
+  if id == "IsRecursiveUsePtr":
+    return '''<p>Return 0, 1, or 2 for not recursive, directly recursive, or indirectly recursive</p>
+    <p>This is a batch metric. The first time it is called, it will
+    scan the entire project to find all recursive functions. Future calls read
+    from a cache.</p>
+
+    </p>This version is intended to more closely match the recursion checks
+    in MISRA and AUTOSAR. It does not include virtual calls and does follow
+    functions passed as pointers. For a simpler version of the metric, use
+    IsRecursive.</p>
+    '''
+def test_available(metric,entkindstr):
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity(kind_util.FUNCTION_KIND_STR))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  return True
+
+def is_integer(id):
+   return True
+
+def test_entity(metric, ent):
+  return hasattr(metric, "cache") and ent.kind().check(kind_util.FUNCTION_KIND_STR)
+
+def value(metric, ent):
+  und_cache = metric.cache(metric.id())
+  if und_cache is None:
+    return
+
+  if not und_cache.is_empty():
+    return und_cache.value(ent=ent,value=0)
+
+  # Cache was empty, build cache by finding all recursive functions
+
+  # Tarjan's algorithm for finding strongly connected components
+  # https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
+  index = 0
+  indices = dict()
+  lowlink = dict()
+  stack = list()
+  direct = set()
+  indirect = set()
+
+  entKindStr = kind_util.FUNCTION_KIND_STR
+  refKindStr = "call"
+  if metric.id() == "IsRecursiveUsePtr":
+    entKindStr = kind_util.FUNCTION_KIND_STR_WITH_UNRESOLVED
+    refKindStr = ("ada call ~dispatch,"
+                  "c call ~virtual ~implicit,"
+                  "c use ptr,"
+                  "csharp call ~virtual,"
+                  "csharp use ptr,"
+                  "fortran call,"
+                  "java call,"
+                  "jovial call,"
+                  "jovial asm use,"
+                  "pascal call ~virtual,"
+                  "plm call,"
+                  "python call,"
+                  "vhdl call,"
+                  "web call")
+
+  def connectRecursive(func):
+    nonlocal index
+    indices[func] = index
+    lowlink[func] = index
+    index += 1
+    stack.append(func)
+
+    for calledFunc in func.ents(refKindStr, entKindStr):
+      if calledFunc not in indices:
+        connectRecursive(calledFunc)
+        lowlink[func] = lowlink[func] if lowlink[func] < lowlink[calledFunc] else lowlink[calledFunc]
+      elif calledFunc in stack:
+        lowlink[func] = lowlink[func] if lowlink[func] < lowlink[calledFunc] else lowlink[calledFunc]
+
+      if calledFunc == func:
+        direct.add(func)
+
+    if lowlink[func] == indices[func]:
+      idx = stack.index(func)
+      if len(stack[idx:]) > 1:
+        for cycle_func in stack[idx:]:
+          indirect.add(cycle_func)
+      del stack[idx:]
+
+  for func in metric.db().ents(entKindStr):
+    if func not in indices:
+      connectRecursive(func)
+
+  for func in direct:
+    und_cache.insert(1, ent=func)
+
+  for func in indirect - direct:
+    und_cache.insert(2, ent=func)
+
+  # add a value to show the cache has been built in case there are no
+  # recursive functions
+  und_cache.insert(1, "built")
+  return und_cache.value(ent=ent,value=0)
