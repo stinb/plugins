@@ -1,0 +1,145 @@
+ERR1 = "The function '%1' conceals an inherited function from the base class"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_6.4.2')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_6.4.2': "Published Standards/MISRA C++ 2023/6.4.2 Derived classes shall not conceal functions that are inherited from their bases"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_6.4.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',            
+            'Functions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_6.4.2': """
+<p><b>Amplification</b></p>
+<p>A function from a base class is concealed in the derived class if the derived class contains any function
+or variable with the same name, unless:</p>
+<p>● The base class is inherited privately; or</p>
+<p>● The base class function is virtual and the derived class contains an override of it; or</p>
+<p>● The base class function is introduced into the derived class through a using-declaration; or</p>
+<p>● The base class function is a copy assignment operator or a move assignment operator.</p>
+<p>Note: this rule does not apply to constructors or destructors as they do not have names.</p>
+
+<p><b>Rationale</b></p>
+<p>When performing name lookup, if a function with the requested name exists in the derived class, no
+lookup will be performed in any base class, even if the base classes contain functions that would
+have been better matches. This may result in a call being made to an unexpected function.</p>
+<p>Additionally, calling a function directly or through a base class pointer should result in the same
+function being called, which may not be the case when a non-virtual base class function is concealed.</p>
+<p>Members of a class inherited privately are not accessible outside of the derived class, and so users of
+the derived type will not encounter the issues identified above.</p>
+<p>Note: a using-declaration will only introduce an overload into a derived class if the derived class does
+not contain the same overload — see example for f5.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class Base
+{
+public:
+ void f1( int32_t i );
+ void f2( int32_t i );
+ virtual Base * f3( char c );
+ void f4( char c );
+ void f5( int32_t i );
+ void f5( char c );
+};
+
+class Derived: public Base
+{
+public:
+ // Compliant - does not conceal Base::operator=
+ Derived & operator=( Derived const & ) &;
+ // Non-compliant - Derived::f1 conceals Base::f1
+ void f1( float f );
+ // Compliant - Base::f2 is not concealed
+ using Base::f2; // Introduces Base::f2( int32_t ) overload
+ void f2( float f ); // Using declaration means this overload does not conceal
+// Compliant - Base::f3 is not concealed
+ Derived * f3( char const c ) override; // overrides Base::f3( char )
+ void f3( int32_t i );
+ // Non-compliant - Base::f4 is concealed
+ void f4( char c ); // Not an override
+ void f4( int32_t i );
+ // Non-compliant - Base::f5( int32_t ) is concealed
+ using Base::f5; // Introduces Base::f5( char ), not Base::f5( int32_t ) as
+ void f5( int32_t i ); // this function has the same signature
+};
+
+class PrivateDerived: private Base
+{
+public:
+ void f1( float f ); // Compliant - Base inherited privately
+};</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class"):
+        if not class_ref.ent().ref("~Private Derive"):
+            continue
+
+        mem_funcs = {}
+
+        for mem_ref in class_ref.ent().refs("Define, Declare", "~Virtual Member Function", True):
+            if mem_ref.ent().name() in [class_ref.ent().name(), "operator="] or mem_ref.ent().name().startswith("~"):
+                continue
+            
+            if mem_ref.ent().name() not in mem_funcs:
+                mem_funcs[mem_ref.ent().name()] = [mem_ref]
+            else:
+                mem_funcs[mem_ref.ent().name()].append(mem_ref)
+
+        if not mem_funcs:
+            continue
+
+        for der_ref in class_ref.ent().refs("~Private Derive"):
+            using = []
+
+            for mem_ref in der_ref.ent().refs("Define, Declare", "~Virtual Member Function", True):
+                if mem_ref.kind().check("Using"):
+                    using.append(mem_ref.ent().name())
+                    continue
+                                
+                if mem_ref.ent().name() in mem_funcs:                    
+                    for func in mem_funcs[mem_ref.ent().name()]:                         
+                        if (str(mem_ref.ent().parameters()) == str(func.ent().parameters())) or ((str(mem_ref.ent().parameters()) != str(func.ent().parameters())) and mem_ref.ent().name() not in using):
+                            check.violation(mem_ref.ent(), mem_ref.file(), mem_ref.line(), mem_ref.column(), ERR1, mem_ref.ent().name())
+                            break
+                        
+
+
+
+
+
