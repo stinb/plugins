@@ -4,11 +4,11 @@ static std::int32_t Fn1(std::int32_t number);
 static std::int32_t Fn2(std::int32_t number);
 static std::int32_t Fn3(std::int32_t number);
 static std::int32_t Fn4(std::int32_t number);
-std::int32_t Fn1(std::int32_t number)
+std::int32_t Fn1(std::int32_t number) // UNDCC_Violation - Directly recursive
 {
     if (number > 1)
     {
-        number = number * Fn1(number - 1);        // UNDCC_Violation - Directly recursive
+        number = number * Fn1(number - 1);
     }
 
     return number;
@@ -22,11 +22,11 @@ std::int32_t Fn2(std::int32_t number)
 
     return number;
 }
-std::int32_t Fn3(std::int32_t number)
+std::int32_t Fn3(std::int32_t number) // UNDCC_Violation - Directly recursive
 {
     if (number > 1)
     {
-        number = number * Fn3(number - 1);        // UNDCC_Violation - Directly recursive
+        number = number * Fn3(number - 1);
     }
 
     return number;
@@ -46,10 +46,10 @@ T Fn5(T value)
     return value;
 }
 template <typename T, typename... Args>
-T Fn5(T first, Args... args)
-{
-    return first + Fn5(args...);                  // UNDCC_Valid by exception - all of the
-                                                  // arguments are known during compile time
+T Fn5(T first, Args... args) // UNDCC_Valid by exception - all of the arguments are known during compile time
+{                           
+    return first + Fn5(args...);                  
+                                                  
 }
 std::int32_t Fn6() noexcept
 {
@@ -66,12 +66,12 @@ constexpr std::int32_t Fn7(std::int32_t x, std::int8_t n)
     }
     return x;
 }
-constexpr std::int32_t Fn8(std::int32_t x)
-{
+constexpr std::int32_t Fn8(std::int32_t x) // UNDCC_Valid(0) by exception - recursion evaluated at compile time
+{                                         
     if (x == 0)
     {
         return 1;
     }
-    return x * Fn8(x - 1);                        // UNDCC_Valid(0) by exception - recursion evaluated at
-                                                  // compile time
+    return x * Fn8(x - 1);                        
+                                                  
 }

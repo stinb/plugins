@@ -5,7 +5,7 @@ import re
 
 
 ERR1 = 'Function is directly recursive.'
-ERR2 = 'Function is indirectly recursive through %1.'
+ERR2 = 'Function is indirectly recursive.'
 
 
 # The ID for the check
@@ -450,99 +450,126 @@ def define_options(check):
 
 
     check.option().checkbox('coreConstExpr', 'Flag constexpr function that is not called within a core constant expression', coreConstExpr)
-    check.options().integer('limit', 'Enter recursion limit for checking indirect recursion (lower numbers will increase speed of check, enter 0 for infinite)', 0)
     check.option().checkbox('lang', 'Include other languages besides C and C++', lang)
 
 
-def variadicTemplateFunction(ent):
-    return ent.parameters() and re.search(r',Args... ', ent.parameters())
+def check(check, file):    
+    coreConstExpr = check.option().lookup('coreConstExpr')
+    entKindString = 'C Function' if not check.option().lookup('lang') else 'ada entry, ada function, ada package, ada procedure, ada protected, ada task, c function, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial file, jovial subroutine, pascal compunit, pascal function, pascal procedure, plm procedure, python function, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function, web method'
+    refKindString = 'C Call ~Virtual ~Implicit ~Indirect ~Undresolved, C Use Ptr ~Virtual ~Implicit ~Indirect ~Undresolved' if not check.option().lookup('lang') else 'ada call ~dispatch, c call ~Virtual ~Implicit ~Indirect ~Undresolved, c use ptr ~Virtual ~Implicit ~Indirect ~Undresolved, csharp call ~virtual, csharp use ptr, fortran call, java call, jovial call, jovial asm use, pascal call ~virtual, plm call, python call, vhdl call, web call'
+    cache = check.cache()
+    if cache.is_empty():
+        functions = check.db().ents(entKindString)
+        directRecursion = []
+        indirectRecursion = []
+        seen = []
+        for fun in functions:
+            stack = []
+            if fun.longname() in seen:
+                continue
+            seen, directRecursion, indirectRecursion = checkRecursion(fun, stack,  directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr)
+        cache.insert(directRecursion, "Direct Recursion")
+        cache.insert(indirectRecursion, "Indirect Recursion")
 
+    directRecursions = cache.value("Direct Recursion")
+    indirectRecursions = cache.value("Indirect Recursion")
+    for ref in file.filerefs('Define', entKindString):
+        if ref.ent().longname() in directRecursions:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+        if ref.ent().longname() in indirectRecursions:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR2)
+
+
+
+
+
+
+# Recursively checks for recursion
+def checkRecursion(fun, stack,  directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr):
+    # Return if seen
+    if fun.longname() in seen:
+        return seen, directRecursion, indirectRecursion 
+    is_except = misra_exception(fun) if coreConstExpr else exception(fun)
+    if is_except:
+        seen.append(fun.longname())
+    stack.append(fun.longname())
+    # Check if exception
+    # Go through function call refs
+    for ref in fun.refs(refKindString, entKindString, True):
+        # Skip if seen
+        if ref.ent().longname() in seen or (ref.ent().kind().check("Template") and isTemplateException(ref, fun)):
+            continue
+        # Add to list if direct recursion is found
+        if ref.ent().longname() == fun.longname() and ref.ent().longname() not in  (directRecursion + indirectRecursion):
+            directRecursion.append(fun.longname())
+            continue
+        # Recursion loop is found
+        if ref.ent().longname() in stack:
+
+            # Go through loop and add to list
+            if ref.ent().longname() not in (directRecursion + indirectRecursion):
+                indirectRecursion.append(ref.ent().longname())
+            tempStack = stack
+            stackItem = tempStack.pop()
+            while stackItem != ref.ent().longname():
+                if stackItem not in (directRecursion + indirectRecursion):
+                    indirectRecursion.append(stackItem)
+                stackItem = tempStack.pop()
+            continue
+        
+        # Recurse
+        seen, directRecursion, indirectRecursion = checkRecursion(ref.ent(), stack, directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr)
+
+        if len(stack) > 0:
+            stack.pop()
+    # Add to seen
+    if fun.longname() not in seen:
+        seen.append(fun.longname())
+    return seen, directRecursion, indirectRecursion 
+
+
+# Check for misra exception
+def misra_exception(ent):
+    if constExprFunction(ent):
+        for a_ref in ent.refs("Assignby Value ~Indirect"):
+            if a_ref.ent().type() and "const" in a_ref.ent().type():
+                return True
+    return False
 
 def constExprFunction(ent):
     return ent.contents() and re.match(r'constexpr ', ent.contents())
 
-
 def exception(ent):
     return variadicTemplateFunction(ent) or constExprFunction(ent)
 
+def variadicTemplateFunction(ent):
+    return ent.parameters() and re.search(r',Arge... ', ent.parameters())
 
-def misra_exception(ent):
-    if constExprFunction(ent):
-        for ass_ref in ent.refs("Assignby Value ~Indirect"):
-            if ass_ref.ent().type() and "const" in ass_ref.ent().type():
+# Check for template exception
+def isTemplateException(ref, originalEnt):
+    if not ref.file().lexer():
+        return False
+    lexeme = ref.file().lexer().lexeme(ref.line(), ref.column())
+    if lexeme:
+        lexeme = lexeme.next(True, True)
+        if lexeme and lexeme.text() == '(':
+            on_param = 0
+            param_ctr = 1
+            while lexeme:
+                if lexeme.text() == '(':
+                    on_param += 1
+                elif lexeme.text() == ')':
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param == 1 and lexeme.text() == ',':
+                    param_ctr += 1
+                lexeme = lexeme.next(True, True)
+
+            if len(originalEnt.refs("Define", "Parameters")) != param_ctr:
+                if ref.file().name() == 'misra_test.cpp':
+                    print(ref.line())
                 return True
-            
+
     return False
-
-
-def discoverRecursion(check, ent, count, firstTime, seen, originalEnt, entKindString, refKindString, coreConstExpr):
-    if not ent.kind().check(entKindString):
-        return
-    
-    is_except = misra_exception(originalEnt) if coreConstExpr else exception(originalEnt)
-
-    limit = check.option().lookup('limit')
-
-    if limit > 0:
-        count += 1
-
-    for callRef in ent.refs(refKindString, entKindString, True):
-        callEnt = callRef.ent()
-        if callEnt.id() not in seen:
-            seen[callEnt.id()] = 0
-        seen[callEnt.id()] += 1
-        if seen[callEnt.id()] > 1:
-            continue
-
-        if callEnt.kind().check("Template"):
-            lex = callRef.file().lexer().lexeme(callRef.line(), callRef.column())
-            lex = lex.next(True, True)
-
-            if lex.text() == "(":
-                on_param = 0
-                param_ctr = 1
-
-                while lex:
-                    if lex.text() == "(":
-                        on_param += 1
-                    elif lex.text() == ")":
-                        on_param -= 1
-
-                        if not on_param:
-                            break
-                    elif (on_param == 1) and (lex.text() == ","):
-                        param_ctr += 1
-
-                    lex = lex.next(True, True)
-
-                if len(originalEnt.refs("Define", "Parameter")) != param_ctr:
-                    is_except = True
-
-        if callEnt.id() == originalEnt.id() and not is_except:
-            if firstTime:
-                check.violation(originalEnt, callRef.file(), callRef.line(), callRef.column(), ERR1)
-            else:
-                check.violation(originalEnt, callRef.file(), callRef.line(), callRef.column(), ERR2, originalEnt.longname())
-            return
-
-        if limit != 0 and count > limit:
-            return
-        discoverRecursion(check, callEnt, count, False, seen, originalEnt, entKindString, refKindString, coreConstExpr)
-        count -= 1
-
-    return
-
-
-def check(check, file):    
-    entKindString = 'C Function' if not check.option().lookup('lang') else 'ada entry, ada function, ada package, ada procedure, ada protected, ada task, c function, csharp method, fortran block data, fortran function, fortran interface, fortran program, fortran subroutine, java method, jovial file, jovial subroutine, pascal compunit, pascal function, pascal procedure, plm procedure, python function, vhdl procedure, vhdl function, vhdl process, vhdl architecture, web function, web method'
-    refKindString = 'C Call ~Virtual ~Implicit, C Use Ptr ~Virtual ~Implicit' if not check.option().lookup('lang') else 'ada call ~dispatch, c call ~virtual, c use ptr, csharp call ~virtual, csharp use ptr, fortran call, java call, jovial call, jovial asm use, pascal call ~virtual, plm call, python call, vhdl call, web call'
-    coreConstExpr = check.option().lookup('coreConstExpr')
-
-    for ref in file.filerefs('define, body declare', entKindString, True):
-        ent = ref.ent()
-        count = 0
-        firstTime = True
-        seen = {}
-        originalEnt = ent
-
-        discoverRecursion(check, ent, count, firstTime, seen, originalEnt, entKindString, refKindString, coreConstExpr)
