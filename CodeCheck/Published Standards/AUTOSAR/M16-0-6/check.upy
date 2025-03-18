@@ -4,7 +4,7 @@ DEF_NAME = "In the definition of a function-like macro, each instance of a param
 
 # The ID for the check 
 def ids():
-    return ('M16-0-6', 'CPP_PR038')
+    return ('M16-0-6', 'CPP_PR038', 'MISRA23_19.3.4')
 
 # The short name of the check
 def name(id):
@@ -16,13 +16,9 @@ the operand of # or ##""",
         'CPP_PR038': """\
 All Checks/Language Specific/C and C++/Preprocessor/In the definition of a \
 function-like macro, each instance of a parameter shall be enclosed in \
-parentheses, unless it is used as the operand of # or ##"""
-
+parentheses, unless it is used as the operand of # or ##""",
+        'MISRA23_19.3.4': "Published Standards/MISRA C++ 2023/19.3.4 Parentheses shall be used to ensure macro arguments are expanded appropriately"
     }[id]
-
-
-
-
 
 
 def tags(id):
@@ -40,6 +36,13 @@ def tags(id):
             'Language: C++',
             'Preprocessor',
         ],
+        'MISRA23_19.3.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Preprocessor',
+        ],
     }.get(id)
 
 # The short description of the check
@@ -47,7 +50,110 @@ def description():
   return DEF_NAME
 
 # The long description of the check
-def detailed_description():
+def detailed_description(id):
+    if id == 'MISRA23_19.3.4':
+        return """
+<p><b>Amplification</b></p>
+<p>For the purposes of this rule, a critical operator is an operator that has a ranking between 2 and 13
+(inclusive), as specified in the table to Rule 8.0.1.</p>
+<p>A macro argument containing a top-level token (see definition below) that expands as a critical operator
+is inappropriately expanded if, within the macro definition, there is an occurrence of the corresponding
+macro parameter that is not:</p>
+<p>● Directly parenthesized (a parameter x is directly parenthesized in ( x )); or</p>
+<p>● Stringified (used as an operand to the # operator).</p>
+<p>When a macro is expanded, a level can be associated with every token in the expansion of a macro
+argument. For each argument, the level of its first token is zero, and then the level of each of its
+subsequent tokens relative to the level of the previous token is:</p>
+<p>● One more, if the previous token is (</p>
+<p>● One less, if the previous token is )</p>
+<p>● The same, for any other previous token.</p>
+<p>A token is said to be top-level when its level is less than or equal to zero.</p>
+
+<p><b>Rationale</b></p>
+<p>When a macro is invoked with an argument that looks like an expression, it is generally assumed that
+this expression will behave as if it were an argument to a function call — in particular, that it will be
+evaluated in isolation.</p>
+<p>However, since macro expansion result in textual replacement, a macro parameter is simply replaced
+by the text corresponding to the argument. This means that the different tokens that form the
+argument can end up forming parts of different sub-expressions. This typically happens when the
+argument contains an operator having a low precedence, and the parameter is expanded next to an
+operator having a higher precedence. This behaviour can generally be avoided by adding parentheses
+around the macro parameter.</p>
+
+<p><b>Developer's Note</b></p>
+<p>This check automatically flags a macro function if at least one of its arguments is not parenthesized, regardless of how it is used.</p>
+
+<p><b>Example</b></p>
+<p>In the following example, the operator + is a top-level token in the x argument to the macro. However, x
+is neither parenthesized nor stringified in the macro definition. The value of the resulting expression
+is 7, whereas the value 9 might have been expected.</p>
+<pre><code language="C++">#define M1( x, y ) ( x * y )
+r = M1( 1 + 2, 3 ); // Non-compliant - x not parenthesized
+ // Expands as r = ( 1 + 2 * 3 );
+</code></pre>
+
+<p>Ideally, the above can be re-written in a compliant manner by parenthesizing the macro parameters
+in the macro definition: </p>
+<pre><code language="C++">#define M2( x, y ) ( ( x ) * ( y ) )
+r = M2( 1 + 2, 3 ); // Compliant - x is directly parenthesized
+ // Expands as r = ( ( 1 + 2 ) * ( 3 ) );
+</code></pre>
+
+<p>If this is not possible, it is also acceptable to parenthesize the macro argument:</p>
+<pre><code language="C++">r = M1( ( 1 + 2 ), 3 ); // Compliant - operator + is not top-level
+ // Expands as r = ( ( 1 + 2 ) * 3 );
+</code></pre>
+
+<p>In the following example, the macro M1 is invoked with 1 + 2 as its x parameter, and the top level +
+token is a critical operator. Therefore, x is inappropriately expanded, as it is neither parenthesized
+nor stringified in the macro definition. </p>
+<pre><code language="C++">#define M3( z ) z + 2
+r = M1( M3( 1 ), 3 ); // Non-compliant - operator + is top-level
+ // Expands as r = ( 1 + 2 * 3 );
+</code></pre>
+
+<p>Given the macro definition:</p>
+<pre><code language="C++">#define MY_ASSERT( cond ) \\
+ do \\
+ { \\
+ if ( !cond ) \\
+ { \\
+ std::cerr &lt;&lt; #cond &lt;&lt; " failed!\\n"; \\
+ std::abort(); \\
+ } \\
+ } while( false )</code></pre>
+
+<p>and its use:</p>
+
+<pre><code language="C++">int32_t x = 0;
+
+MY_ASSERT( x &lt; 42 ); // Non-compliant - argument expansions result in:
+ // if ( !x &lt; 42 ) - neither parenthesized nor stringified
+// "!x &lt; 42" - stringified</code></pre>
+
+<p>During expansion of MY_ASSERT, the cond parameter is replaced by the argument x &lt; 42. This
+argument includes &lt; as a top-level token that expands as a critical operator, which means that all
+occurrences of cond in the macro definition have to be checked for compliance. Within the macro,
+cond is used:</p>
+<p>1. As the operand to #, which is compliant as it is stringified; and</p>
+<p>2. Within if( !cond ), which is non-compliant as it is neither parenthesized nor stringified — the
+macro expansion will contain if ( !x &lt; 42 ), which is true for any value of x (which is equivalent
+to if ( ( !x ) &lt; 42 )).</p>
+<p>Similarly, MY_ASSERT( a or b ) would also be non-compliant as the rule applies irrespective of the
+way in which an operator is spelled.</p>
+<p>The following example is compliant as the &lt; and &gt; tokens are not operators in the expanded code.</p>
+<pre><code language="C++">#define PROP( Type, Name ) \\
+ Type Name; \\
+ Type get_##Name() { return Name; }
+struct Student
+{
+ PROP( vector&lt; int32_t &gt;, grades );
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.0.1, Rule 19.0.2</p>
+"""
+
     return """\
 <p><b>Rationale</b></p>
 <p>If parentheses are not used, then the operator precedence may not give the desired results when the preprocessor substitutes the macro into the code.</p>
