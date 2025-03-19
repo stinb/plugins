@@ -29,5 +29,5 @@ void dogPark()
 
   std::cout << "Bark!\n";              // UndCC_Valid
   std::cout << "Bark!" << &std::endl;  // UndCC_Valid
-  std::cout << "Bark!" << std::endl;   // UndCC_Violation
+  std::cout << "Bark!" << std::endl;   // UndCC_Violation(strict)
 }
