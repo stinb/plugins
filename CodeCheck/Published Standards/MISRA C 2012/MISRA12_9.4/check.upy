@@ -203,70 +203,57 @@ def test_language(language):
 def check(check, file):
     refs = file.filerefs('Set Init', 'Object ~Unknown ~Unresolved')
     lexer = None
+    # Look for array set inits
     for ref in refs:
-        value = str(ref.ent().value())
-        # Look for curly braces surrounding an object's value
-        if re.search(r'^{.*}$', value) and '=' in value:
-            """
-            if value.count('{') > 1:
-                if not lexer:
-                    if not file.lexer():
-                        continue
-                    lexer = file.lexer()
-                lexeme = lexer.lexeme(ref.line(), ref.column())
-                while lexeme and lexeme.text() not in [';', '=']:
-                    lexeme = lexeme.next(True, True)
-                while lexeme and lexeme.text() not in [';', '{']:
-                    lexeme = lexeme.next(True, True)
-                if lexeme and lexeme.text() == '{':
-                    close = Modules.findClose(lexeme)
-                    if not recurseCheck(lexeme, close):
-                        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
-                    continue
-                    """
-            #list = ref.ent().value()[1:-1].split(",")
-            listBraces = split_nested_braces(ref.ent().value())
-            for l in listBraces:
-                list = l.split(",")
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        # Find equals
+        while lexeme and lexeme.text() not in ['=', ';']:
+            lexeme = lexeme.next(True, True)
+        if lexeme and lexeme.text() == '=':
 
-                # Skip if list has 1 or 0 items
-                if len(list) < 2:
-                    continue
-                indices = []
-                for l in list:
-                    # Save every item that has an '='
-                    if re.search(r'=', l):
-                        indices.append(l.split("=")[0].strip())
-                for index in indices:
-                    # Violation if there exists more than one of the same value
-                    if indices.count(index) > 1:
-                        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
-                        break
+            lexeme = lexeme.next(True, True)
+            # Check each set including nested sets
+            if lexeme and lexeme.text() == '{':
+                lexeme = checkList(lexeme, check, ref)
 
 
-# Creates list that holds each set of curly braces out of a string from ent.value()
-def split_nested_braces(s):
-    result = []
-    current = ''
-    stack = []
-    temp = ''
-    for char in s:
-        if char == '{':
-            stack.append(char)
-            if temp:
-                current += temp + ', '
-                temp = ''
-        elif char == '}':
-            stack.pop()
-            if temp:
-                current += temp
-                result.append(current.strip())
-                current = ''
-                temp = ''
-            if not stack:
-                current = ''
-        elif stack:
-            temp += char
-    
-    return result
 
+# Recursive check inside sets of curly braces
+def checkList(lexeme, check, ref):
+    currentIndex = ''
+    indices = []
+    end = Modules.findClose(lexeme)
+    lexeme = lexeme.next(True, True)
+
+    # Go through to close
+    while lexeme and not (lexeme.line_begin() == end.line_begin() and lexeme.column_begin() == end.column_begin()):
+        lastLex = lexeme
+        currentIndex += lexeme.text()
+        if lexeme.text() == ',':
+            currentIndex = ''
+        elif lexeme.text() == '=' and lexeme.token() != 'String':
+            # If index already exists in list then throw violation
+            if currentIndex in indices:
+                check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1, ref.ent().name())
+            else:
+                indices.append(currentIndex)
+        # Recurse if nested list found
+        elif lexeme.text() == '{':
+            lexeme = checkList(lexeme, check, ref)
+        # Skip to closing parenthesis
+        elif lexeme.text() == '(':
+            close = Modules.findClose(lexeme)
+            while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                currentIndex += lexeme.text()
+                lexeme = lexeme.next(True, True)
+            if lexeme and (lexeme.line_begin() > end.line_begin() or (lexeme.line_begin() == end.line_begin() and lexeme.column_begin() > end.column_begin())):
+                return lexeme
+        # If lexeme didn't change then get next
+        if lexeme and lastLex.line_begin() == lexeme.line_begin() and lastLex.column_begin() == lexeme.column_begin():
+            lexeme = lexeme.next(True, True)
+
+    return lexeme
