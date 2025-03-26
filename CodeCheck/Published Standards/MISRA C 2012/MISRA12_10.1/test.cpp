@@ -16,6 +16,7 @@ int main() {
   bool blb;
 
 
+  int a[bla]; // UndCC_Violation Rationale 3
   cha && bla; /* UndCC_Violation Rationale 2 - char type used as a Boolean value */
   ena ? a1 : a2; /* UndCC_Violation Rationale 2 - enum type used as a Boolean value */
   s8a && bla; /* UndCC_Violation Rationale 2 - signed type used as a Boolean value */
