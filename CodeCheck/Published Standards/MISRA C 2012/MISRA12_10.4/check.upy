@@ -4,7 +4,7 @@
 
 import re
 
-ERR1 = 'The operands for the operator %1 are not of the same essential type'
+ERR1 = 'The operands, "%2" and "%3", for the operator %1 are not of the same essential type'
 
 
 # The ID for the check
@@ -137,21 +137,50 @@ def check(check, file):
     lexer = file.lexer()
     lexemes = lexer.lexemes()
     for lexeme in lexemes:
+        member = False
         # Check the operands if the operator is in the list
         if lexeme.text() in operators:
             left = ''
             right = ''
             leftEnt = None
+            rightEnt = None
             prevLex = lexeme.previous(True, True)
             nextLex = lexeme.next(True, True)
             if prevLex.ent():
                 left = prevLex.ent().type()
                 leftEnt = prevLex.ent()
+                if leftEnt.kind().check('Macro'):
+                    continue
+
             if nextLex.ent():
-                right = nextLex.ent().type()
+                tempLex = nextLex.next(True, True)
+
+                # Check for member objects
+                while tempLex and tempLex.text() in ['[', '.', '->', '::']:
+                    if tempLex.text() == '[':
+                        while tempLex and tempLex.text() != ']':
+                            tempLex = tempLex.next(True, True)
+                    if tempLex.text() in ['[', '.', '->', '::']:
+                        tempLex = tempLex.next(True, True)
+                        if tempLex and tempLex.ent():
+                            right = str(tempLex.ent().type())
+                            rightEnt = tempLex.ent()
+                            if rightEnt.kind().check('Macro'):
+                                continue
+
+
+
+                    tempLex = tempLex.next(True, True)
+                if not right:
+                    right = str(nextLex.ent().type())
+                    rightEnt = nextLex.ent()
+                    if rightEnt.kind().check('Macro'):
+                        continue
+                    if ('*' in right or lexeme.text() == '&') and nextLex.ref().kind().check('Definein, Declarein'):
+                        continue
             if left and right:
                 if not sameEssentialType(left, right, lexeme.text()):
-                    check.violation(leftEnt, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text())
+                    check.violation(leftEnt, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text(), leftEnt.name(), rightEnt.name())
 
 # Checks if both operands are the same essential type or one of the exceptions
 def sameEssentialType(left, right, operator):
