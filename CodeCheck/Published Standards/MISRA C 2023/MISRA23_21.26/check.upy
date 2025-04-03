@@ -1,0 +1,132 @@
+ERR1 = "mtx_timedlock() shall only be invoked on a mutex object of an appropriate type"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_21.26')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_21.26': "Published Standards/MISRA C 2023/21.26 The Standard Library function mtx_timedlock() shall only be invoked on mutex objects of appropriate mutex type"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_21.26': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_21.26': """
+<p><b>Amplification</b></p>
+<p>The first argument of the Standard Library function mtx_timedlock() shall be a mutex object of mutex
+type mtx_timed or ( mtx_timed | mtx_recursive ).</p>
+
+<p><b>Rationale</b></p>
+<p>Calling the function mtx_timedlock() on a mutex object that does not support timeout is undefined
+behaviour.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">mtx_t Ra;
+mtx_t Rb;
+mtx_t Rc;
+struct timespec *ts;
+
+void main( void )
+{
+ mtx_init( &Ra, mtx_plain );
+ mtx_init( &Rb, mtx_timed );
+ mtx_init( &Rc, mtx_timed | mtx_recursive );
+ ...
+}
+
+int32_t t1( void* ignore )
+{
+ ...
+ mtx_timedlock( &Ra, ts ); /* Non-compliant */
+ mtx_timedlock( &Rb, ts ); /* Compliant */
+ mtx_timedlock( &Rc, ts ); /* Compliant */
+ ...
+}</code></pre>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+    mtxs = {}
+    call_refs = file.filerefs("Call", "Function")
+        
+    for call_ref in call_refs:
+        if call_ref.ent().name() == "mtx_init":
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            mutex = None
+            param_ctr = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and (lex.text() == ","):
+                    param_ctr += 1
+                elif (on_param == 1) and lex.ent() and (lex.ent().type() == "mtx_t"):
+                    mutex = lex.ent().id()
+                elif (on_param == 1) and (param_ctr == 1) and mutex:
+                    if mutex not in mtxs:
+                        mtxs[mutex] = lex.text()
+                    else:
+                        mtxs[mutex] += lex.text()
+                
+                lex = lex.next(True, True)
+
+    if not mtxs:
+        return
+    
+    for call_ref in call_refs:
+        if call_ref.ent().name() == "mtx_timedlock":
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and lex.ent() and (lex.ent().type() == "mtx_t") and lex.ent().id() in mtxs and mtxs[lex.ent().id()] not in ["mtx_timed", "mtx_timed|mtx_recursive"]:
+                    check.violation(call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+                    break
+                
+                lex = lex.next(True, True)             
