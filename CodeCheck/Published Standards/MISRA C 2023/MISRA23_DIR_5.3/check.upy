@@ -1,0 +1,105 @@
+ERR1 = "There shall be no dynamic thread creation"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_DIR_5.3')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_DIR_5.3': "Published Standards/MISRA C 2023/Directive 5.3 There shall be no dynamic thread creation"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_DIR_5.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Threads',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_DIR_5.3': """
+<p><b>Amplification</b></p>
+<p>Thread creation shall only occur in a well-defined program start-up phase.</p>
+
+<p><b>Rationale</b></p>
+<p>Uncertainty about the number of threads running at a particular point in time is error prone and
+reduces analysability. Also the overhead in thread creation and destruction is hard to predict.</p>
+<p>Usage of a static thread pool is common practice in operating systems for safety-related systems, e.g.
+ARINC-653 [38], AUTOSAR [42] and OSEK [49].</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">thrd_t id1;
+thrd_t id2;
+
+int32_t t1( void *ignore ) /* Thread T1 entry */
+{
+ ...
+ thrd_create( &id2, t2, NULL ); /* Non-compliant, not constrained to start-up */
+ ...
+}
+
+int32_t t2( void *ignore ) /* Thread T2 entry */
+{
+ ...
+}
+
+void main(void)
+{
+ thrd_create( &id1, t1, NULL ); /* Compliant */
+ ...
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 4.7</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for call_ref in file.filerefs("Call", "Function"):
+        if call_ref.ent().name() == "thrd_create":
+            lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            param_ctr = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and (lex.text() == ","):
+                    param_ctr += 1
+                elif (on_param == 1) and (param_ctr == 1) and lex.ent() and lex.ent().kind().check("Function"):
+                    for ref in lex.ent().refs("Call", "Function"):
+                        if ref.ent().name() == "thrd_create":
+                            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+                    
+                lex = lex.next(True, True)
