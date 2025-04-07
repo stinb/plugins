@@ -60,9 +60,9 @@ int main() {
   (bool) us; // UndCC_Violation short int to bool
 
   // Optional: print values to verify
-  printf("%d\n", (bool) false); // UndCC_Violation
+  printf("%d\n", (bool) false); // UndCC_Valid
   printf("%d\n", (int32_t) 3U);  // UndCC_Valid
-  printf("%d\n", (bool) 0); // UndCC_Violation
+  printf("%d\n", (bool) 0); // UndCC_Valid
   printf("%d\n", (int32_t) ena); // UndCC_Valid
   printf("%c\n", (char) enc); // UndCC_Valid
 
