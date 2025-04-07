@@ -47,6 +47,7 @@ int main() {
   (float) enc; // UndCC_Violation char to float $$$
   (enum enuma) a; // UndCC_Valid enuma to enuma
   (enuma) a; // UndCC_Valid enuma to enuma
+  (bool) a; // UndCC_Violation enuma to bool
   
   
   (bool) 0;  // UndCC_Valid - by exception 
@@ -62,9 +63,9 @@ int main() {
 
 
   // Optional: print values to verify
-  printf("%d\n", (bool) false); // UndCC_FalsePos
+  printf("%d\n", (bool) false); // UndCC_Valid
   printf("%d\n", (int32_t) 3U);  // UndCC_Valid
-  printf("%d\n", (bool) 0); // UndCC_FalsePos
+  printf("%d\n", (bool) 0); // UndCC_Valid
   printf("%d\n", (int32_t) ena); // UndCC_Valid
   printf("%c\n", (char) enc); // UndCC_Valid
 
