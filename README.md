@@ -3,7 +3,7 @@
 [Understand](www.scitools.com) is a powerful static analysis tool designed for code maintenance and exploration. It creates an extensive database about your code and how everything is interconnected. The Understand IDE shows you a lot of that information directly, but it also has fully extensible plugin systems for Python and Perl to let you gather and display your team's information in the most meaningful way. Understand supports four flavors of plugins: [Graphs](https://github.com/stinb/plugins/tree/main/Graph), [Interactive Reports](https://github.com/stinb/plugins/tree/main/IReport), [CodeChecks](https://github.com/stinb/plugins/tree/main/CodeCheck) and [Scripts](https://github.com/stinb/plugins/tree/main/Scripts/Python).
 
 Checkout the [API tutorials](https://scitools.freshdesk.com/en/support/solutions/articles/70000582855) for more help writing your own plugins.
-The most up-to-date documentation is accessible from the Help menu in Understand. Select Help->Python API Documentation. You can also [access it here](https://documentation.scitools.com/html/python/index.html).
+The most up-to-date documentation is accessible from the Help menu in Understand. Select Help->Python API Documentation. You can also [access it here](https://docs.scitools.com/manuals/python/index.html).
 
 ## Graph Plugins
 With a graph plugin you can leverage the information in the Understand database to create graphs of what is important to you. For example, this plugin creates a call tree graph that changes the color based on the complexity of the function. Graphs can be accessed directly in Understand or exported en masse via a script plugin. Check out the [README file](https://github.com/stinb/plugins/blob/main/Graph/README.md) in the Graph folder for more details.  
