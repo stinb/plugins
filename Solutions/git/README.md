@@ -1,15 +1,10 @@
-This folder contains plugin scripts for Git. All plugin scripts use the common [git_util.py](https://github.com/stinb/plugins/blob/main/Solutions/git/git_util.py) so if a script is installed individually, the common file must be installed as well. Instead of installing individual scripts, it's recommended to copy the entire folder to the plugin directory:
-
-- Windows – C:\Program Files\SciTools\conf\plugin\User\
-- Mac – /Users/username/Library/Application Support/SciTools/plugin/
-- Linux – /home/username/.config/SciTools/plugin/
+This folder contains plugin scripts for Git.
 
 # Authors
 
 The architecture plugins are:
 
-- the last author to touch a file [arch_last_author.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_last_author.upy)
-- the first author to touch a file [arch_creator.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_creator.upy)
+- the last (or first) author to touch a file [arch_author.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_author.upy)
 - the author who made the most commits to the file [arch_owner.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_owner.upy) [1]
 
 The metric plugin [metric_authors.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/metric_authors.upy) works for file entities, architectures (with file entities) and the whole project. It defines the following metrics:
@@ -24,12 +19,7 @@ For a detailed view, the ireport plugin [ireport_authors.upy](https://github.com
 
 # Dates
 
-Calendar architectures can be absolute (Year/Month) or relative (Today, This Week, and so on). There are four calendar architecture plugins:
-
-- Absolute from the last modified date [arch_modified.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_modified.upy)
-- Relative from the last modified date [arch_modified_rel.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_modified_rel.upy)
-- Absolute from the earliest date [arch_created.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_created.upy)
-- Relative from the earliest date [arch_created_rel.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_created_rel.upy)
+Calendar architectures can be absolute (Year/Month) or relative (Today, This Week, and so on). They can be created from the most recent Git commit or the earliest commit. There is one plugin [arch_date.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_date.upy) that uses options to provide all four variants.
 
 There is also an architecture plugin based on activity: [arch_stability.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/arch_stability.upy). Files that have been modified at least twice in the past month (=past 30 days) are "Active". If an active file was also active in the previous month, then it is "Recurrently Active". All other files are "Stable". [3]
 
@@ -63,7 +53,7 @@ Code as a Crime Scene [2] mentions coupling. The idea is that if two files appea
 
 Coupling can also be viewed graphically with [graph_coupling.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/graph_coupling.upy). However, the layout algorithm used by the graph plugin requires build 1164 or later. The graph includes a coupling value cutoff option because too many edges can freeze the user interface on render. Note that unlike most other plugins, graph plugins execute on the main thread so this graph can potentially freeze the user interface while calculating. The graph plugin is based on the Flat Dependencies Graph style, with edges colored by the source node and sized by the number of commits. For OpenSSL, the graph looks like:
 
-<img width="769" alt="image" src=".doc/8b639d94-7b38-48e6-971a-3a590df054d3.png">
+<img width="769" alt="image" src=".doc/graph_coupling.png">
 
 
 # References
