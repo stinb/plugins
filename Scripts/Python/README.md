@@ -11,7 +11,7 @@ c:\Program Files\SciTools\pc-win64>upython
 >>>
 ```
 ## Documentation
-The most up-to-date documentation is accessible from the Help menu in Understand. Select Help->Python API Documentation. You can also [access it here](https://documentation.scitools.com/html/python/index.html).
+The most up-to-date documentation is accessible from the Help menu in Understand. Select Help->Python API Documentation. You can also [access it here](https://docs.scitools.com/manuals/python/index.html).
 
 ## Sample Scripts
 In addition to these scripts, the documentation also includes some samples. More detailed example scripts are shipped with Understand in the SciTools/scripts/python folder.

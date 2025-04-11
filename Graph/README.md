@@ -6,7 +6,7 @@ After enabling a graph, project level graphs can be run by selecting Graphs->Pro
 
 
 # Making Your Own Custom Graphs
-You can customize any of these graphs, or make your own from scratch. We recommend starting with our [graph plugin example](https://documentation.scitools.com/html/python/graph.html), designed for that purpose. The full Graph API documentation is accessible 
+You can customize any of these graphs, or make your own from scratch. We recommend starting with our [graph plugin example](https://docs.scitools.com/manuals/python/graph.html), designed for that purpose. The full Graph API documentation is accessible 
 in Understand by selecting Help->Python API Documentation and navigating to the Graphs section. There are also several tutorials on building graphs on our [support site](https://support.scitools.com).  
 
 ![image](.doc/193376858-3e304851-dcb3-4280-9d03-e9ba75185bde.png)

@@ -6,7 +6,7 @@
 
 
 # カスタムグラフを作成する
-これらのグラフをカスタマイズ、または独自のカスタムグラフを作成することができます。目的に合わせ、サンプルスクリプト [graph plugin example](https://documentation.scitools.com/html/python/graph.html)からカスタマイズを始めることをお勧めします。
+これらのグラフをカスタマイズ、または独自のカスタムグラフを作成することができます。目的に合わせ、サンプルスクリプト [graph plugin example](https://docs.scitools.com/manuals/python/graph.html)からカスタマイズを始めることをお勧めします。
 Graph APIのドキュメントはUnderstandのメニューより、[ヘルプ] -> [Python API ヘルプ]で表示されるページの[Graph]セクションを参照してください。
 
 ![image](.doc/193376858-3e304851-dcb3-4280-9d03-e9ba75185bde.png)
