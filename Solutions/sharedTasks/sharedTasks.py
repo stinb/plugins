@@ -124,7 +124,7 @@ def getFnOrObjRefs(
         options: dict[str, str | bool] | None = None) -> list[Ref]:
 
     refKinds = FUN_REF_KINDS
-    if options[FUNCTION_POINTER] == 'On':
+    if options and options[FUNCTION_POINTER] == 'On':
         refKinds += FUN_REF_KINDS_OPTION
 
     refs = function.refs(refKinds)
@@ -193,9 +193,9 @@ def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -
     for otherFunction in [function] + function.ents('Instanceof'):
         # Global objects
         refKinds = OBJ_REF_KINDS
-        if options[FUNCTION_POINTER] == 'On':
+        if options and options[FUNCTION_POINTER] == 'On':
             refKinds += OBJ_REF_KINDS_OPTION
-            
+
         for ref in otherFunction.refs(refKinds, 'Global Object'):
             if not memberObjectParents and entHasMembers(ref.ent()):
                 continue
