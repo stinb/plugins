@@ -53,7 +53,8 @@ Code as a Crime Scene [2] mentions coupling. The idea is that if two files appea
 
 Coupling can also be viewed graphically with [graph_coupling.upy](https://github.com/stinb/plugins/blob/main/Solutions/git/graph_coupling.upy). However, the layout algorithm used by the graph plugin requires build 1164 or later. The graph includes a coupling value cutoff option because too many edges can freeze the user interface on render. Note that unlike most other plugins, graph plugins execute on the main thread so this graph can potentially freeze the user interface while calculating. The graph plugin is based on the Flat Dependencies Graph style, with edges colored by the source node and sized by the number of commits. For OpenSSL, the graph looks like:
 
-<img width="769" alt="image" src=".doc/graph_coupling.png">
+
+![image](.doc/graph_coupling.png)
 
 
 # References
