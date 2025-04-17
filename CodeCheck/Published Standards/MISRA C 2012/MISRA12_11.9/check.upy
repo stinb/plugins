@@ -129,6 +129,8 @@ def check(check, file):
     refs = file.filerefs('Set, Use', 'Object') + file.filerefs('Call', 'Function')
 
     for ref in refs:
+        violationLine = ref.line()
+        violationColumn = ref.column() 
         ok = True
         if ref.ent().kind().check('Object') and '*' in str(ref.ent().type()):
             if not lexer:
@@ -141,23 +143,33 @@ def check(check, file):
                 if ref.kind().check('Set'):
                     lexeme = lexeme.next(True, True)
                     if lexeme and lexeme.text() == '=':
-                        while lexeme and lexeme.text() not in [';', '{', '}']:
-                            if lexeme.text() == '0':
-                                ok = False
-                            elif lexeme.text() == '(':
-                                lexeme = lexeme.next(True, True)
-                                if lexeme and lexeme.text() == 'void':
-                                    lexeme = lexeme.next(True, True)
-                                    if lexeme and lexeme.text() == '*':
-                                        # Cast found
-                                        ok = True
-                                        break
-
+                        lexeme = lexeme.next(True, True)
+                        if not lexeme:
+                            continue
+                        if lexeme.text() == '0':
+                            violationLine = lexeme.line_begin()
+                            violationColumn = lexeme.column_begin()
+                            ok = False
+                        elif lexeme.text() == '(':
                             lexeme = lexeme.next(True, True)
+                            if lexeme and lexeme.text() == 'void':
+                                lexeme = lexeme.next(True, True)
+                                if lexeme and lexeme.text() == '*':
+                                    # Cast found
+                                    ok = True
+                                    break
+                        elif lexeme.ent() and lexeme.ent().value() == '0':
+                            ok = False
+                            violationLine = lexeme.line_begin()
+                            violationColumn = lexeme.column_begin()
+                            
+
+                        lexeme = lexeme.next(True, True)
 
                 # Find uses in the given operators
                 elif ref.kind().check('Use'):
                     prevLex = lexeme.previous(True, True)
+                    lastLex = lexeme
                     lexeme = lexeme.next(True, True)
                     if prevLex and prevLex.text() in operators:
                         prevLex = prevLex.previous(True, True)
@@ -166,6 +178,8 @@ def check(check, file):
                             while prevLex and prevLex.text() not in ['?', ';', '=', '{', '}']:
                                 # Flag if 0 is found and not a cast to void *
                                 if lexeme.text() == '0' or (lexeme.ent() and '0' in str(lexeme.ent().value()) and 'void*' not in str(lexeme.ent().value()).replace(" ", "") and not re.search(r'\d.*\d', str(lexeme.ent().value()))):
+                                    violationLine = lexeme.line_begin()
+                                    violationColumn = lexeme.column_begin()
                                     ok = False
                                     violationLex = prevLex
                                     prevLex = prevLex.previous(True, True)
@@ -181,24 +195,30 @@ def check(check, file):
 
 
                     if lexeme and lexeme.text() in operators and not lexeme.text() == '?':
+                        lastLex = lexeme
                         lexeme = lexeme.next(True, True)
                         if lexeme and lexeme.text() == '->':
                             continue
                         while lexeme and lexeme.text() not in [';', '{', '}']:
                             # Flag if 0 is found and not a cast to void *
                             if lexeme.text() == '0' or (lexeme.ent() and '0' in str(lexeme.ent().value()) and 'void*' not in str(lexeme.ent().value()).replace(" ", "") and not re.search(r'\d.*\d', str(lexeme.ent().value()))):
+                                violationLine = lexeme.line_begin()
+                                violationColumn = lexeme.column_begin()
                                 ok = False
                                 violationLex = lexeme
 
                             elif lexeme.text() == '(':
+                                lastLex = lexeme
                                 lexeme = lexeme.next(True, True)
                                 if lexeme and lexeme.text() == 'void':
+                                    lastLex = lexeme
                                     lexeme = lexeme.next(True, True)
                                     if lexeme and lexeme.text() == '*':
                                         # Cast found
                                         ok = True
                             break
 
+                            lastLex = lexeme
                             lexeme = lexeme.next(True, True)
 
 
@@ -211,6 +231,7 @@ def check(check, file):
                 lexer = file.lexer()
             lexeme = lexer.lexeme(ref.line(), ref.column())
             if lexeme:
+                lastLex = lexeme
                 lexeme = lexeme.next(True, True)
                 if lexeme.text() == '(':
                     count = 0
@@ -219,10 +240,16 @@ def check(check, file):
                     lexeme = lexeme.next(True, True)
                     skip = False
                     parameter = parameters[count]
-                    test = ''
                     while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                        if not skip and lexeme.text() == '0' or (lexeme.ent() and lexeme.ent().value() == '0'):
+                            violationLine = lexeme.line_begin()
+                            violationColumn = lexeme.column_begin()
+                            ok = False
+                            violationLex = lexeme
+                            break
+                        
+
                         # Look for commas to check next parameter
-                        test += lexeme.text()
                         if lexeme.text() == ',':
                             count += 1
                             if count == len(parameters):
@@ -232,26 +259,13 @@ def check(check, file):
                             # Skip if the function isn't asking for pointer
                             if '*' not in parameter:
                                 skip = True
-                        if skip:
-                            pass
-
-                        # Flag if 0 is found and not a cast to void *
-                        elif lexeme.text() == '0' or (lexeme.ent() and '0' in str(lexeme.ent().value()) and 'void*' not in str(lexeme.ent().value()).replace(" ", "") and not re.search(r'\d.*\d', str(lexeme.ent().value()))):
-                            ok = False
-                            violationLex = lexeme
-                            break
-
-                        elif lexeme.text() == '(':
-                            nextLex = lexeme.next(True, True)
-                            if nextLex and nextLex.text() == 'void':
-                                nextLex = nextLex.next(True, True)
-                                if nextLex and nextLex.text() == '*':
-                                    # Cast found
-                                    ok = True
-                                    break
-                            else:
-                                lexeme = Modules.findClose(lexeme)
-                                continue
+                        else:
+                            while lexeme and lexeme.text() != ',' and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                                if lexeme.text() == '(':
+                                    lexeme = Modules.findClose(lexeme)
+                                if lexeme:
+                                    lexeme = lexeme.next(True)
+                            continue
 
 
 
@@ -260,4 +274,4 @@ def check(check, file):
 
 
         if not ok:
-            check.violation(file, file, ref.line(),ref.column(),ERR1)
+            check.violation(file, file, violationLine,violationColumn,ERR1)
