@@ -2,94 +2,51 @@ import duplicates
 import understand
 
 def ids():
-  """
-  Required, a list of metric ids that this script provides
-
-  For example, CountLineCode is a metric id.
-  """
-  return ["DuplicateLinesOfCode"]
+  return ["DuplicateLinesOfCode", "DuplicateLinesOfCodePercent"]
 
 def name(id):
-  """
-  Required, the name of the metric given by id.
-
-  For example, CountLineCode -> "Source Lines of Code"
-  """
-  return "Number of duplicated lines of code"
+  if id == "DuplicateLinesOfCodePercent":
+    return "Duplicated Lines of Code Percentage"
+  return "Duplicated Lines of Code"
 
 def description(id):
-  """
-  Required, the description of the metric given by id
-
-  For example, CountLineCode -> "Number of lines containing source code"
-  """
-  return """<p>The number of unique lines that are duplicated.</p>
+  return """<p>The {} of unique lines that are duplicated.</p>
   <p>If the ireport or check is run, those numbers are reported. Otherwise,
   the metric script calculates duplicates using a 5 line window ignoring comments
   and whitespace.</p>
 
   <p>See also the interactive report
   <a href="und://plugin/ireport/Duplicate%20Lines%20of%20Code">Duplicate Lines of
-  Code</a> and the check "Duplicate Lines of Code"</p>
-  """
+  Code</a> and the check "Duplicate Lines of Code". There is also a
+  <a href="https://blog.scitools.com/duplicate-lines-of-code/">blog
+  article</a> describing how duplicate lines are calculated. Duplicate lines
+  of code are part of the Project Quality
+  <a href="und://plugins/Solutions/.doc/manager_project_quality.md?filter=Solution%3A%22Project%20Quality%22">
+  solution</a>.</p>
+  """.format("number" if id == "DuplicateLinesOfCode" else "percent")
 
 def tags(id):
   return [
-    'Solution: CBRI',
+    'Solution: Project Quality',
     'Target: Files',
     'Target: Architectures',
     'Target: Project',
-    'Duplicate Lines'
+    'Duplicate Code'
   ]
 
 def is_integer(id):
-   """
-   Optional, return True if the metric value is an integer.
-
-   If this function it not implemented, it is assumed false, meaning the
-   value should be represented as a double/float.
-   """
-   return True
+   return id == "DuplicateLinesOfCode"
 
 def test_entity(metric, ent):
-  """
-  Optional, return True if metric can be calculated for the given entity.
-  """
   return hasattr(metric, "cache") and ent.kind().check("file ~unknown ~unresolved")
 
 def test_architecture(metric, arch):
-  """
-  Optional, return True if metric can be calculated for the given architecture.
-  """
   return hasattr(metric, "cache")
 
 def test_global(metric, db):
-  """
-  Optional, return True if metric can be calculated for the given database.
-  """
   return hasattr(metric, "cache")
 
 def test_available(metric,entkindstr):
-  """
-  Optional, return True if the metric is potentially available.
-
-  This is used when there isn't a specific target for the metric, like lists
-  of metrics available for export, or for a treemap.
-
-  Use metric.db() to retrieve the database. If the metric is language specific,
-  the code might look like this:
-    return "Ada" in metric.db().language()
-
-  entkindstr may be empty. If it is empty, return True as long as the metric
-  is available for an entity, architecture, or the project as a whole.
-
-  If entkindstr is not empty, return True only if the metric is available for
-  entities matching the provided kind string. Kind checks are performed like
-  this:
-    my_kinds = set(understand.Kind.list_entity(myMetricKindString)
-    test_kinds = set(understand.Kind.list_entity(entkindstr)
-    return len(my_kinds.intersection(test_kinds)) > 0
-  """
   # Kind check if requested
   if entkindstr:
     my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
@@ -99,12 +56,6 @@ def test_available(metric,entkindstr):
   return True
 
 def value(metric, target):
-  """
-  Required, return the metric value for the target. The target may be
-  an entity, architecture, or database depending on which test functions
-  returned True.
-  """
-
   cache = metric.cache("Duplicates")
   if cache.is_empty():
     # Calculate Duplicate Lines if another plugin has not
@@ -114,13 +65,20 @@ def value(metric, target):
     duplicates.addToPluginCache(matches.duplicateLines(), metric)
 
   # Return count from cache
+  dupls = 0
+  loc = 0
   if isinstance(target, understand.Db):
-    return cache.value(value=0)
+    dupls = cache.value(value=0)
+    loc = target.metric("CountLineCode")
   elif isinstance(target, understand.Arch):
-    total = 0
     for ent in target.ents(True):
       if ent.kind().check("file ~unresolved ~unknown"):
-        total += cache.value(ent=ent,value=0)
-    return total
+        dupls += cache.value(ent=ent,value=0)
+        loc += ent.metric("CountLineCode")
   else:
-    return cache.value(ent=target, value=0)
+    dupls = cache.value(ent=target, value=0)
+    loc = ent.metric("CountLineCode")
+
+  if metric.id() == "DuplicateLinesOfCodePercent":
+    return dupls / loc if loc else 0
+  return dupls
