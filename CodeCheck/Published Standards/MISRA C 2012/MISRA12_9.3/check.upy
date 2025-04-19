@@ -92,11 +92,11 @@ def test_language(language):
 def check(check, file):
     lexer = None
     count = 0
-    refs = file.filerefs('Set ~Deref', 'Object')
+    refs = file.filerefs('Set ~Deref', 'Object ~Member')
 
     for ref in refs:
         # Skip if not array
-        if not re.search(r'\[\d\]', str(ref.ent().type())):
+        if not re.search(r'\[\d+\]', str(ref.ent().type())):
             continue
 
         # Prepare list
@@ -115,20 +115,19 @@ def check(check, file):
             commaTotal = 1
             for num in numbers:
                 commaTotal = int(num) * commaTotal
-            commaTotal -= 1
             lexeme = lexer.lexeme(ref.line(), ref.column())
             while lexeme and not re.search(r'\=|;', lexeme.text()):
                 lexeme = lexeme.next(True, True)
 
             # Go through the set statement
             if lexeme and lexeme.text() == '=':
-                while lexeme and not lexeme.text() == '{':
+                while lexeme and lexeme.text() not in ['{', ';']:
                     lexeme = lexeme.next(True, True)
                 if lexeme and lexeme.text() == '{':
                     lexeme, count = checkList(lexeme, Modules.findClose(lexeme), 0, numbers, 0)
 
-                if count < commaTotal and count:
-                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                    if count < commaTotal and count:
+                        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
 
 
 # Count total commas but replace a '0' initialized array with the amount of
@@ -141,31 +140,40 @@ def checkList(lexeme, close, count, numbers, i):
     ok1 = False
     onlyZero = None
     allOk = True
-    while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+    currentCount = 0
+    while lexeme:
+        if not onlyZero and '0' not in lexeme.text():
+            onlyZero = False
         if lexeme.text() == '{':
+            count += currentCount
+            currentCount = 0
             if i + 1 < len(numbers):
-                lexeme, addToCount = checkList(lexeme, Modules.findClose(lexeme), count, numbers, i + 1)
-                count += addToCount
-        if re.match(r',', lexeme.text()):
-            if not (ok and ok1):
-                allOk = False
+                lexeme, count = checkList(lexeme, Modules.findClose(lexeme), count, numbers, i + 1)
+        if re.match(r',|}', lexeme.text()):
+            nextLex = lexeme.next(True, True)
+            if nextLex and nextLex.text() != '}':
+                if not (ok and ok1):
+                    allOk = False
 
-            count += 1
-            ok = False
-            ok1 = False
+                currentCount += 1
+                ok = False
+                ok1 = False
         elif lexeme.text() == '[':
             ok = True
         elif lexeme.text() == '=':
             ok1 = True
-        elif lexeme.token() == 'Literal' and onlyZero != False:
-            if lexeme.text().isdigit():
-                if lexeme.text() == '0':
-                    onlyZero = True
-                else:
-                    onlyZero = False
+        elif lexeme.token() in ['Literal', 'String'] and onlyZero != False:
+            if '0' in lexeme.text():
+                onlyZero = True
+            else:
+                onlyZero = False
 
+        if lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin():
+            break
         lexeme = lexeme.next(True, True)
 
-    if onlyZero:
-        count = int(numbers[i]) - 1
+    if onlyZero or allOk:
+        count += int(numbers[i])
+    else:
+        count += currentCount
     return lexeme, count
