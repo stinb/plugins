@@ -9,6 +9,8 @@ The three areas scored are:
 2. Complexity
 3. Clarity
 
+There is an [interactive report](und://plugin/ireport/Project%20Quality%20%28CBRI%29) that shows the metrics contributing to each score. More details on the metrics and scoring are below.
+
 ## Architecture Score
 
 The architecture score is a measure of software modularity. It is calculated from two metrics as `(1-CoreSize) + (1-PropagationCost)` where both CoreSize and PropagationCost are percentages. The corresponding metric plugins are [CorePercentage](und://plugin/metric/CorePercentage) and [PropagationCost](und://plugin/metric/PropagationCost).
