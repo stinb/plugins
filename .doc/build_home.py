@@ -23,13 +23,33 @@ if remainder != 0:
 
 
 # print html
+print("""<html>
+<head>
+<style>
+a.titleLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.titleLink:hover {
+  color: #4e8cb9;
+}
+
+</style>
+</head>
+<body>
+""", file=args.out)
+
 print('<table style="padding:10px">', file=args.out)
 i = 0
 while i < len(data):
   # Title row
   print('<tr>', file=args.out)
   for idx in range(i, i + columns):
-    print('<td align="center" width={}%><br><h3>{}</h3></td>'.format(100/columns, data[idx]['title']), file=args.out)
+    text = data[idx]['title']
+    if "more" in data[idx]:
+      text = ' <a href="{}" class="titleLink">{}</a>'.format(data[idx]['more'], text)
+    print('<td align="center" width={}%><br><h3>{}</h3></td>'.format(100/columns, text), file=args.out)
   print('</tr>', file=args.out)
 
   # Description row
@@ -61,4 +81,4 @@ while i < len(data):
   print('</tr>', file=args.out)
   i = i + columns
 
-print('</table>', file=args.out)
+print('</table></body></html>', file=args.out)
