@@ -65,7 +65,7 @@ The duplicate lines of code [number](und://plugin/metric/DuplicateLinesOfCode) a
 
 ![image](../duplicates/.doc/overlaps.png)
 
-There are more details on the algorithm in the [Duplicate Lines of Code](https://blog.scitools.com/duplicate-lines-of-code/) blog article. In addition to using a different detection algorithm, CBR-Insight also only considered "useful" lines of code which excluding lines that contained only punctuation (see [CBRIUsefulLOC](und://plugin/metric/CBRIUsefulLOC) ) and "useful" comment lines which excludes comments about licensing and commented out code. (see [CBRIUsefulComments](und://plugin/metric/CBRIUsefulComments) ).
+There are more details on the algorithm in the [Duplicate Lines of Code &#8599;](https://blog.scitools.com/duplicate-lines-of-code/) blog article. In addition to using a different detection algorithm, CBR-Insight also only considered "useful" lines of code which excluding lines that contained only punctuation (see [CBRIUsefulLOC](und://plugin/metric/CBRIUsefulLOC) ) and "useful" comment lines which excludes comments about licensing and commented out code. (see [CBRIUsefulComments](und://plugin/metric/CBRIUsefulComments) ).
 
 To manipulate the minimum number of lines, or limit the results to only part of the project, run the Duplicate Lines of Code [interactive report](und://plugin/ireport/Duplicate%20Lines%20of%20Code) or the codecheck to populate the metric.
 
@@ -80,6 +80,6 @@ The clarity score is a measure of how simple and readable the code is. It usees 
 
 There are also Understand blog articles with more information:
 
-- [Overly Complex Files](https://blog.scitools.com/overly-complex-files/) describes CBR-Insight
-- [Dependency Networks With Understand](https://blog.scitools.com/dependency-networks-with-understand/) describes dependency networks
-- [Duplicate Lines of Code](https://blog.scitools.com/duplicate-lines-of-code/) describes how duplicate lines of code are calculated
+- [Overly Complex Files &#8599;](https://blog.scitools.com/overly-complex-files/) describes CBR-Insight
+- [Dependency Networks With Understand &#8599;](https://blog.scitools.com/dependency-networks-with-understand/) describes dependency networks
+- [Duplicate Lines of Code &#8599;](https://blog.scitools.com/duplicate-lines-of-code/) describes how duplicate lines of code are calculated

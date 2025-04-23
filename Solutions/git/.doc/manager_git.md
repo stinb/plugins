@@ -1,6 +1,6 @@
 Version control can contain valuable information about technical debt in three broad categories: authors, churn, and coupling. Learn more about each area below.
 
-These plugins read information from a Git repository. There is also a [blog article](https://blog.scitools.com/git-plugins-for-understand/) describing these plugins.
+These plugins read information from a Git repository. There is also a [blog article &#8599;](https://blog.scitools.com/git-plugins-for-understand/) describing these plugins.
 
 # Authors
 

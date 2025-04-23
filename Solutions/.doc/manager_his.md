@@ -1,6 +1,6 @@
-The Hersteller Initiative Software (HIS) metrics are a list of metrics and thresholds developed by the automotive industry to ensure code quality. The documentation for them available in English is at https://emenda.com/his/.
+The Hersteller Initiative Software (HIS) metrics are a list of metrics and thresholds developed by the automotive industry to ensure code quality. The documentation for them available in English is at [https://emenda.com/his/ &#8599;](https://emenda.com/his/).
 
-In Understand, the primary way of accessing these metrics has been through running the CodeCheck [configuration](und://plugin/config/Hersteller%20Initiative%20Software%20(HIS)%20Metrics). There is now also an [interactive report](und://plugin/ireport/HIS%20Metrics). The interactive report and metric plugins are described in a [blog article](https://blog.scitools.com/hersteller-initiative-software-his-metrics/).
+In Understand, the primary way of accessing these metrics has been through running the CodeCheck [configuration](und://plugin/config/Hersteller%20Initiative%20Software%20(HIS)%20Metrics). There is now also an [interactive report](und://plugin/ireport/HIS%20Metrics). The interactive report and metric plugins are described in a [blog article &#8599;](https://blog.scitools.com/hersteller-initiative-software-his-metrics/).
 
 ## HIS Metrics
 
@@ -34,5 +34,5 @@ Notes:
 5. This metric depends on the [MISRA HIS configuration](und://plugin/config/MISRA%20HIS%20Subset) running in the background.
 6. This metric is not supported. Similar output is available by running the [MISRA HIS configuration](und://plugin/config/MISRA%20HIS%20Subset) and generating a "Results By Check Report". The report will show the number of violations for each rule.
 7. This metric returns 0 for non-recursive functions, 1 for directly recursive functions, and 2 for indirectly recursive functions.
-8. These metrics are not listed on https://emenda.com/his/ but have been listed on https://www.imagix.com/user_guide/his-+-misra-c.html
+8. These metrics are not listed on [https://emenda.com/his/ &#8599;](https://emenda.com/his] but have been listed on [https://www.imagix.com/user_guide/his-+-misra-c.html &#8599;](https://www.imagix.com/user_guide/his-+-misra-c.html)
 

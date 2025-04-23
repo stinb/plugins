@@ -33,4 +33,4 @@ Finally, the architecture can be used to identify functions that enable and disa
         - disableFunction()
 
 
-More documentation and scripts are available in the [README](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/README.md) file in the repository and in the two blog articles [Finding Shared Global Objects](https://blog.scitools.com/finding-shared-global-objects/) and [Visualizing Shared Tasks](https://blog.scitools.com/visualizing-shared-tasks/). Also check out [concurrency](und://plugins?filter=Tags%3A%22Concurrency%22) plugins.
+More documentation and scripts are available in the [README &#8599;](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/README.md) file in the repository and in the two blog articles [Finding Shared Global Objects &#8599;](https://blog.scitools.com/finding-shared-global-objects/) and [Visualizing Shared Tasks &#8599;](https://blog.scitools.com/visualizing-shared-tasks/). Also check out [concurrency](und://plugins?filter=Tags%3A%22Concurrency%22) plugins.
