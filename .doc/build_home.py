@@ -74,8 +74,8 @@ while i < len(data):
     if "image" in data[idx]:
       img = '<br><img {} src="{}"/>'.format(' '.join(attrs), data[idx]['image'])
 
-    if img and "image_link" in data[idx]:
-      img = '<a href="{}">{}</a>'.format(data[idx]['image_link'], img)
+    if img and "more" in data[idx]:
+      img = '<a href="{}">{}</a>'.format(data[idx]['more'], img)
 
     print('<td align="center">{}</td>'.format(img), file=args.out)
   print('</tr>', file=args.out)

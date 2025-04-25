@@ -2,6 +2,10 @@ Version control can contain valuable information about technical debt in three b
 
 These plugins read information from a Git repository. There is also a [blog article &#8599;](https://blog.scitools.com/git-plugins-for-understand/) describing these plugins.
 
+![image](../../../.doc/git.png)
+
+*A File Dependencies graph generated from the [Git Stability](und://plugin/arch/Git%20Stability) architecture*
+
 # Authors
 
 Authors can be broken into three categories [1]:
@@ -31,7 +35,7 @@ Files can be classified as:
 
 ## Plugins
 
-![image](../../../.doc/git.png)
+![image](arch_stability.png)
 
 Tag "Recurrently Active" files with the [Git Stability](und://plugin/arch/Git%20Stability) architecture. You can also group files by when they were last modified with the [Git Date](und://plugin/arch/Git%20Date) architecture. Summarize commits with the [Git Commits](und://plugin/ireport/Git%20Commits) interactive report. Use metrics to see the [number of commits](und://plugin/metric/GitCommits) and the [first](und://plugin/metric/GitDaysSinceCreated) and [last](und://plugin/metric/GitDaysSinceLastModified) date. The last date metric is also available as a line metric, so it can be used to color Control Flow graphs.
 

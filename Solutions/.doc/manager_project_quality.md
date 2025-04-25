@@ -1,5 +1,9 @@
 The goal of project quality is to assign a grade to a code-base. Ideally, this grade means something when comparing the project over time and/or against other projects. This solution contains plugins based on research papers about grading projects.
 
+![image](../visibilityMatrix/.doc/sorted_matrix.png)
+
+*A matrix showing the dependency analysis done by the [Visibility Matrix](und://plugin/arch/Visibility%20Matrix) architecture.*
+
 # Comparing Different Projects
 
 The software CBR-Insight[1] grades projects by comparing them to similar projects found on GitHub. This involves defining a set of metrics, calculating the values for many projects, finding similar projects, and then comparing the values. The final score is the percentile of the target project relative to the similar projects. Understand plugins support calculating the metrics used to compare against other projects.

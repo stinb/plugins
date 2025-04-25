@@ -1,5 +1,9 @@
 The Hersteller Initiative Software (HIS) metrics are a list of metrics and thresholds developed by the automotive industry to ensure code quality. The documentation for them available in English is at [https://emenda.com/his/ &#8599;](https://emenda.com/his/).
 
+![image](../../../IReport/.doc/his_metrics.png)
+
+*The [HIS Metrics](und://plugin/ireport/HIS%20Metrics) interactive report*
+
 In Understand, the primary way of accessing these metrics has been through running the CodeCheck [configuration](und://plugin/config/Hersteller%20Initiative%20Software%20(HIS)%20Metrics). There is now also an [interactive report](und://plugin/ireport/HIS%20Metrics). The interactive report and metric plugins are described in a [blog article &#8599;](https://blog.scitools.com/hersteller-initiative-software-his-metrics/).
 
 ## HIS Metrics
