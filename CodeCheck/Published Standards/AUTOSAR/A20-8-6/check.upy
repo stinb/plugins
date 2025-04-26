@@ -98,6 +98,7 @@ def test_language(language):
 
 def check(check, file):
     refs = file.filerefs('Define', 'Object')
+    lexer = None
 
     for ref in refs:
         if re.match('__', ref.ent().name()):
@@ -118,6 +119,67 @@ def check(check, file):
         if re.search(r'^new', ref.ent().value()) and re.search(r'delete', ref.ent().value()):
             continue
 
+        # Check for vector declaration
+        if re.match(r'std::vector', str(ref.ent().type())):
+            if not lexer:
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            equals = False
+            new = False
+            delete = False
+            makeShared = False
+            # Go through whole statement
+            while lexeme and lexeme.text() not in [';', '{', '}']:
+                if lexeme.text() == '=':
+                    equals = True
+                if lexeme.text() == 'new':
+                    new = True
+                    break
+                if lexeme.text() == 'delete':
+                    delete = True
+                    break
+                if lexeme.text() == 'make_shared':
+                    makeShared = True
+                    break
+                lexeme = lexeme.next(True, True)
+                # Flag if no make_shared and  no new or delete
+            if not makeShared and equals and not (new or delete):
+                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+                
+
+            # Check for sets (vector[x] = ...)
+            setRefs = ref.ent().refs('Set')
+            for setRef in setRefs:
+                lexeme = lexer.lexeme(setRef.line(), setRef.column())
+                bracket = False
+                equals = False
+                new = False
+                delete = False
+                makeShared = False
+                # Go through whole statement
+                while lexeme and lexeme.text() not in [';', '{', '}']:
+                    if lexeme.text() == '[':
+                        bracket = True
+                    if lexeme.text() == '=' and not bracket:
+                        break
+                    elif lexeme.text() == '=':
+                        equals = True
+                    if lexeme.text() == 'new':
+                        new = True
+                        break
+                    if lexeme.text() == 'delete':
+                        delete = True
+                        break
+                    if lexeme.text() == 'make_shared':
+                        makeShared = True
+                        break
+                    lexeme = lexeme.next(True, True)
+                # Flag if no make_shared, no new or delete, and no equals
+                if not makeShared and equals and not (new or delete):
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
+
+
+                
         # Throw violation if it isn't created with the make_shared keyword
-        if not re.search(r'make_shared', ref.ent().value()):
+        elif not re.search(r'make_shared', ref.ent().value()):
             check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
