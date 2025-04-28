@@ -19,17 +19,13 @@ def define_histogram_opts(graph):
   - Cutoff
   """
   graph.options().define("RankDir", ["LR", "RL", "TB", "BT"], "BT")
-  graph.options().define("Node Labels", ["Off", "On"], "On")
+  graph.options().checkbox("Node Labels", "Node Labels", True)
   graph.options().define("Log Scale", ["Off", "On", "Auto"], "Auto")
 
   graph.options().define("Threshold", ["None", "Max Integer", "Max Percent", "Min Integer", "Min Percent"], "None")
 
-  # Messy, since we really just want to pass in an integer, but support integers
-  # between 0 and 100
-  cutoffs = []
-  for i in range(0,101):
-    cutoffs.append(str(i))
-  graph.options().define("Cutoff", cutoffs, "0")
+  # 7.1 build 1225+ allow using integers with ranges
+  graph.options().integer("Cutoff", "Cutoff", 0, 0, 100)
 
 def draw_entity_histogram(graph, ents, metric, tooltip_kindstr="", bin_count=BINS):
   graph.set("layout", "bar") # Override default layout algorithm (Usually dot)
@@ -82,7 +78,7 @@ def draw_entity_histogram(graph, ents, metric, tooltip_kindstr="", bin_count=BIN
     logscale = logopt == "On"
 
   # Create stacked bar chart from counts
-  node_labels = graph.options().lookup("Node Labels") == "On"
+  node_labels = graph.options().lookup("Node Labels")
   for i in range(len(bins)-1):
     c = graph.cluster(" {} ".format(format_number(bins[i], isfloat)))
     if not cnts[i]:
