@@ -16,69 +16,397 @@ def generate(report, target):
   und_name = und_name.split("/")[-1].split(".")[0]
   file_name = f"{und_name}_Ada_Project_Information.txt"
   txtfile = open(file_name, 'w')
-  files = target.ents("Ada Package ~Generic")
+  packages = target.ents("Ada Package ~Generic")
 
-  for file in files:
-    if file.parent() and (file.parent().library() == "Standard"):
+  for package in packages:
+    if package.parent() and (package.parent().library() == "Standard"):
         continue
+
+    ada_files = []
+
+    for file_ent in package.ents("Ada File"):
+        ada_files.append(file_ent.name())
+
+        for dep_ent in file_ent.dependsby():
+            if not dep_ent.kind().check("Ada File"):
+                continue
+
+            ada_files.append(dep_ent.name())
     
-    txtfile.write(f"===== PACKAGE: {file.name()} =====\n\n")
+    txtfile.write(f"========== PACKAGE: {package.name()} ==========\n\n")
 
     txtfile.write(f"PROVIDED INTERFACE\n\n")
 
     txtfile.write(f"\tCONSTANTS:\n")
 
-    const_refs = file.refs("Define, Declare", "Constant Object ~Local", True)
+    const_refs = package.refs("Declare", "Constant Object ~Local", True)
 
     if not const_refs:
-       txtfile.write(f"\t\tNONE\n")
+       txtfile.write(f"\t\tNONE\n\n")
        
     for ref in const_refs:
-        txtfile.write(f"\t\t{ref.ent().name()}\n")
+        txtfile.write(f"\t\t{ref.ent().name()} : {ref.ent().type()}\n\n")
 
-    txtfile.write(f"\n\tTYPES:\n")
+    txtfile.write(f"\tTYPES:\n")
 
-    type_refs = file.refs("Define, Declare", "Type ~Local", True)
+    type_refs = package.refs("Declare", "Type ~Local", True)
 
     if not type_refs:
-       txtfile.write(f"\t\tNONE\n")
+       txtfile.write(f"\t\tNONE\n\n")
 
     for ref in type_refs:
-        txtfile.write(f"\t\t{ref.ent().name()}\n")
+        txtfile.write(f"\t\t")
+        lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
 
-    txtfile.write(f"\n\tDATA:\n")
+        if lex.previous(True, True).text() == "type":
+            lex = lex.previous(True, True)
 
-    data_refs = file.refs("Define, Declare", "Data ~Local", True)
+        while lex and lex.text() != ";":
+            txtfile.write(f"{lex.text()}")
+            lex = lex.next(ignore_comments=True)
+
+        txtfile.write(f"\n\n")
+
+    txtfile.write(f"\tDATA:\n")
+
+    data_refs = package.refs("Declare", "Data ~Local", True)
 
     if not data_refs:
-       txtfile.write(f"\t\tNONE\n")
+       txtfile.write(f"\t\tNONE\n\n")
 
     for ref in data_refs:
-        txtfile.write(f"\t\t{ref.ent().name()}\n")
+        txtfile.write(f"\t\t{ref.ent().name()} : {ref.ent().type()}\n\n")
 
-    txtfile.write(f"\n\tOPERATIONS:\n")
+    txtfile.write(f"\tOPERATIONS:\n")
 
-    op_refs = file.refs("Define, Declare", "Procedure ~Local, Function ~Local", True)
+    package_ops = package.refs("Declare Spec", "Procedure ~Local, Function ~Local", True)
 
-    if not op_refs:
-       txtfile.write(f"\t\tNONE\n")
+    if not package_ops:
+       txtfile.write(f"\t\tNONE\n\n")
+
+    for ref in package_ops:
+        txtfile.write(f"\t\t")
+        lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+        while lex and lex.text() != ";":
+            txtfile.write(f"{lex.text()}")
+            lex = lex.next(ignore_comments=True)
+
+        txtfile.write(f"\n\n")
+        
+
+    reqpack_refs = []
+    intpack_refs = []
+
+    for pack_ref in package.refs("With", "Package"):
+        dotby_pack = str(pack_ref.ent().longname()).split(".")[0]
+
+        if dotby_pack == package.name():
+            intpack_refs.append(pack_ref)
+            continue
+
+        reqpack_refs.append(pack_ref)
+
+    txtfile.write(f"REQUIRED INTERFACE\n\n")
+
+    if not reqpack_refs:
+        txtfile.write(f"\tNONE\n\n")
+    else:
+        types = {}
+        constants = {}
+        operations = {}
+        data = {}
+
+        txtfile.write(f"\tPACKAGES:\n")
+
+        for pack_ref in reqpack_refs:
+            txtfile.write(f"\t\t{pack_ref.ent().name()}\n\n")
+
+            for type_ref in pack_ref.ent().refs("Dotby"):
+                if type_ref.file().name() not in ada_files:
+                    continue
+
+                get_dotrefs(type_ref, types, constants, operations, data)
+
+        txtfile.write(f"\tCONSTANTS:\n")
+
+        if not constants:
+            txtfile.write(f"\t\tNONE\n\n")
+        
+        for c in constants.values():
+            txtfile.write(f"\t\t{c.name()} : {c.type()}\n\n")
+
+        txtfile.write(f"\tTYPES:\n")
+
+        if not types:
+            txtfile.write(f"\t\tNONE\n\n")
+
+        for t in types.values():
+            txtfile.write(f"\t\t")
+            dec_ref = t.ref("Declarein")
+            lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
+
+            if lex.previous(True, True).text() == "type":
+                lex = lex.previous(True, True)
+
+            while lex and lex.text() != ";":
+                txtfile.write(f"{lex.text()}")
+                lex = lex.next(ignore_comments=True)
+
+            txtfile.write(f"{t}\n\n")
+
+        txtfile.write(f"\tDATA:\n")
+
+        if not data:
+            txtfile.write(f"\t\tNONE\n\n")
+
+        for d in data.values():
+            txtfile.write(f"\t\t{d.name()} : {d.type()}\n\n")
+
+        txtfile.write(f"\tOPERATIONS:\n")
+
+        if not operations:
+            txtfile.write(f"\t\tNONE\n\n")
+
+        for o in operations.values():
+            txtfile.write(f"\t\t")
+            dec_ref = o.ref("Declarein Spec")
+            lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
+
+            while lex and lex.text() != ";":
+                txtfile.write(f"{lex.text()}")
+                lex = lex.next(ignore_comments=True)
+
+            txtfile.write(f"\n\n")
+       
+
+    txtfile.write(f"INTERNAL INTERFACE\n\n")
+
+    const_refs = package.refs("Declare", "Constant Object Local", True)
+    type_refs = package.refs("Declare", "Type Local", True)
+    data_refs = package.refs("Declare", "Data Local", True)
+    op_refs = package.refs("Declare", "Procedure Local, Function Local", True)
+
+    types = {}
+    constants = {}
+    operations = {}
+    data = {}
+
+    txtfile.write(f"\tPACKAGES:\n")
+
+    if not intpack_refs:
+        txtfile.write(f"\t\tNONE\n\n")
+    
+    for pack_ref in intpack_refs:
+        txtfile.write(f"\t\t{pack_ref.ent().longname()}\n\n")
+
+        for type_ref in pack_ref.ent().refs("Dotby"):
+            if type_ref.file().name() not in ada_files:
+                continue
+            
+            get_dotrefs(type_ref, types, constants, operations, data)
+
+    txtfile.write(f"\tCONSTANTS:\n")
+
+    if not (constants or const_refs):
+        txtfile.write(f"\t\tNONE\n\n")
+    
+    for c in constants.values():
+        txtfile.write(f"\t\t{c.name()} : {c.type()}\n\n")
+    
+    for ref in const_refs:
+        txtfile.write(f"\t\t{ref.ent().name()} : {ref.ent().type()}\n\n")
+
+    txtfile.write(f"\tTYPES:\n")
+
+    if not (types or type_refs):
+        txtfile.write(f"\t\tNONE\n\n")
+
+    for t in types.values():
+        txtfile.write(f"\t\t")
+        dec_ref = t.ref("Declarein")
+        lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
+
+        if lex.previous(True, True).text() == "type":
+            lex = lex.previous(True, True)
+
+        while lex and lex.text() != ";":
+            txtfile.write(f"{lex.text()}")
+            lex = lex.next(ignore_comments=True)
+
+        txtfile.write(f"{t}\n\n")
+    
+    for ref in type_refs:
+        txtfile.write(f"\t\t")
+        lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+        if lex.previous(True, True).text() == "type":
+            lex = lex.previous(True, True)
+
+        while lex and lex.text() != ";":
+            txtfile.write(f"{lex.text()}")
+            lex = lex.next(ignore_comments=True)
+
+        txtfile.write(f"{t}\n\n")
+
+    txtfile.write(f"\tDATA:\n")
+
+    if not (data or data_refs):
+        txtfile.write(f"\t\tNONE\n\n")
+
+    for d in data.values():
+        txtfile.write(f"\t\t{d.name()} : {d.type()}\n\n")
+
+    for ref in data_refs:
+        txtfile.write(f"\t\t{ref.ent().longname()} : {ref.ent().type()}\n\n")
+
+    txtfile.write(f"\tOPERATIONS:\n")
+
+    if not (operations or op_refs):
+        txtfile.write(f"\t\tNONE\n\n")
+
+    for o in operations.values():
+        txtfile.write(f"\t\t")
+        dec_ref = o.ref("Declarein Spec")
+        lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
+
+        while lex and lex.text() != ";":
+            txtfile.write(f"{lex.text()}")
+            lex = lex.next(ignore_comments=True)
+
+        txtfile.write(f"\n\n")
 
     for ref in op_refs:
-        txtfile.write(f"\t\t{ref.ent().name()}\n")
+        txtfile.write(f"\t\t")
+        lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
 
-    txtfile.write(f"\n\nREQUIRED INTERFACE\n\n")
+        while lex and lex.text() != ";":
+            txtfile.write(f"{lex.text()}")
+            lex = lex.next(ignore_comments=True)
 
-    # TODO: Get library info
-
-    txtfile.write(f"\n\nINTERNAL INTERFACE \n")
-
-    # TODO: Get library info
+        txtfile.write(f"\n\n")
         
-    txtfile.write(f"\n\n")
+    if package_ops:
+       txtfile.write(f"OPERATIONS\n\n")
+       
+       for ref in package_ops:
+            txtfile.write(f"\t{ref.ent().longname()}\n")
+
+            txtfile.write(f"\n\t\tREQUIRED PACKAGES:\n")
+
+            pack_refs = ref.ent().refs("Withaccess, Dot", "Package", True)
+
+            if not pack_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+
+            for pack in pack_refs:
+                txtfile.write(f"\t\t\t{pack.ent().longname()}\n\n")
+
+            txtfile.write(f"\t\tREQUIRED CONSTANTS:\n")
+
+            const_refs = ref.ent().refs("Use", "Constant", True)
+
+            if not const_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+
+            for const in const_refs:
+                txtfile.write(f"\t\t\t{const.ent().name()} : {const.ent().type()}\n\n")
+
+            txtfile.write(f"\t\tREQUIRED TYPES:\n")
+
+            type_refs = ref.ent().refs("Ref", "Type", True)
+
+            if not type_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+            
+            for t in type_refs:
+                txtfile.write(f"\t\t\t{t.ent().longname()}\n\n")
+
+            txtfile.write(f"\t\tREQUIRED DATA:\n")
+
+            data_refs = ref.ent().refs("Ref", "Data", True)
+
+            if not data_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+            
+            for d in data_refs:
+                txtfile.write(f"\t\t\t{d.ent().name()} : {d.ent().type()}\n\n")
+
+            txtfile.write(f"\t\tREQUIRED OPERATIONS:\n")
+
+            op_refs = ref.ent().refs("Call", "Procedure, Function", True)
+
+            if not op_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+
+            for op in op_refs:
+                txtfile.write(f"\t\t\t{op.ent().longname()}\n\n")
+
+            txtfile.write(f"\t\tINTERNAL CONSTANTS:\n")
+
+            const_refs = ref.ent().refs("Declare", "Constant", True)
+
+            if not const_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+
+            for const in const_refs:
+                txtfile.write(f"\t\t\t{const.ent().name()} : {const.ent().type()}\n\n")  
+
+            txtfile.write(f"\t\tINTERNAL TYPES:\n")
+
+            type_refs = ref.ent().refs("Declare", "Type", True)
+
+            if not type_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+            
+            for t in type_refs:
+                txtfile.write(f"\t\t\t{t.ent().longname()}\n\n")
+
+            txtfile.write(f"\t\tINTERNAL DATA:\n")
+
+            data_refs = ref.ent().refs("Declare", "Data, Object ~Constant ~Loop", True)
+
+            if not data_refs:
+                txtfile.write(f"\t\t\tNONE\n\n")
+
+            for d in data_refs:
+                txtfile.write(f"\t\t\t{d.ent().name()} : {d.ent().type()}\n\n")      
+
+    txtfile.write(f"\n")
 
   txtfile.close()
 
-  report.print(f"{file_name} is created on the project folder.")
+  report.print(f"{file_name} has been created in the project folder.")
     
 
+def get_dotrefs(ref, types, constants, operations, data):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
 
+    while lex:
+        if lex.text() == ".":
+            lex = lex.next()
+            
+            if lex.ent() and lex.ent().kind().check("Type"):
+                if lex.ent().longname() in types:
+                    break
+
+                types[lex.ent().longname()] = lex.ent()
+            elif lex.ent() and lex.ent().kind().check("Constant"):
+                if lex.ent().longname() in constants:
+                    break
+
+                constants[lex.ent().longname()] = lex.ent()
+            elif lex.ent() and lex.ent().kind().check("Procedure, Function"):
+                if lex.ent().longname() in operations:
+                    break
+
+                operations[lex.ent().longname()] = lex.ent()
+            elif lex.ent() and lex.ent().kind().check("Data"):
+                if lex.ent().longname() in data:
+                    break
+
+                data[lex.ent().longname()] = lex.ent()
+
+            break
+
+        lex = lex.next(True, True)
