@@ -87,12 +87,15 @@ def test_language(language):
 
 
 def check(check, file):
-    checkOperators(check, file)
-    checkFunctors(check, file)
+    lexers = {}
+    checkOperators(check, file, lexers)
+    checkFunctors(check, file, lexers)
 
 
-def checkOperators(check, file):
-    lexer = file.lexer()
+def checkOperators(check, file, lexers):
+    if file.name() not in lexers.keys():
+        lexers[file.name()] = file.lexer()
+    lexer = lexers[file.name()]
     lex = lexer.first()
 
     while lex:
@@ -107,13 +110,13 @@ def checkOperators(check, file):
         # Skip unless the left & right are different arrays
         leftLexemes = cGetOperand(lex, True)
         rightLexemes = cGetOperand(lex, False)
-        if not violationInLexemeArrays(leftLexemes, rightLexemes):
+        if not violationInLexemeArrays(leftLexemes, rightLexemes, lexers):
             continue
 
         check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
 
 
-def checkFunctors(check, file):
+def checkFunctors(check, file, lexers):
     for typeRef in file.filerefs('Typed', 'Struct Type Template'):
         # Skip if not a certain kind of comparison
         if not re.search(r'^std::(greater|less)', typeRef.ent().longname()):
@@ -125,39 +128,43 @@ def checkFunctors(check, file):
             # Skip unless the left & right are different arrays
             leftLexemes = nthParamOfCall(call, 0)
             rightLexemes = nthParamOfCall(call, 1)
-            if not violationInLexemeArrays(leftLexemes, rightLexemes):
+            if not violationInLexemeArrays(leftLexemes, rightLexemes, lexers):
                 continue
 
             check.violation(functor, file, call.line(), call.column(), ERR1)
 
 
-def violationInLexemeArrays(leftLexemes, rightLexemes):
+def violationInLexemeArrays(leftLexemes, rightLexemes, lexers):
     # False unless lexemes found on both sides
     if not leftLexemes or not rightLexemes:
         return False
 
     # False if no pointer/iterator in any operand
-    leftIteratorEnts = getIteratorEntsFromLexemes(leftLexemes)
-    rightIteratorEnts = getIteratorEntsFromLexemes(rightLexemes)
+    leftIteratorEnts = getIteratorEntsFromLexemes(leftLexemes, lexers)
+    rightIteratorEnts = getIteratorEntsFromLexemes(rightLexemes, lexers)
     if not leftIteratorEnts or not rightIteratorEnts:
         return False
 
     # False if the pointer/iterator is of the same array
     for left in leftIteratorEnts:
         for right in rightIteratorEnts:
-            if eitherIsAssignedWith(left, right):
+            if eitherIsAssignedWith(left, right, lexers):
                 return False
 
     return True
 
 
-def eitherIsAssignedWith(ent0, ent1):
-    return ent0 == ent1 or isSetBy(ent0, ent1) or isSetBy(ent1, ent0)
+def eitherIsAssignedWith(ent0, ent1, lexers):
+    return ent0 == ent1 or isSetBy(ent0, ent1, lexers) or isSetBy(ent1, ent0, lexers)
 
 
-def isSetBy(ent0, ent1):
+def isSetBy(ent0, ent1, lexers):
     for ref in ent0.refs('Setby'):
-        lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+        if ref.file().name() not in lexers.keys():
+            lexers[ref.file().name()] = ref.file().lexer()
+        lexer = lexers[ref.file().name()]
+
+        lex = lexer.lexeme(ref.line(), ref.column())
         while lex:
             lex = lex.next(True, True)
             if not lex or lex.text() == ';':
@@ -167,7 +174,7 @@ def isSetBy(ent0, ent1):
     return False
 
 
-def getIteratorEntsFromLexemes(lexemes):
+def getIteratorEntsFromLexemes(lexemes, lexers):
     iteratorEnts = []
 
     # Fail if there isn't exactly 1 variable entity in the given lexemes
@@ -205,7 +212,7 @@ def getIteratorEntsFromLexemes(lexemes):
     seen = set(variableEnts)
     while stack:
         ent = stack.pop()
-        baseEnts = getBaseArraysFromAssignments(ent)
+        baseEnts = getBaseArraysFromAssignments(ent, lexers)
         baseEnts.append(getBaseArrayFromCalls(ent))
         for baseEnt in baseEnts:
             if baseEnt in seen:
@@ -217,7 +224,7 @@ def getIteratorEntsFromLexemes(lexemes):
     return iteratorEnts
 
 
-def getBaseArraysFromAssignments(ent):
+def getBaseArraysFromAssignments(ent, lexers):
     baseArrays = []
     seen = set(baseArrays)
 
@@ -228,7 +235,10 @@ def getBaseArraysFromAssignments(ent):
 
     # Get arrays in complicated assignments
     for ref in ent.refs('Setby'):
-        lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+        if ref.file().name() not in lexers.keys():
+            lexers[ref.file().name()] = ref.file().lexer()
+        lexer = lexers[ref.file().name()]
+        lex = lexer.lexeme(ref.line(), ref.column())
         if not lex:
             continue
 
