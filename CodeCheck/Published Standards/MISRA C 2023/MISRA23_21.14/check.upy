@@ -1,0 +1,140 @@
+import re
+
+
+ERR1 = "memcmp shall not be used to compare null terminated strings"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_21.14')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_21.14': "Published Standards/MISRA C 2023/21.14 The Standard Library function memcmp shall not be used to compare null terminated strings"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_21.14': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_21.14': """
+<p><b>Amplification</b></p>
+<p>For the purposes of this rule, “null terminated strings” are:</p>
+<p>● String literals;</p>
+<p>● Arrays having essentially character type which contain a null character.</p>
+
+<p><b>Rationale</b></p>
+<p>The Standard Library function int memcmp ( const void *s1, const void *s2, size_t n ); performs a byte by byte comparison of the first n bytes of the two objects pointed at by s1 and 
+s2.</p>
+<p>If memcmp is used to compare two strings and the length of either is less than n, then they may 
+compare as different even when they are logically the same (i.e. each has the same sequence of 
+characters before the null terminator) as the characters after a null terminator will be included in the 
+comparison even though they do not form part of the string.</p>
+
+<p><b>Developer's Note</b></p>
+<p>This check automatically assumes that a character object not initialized as an array is a null-terminated string.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++"> extern char buffer1[ 12 ];
+ extern char buffer2[ 12 ];
+
+ void f1 ( void )
+ {
+  ( void ) strcpy ( buffer1, "abc" );
+  ( void ) strcpy ( buffer2, "abc" );
+  /* The following use of memcmp is non-compliant */
+  if ( memcmp ( buffer1, buffer2, sizeof ( buffer1 ) ) != 0 )  
+  {
+    /*
+     * The strings stored in buffer1 and buffer 2 are reported to be
+     * different, but this may actually be due to differences in the
+     * uninitialized characters stored after the null terminators.
+     */
+  }
+ }
+
+ /* The following definition violates other guidelines */
+ unsigned char headerStart[ 6 ] = { 'h', 'e', 'a', 'd', 0, 164 };
+ void f2 ( const uint8_t *packet )
+ {
+  /* The following use of memcmp is compliant */
+  if ( ( NULL != packet ) && ( memcmp( packet, headerStart, 6 ) == 0 ) )
+  {
+    /*
+     * Comparison of values having essentially unsigned type reports that
+     * contents are the same. Any null terminator is simply treated as a
+     * zero value and any differences beyond it are significant.
+     */
+  }
+ }</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.15, Rule 21.16</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for call_ref in file.filerefs("Call", "Function"):
+        if not call_ref.ent().name() == "memcmp":
+            continue          
+
+        lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+        on_param = 0
+        param_ctr = 0
+
+        while lex:
+            if lex.text() == "(":
+                on_param += 1
+            elif lex.text() == ")":
+                on_param -= 1
+
+                if not on_param:
+                    break
+            elif (on_param == 1) and (lex.text() == ","):
+                param_ctr += 1
+
+                if param_ctr == 2:
+                    break
+            elif (on_param == 1) and lex.ent() and ("iterator" not in str(lex.ent().type())):                
+                utype = str(lex.ent().freetext("UnderlyingType"))
+
+                if re.search(r"(?<!unsigned )char ?[\*\[]", utype):
+                    init_val = str(lex.ent().freetext("InitText"))
+
+                    if (not re.search(r"\{.*\}", init_val)) or re.search(r"\{.*'\\0'.*}", init_val):
+                        check.violation(lex.ent(), file, call_ref.line(), call_ref.column(), ERR1)
+                        break
+            elif (on_param == 1) and (lex.token() == "Literal"):
+                check.violation(None, file, call_ref.line(), call_ref.column(), ERR1)
+                break
+
+            lex = lex.next(True, True)
