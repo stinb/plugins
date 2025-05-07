@@ -1,15 +1,15 @@
-
-#include <stdio.h>          // UndCC_FalseNeg
-#include "usedindirect.hpp" // UndCC_FalseNeg - it could be argued that
-                            // usedindirect.hpp isn't really used because we
-                            // only use indirect.hpp
-
+#include <cstdint>
+#include <math.h>           // UndCC_Valid - sqrt (indirect on win32)
+#include <stdio.h>          // UndCC_Valid - printf
+#include "usedindirect.hpp" // UndCC_Valid - useindirect (indirect)
 #include "notused.hpp"      // UndCC_Violation
 #include "used.hpp"         // UndCC_Valid
 
 
 int main()
 {
+    int32_t x;
+    sqrt(100.0);
     int i = MACUSED;
     useindirect();
     used();

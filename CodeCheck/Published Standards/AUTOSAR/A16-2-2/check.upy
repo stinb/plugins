@@ -3,7 +3,10 @@
 # 2022-11-29
 
 
+from queue import Queue
 import re
+
+from understand import Ent
 
 
 ERR1 = 'Included file is unused'
@@ -138,7 +141,7 @@ contents will be parsed. This may result in false positives.
 
 
 def test_entity(file):
-    return file.kind().check('Header File, Code File')
+    return file.kind().check('Code File')
 
 
 def test_global():
@@ -173,25 +176,97 @@ def check(check, file):
 
 
 def checkFast(check, file):
-    # Get used included files
-    used = set()
-    for ent, refs in file.depends().items():
-        if hasUseRef(refs):
-            used.add(ent)
+    # Get used headers through dependencies
+    used: set[Ent] = set()
+    for header, refs in file.depends().items():
+        for ref in refs:
+            if not ref.kind().check('Include'):
+                used.add(header)
+                break
 
-    # Violation for each unused file
-    for ref in file.filerefs('~Inactive Include', '~Unresolved File'):
-        ent = ref.ent()
-        if ent not in used:
-            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+    gotOtherDeps = False
+    gotIndirectDeps = False
+
+    # Each included header
+    for include in file.filerefs('Include', '~Unresolved ~Unknown'):
+        header = include.ent()
+
+        if header in used:
+            continue
+
+        if not gotOtherDeps:
+            gotOtherDeps = True
+            getOtherDeps(file, used)
+            if header in used:
+                continue
+
+        if not gotIndirectDeps:
+            gotIndirectDeps = True
+            getIndirectDeps(file, used)
+            if header in used:
+                continue
+
+        check.violation(header, file, include.line(), include.column(), ERR1)
 
 
-def hasUseRef(refs):
-    # Find any ref with a kind like Call, Type, or Use
-    for ref in refs:
-        if ref.kind().check('~Include'):
-            return True
-    return False
+# Get the headers which are only used for unsupported dependencies
+def getOtherDeps(file: Ent, used: set[Ent]):
+    for ref in file.filerefs('', 'Function, Global Object', True):
+        for decl in ref.ent().refs('Declarein, Definein'):
+            declFile = decl.file()
+            if declFile == file:
+                continue
+            used.add(declFile)
+
+
+# Get the headers which are only used indirectly
+def getIndirectDeps(file: Ent, used: set[Ent]):
+    shortestPaths: dict[Ent, HeaderPath] = dict()
+    queue = Queue()
+    seen: set[Ent] = set()
+
+    # Get all of the directly-included headers
+    otherHeader: Ent
+    for otherHeader in file.ents('Include', '~Unresolved ~Unknown'):
+        if otherHeader in used:
+            shortestPaths[otherHeader] = HeaderPath([], otherHeader)
+        queue.put(HeaderPath([], otherHeader))
+        seen.add(otherHeader)
+
+    # Traverse with a breadth-first search to find the shortest paths
+    # to indirectly-included headers
+    while not queue.empty():
+        otherHeaderPath: HeaderPath = queue.get()
+        deeperHeaders: list[Ent] = otherHeaderPath.current.ents('Include', '~Unresolved ~Unknown')
+
+        deeperHeader: Ent
+        for deeperHeader in deeperHeaders:
+            if deeperHeader not in used:
+                continue
+            previous: Ent
+            shortestPath = shortestPaths.get(deeperHeader)
+            if shortestPath != None and len(shortestPath.previous) <= len(otherHeaderPath.previous) + 1:
+                continue
+            shortestPaths[deeperHeader] = HeaderPath(otherHeaderPath.previous + [otherHeaderPath.current], deeperHeader)
+
+        deeperHeader: Ent
+        for deeperHeader in deeperHeaders:
+            if deeperHeader in seen:
+                continue
+            queue.put(HeaderPath(otherHeaderPath.previous + [otherHeaderPath.current], deeperHeader))
+            seen.add(deeperHeader)
+
+    # Move the shortest paths into the used headers
+    shortestPath: HeaderPath
+    for shortestPath in shortestPaths.values():
+        if shortestPath.previous:
+            used.add(shortestPath.previous[0])
+
+
+class HeaderPath:
+    def __init__(self, previous: list[Ent], current: Ent):
+        self.previous = previous
+        self.current = current
 
 
 ################
@@ -210,16 +285,26 @@ def checkSlow(check, file):
             unresolvedHeadersUnused.add(header)
 
     # For each imported ent, see which files declare/define them
-    for ref in file.filerefs('~Include', '~Namespace ~Parameter', True):
+    for ref in file.filerefs('~Include', '~Local ~Namespace ~Parameter', True):
         ent = ref.ent()
 
-        declarations = ent.ents('Definein, Declarein')
+        # Get the declaring files
+        declaringFiles: list[Ent] = []
+        declarationSet: set[Ent] = set()
+        for decl in ent.refs('Definein, Declarein'):
+            declFile = decl.file()
+            if declFile in declarationSet or declFile.kind().check('~Header'):
+                continue
+            declarationSet.add(declFile)
+            declaringFiles.append(declFile)
+        del declarationSet
+
         # Resolved headers
-        for declaringFile in declarations:
+        for declaringFile in declaringFiles:
             if declaringFile not in resolvedHeadersUsed:
                 resolvedHeadersUsed[declaringFile] = True
         # Unresolved headers
-        if not declarations and not check.options().lookup('skipUnresolved'):
+        if not declaringFiles and not check.options().lookup('skipUnresolved'):
             # Declaration already known
             if ent in headersOfUnresolvedEnts:
                 header = headersOfUnresolvedEnts[ent]
