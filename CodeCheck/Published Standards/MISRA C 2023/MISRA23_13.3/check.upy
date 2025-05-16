@@ -1,0 +1,179 @@
+import re
+
+
+ERR1 = "An increment (++) or decrement (--) operator should have no other potential side effects"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_13.3')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_13.3': "Published Standards/MISRA C 2023/13.3 A full expression containing an increment (++) or decrement (--) operator should have no other potential side effects other than that caused by the increment or decrement operator"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_13.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_13.3': """
+<p><b>Amplification</b></p>
+<p>A function call is considered to be a side effect for the purposes of this rule.</p>
+<p>All sub-expressions of the full expression are treated as if they were evaluated for the purposes of this
+rule, even if specified as not being evaluated by the C Standard.</p>
+
+<p><b>Rationale</b></p>
+<p>The use of increment and decrement operators in combination with other operators is not
+recommended because:</p>
+<p>● It can significantly impair the readability of the code;</p>
+<p>● It introduces additional side effects into a statement with the potential for undefined
+behaviour (covered by Rule 13.2).</p>
+<p>It is clearer to use these operations in isolation from any other operators.</p>
+
+<p><b>Example</b></p>
+<p>The expression:</p>
+<pre><code language="C++">u8a = u8b++</code></pre>
+
+<p>is non-compliant. The non-compliant expression statement:</p>
+<pre><code language="C++">u8a = ++u8b + u8c--;</code></pre>
+
+<p>is clearer when written as the following sequence:</p>
+<pre><code language="C++">++u8b;
+u8a = u8b + u8c;
+u8c--;</code></pre>
+
+<p>The following are all compliant because the only side effect in each expression is caused by the
+increment or decrement operator.</p>
+<pre><code language="C++">x++;
+a[ i ]++;
+b.x++;
+c-&gt;x++;
+++( *p );
+*p++;
+( *p )++;</code></pre>
+
+<p>The following are all non-compliant because they contain a function call as well as an increment or
+decrement operator:</p>
+<pre><code language="C++">if ( ( f ( ) + --u8a ) == 0u )
+{
+}
+g ( u8b++ );
+</code></pre>
+
+<p>The following are all non-compliant even though the sub-expression containing the increment or
+decrement operator or some other side effect is not evaluated:</p>
+<pre><code language="C++">u8a = ( 1u == 1u ) ? 0u : u8b++;
+if ( u8a++ == ( ( 1u == 1u ) ? 0u : f ( ) ) )
+{
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 13.2</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    if not re.search(r'\+\+|--', file.contents()):
+        return
+    
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+    
+    while lex:
+        if lex.text() in ["++", "--"]:
+            curr_lex = lex
+            lex = lexer.lexeme(lex.line_begin(), 0)            
+            operator = 0
+
+            while lex:
+                if lex.text() == ";":
+                    if (curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin()):
+                        operator, lex = check_next_statement(curr_lex, lex, operator)
+                    break
+                elif lex.text() in ["if", "while", "for", "switch"]:
+                    on_cond = 0
+
+                    while lex:
+                        if lex.text() == "(":
+                            on_cond += 1
+                        elif lex.text() == ")":
+                            on_cond -= 1
+
+                            if not on_cond:
+                                if (curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin()):
+                                    operator, lex = check_next_statement(curr_lex, lex, operator)
+                                break
+                        elif (lex.token() == "Operator") and lex.text() not in ["->", ".", "[", "]"]:
+                            operator += 1
+                        elif on_cond and lex.text() == ";":
+                            if operator > 1 and not ((curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin())):
+                                check.violation(None, file, curr_lex.line_begin(), curr_lex.column_begin(), ERR1)
+                        
+                            operator = 0
+                        elif not on_cond and lex.text() == ";":
+                            break
+
+                        lex = lex.next(True, True)
+
+                    break
+                elif lex.text() == "*" and lex.next().ent() and ("*" in lex.next().ent().type()):
+                    lex = lex.next(True, True)
+                    continue
+                elif lex.ent() and lex.ent().kind().check("Function") and lex.ref() and lex.ref().kind().check("Callby"):
+                    operator += 1
+                elif (lex.token() == "Operator") and lex.text() not in ["->", ".", "[", "]"]:
+                    operator += 1
+
+                lex = lex.next(True, True)
+
+            if operator > 1:
+                check.violation(None, file, curr_lex.line_begin(), curr_lex.column_begin(), ERR1)
+
+        lex = lex.next(True, True)
+
+
+def check_next_statement(curr_lex, lex, operator):
+    lex = lex.next(True, True)
+    operator = 0
+
+    while lex:
+        if lex.text() == ";":
+            if (curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin()):
+                operator, lex = check_next_statement(curr_lex, lex, operator)
+            return operator, lex
+        elif (lex.token() == "Operator") and lex.text() not in ["->", ".", "[", "]"]:
+            operator += 1
+
+        lex = lex.next(True, True)
+
+    return operator, lex
