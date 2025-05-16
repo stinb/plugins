@@ -38,7 +38,7 @@ namespace v3
     // (complies to A12-0-1 but will also be a compiler error if they are needed).
     // Default constructor is defaulted since it is no longer generated
     // (not required by A12-0-1 but will be a compiler error if it is needed).
-    class A  // UndCC_FalsePos - rule of five. Programmer’s intent is clear, class behaves the same as v1::A.
+    class A 
     {
     public:
         A() = default;
