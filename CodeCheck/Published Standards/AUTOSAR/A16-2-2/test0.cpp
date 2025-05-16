@@ -1,6 +1,6 @@
 // $Id: A16-2-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
-#include <algorithm> // UndCC_Violation - nothing from algorithm header file is used
-#include <array>     // UndCC_Violation - nothing from array header file is used
+#include <algorithm> // UndCC_Violation(fast) - nothing from algorithm header file is used
+#include <array>     // UndCC_Violation(fast) - nothing from array header file is used
 #include <cstdint>   // UndCC_Valid - std::int32_t, std::uint8_t are used
 #include <iostream>  // UndCC_Valid - cout is used
 #include <stdexcept> // UndCC_Valid - out_of_range is used
