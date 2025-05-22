@@ -125,11 +125,12 @@ def check(check, file):
         if not type0:
             continue
         type0 = type0.lower()
-        if 'const' in type0 and not re.search(r'\*\s*const\s*\*', type0):
+        if 'const' in type0 and not re.search(r'\*\s*const', type0):
             type0 = re.sub(r'const', '', type0)
         else:
-            type0 = re.sub(r'\*\s*const\s*\*', '**', type0)
+            type0 = re.sub(r'\*\s*const', '*', type0)
         type0 = re.sub(r'\[\d*\]', '', type0)
+        type0 = remove_parentheses(type0)
         type0 = re.sub(r'(volatile|struct|restrict)|[^a-z\d]', '', type0)
         
 
@@ -144,15 +145,20 @@ def check(check, file):
 
             if lexeme and lexeme.text() == '=':
                 prevLex = lexeme
-                while lexeme and not re.match(r';|{|}|,', lexeme.text()):
+                line = lexeme.line_begin()
+                while lexeme and not re.match(r';|{|}|,', lexeme.text()) and lexeme.line_begin() == line:
                     if lexeme.text() == '(' or lexeme.text() == '[':
                         lexeme = Modules.findClose(lexeme)
                         if not lexeme:
                             break
+                        lexeme = lexeme.next(True, True)
+                        continue
+                    if lexeme.text() == ')':
+                        break
                     # Look for ents
                     if lexeme.ent():
                         nextLex = lexeme.next(True, True)
-                        if nextLex and nextLex.text() == '->':
+                        if nextLex and (nextLex.text() in ['->', '.', '['] or nextLex.token() == 'Operator'):
                             lexeme = nextLex
                             continue
                         # Remove volatile keywords
@@ -167,17 +173,24 @@ def check(check, file):
                         if not re.search(r'const|volatile|restrict', type1) and 'char' in type0:
                             lexeme = nextLex 
                             continue
-                        if 'const' in type1 and not re.search(r'\*\s*const\s*\*', type1):
+                        if 'const' in type1 and not re.search(r'\*\s*const', type1):
                             type1 = re.sub(r'const', '', type1)
                         else:
-                            type1 = re.sub(r'\*\s*const\s*\*', '**', type1)
+                            type1 = re.sub(r'\*\s*const', '*', type1)
                         type1 = re.sub(r'\[\d*\]', '', type1)
+                        type1 = remove_parentheses(type1)
                         type1 = re.sub(r'(volatile|struct|restrict)|[^a-z\d]', '', type1)
 
                         # Check if types are the same
-                        if type0 != type1 and not 'void' in type0 + type1:
-                            check.violation(ref.ent(), file, setRef.line(), setRef.column(), ERR1)
+                        if type0 != type1 and not 'void' in type0 + type1 and type0 not in ['char', 'signedchar', 'unsignedchar']:
+                            check.violation(ref.ent(), file, setRef.line(), setRef.column(), lexeme.text() + ' ' + str(lexeme.line_begin()) + ': ' + type1 + ' ' + ref.ent().name() + ': ' + type0)
                             break
                     prevLex = lexeme
                     lexeme = lexeme.next(True, True)
 
+def remove_parentheses(s):
+    while True:
+        s, n = re.subn(r'\([^()]*\)', '', s)
+        if n == 0:
+            break
+    return s
