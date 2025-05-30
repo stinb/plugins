@@ -4,19 +4,8 @@
 import understand
 import re
 
-metDict = {
-  "CBRIUsefulLOC" : ["CBRI Useful Lines of Code", "From CBRI, lines of code excluding lines with only punctuation"],
-  "CBRIUsefulComments": [ "CBRI Useful Comment Lines", "From CBRI, the number of comments that do not appear to be licensing or commented out code"],
-  "CBRIUsefulCommentToCodeRatio" : ["CBRI Useful Comment To Code Ratio", "CBRI Useful Comments (not licensing or commented out code) divided by CBRI's useful lines of code (excludes lines with only punctuation)."],
-  "CBRIMaxCBO" : ["CBRI Max CBO", "From CBRI. For a file defining class(es), the maximum CountClassCoupled of a class. Otherwise, the number of files this file depends on."],
-  "CBRIMaxRFC" : ["CBRI Max RFC", "From CBRI. For a file defining class(es), the maxium of (CountDeclMethodAll + called methods). Otherwise, the number of functions called by the file."],
-  "CBRIMaxWMC": [ "CBRI Max WMC", "From CBRI. For a file defining class(es), the maximum CountDeclMethod. Otherwise, the file's CountDeclFunction + CountDeclSubProgram metrics."],
-  "CBRIMaxWMCM": [ "CBRI Max WMC-McCabe", "From CBRI. For a file defining class(es), the maximum SumCyclomatic. Otherwise, the file's MaxCyclomatic metric."],
-  "CBRIThresholdViolations": [ "CBRI Threshold Violations", "From CBRI. The number of the following metrics that exceeded the thresholds: CBRIMaxCBO, CBRIMaxWMC, CBRIMaxWMCM, CBRIMaxRFC, MaxFileSize"],
-  "CBRIOverlyComplexFiles": [ "CBRI Overly Complex Files", "The number of files with CBRIThresholdViolations > 3" ]
-}
-
-projMetrics = ["CBRIOverlyComplexFiles", "CBRIUsefulCommentToCodeRatio", "CBRIUsefulComments", "CBRIUsefulLOC"]
+projMetrics = ["CBRIOverlyComplexFilesPercent", "CBRIOverlyComplexFiles", "CBRIUsefulCommentToCodeRatio", "CBRIUsefulComments", "CBRIUsefulLOC"]
+projOnlyMetrics = ["CBRIOverlyComplexFiles", "CBRIOverlyComplexFilesPercent"]
 funcKindStr = ("ada entry, ada function, ada package, ada procedure, ada protected, ada task,"
   "c function,"
   "cobol program,"
@@ -29,28 +18,217 @@ funcKindStr = ("ada entry, ada function, ada package, ada procedure, ada protect
   "web function")
 
 def ids():
-  """
-  Required, a list of metric ids that this script provides
-
-  For example, CountLineCode is a metric id.
-  """
-  return list(metDict.keys())
+  return [
+    "CBRIUsefulLOC",
+    "CBRIUsefulComments",
+    "CBRIUsefulCommentToCodeRatio",
+    "CBRIMaxCBO",
+    "CBRIMaxRFC",
+    "CBRIMaxWMC",
+    "CBRIMaxWMCM",
+    "CBRIThresholdViolations",
+    "CBRIOverlyComplexFiles",
+    "CBRIOverlyComplexFilesPercent",
+  ]
 
 def name(id):
-  """
-  Required, the name of the metric given by id.
-
-  For example, CountLineCode -> "Source Lines of Code"
-  """
-  return metDict.get(id,["",""])[0]
+  return {
+    "CBRIUsefulLOC" : "Useful Lines of Code (CBRI)",
+    "CBRIUsefulComments": "Useful Comment Lines (CBRI)",
+    "CBRIUsefulCommentToCodeRatio" : "Useful Comment To Code Ratio (CBRI)",
+    "CBRIMaxCBO" : "Max CBO (CBRI)",
+    "CBRIMaxRFC" : "Max RFC (CBRI)",
+    "CBRIMaxWMC": "Max WMC (CBRI)",
+    "CBRIMaxWMCM": "Max WMC-McCabe (CBRI)",
+    "CBRIThresholdViolations": "Complexity Thresholds Exceeded (CBRI)",
+    "CBRIOverlyComplexFiles": "Overly Complex Files (CBRI)",
+    "CBRIOverlyComplexFilesPercent": "Overly Complex Files Percentage (CBRI)",
+  }.get(id, "")
 
 def description(id):
-  """
-  Required, the description of the metric given by id
+  about_cbri_thresholds="""
+    <p>This metric is one of five file complexity metrics used by CBR-Insight,
+    a program that grades project quality. <span style="color:#8f8f8f"> (Ludwig,
+    Jeremy, Devin Cline, and Aaron Novstrup. "A case study using CBR-insight to
+    visualize source code quality." 2020 IEEE Aerospace Conference. IEEE, 2020.)
+    </span>. The five metrics and thresholds are:</p>
 
-  For example, CountLineCode -> "Number of lines containing source code"
+    <ul>
+      <li>Lines of Code (LOC, <a href="und://plugin/metric/CBRIUsefulLOC">CBRIUsefulLOC</a>) &gt; 200
+      <li>Number of Methods (WMC-Unweighted, <a href="und://plugin/metric/CBRIMaxWMC">CBRIMaxWMC</a>) &gt; 12
+      <li>Sum Cyclomatic Complexity (WMC-McCabe, <a href="und://plugin/metric/CBRIMaxWMCM">CBRIMaxWMCM</a>) &gt; 100
+      <li>Response For Class (RFC, <a href="und://plugin/metric/CBRIMaxRFC">CBRIMaxRFC</a>) &gt; 30
+      <li>Coupling Between Objects (CBO, <a href="und://plugin/metric/CBRIMaxCBO">CBRIMaxCBO</a>) &gt; 8
+    </ul>
   """
-  return metDict.get(id,["",""])[1]
+
+  see_solution="""
+    <p>See also the Project Quality
+    <a href="und://plugins/Solutions/.doc/manager_project_quality.md?filter=Solution%3A%22Project%20Quality%22">
+    solution</a>.</p>
+  """
+
+  about_complex_files="""
+    <p>CBR-Insight is a program that grades project quality. <span
+    style="color:#8f8f8f"> (Ludwig, Jeremy, Devin Cline, and Aaron Novstrup. "A
+    case study using CBR-insight to visualize source code quality." 2020 IEEE
+    Aerospace Conference. IEEE, 2020.)</span>. It defines 5 metric thresholds
+    for files:</p>
+
+    <ul>
+      <li>Lines of Code (LOC, <a href="und://plugin/metric/CBRIUsefulLOC">CBRIUsefulLOC</a>) &gt; 200
+      <li>Number of Methods (WMC-Unweighted, <a href="und://plugin/metric/CBRIMaxWMC">CBRIMaxWMC</a>) &gt; 12
+      <li>Sum Cyclomatic Complexity (WMC-McCabe, <a href="und://plugin/metric/CBRIMaxWMCM">CBRIMaxWMCM</a>) &gt; 100
+      <li>Response For Class (RFC, <a href="und://plugin/metric/CBRIMaxRFC">CBRIMaxRFC</a>) &gt; 30
+      <li>Coupling Between Objects (CBO, <a href="und://plugin/metric/CBRIMaxCBO">CBRIMaxCBO</a>) &gt; 8
+    </ul>
+  """
+
+  if id == "CBRIUsefulLOC":
+    return """<p>Lines of code excluding lines with only punctuation. </p>
+
+    {}
+
+    <p>This metric is used as Lines of Code (LOC), but differs from the built-in
+    CountLineCode metric by excluding lines with only punctuation. So, the
+    following code has a CountLineCode value of 10 but a CBRIUsefulLOC value
+    of only 6 because of the four punctuation only lines.</p>
+
+    <pre><code language="C++">
+    bool playPickleball(int windSpeed, int temp)
+    {{                                  // ignored
+      if (temp < 60 || temp > 80) {{
+        return false;
+      }}                                // ignored
+
+      if (windSpeed > 10) {{
+        return false;
+      }}                                // ignored
+
+      return true;
+    }}                                  // ignored
+    </code></pre>
+
+    {}
+    """.format(about_cbri_thresholds, see_solution)
+  if id == "CBRIUsefulComments":
+    return """<p>The number of comments that do not appear to be licensing or commented out code</p>
+
+    <p>CBR-Insight is a program that grades project quality. <span
+    style="color:#8f8f8f"> (Ludwig, Jeremy, Devin Cline, and Aaron Novstrup. "A
+    case study using CBR-insight to visualize source code quality." 2020 IEEE
+    Aerospace Conference. IEEE, 2020.)</span>. One of the three areas graded
+    is clarity which is built using the useful comments.</p>
+
+    {}
+    """.format(see_solution)
+  if id == "CBRIUsefulCommentToCodeRatio":
+    return """<p>The ratio of "Useful comments" to "Useful Lines of Code"</p>
+
+    <p>CBR-Insight is a program that grades project quality. <span
+    style="color:#8f8f8f"> (Ludwig, Jeremy, Devin Cline, and Aaron Novstrup. "A
+    case study using CBR-insight to visualize source code quality." 2020 IEEE
+    Aerospace Conference. IEEE, 2020.)</span>. One of the three areas graded
+    is clarity which uses this metric.</p>
+
+    <p>A useful comment line is one that is not licensing or commented out
+    code. See <a href="und://plugin/metric/CBRIUsefulComments">
+    CBRIUsefulComments</a>.</p>
+
+    <p>A useful line of code is excludes lines with only punctuation. See
+    <a href="und://plugin/metric/CBRIUsefulLOC">CBRIUsefulLOC</a>.</p>
+
+    {}
+    """.format(see_solution)
+  if id == "CBRIMaxCBO":
+    return """<p>A version of the "coupling between objects" metric.</p>
+
+    {}
+
+    <p>This metric is used as Coupling Between Objects (CBO). For a file
+    defining class(es), it is the maximum CountClassCoupled of a class.
+    Otherwise, it is the number of files this file depends on.</p>
+
+    {}
+    """.format(about_cbri_thresholds, see_solution)
+  if id == "CBRIMaxRFC":
+    return """<p>A version of the "response for class" metric.</p>
+
+    {}
+
+    <p>This metric is used as Response For Class (RFC). For a file defining
+    class(es), it is the maximum of (CountDeclMethodAll + called methods).
+    Otherwise, it is the number of functions called by the file.</p>
+
+    {}
+    """.format(about_cbri_thresholds, see_solution)
+  if id == "CBRIMaxWMC":
+    return """<p>A version of the "number of methods" metric.</p>
+
+    {}
+
+    <p>This metric is used as Number of Methods (WMC-Unweighted). For a file
+    defining class(es), it is the maximum CountDeclMethod. Otherwise, it is
+    the  file's CountDeclFunction + CountDeclSubProgram metrics</p>
+
+    {}
+    """.format(about_cbri_thresholds, see_solution)
+  if id == "CBRIMaxWMCM":
+    return """<p>A version of "maximum cyclomatic complexity" metric.</p>
+
+    {}
+
+    <p>This metric is used as Sum Cyclomatic Complexity (WMC-McCabe). For a file
+    defining class(es), it is the maximum SumCyclomatic value of the classes.
+    Otherwise, it is the file's MaxCyclomatic value.</p>
+
+    {}
+    """.format(about_cbri_thresholds, see_solution)
+  if id == "CBRIThresholdViolations":
+    return """<p>The number of complexity thresholds exceeded by the file.</p>
+
+    {}
+
+    <p>This metric is the number of thresholds exceeded by the file.</p>
+
+    {}
+    """.format(about_complex_files, see_solution)
+  if id == "CBRIOverlyComplexFiles":
+    return """<p>The number of files exceeding more than 3 complexity thresholds</p>
+
+    {}
+
+    <p>This metric counts the number of files whose number of exceeded
+    complexity thresholds (<a href="und://plugin/metric/CBRIThresholdViolations">
+    CBRIThresholdViolations</a>) is greater than 3. For the percentage,
+    use <a href="und://plugin/metric/CBRIOverlyComplexFilesPercent">
+    CBRIOverlyComplexFilesPercent</a>.</p>
+
+    {}
+    """.format(about_complex_files, see_solution)
+  if id == "CBRIOverlyComplexFilesPercent":
+    return """<p>The percentage of files exceeding more than 3 complexity thresholds</p>
+
+    {}
+
+    <p>This metric is the percentage of files whose number of exceeded
+    complexity thresholds (<a href="und://plugin/metric/CBRIThresholdViolations">
+    CBRIThresholdViolations</a>) is greater than 3. For the number of files,
+    use <a href="und://plugin/metric/CBRIOverlyComplexFiles">
+    CBRIOverlyComplexFiles</a>.</p>
+
+    {}
+    """.format(about_complex_files, see_solution)
+
+def tags(id):
+  taglist = ['Solution: Project Quality']
+  if id not in projOnlyMetrics:
+    taglist.append('Target: Files')
+  if id in projMetrics:
+    taglist.append('Target: Architectures')
+    taglist.append('Target: Project')
+  taglist.append('Language: Any')
+  return taglist
 
 def is_integer(id):
    """
@@ -59,14 +237,14 @@ def is_integer(id):
    If this function it not implemented, it is assumed false, meaning the
    value should be represented as a double/float.
    """
-   return id != "CBRIUsefulCommentToCodeRatio"
+   return id not in ["CBRIUsefulCommentToCodeRatio", "CBRIOverlyComplexFilesPercent"]
 
 # One of the following three test functions should return True.
 def test_entity(metric, ent):
   """
   Optional, return True if metric can be calculated for the given entity.
   """
-  return metric.id() != "CBRIOverlyComplexFiles" and ent.kind().check("file ~unknown ~unresolved");
+  return metric.id() not in projOnlyMetrics and ent.kind().check("file ~unknown ~unresolved");
 
 def test_architecture(metric, arch):
   """
@@ -103,6 +281,8 @@ def test_available(metric,entkindstr):
   """
   # Kind check if requested
   if entkindstr:
+    if metric.id() in projOnlyMetrics:
+      return False
     my_kinds = set(understand.Kind.list_entity("file ~unknown ~unresolved"))
     test_kinds = set(understand.Kind.list_entity(entkindstr))
     return len(my_kinds.intersection(test_kinds)) > 0
@@ -141,11 +321,13 @@ def value(metricObj, target):
     if metricObj.id() == "CBRIThresholdViolations":
       return thresholds(metricObj, target)
 
-  if metricObj.id() == "CBRIOverlyComplexFiles":
+  if metricObj.id() in projOnlyMetrics:
     cnt = 0
     for file in fileents:
       if thresholds(metricObj,file) > 3:
         cnt += 1
+    if metricObj.id() == "CBRIOverlyComplexFilesPercent" and fileents:
+      return cnt / len(fileents)
     return cnt
   if metricObj.id() == "CBRIUsefulLOC":
     sum = 0

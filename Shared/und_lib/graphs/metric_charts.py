@@ -50,14 +50,22 @@ class SizeColorMetricChart:
       If drawing hiearchically, clusters are colored by the max value of leaf
       nodes. Callers must set the layout algorithm.
   """
-  def define_options(graph, legend="top", labels="Name", max_nodes = "50", layout_target=None):
+  def define_options(graph, legend="top", labels="Name", max_nodes = 50, metlist=None, sizeMetric="CountLine", colorMetric="None", layout_target=None):
     """ Define options this chart uses. Pass in None to hide the option.
         max_nodes only impacts flat drawing.
     """
+    if metlist:
+      if sizeMetric:
+        graph.options().define("Size Metric", metlist, sizeMetric)
+      if colorMetric:
+        graph.options().define("Color Metric", ["None"] + metlist, colorMetric)
+        graph.options().text("Minimum Color", "Minimum Color", "#9ECAE1")
+        graph.options().text("Maximum Color", "Maximum Color", "#084594")
     if labels is not None:
       graph.options().define("Node Label", ["Size Metric Value", "Color Metric Value", "Name", "Long Name", "None"], labels)
     if max_nodes is not None:
-      graph.options().define("Maximum Nodes Shown", ["5", "10", "15", "20", "25", "30", "40", "50", "75", "100", "200", "300", "400", "500"], max_nodes)
+      # 7.1 build 1225+ allow using integers with ranges
+      graph.options().integer("Maximum Nodes Shown", "Maximum Nodes Shown", max_nodes, 1, 1000)
     if legend is not None:
       graph.options().define("Legend", ["None", "top", "left", "right", "bottom"], legend)
     if layout_target is not None:
@@ -66,10 +74,29 @@ class SizeColorMetricChart:
         layouts.extend(["hiearchical_treemap", "sunburst"])
       graph.options().define("Layout", layouts, "flatbubble")
 
-  def __init__(self, graph, size_metric, color_metric):
+  def __init__(self, graph, size_metric = None, color_metric = None):
+    if size_metric is None:
+      size_metric = graph.options().lookup("Size Metric")
+    if color_metric is None:
+      color_metric = graph.options().lookup("Color Metric")
     self.size_metric = size_metric
-    self.color_metric = color_metric if color_metric != "None" else None
+    self.color_metric = color_metric if color_metric and color_metric != "None" else None
     self.color_scale = und_colors.ColorScale() if self.color_metric else und_colors.DiscreteColorScale()
+
+    if self.color_metric:
+      # Do colors separately in case the minimum color is invalid but the
+      # maximum color is valid
+      try:
+        h = graph.options().lookup("Minimum Color").lstrip('#')
+        self.color_scale.min_color = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+      except:
+        pass
+
+      try:
+        h = graph.options().lookup("Maximum Color").lstrip('#')
+        self.color_scale.max_color = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+      except:
+        pass
 
     self.max_nodes = None # Flat draw only
     try:

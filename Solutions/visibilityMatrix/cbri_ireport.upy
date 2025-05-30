@@ -1,0 +1,241 @@
+import und_lib.duplicates as duplicates
+import und_lib.kind_util as kind_util
+import und_lib.reports.metrics_table as metricreports
+import understand
+from matrix import DepMatrix
+
+def name():
+  return "Project Quality (CBRI)"
+
+def description():
+  return """<p>Show the project quality metrics used by CBR-Insight</p>
+
+  <p>CBR-Insight is a program that grades project quality. <span
+  style="color:#8f8f8f"> (Ludwig, Jeremy, Devin Cline, and Aaron Novstrup. "A
+  case study using CBR-insight to visualize source code quality." 2020 IEEE
+  Aerospace Conference. IEEE, 2020.)</span>.</p>
+
+  <p>It defines metrics across three categories:</p>
+  <ul>
+  <li><b>Architecture</b> - modularity of the project
+    <ul>
+      <li>Core Size (<a href="und://plugin/metric/CorePercentage">
+          CorePercentage</a>) - the percentage of files in the largest cyclical
+          group. Smaller values are better.</li>
+      <li>Propagation Cost (<a href="und://plugin/metric/PropagationCost">
+          PropagationCost</a>) - the percentage of direct or indirect file
+          dependencies out of the number of possible file dependencies. Smaller
+          values are better</li>
+    </ul></li>
+  <li><b>Complexity</b> - logical complexity within files
+    <ul>
+      <li>Overly Complex Files (<a href="und://plugin/metric/CBRIOverlyComplexFilesPercent">
+          CBRIOverlyComplexFilesPercent</a>) - the percentage of files that
+          exceed at least 4 of the 5 complexity thresholds. Smaller values
+          are better.</li>
+      <li>Duplicate Lines of Code (<a href="und://plugin/metric/DuplicateLinesOfCodePercent">
+          DuplicateLinesOfCodePercent</a>) - the percentage of lines of code
+          that are duplicated. Smaller values are better</li>
+    </ul></li>
+  <li><b>Clarity</b> - readability
+    <ul>
+      <li>Comment Density (<a href="und://plugin/metric/CBRIUsefulCommentToCodeRatio">
+          CBRIUsefulCommentToCodeRatio</a>) - the ratio of useful comment
+          lines to useful lines of code. Larger values are better.</li>
+    </ul></li>
+  </ul>
+
+  <p>The report shows the values for each metric. It also includes a treemap
+  and table with metric values for each file.</p>
+
+  <p>See also the Project Quality
+  <a href="und://plugins/Solutions/.doc/manager_project_quality.md?filter=Solution%3A%22Project%20Quality%22">
+  solution</a>.</p>
+
+  <br><img src=".doc/cbri_report.png"/>
+  """
+
+def tags():
+  return [
+    'Target: Architectures',
+    'Target: Project',
+    'Language: Any',
+    'Solution: Project Quality',
+  ]
+
+def test_global(db):
+  return kind_util.can_contain_files(db)
+
+def test_architecture(arch):
+  return kind_util.can_contain_files(arch)
+
+def support_abort():
+  return True
+
+def init(report, target):
+  report.options().label("dupl_label", "Duplicate Lines of Code Options")
+  report.options().integer("lines","Minimum # lines to match",5);
+  report.options().checkbox("ws","Ignore Whitespace",True);
+  report.options().checkbox("comments","Ignore Comments",True);
+
+
+def generate(report, target, page):
+  files = kind_util.list_files(target)
+
+  report.progress(0)
+  m = DepMatrix(set(files))
+  if report.is_aborted():
+    return
+  report.progress(10)
+
+  m.classify()
+  if report.is_aborted():
+    return
+  report.progress(15)
+
+  precalculated = {}
+  precalculated["ArchType"] = m.type
+  precalculated["CorePercentage"] = "{:.0f}%".format(m.values['core_percent'])
+  precalculated["PropagationCost"] = "{:.0f}%".format(m.values['propagation_cost'])
+
+  dupls = duplicateLinesOfCode(report, files)
+  if report.is_aborted():
+    return
+
+  lines = target.metric("CountLineCode")
+  precalculated["CountLineCode"] = '{:n}'.format(lines)
+  if lines:
+    precalculated["DuplicateLinesOfCodePercent"] = "{:.0%}".format(dupls/lines)
+
+  report.heading(2)
+  report.print("Project Summary")
+  report.heading()
+
+  report.table(["Metric", "Value"])
+
+  percentagesAfterIndex = 2
+  cells = [
+    ("LOC", "CountLineCode"),
+    ("Files", "CountDeclFile"),
+    ("Type", "ArchType"),
+    ("Architecture", None),
+    ("Core Size", "CorePercentage"),
+    ("Propagation Cost", "PropagationCost"),
+    ("Complexity", None),
+    ("Overly Complex Files", "CBRIOverlyComplexFilesPercent"),
+    ("Duplicate Lines of Code", "DuplicateLinesOfCodePercent"),
+    ("Clarity", None),
+    ("Comment Density", "CBRIUsefulCommentToCodeRatio"),
+  ]
+
+  for name, metric in cells:
+    report.tablecell()
+    if not metric:
+      report.bold()
+    report.print(name)
+    report.nobold()
+
+    report.tablecell()
+    if metric:
+      if metric in precalculated:
+        v_str = precalculated[metric]
+      else:
+        v = target.metric(metric,format="raw")
+      if metric == "CountDeclFile":
+        v_str = '{:n}'.format(v)
+      elif metric not in precalculated:
+        v_str = "{:.0%}".format(v)
+      report.print(v_str)
+
+  report.table()
+
+  report.heading(2)
+  report.print("Files")
+  report.heading()
+
+  report.draw(target, "Files Metric Chart", "Layout=treemap;Size Metric=CBRIUsefulLOC;Color Metric=CBRIThresholdViolations")
+
+  matrix_categories = ['class', 'vfi', 'vfo']
+  metrics = [
+    ('CBRIUsefulLOC', 200),
+    ('CBRIMaxWMC', 12),
+    ('CBRIMaxWMCM', 100),
+    ('CBRIMaxRFC', 30),
+    ('CBRIMaxCBO', 8),
+    ('CBRIThresholdViolations', 3),
+  ]
+
+  tbldesc = """ [{ "name" : "Name", "filtertype": "string", "sort" : "ascending" },
+                 { "name" : "Group", "filtertype": "string" }"""
+  for name in ['VFI', 'VFO', 'LOC', 'WMC-Unweighted', 'WMC-McCabe', 'RFC', 'CBO', 'Thresholds'] :
+    tbldesc += ",{ \"name\": \"" + name + "\", \"filtertype\": \"numeric\"}"
+  tbldesc += "]"
+
+  percent = 75
+  filePercent = 25.0 / len(files)
+  report.table(tbldesc)
+  for i in range(m.size()):
+    file = m.entityAt(i)
+
+    report.tablecell()
+    report.entity(file)
+    report.print(file.relname())
+    report.entity()
+
+    for m_cat in matrix_categories:
+      report.tablecell()
+      v = m.valueAt(i, m_cat)
+      if m_cat == "class":
+        report.print(m.categories[v])
+      else:
+        report.print(str(v))
+
+    for id, threshold in metrics:
+      report.tablecell()
+      v = file.metric(id)
+      if v and v > threshold:
+        report.fontcolor("#e45721")
+      report.print(str(v))
+      report.fontcolor()
+
+    percent += filePercent
+    report.progress(int(percent), "Calculating CBRI Metrics")
+    if report.is_aborted():
+      return
+
+def duplicateLinesOfCode(report, fileents):
+  # Load Options
+  ignores = []
+  if report.options().lookup("ws"):
+    ignores.append("Whitespace")
+    ignores.append("Newline")
+  if report.options().lookup("comments"):
+    ignores.append("Comment")
+  matches = duplicates.Matches(report.options().lookup("lines"))
+
+    # Scan files
+  percent = 15
+  filePercent = 55.0 / len(fileents)
+  for file in fileents:
+    # cache the lexer
+    lexer = file.lexer(lookup_ents = False)
+
+    matches.processFile(file, duplicates.fileLines(file, ignores)[0])
+    percent += filePercent
+    report.progress(int(percent), "Scanning Files for Duplicate Lines")
+
+    # while a lexer is open anyway, calculate useful lines of code
+    file.metric(["CBRIUsefulLOC","CBRIUsefulComments"])
+
+    if report.is_aborted():
+      return
+
+  report.progress(70, "Finding Duplicate Line Matches")
+  matchlist = matches.findMatches()
+  report.progress(75)
+
+  dupl = matches.duplicateLines()
+  total = 0
+  for lineset in dupl.values():
+    total += len(lineset)
+  return total
