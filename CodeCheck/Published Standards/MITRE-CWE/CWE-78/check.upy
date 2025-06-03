@@ -1,0 +1,186 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 5/22/25
+
+import Modules
+import re
+
+ERR1 = ''
+
+
+# The ID for the check
+def ids():
+    return ('CWE-78')
+
+# The short name of the check
+def name(id):
+    return {
+        'CWE-78': 'Published Standards/MITRE-CWE/' + """\
+Improper Neutralization of Special Elements used in an OS Command""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'CWE-78': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MITRE CWE Top 25',
+            '',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The product constructs all or part of an OS command using
+externally-influenced input from an upstream component, but it does not
+neutralize or incorrectly neutralizes special elements that could modify the
+intended OS command when it is sent to a downstream component.</p>
+<p><b>Rationale</b></p>
+<p>This weakness can lead to a vulnerability in environments in which the
+attacker does not have direct access to the operating system, such as in web
+applications. Alternately, if the weakness occurs in a privileged program, it
+could allow the attacker to specify commands that normally would not be
+accessible, or to call alternate commands with privileges that the attacker does
+not have. The problem is exacerbated if the compromised process does not follow
+the principle of least privilege, because the attacker-controlled commands may
+run with special system privileges that increases the amount of damage.</p>
+<p>There are at least two subtypes of OS command injection:</p>
+<ul><li>The application intends to execute a single, fixed program that is under
+its own control. It intends to use externally-supplied inputs as arguments to
+that program. For example, the program might use system("nslookup [HOSTNAME]")
+to run nslookup and allow the user to supply a HOSTNAME, which is used as an
+argument. Attackers cannot prevent nslookup from executing. However, if the
+program does not remove command separators from the HOSTNAME argument, attackers
+could place the separators into the arguments, which allows them to execute
+their own program after nslookup has finished executing.</li>
+<li>The application accepts an input that it uses to fully select which program 
+to run, as well as which commands to use. The application simply redirects this
+entire command to the operating system. For example, the program might use
+"exec([COMMAND])" to execute the [COMMAND] that was supplied by the user. If the
+COMMAND is under attacker control, then the attacker can execute arbitrary
+commands or programs. If the command is being executed using functions like
+exec() and CreateProcess(), the attacker might not be able to combine multiple
+commands together in the same line.</li></ul>
+<p>From a weakness standpoint, these variants represent distinct programmer
+errors. In the first variant, the programmer clearly intends that input from
+untrusted parties will be part of the arguments in the command to be executed.
+In the second variant, the programmer does not intend for the command to be
+accessible to any untrusted party, but the programmer probably has not accounted
+for alternate ways in which malicious attackers can provide input.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include <stdlib.h>
+
+int main() {
+    char user_input[100];
+    fgets(user_input, 100, stdin);
+    system(user_input);  // Vulnerable to command injection
+    return 0;
+}</code></pre>
+<p><b>Developer's Notes</b></p>
+<p>This check currently only supports C and C++ languages</p>
+"""
+    return {
+        'CWE-78': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    inputs = r'stdin|argv|getenv|cin'
+    osCommands = r'system|popen|exec|fork|CreateProcess|ShellExecute'
+    assignFunctions = r'fgets|strcat|getline|fscanf'
+    if not (re.search(inputs, file.contents()) and re.search(osCommands, file.contents())):
+        return
+    if not file.lexer():
+        return
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+    for lexeme in lexemes:
+        # Skip if not an OS command
+        if not re.search(osCommands, lexeme.text()):
+            continue
+        # Look for opening parenthesis
+        while lexeme and lexeme.text() not in ['(',';','{','}',')']:
+            lexeme = lexeme.next(True, True)
+
+        if lexeme and lexeme.text() == '(':
+            close = Modules.findClose(lexeme)
+            # Look for variable or user input
+            while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                if lexeme.ent() and not re.search(inputs, str(lexeme.ent().value())):
+                    if not checkOnlyIf(lexeme.ent(), lexer, file.name()):
+                        check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+                elif lexeme.ent():
+                    if not checkUse(lexeme.ent(), lexer, file.name(), inputs, assignFunctions):
+                        check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+                elif re.search(inputs, lexeme.text()):
+                    check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                lexeme = lexeme.next(True, True)
+
+
+# Look for user input being assigned to variable with a function listed in 'assignFunctions'
+def checkUse(ent, lexer, filename, inputs, assignFunctions):
+    refs = ent.refs('Useby')
+    ok = True
+    for ref in refs:
+        ok = True
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        while lexeme and lexeme.text() not in ['(', ';', '{', '}']:
+            if lexeme.text() == ')':
+                lexeme = Modules.findOpen(lexeme)
+            if lexeme:
+                lexeme = lexeme.previous(True, True)
+
+        if lexeme and lexeme.text() == '(':
+            lex = lexeme
+            lexeme = lexeme.previous(True, True)
+            if lexeme and re.search(assignFunctions, lexeme.text()):
+                lexeme = lex
+                close = Modules.findClose(lexeme)
+                while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    if re.search(inputs, lexeme.text()) or (lexeme.ent() and re.search(inputs, str(lexeme.ent().value()))):
+                        ok = False
+
+                    lexeme = lexeme.next(True, True)
+
+        while lexeme and not lexeme.text() in [';', '{', '}']:
+            if lexeme.text() == 'if':
+                return True
+    
+            lexeme = lexeme.previous(True, True)
+
+
+    if not ok:
+        return False
+    return True
+
+
+def checkOnlyIf(ent, lexer, filename):
+    refs = ent.refs('Useby')
+    for ref in refs:
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        while lexeme and lexeme.text() not in [';', '{', '}']:
+            if lexeme.text() == 'if':
+                return True
+    
+            lexeme = lexeme.previous(True, True)
+
+    return False
+
