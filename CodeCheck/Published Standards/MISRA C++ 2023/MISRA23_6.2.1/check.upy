@@ -1,0 +1,217 @@
+ERR1 = "'%1' is defined differently in %2"
+
+
+def ids():
+    return ('MISRA23_6.2.1')
+
+
+def name(id):
+    return {
+        'MISRA23_6.2.1': "Published Standards/MISRA C++ 2023/6.2.1 The one-definition rule shall not be violated",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_6.2.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Identifiers',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_6.2.1': """
+<p><b>Rationale</b></p>
+<p>Violation of the one-definition rule (ODR) results in undefined behaviour — for example, when an entity
+has:</p>
+<p>● No definition; or</p>
+<p>● Multiple non-inline definitions in different translation units; or</p>
+<p>● Multiple inline definitions in different translation units that are not the same; or</p>
+<p>● Different initializer values</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// File a.cpp
+struct S1
+{
+ int32_t i;
+};
+
+struct S2
+{
+ int32_t i;
+};
+
+// File b.cpp
+struct S1
+{
+ int64_t i;
+}; // Non-compliant - definitions of S1 are not the same
+
+struct S2
+{
+ int32_t i;
+ int32_t j;
+}; // Non-compliant - definitions of S2 are not the same</code></pre>
+<p>The following example is non-compliant as File1.cpp and File2.cpp introduce different definitions
+of h, with the call they contain to f resolving to different overloads in each definition.</p>
+<pre><code language="C++">// File1.h
+void f( int32_t i );
+
+// File2.h
+void f( int64_t i );
+
+// File3.h
+inline void h( int64_t i )
+{
+ f( i ); // Nested call
+}
+
+// File1.cpp
+#include "File1.h"
+#include "File3.h"
+
+void f1()
+{
+ h( 42 ); // Nested call in h is to int32_t overload of f
+}
+
+// File2.cpp
+#include "File2.h"
+#include "File3.h"
+
+void f2()
+{
+ h( 42 ); // Nested call in h is to int64_t overload of f
+}</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return False
+
+
+def test_global():
+    return True
+
+
+def check(check):
+    db = check.db()
+    files = db.ents("code file, header file")
+    defined_objs = {}
+    defined_types = {}
+    defined_funcs = {}
+    declared_funcs = {}
+    flagged_defs = []
+
+    for file in files:
+        for type_ref in file.filerefs("Define", "Type ~Unnamed ~TemplateParameter ~Alias ~Typedef"):
+            if type_ref.ent().longname() not in defined_types:
+                defined_types[type_ref.ent().longname()] = type_ref
+            else:
+                defined_ref = defined_types[type_ref.ent().longname()]
+
+                if not (is_diff_files(type_ref, defined_ref) and is_same_kind(type_ref, defined_ref)):
+                    continue
+
+                if ent_definition(defined_ref) != ent_definition(type_ref):
+                    if defined_ref.ent().id() not in flagged_defs:
+                        check_violation(defined_ref, type_ref, check)
+                        flagged_defs.append(defined_ref.ent().id())
+
+                    check_violation(type_ref, defined_ref, check)
+
+        for func_ref in file.filerefs("Declare ~Implicit", "Function ~Macro ~Member ~Lambda ~Template ~Static"):
+            if str(func_ref.ent().name()).startswith("operator"):
+                continue
+
+            if func_ref.ent().longname() not in declared_funcs:
+                declared_funcs[func_ref.ent().longname()] = func_ref
+            else:
+                defined_ref = declared_funcs[func_ref.ent().longname()]
+
+                if not (is_diff_files(func_ref, defined_ref) and is_same_kind(func_ref, defined_ref)):
+                    continue
+
+                if ent_definition(defined_ref) != ent_definition(func_ref):
+                    if defined_ref.ent().id() not in flagged_defs:
+                        check_violation(defined_ref, func_ref, check)
+                        flagged_defs.append(defined_ref.ent().id())
+
+                    check_violation(func_ref, defined_ref, check)
+
+        for func_ref in file.filerefs("Define", "Function ~Macro ~Member ~Lambda ~Template ~Static"):
+            if (func_ref.ent().name() == "main") or (str(func_ref.ent().name()).startswith("operator")) or (func_ref.ent().parent().kind().check("Unnamed Namespace")):
+                continue
+
+            if func_ref.ent().longname() not in defined_funcs:
+                defined_funcs[func_ref.ent().longname()] = func_ref
+            else:
+                defined_ref = defined_funcs[func_ref.ent().longname()]
+
+                if ((not func_ref.ent().freetext("Inline") and is_diff_files(func_ref, defined_ref)) or 
+                    (func_ref.ent().freetext("Inline") and is_diff_files(func_ref, defined_ref) and (defined_ref.ent().contents() != func_ref.ent().contents()))):
+                    if defined_ref.ent().id() not in flagged_defs:
+                        check_violation(defined_ref, func_ref, check)
+                        flagged_defs.append(defined_ref.ent().id())
+
+                    check_violation(func_ref, defined_ref, check)
+
+        for global_ref in file.filerefs("Define", "Global ~Static"):
+            if global_ref.ent().longname() not in defined_objs:
+                defined_objs[global_ref.ent().longname()] = global_ref
+            else:
+                defined_ref = defined_objs[global_ref.ent().longname()]
+
+                if not (is_diff_files(global_ref, defined_ref) and is_same_kind(global_ref, defined_ref)):
+                    continue
+
+                if ent_definition(defined_ref) != ent_definition(global_ref):
+                    if defined_ref.ent().id() not in flagged_defs:
+                        check_violation(defined_ref, global_ref, check)
+                        flagged_defs.append(defined_ref.ent().id())
+
+                    check_violation(global_ref, defined_ref, check)
+
+                    
+def ent_definition(ref):
+    body = ""
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+    on_body = 0
+
+    while lex and (lex.text() != ";" or on_body):
+        body += lex.text()
+
+        if lex.text() in "({[<":
+            on_body += 1
+        elif lex.text() in ")}]>":
+            on_body -= 1
+
+        lex = lex.next(True, True)
+
+    return body
+
+
+def is_diff_files(ref_1, ref_2):
+    # True if ref_1 and ref_2 on diff files
+    if ref_1.ent().parent() and ref_2.ent().parent() and ref_1.ent().parent().kind().check("File") and ref_2.ent().parent().kind().check("File") and (ref_1.ent().parent().id() != ref_2.ent().parent().id()):
+        return True
+    
+    return False
+
+
+def is_same_kind(ref_1, ref_2):
+    return ref_1.ent().kind().longname() == ref_2.ent().kind().longname()
+
+
+def check_violation(ref_1, ref_2, check):
+    check.violation(ref_1.ent(), ref_1.file(), ref_1.line(), ref_1.column(), ERR1, ref_1.ent().name(), ref_2.file().name())
