@@ -520,6 +520,8 @@ def cGetBitFieldWidth(ref):
 
     # Get lexeme
     lex = ref.file().lexer(False).lexeme(ref.line(), ref.column())
+    if not lex:
+        return
 
     # Match :
     lex = lex.next(True, True)
