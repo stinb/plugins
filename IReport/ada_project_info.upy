@@ -56,20 +56,7 @@ def generate(report, target):
 
     for type_ref in type_refs:
         txtfile.write(f"\t\t")
-        lex = type_ref.file().lexer(lookup_ents=False).lexeme(type_ref.line(), type_ref.column())
-        on_record = False
-
-        if lex.previous(True, True).text() == "type":
-            lex = lex.previous(True, True)
-
-        while lex and (lex.text() != ";" or on_record):
-            if lex.text() == "record":
-                on_record = False if on_record else True
-
-            txtfile.write(f"{lex.text()}")
-
-            lex = lex.next(ignore_comments=True)
-
+        print_type(type_ref, txtfile, None)
         txtfile.write(f";\n\n")
 
     txtfile.write(f"\tDATA:\n")
@@ -91,21 +78,9 @@ def generate(report, target):
 
     for pack_ref in package_ops:
         txtfile.write(f"\t\t")
-        lex = pack_ref.file().lexer(lookup_ents=False).lexeme(pack_ref.line(), pack_ref.column())
-        on_body = 0
-
-        while lex and (lex.text() != ";" or on_body):
-            if lex.text() == "(":
-                on_body += 1
-            elif lex.text() == ")":
-                on_body -= 1
-
-            txtfile.write(f"{lex.text()}")
-            lex = lex.next(ignore_comments=True)
-
+        print_op(pack_ref, txtfile, None)
         txtfile.write(f";\n\n")
-        
-
+    
     reqpack_refs = []
     intpack_refs = []
 
@@ -140,6 +115,12 @@ def generate(report, target):
 
                 get_dotrefs(dot_ref, types, constants, operations, data)
 
+        for dotby_ref in package.refs("Dotby"):
+            if dotby_ref.file().name() not in ada_files:
+                continue
+
+            get_dotrefs(dotby_ref, types, constants, operations, data)
+
         for pack_ref in package_ops:
             op_refs.extend(pack_ref.ent().refs("Call, Rename", "Procedure, Function", True))
         
@@ -159,23 +140,7 @@ def generate(report, target):
         for type_ent in types.values():
             txtfile.write(f"\t\t")
             dec_ref = type_ent.ref("Declarein")
-            lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
-            on_record = False
-
-            if lex.previous(True, True).text() == "type":
-                lex = lex.previous(True, True)            
-
-            while lex and (lex.text() != ";" or on_record):
-                if lex.text() == "record":
-                    on_record = False if on_record else True
-
-                if lex.text() == type_ent.name():
-                    txtfile.write(f"{type_ent.longname()}")
-                else:
-                    txtfile.write(f"{lex.text()}")
-
-                lex = lex.next(ignore_comments=True)
-
+            print_type(dec_ref, txtfile, type_ent)
             txtfile.write(f";\n\n")
 
         txtfile.write(f"\tDATA:\n")
@@ -194,46 +159,17 @@ def generate(report, target):
         for op_ent in operations.values():
             txtfile.write(f"\t\t")
             dec_ref = op_ent.ref("Declarein Spec")
-            lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
-            on_body = 0
-
-            while lex and (lex.text() != ";" or on_body):
-                if lex.text() == "(":
-                    on_body += 1
-                elif lex.text() == ")":
-                    on_body -= 1
-
-                if lex.text() == op_ent.name():
-                    txtfile.write(f"{op_ent.longname()}")
-                else:
-                    txtfile.write(f"{lex.text()}")
-
-                lex = lex.next(ignore_comments=True)
-
+            print_op(dec_ref, txtfile, op_ent)
             txtfile.write(f";\n\n")
 
         for op_ref in op_refs:
             if op_ref.ent().longname() in operations:
                 continue
-
+            
+            operations[op_ref.ent().longname()] = None
             txtfile.write(f"\t\t")
             dec_ref = op_ref.ent().ref("Declarein Spec") if op_ref.ent().ref("Declarein Spec") else op_ref.ent().ref("Declarein Stub")
-            lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
-            on_body = 0
-
-            while lex and (lex.text() != ";" or on_body):
-                if lex.text() == "(":
-                    on_body += 1
-                elif lex.text() == ")":
-                    on_body -= 1
-
-                if lex.text() == op_ref.ent().name():
-                    txtfile.write(f"{op_ref.ent().longname()}")
-                else:
-                    txtfile.write(f"{lex.text()}")
-
-                lex = lex.next(ignore_comments=True)
-
+            print_op(dec_ref, txtfile, op_ref.ent())
             txtfile.write(f";\n\n")       
 
     txtfile.write(f"INTERNAL INTERFACE\n\n")
@@ -242,6 +178,7 @@ def generate(report, target):
     type_refs = package.refs("Declare", "Type Local", True)
     data_refs = package.refs("Declare", "Data Local, Object Local", True)
     op_refs = package.refs("Declare", "Procedure Local, Function Local", True)
+    package_ops.extend(op_refs)
 
     types = {}
     constants = {}
@@ -281,44 +218,12 @@ def generate(report, target):
     for type_ent in types.values():
         txtfile.write(f"\t\t")
         dec_ref = type_ent.ref("Declarein")
-        lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
-        on_record = False
-
-        if lex.previous(True, True).text() == "type":
-            lex = lex.previous(True, True)
-
-        while lex and (lex.text() != ";" or on_record):
-            if lex.text() == "record":
-                on_record = False if on_record else True
-
-            if lex.text() == type_ent.name():
-                txtfile.write(f"{type_ent.name()}")
-            else:
-                txtfile.write(f"{lex.text()}")
-
-            lex = lex.next(ignore_comments=True)
-
+        print_type(dec_ref, txtfile, type_ent)
         txtfile.write(f";\n\n")
     
     for type_ref in type_refs:
         txtfile.write(f"\t\t")
-        lex = type_ref.file().lexer(lookup_ents=False).lexeme(type_ref.line(), type_ref.column())
-        on_record = False
-
-        if lex.previous(True, True).text() == "type":
-            lex = lex.previous(True, True)
-
-        while lex and (lex.text() != ";" or on_record):
-            if lex.text() == "record":
-                on_record = False if on_record else True
-
-            if lex.text() == type_ref.ent().name():
-                txtfile.write(f"{type_ref.ent().name()}")
-            else:
-                txtfile.write(f"{lex.text()}")
-
-            lex = lex.next(ignore_comments=True)
-
+        print_type(type_ref, txtfile, type_ref.ent())
         txtfile.write(f";\n\n")
 
     txtfile.write(f"\tDATA:\n")
@@ -346,28 +251,12 @@ def generate(report, target):
     for op_ent in local_operations:
         txtfile.write(f"\t\t")
         dec_ref = op_ent.ref("Declarein Spec")
-        lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
-        on_body = 0
-
-        while lex and (lex.text() != ";" or on_body):
-            if lex.text() == "(":
-                on_body += 1
-            elif lex.text() == ")":
-                on_body -= 1
-
-            txtfile.write(f"{lex.text()}")
-            lex = lex.next(ignore_comments=True)
-
+        print_op(dec_ref, txtfile, None)
         txtfile.write(f";\n\n")
 
     for op_ref in op_refs:
         txtfile.write(f"\t\t")
-        lex = op_ref.file().lexer(lookup_ents=False).lexeme(op_ref.line(), op_ref.column())
-
-        while lex and lex.text() != ";":
-            txtfile.write(f"{lex.text()}")
-            lex = lex.next(ignore_comments=True)
-
+        print_op(op_ref, txtfile, None)
         txtfile.write(f";\n\n")
         
     if package_ops:
@@ -375,19 +264,15 @@ def generate(report, target):
        
        for package_op in package_ops:
             txtfile.write(f"\t")
-            dec_ref = package_op.ent().ref("Declarein Spec")
+            dec_ref = package_op.ent().ref("Declarein Spec") if package_op.ent().ref("Declarein Spec") else package_op.ent().ref("Declarein Stub")
             body_ref = package_op.ent().ref("Declarein Body")
-            lex = dec_ref.file().lexer(lookup_ents=False).lexeme(dec_ref.line(), dec_ref.column())
-
-            while lex and lex.text() != ";":
-                txtfile.write(f"{lex.text()}")
-                lex = lex.next(ignore_comments=True)
+            print_op(dec_ref, txtfile, None)
 
             txtfile.write(f";\n\n\t\tREQUIRED PACKAGES:\n")
             
             pack_refs = {}
 
-            for pack_ref in package_op.ent().refs("Withaccess", "Package", True):
+            for pack_ref in package_op.ent().refs("Withaccess, Dot", "Package", True):
                 if pack_ref.ent().library() == "Standard":
                     continue
 
@@ -473,10 +358,10 @@ def generate(report, target):
                 txtfile.write(f"\t\t\tNONE\n\n")
 
             for op_ent in operations.values():
-                txtfile.write(f"\t\t\t{op_ent.name()}\n\n")
+                txtfile.write(f"\t\t\t{op_ent.longname()}\n\n")
 
             for op_ref in op_refs:
-                txtfile.write(f"\t\t\t{op_ref.ent().name()}\n\n")
+                txtfile.write(f"\t\t\t{op_ref.ent().longname()}\n\n")
 
             txtfile.write(f"\t\tINTERNAL CONSTANTS:\n")
 
@@ -497,20 +382,7 @@ def generate(report, target):
             
             for type_ref in type_refs:
                 txtfile.write(f"\t\t\t")
-                lex = type_ref.file().lexer(lookup_ents=False).lexeme(type_ref.line(), type_ref.column())
-                on_record = False
-
-                if lex.previous(True, True).text() == "type":
-                    lex = lex.previous(True, True)
-
-                while lex and (lex.text() != ";" or on_record):
-                    if lex.text() == "record":
-                        on_record = False if on_record else True
-
-                    txtfile.write(f"{lex.text()}")
-
-                    lex = lex.next(ignore_comments=True)
-
+                print_type(type_ref, txtfile, None)
                 txtfile.write(f";\n\n")
 
             txtfile.write(f"\t\tINTERNAL DATA:\n")
@@ -561,3 +433,42 @@ def get_dotrefs(ref, types, constants, operations, data):
             break
 
         lex = lex.next(True, True)
+
+
+def print_op(ref, txtfile, op_ent):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+    on_body = 0
+
+    while lex and (lex.text() != ";" or on_body):
+        if lex.text() == "(":
+            on_body += 1
+        elif lex.text() == ")":
+            on_body -= 1
+
+        if op_ent and (lex.text() == op_ent.name()):
+            txtfile.write(f"{op_ent.longname()}")
+        else:
+            txtfile.write(f"{lex.text()}")
+
+        lex = lex.next(ignore_comments=True)
+
+
+def print_type(ref, txtfile, type_ent):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+    on_record = False
+
+    if lex.previous(True, True).text() == "type":
+        lex = lex.previous(True, True)            
+
+    while lex and (lex.text() != ";" or on_record):
+        if lex.text() == "record":
+            on_record = False if on_record else True
+
+        if type_ent and (lex.text() == type_ent.name()):
+            txtfile.write(f"{type_ent.longname()}")
+        else:
+            txtfile.write(f"{lex.text()}")
+
+        lex = lex.next(ignore_comments=True)
+
+
