@@ -99,12 +99,13 @@ def test_global():
     return False
 
 def test_language(language):
-    return language in ['C++', 'Ada', 'Java']
+    return language in ['C++', 'Ada', 'Java', 'Python']
 
 def check(check, file):
     inputs = r''
     osCommands = r''
     assignFunctions = r''
+    lineEnd = [';', '{', '}']
     if file.language() == 'Ada':
         inputs = r'Argument|Get_Line'
         osCommands = r'Spawn'
@@ -116,9 +117,9 @@ def check(check, file):
         inputs = r'System\.in'
         osCommands = r'exec'
     elif file.language() == 'Python':
-        inputs = r'stdin|argv|getenv|cin'
-        osCommands = r'system|popen|exec|fork|CreateProcess|ShellExecute'
-        assignFunctions = r'fgets|strcat|getline|fscanf'
+        inputs = r'input|raw_input|argv|args'
+        osCommands = r'system|run|Popen|call'
+        lineEnd = ['\n']
     if not (re.search(inputs, file.contents()) and re.search(osCommands, file.contents())):
         return
     if not file.lexer():
@@ -130,7 +131,7 @@ def check(check, file):
         if not re.search(osCommands, lexeme.text()):
             continue
         # Look for opening parenthesis
-        while lexeme and lexeme.text() not in ['(',';','{','}',')']:
+        while lexeme and lexeme.text() not in ['(',')'] + lineEnd:
             lexeme = lexeme.next(True, True)
 
         if lexeme and lexeme.text() == '(':
@@ -138,11 +139,11 @@ def check(check, file):
             # Look for variable or user input
             while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
                 if lexeme.ent() and not re.search(inputs, str(lexeme.ent().value())):
-                    if not checkOnlyIf(lexeme.ent(), lexer, file.name()):
+                    if not checkOnlyIf(lexeme.ent(), lexer, file.name(), lineEnd):
                         check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
 
                 elif lexeme.ent():
-                    if not checkUse(lexeme.ent(), lexer, file.name(), inputs, assignFunctions):
+                    if not checkUse(lexeme.ent(), lexer, file.name(), inputs, assignFunctions, lineEnd):
                         check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
 
                 elif re.search(inputs, lexeme.text()):
@@ -151,13 +152,13 @@ def check(check, file):
 
 
 # Look for user input being assigned to variable with a function listed in 'assignFunctions'
-def checkUse(ent, lexer, filename, inputs, assignFunctions):
+def checkUse(ent, lexer, filename, inputs, assignFunctions, lineEnd):
     refs = ent.refs('Useby')
     ok = True
     for ref in refs:
         ok = True
         lexeme = lexer.lexeme(ref.line(), ref.column())
-        while lexeme and lexeme.text() not in ['(', ';', '{', '}']:
+        while lexeme and lexeme.text() not in ['('] + lineEnd:
             if lexeme.text() == ')':
                 lexeme = Modules.findOpen(lexeme)
             if lexeme:
@@ -175,7 +176,7 @@ def checkUse(ent, lexer, filename, inputs, assignFunctions):
 
                     lexeme = lexeme.next(True, True)
 
-        while lexeme and not lexeme.text() in [';', '{', '}']:
+        while lexeme and not lexeme.text() in lineEnd:
             if lexeme.text() == 'if':
                 return True
     
@@ -187,11 +188,11 @@ def checkUse(ent, lexer, filename, inputs, assignFunctions):
     return True
 
 
-def checkOnlyIf(ent, lexer, filename):
+def checkOnlyIf(ent, lexer, filename, lineEnd):
     refs = ent.refs('Useby')
     for ref in refs:
         lexeme = lexer.lexeme(ref.line(), ref.column())
-        while lexeme and lexeme.text() not in [';', '{', '}']:
+        while lexeme and lexeme.text() not in lineEnd:
             if lexeme.text() == 'if':
                 return True
     
