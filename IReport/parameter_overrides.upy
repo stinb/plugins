@@ -1,0 +1,142 @@
+# Interactive Report for showing the values for the given parameter passed
+# in at each call reference
+
+import understand
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Parameter Overrides"
+
+def description():
+  return '''Shows the references of the parameter in each overridden function.
+    <p>Suppose you have a pure virtual function that takes a parameter and you
+    want to know how the parameter is used. You could go to every implementation
+    (override) of the function and then get information on the corresponding
+    parameter. Or use this interactive report to do it for you.</p>
+
+    <br><img src=".doc/parameter_overrides.png"/>
+    '''
+
+def tags():
+  return [
+    'Target: Objects',
+    'Language: C',
+    'Language: C++',
+  ]
+
+def test_entity(ent):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  # Valid for parameters whose parent exists and has callby references
+  return ent.kind().check("c parameter") and ent.parent() and len(ent.parent().refs("overriddenby")) > 0
+
+
+# Report generation
+def generate(report, ent):
+  """
+  Required, generate the report
+  """
+
+  refkind = "c declare" if ent.parent().kind().check("unresolved") else "c define"
+  idx = -1
+  for i, ref in enumerate(ent.parent().refs(refkind, "c parameter", True)):
+    if ref.ent() == ent:
+      idx = i
+      break
+
+  if idx == -1:
+    report.print("Error: Unable to determine parameter position\n")
+    return
+
+  funcs = set()
+  toVisit = [ent.parent()]
+  while toVisit:
+    func = toVisit.pop()
+    if func in funcs:
+      continue
+    funcs.add(func)
+    toVisit.extend(func.ents("overriddenby"))
+
+  allrefs = []
+  report.table("""
+    [{
+      "name" : "Function",
+      "filtertype": "string"
+     },{
+      "name" : "Parameter",
+      "filtertype": "string"
+     },{
+      "name" : "References",
+      "filtertype": "numeric",
+      "sort" : "ascending"
+     }]
+  """)
+  for func in funcs:
+    report.tablecell()
+    report.entity(func)
+    report.print(func.longname())
+    report.entity()
+
+    refkind = "c declare" if func.kind().check("unresolved") else "c define"
+    params = func.refs(refkind, "c parameter", True)
+    param = params[idx].ent() if idx < len(params) else None
+
+    report.tablecell()
+    if param:
+      report.entity(param)
+      report.print(param.name())
+      report.entity()
+
+    report.tablecell()
+    if param:
+      refs = param.refs("useby, setby, modifyby")
+      report.print(str(len(refs)))
+      allrefs.extend(refs)
+
+  report.table()
+
+  report.table("""
+    [{
+      "name" : "Reference",
+      "filtertype": "string"
+     },{
+      "name" : "Scope",
+      "filtertype": "string"
+     },{
+      "name" : "File",
+      "filtertype": "string"
+     },{
+      "name" : "Line",
+      "filtertype": "numeric"
+     },{
+      "name" : "Parent",
+      "filtertype": "string"
+     }]
+  """ )
+  for ref in allrefs:
+    report.tablecell()
+    report.print(ref.kind().name())
+
+    report.tablecell()
+    report.entity(ref.ent())
+    report.print(ref.ent().name())
+    report.entity()
+
+    report.tablecell()
+    report.entity(ref.file())
+    report.print(ref.file().name())
+    report.entity()
+
+    report.tablecell()
+    report.syncfile(ref.file().longname(), ref.line(), ref.column())
+    report.print(str(ref.line()))
+    report.syncfile()
+
+    report.tablecell()
+    if ref.scope().parent():
+      report.entity(ref.scope().parent())
+      report.print(ref.scope().parent().longname())
+      report.entity()
