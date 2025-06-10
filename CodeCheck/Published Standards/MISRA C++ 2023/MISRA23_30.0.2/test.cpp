@@ -1,4 +1,5 @@
 #include <fstream>
+#include <string>
 
 void show_fstream_non_compliant()
 {
