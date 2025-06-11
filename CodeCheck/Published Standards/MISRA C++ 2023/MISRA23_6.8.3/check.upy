@@ -1,0 +1,147 @@
+ERR1 = "Address should not be assigned to another object with a greater lifetime"
+
+
+def ids():
+    return ('MISRA23_6.8.3')
+
+
+def name(id):
+    return {
+        'MISRA23_6.8.3': "Published Standards/MISRA C++ 2023/6.8.3 An assignment operator shall not assign the address of an object with automatic storage duration to an object with a greater lifetime",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_6.8.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_6.8.3': """
+<p><b>Amplification</b></p>
+<p>This rule applies when the right-hand side of an assignment operator has the form addressof( x ),
+&x, or is the name of an object having array type.</p>
+<p>For the purposes of this rule, two objects with automatic storage duration that are declared in the
+same scope are considered to have the same lifetime.</p>
+
+<p><b>Rationale</b></p>
+<p>If the address of an automatic object is assigned to another automatic object of larger scope, or to an
+object with static storage duration, then the object containing the address may exist beyond the time
+when the original object ceases to exist (and its address becomes invalid).</p>
+<p>Note: this rule and Rule 6.8.2 use decidable checks that allow trivial, specific instances of potentially
+dangling references to be detected statically. Other (possibly non-decidable) cases are covered by
+Rule 6.8.1.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1()
+{
+ int8_t * p;
+
+ {
+ int8_t local;
+ int8_t local_array[ 10 ];
+ p = &local; // Non-compliant
+ p = local_array; // Non-compliant
+ }
+}</code></pre>
+<p>The following example is compliant with this rule, but violates Rule 6.8.1.</p>
+<pre><code language="C++">void f2()
+{
+ int8_t * p1;
+
+ {
+ int8_t * p2 = nullptr;
+ int8_t local;
+ p2 = &local; // Compliant - objects have the same lifetime
+ p1 = p2; // Rule does not apply
+ }
+
+ *p1 = 0; // Undefined behaviour
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 6.8.1, Rule 6.8.2</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        local_objs = {} # key: id, val: define ref
+
+        for obj_ref in func_ref.ent().refs("Define", "Local Object ~Static"):
+            local_objs[obj_ref.ent().id()] = obj_ref
+
+        for obj_ref in local_objs.values():
+            for ass_ref in obj_ref.ent().refs("Assignby Ptr"):
+                if ass_ref.ent().id() not in local_objs:
+                    continue
+
+                lho_def = local_objs[ass_ref.ent().id()]
+                rho_def = local_objs[ass_ref.scope().id()]
+
+                ass_lex = ass_ref.file().lexer(lookup_ents=False).lexeme(ass_ref.line(), ass_ref.column())
+                valid_form = True if (ass_lex.previous().text() == "&" or str(rho_def.ent().type()).endswith("]")) else False
+
+                while ass_lex and ((ass_lex.text() != "=") or (ass_lex.line_begin() == ass_ref.line())):
+                    if (ass_lex.text() == "addressof") and (ass_lex.token() == "Identifier"):
+                        valid_form = True
+
+                    ass_lex = ass_lex.previous(True, True)
+
+                if not valid_form:
+                    continue
+
+                lex = rho_def.file().lexer(lookup_ents=False).lexeme(rho_def.line(), rho_def.column())
+                scope = backward_scan(lex, lho_def) if lho_def.line() < rho_def.line() else forward_scan(lex, lho_def)
+
+                if scope < 0:
+                    check.violation(ass_ref.scope(), ass_ref.file(), ass_ref.line(), ass_ref.column(), ERR1)
+
+        
+def backward_scan(lex, lho_def):
+    scope = 0
+
+    while lex and (lex.line_begin() != lho_def.line()):
+        if lex.text() == "}":
+            scope += 1
+        elif lex.text() == "{":
+            scope -= 1
+
+        lex = lex.previous(True, True)
+
+    return scope
+        
+
+def forward_scan(lex, lho_def):
+    scope = 0
+
+    while lex and (lex.line_begin() != lho_def.line()):
+        if lex.text() == "{":
+            scope += 1
+        elif lex.text() == "}":
+            scope -= 1
+
+        lex = lex.next(True, True)
+
+    return scope
