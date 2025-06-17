@@ -1,0 +1,108 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6/13/25
+
+import re
+
+ERR1 = 'Use of Hard-coded Credentials Found'
+
+
+# The ID for the check
+def ids():
+    return ('CWE-798')
+
+# The short name of the check
+def name(id):
+    return {
+        'CWE-798': 'Published Standards/MITRE-CWE/' + """\
+Use of Hard-coded Credentials""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'CWE-798': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MITRE CWE Top 25',
+            'Exceptional Behavior',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>There are two main variations:</p>
+<p>Inbound: the product contains an authentication mechanism that checks the
+input credentials against a hard-coded set of credentials. In this variant, a
+default administration account is created, and a simple password is hard-coded
+into the product and associated with that account. This hard-coded password is
+the same for each installation of the product, and it usually cannot be changed
+or disabled by system administrators without manually modifying the program, or
+otherwise patching the product. It can also be difficult for the administrator
+to detect.
+Outbound: the product connects to another system or component, and it contains
+hard-coded credentials for connecting to that component. This variant applies to
+front-end systems that authenticate with a back-end service. The back-end
+service may require a fixed password that can be easily discovered. The
+programmer may simply hard-code those back-end credentials into the front-end
+product.</p>
+"""
+    return {
+        'CWE-798': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language in ['C++', 'Java', 'C#']
+
+def check(check, file):
+    lexer = None
+    credentials = r'password|pwd|passwd|secret|key|token|user|admin|root'
+    if not re.search(credentials, file.contents()):
+        return
+    refs = file.filerefs('Use', 'Object, Parameter')
+    for ref in refs:
+        # Skip if password is not in name
+        if not re.search(credentials, ref.ent().name().lower()):
+            continue
+        if not lexer:
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        refLex = lexeme
+        if lexeme:
+            lexeme = lexeme.next(True, True)
+            # Check if compared with string literal
+            if lexeme and lexeme.text() in ['.',',']:
+                if lexeme and lexeme.text() == '.':
+                    lexeme = lexeme.next(True, True)
+                    if lexeme.text().lower() == 'equals':
+                        lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.text() == '(':
+                            lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.token() == 'String':
+                            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                # Check if used in strcmp to compare with hard coded value
+                elif lexeme and lexeme.text() == ',':
+                    prevLex = refLex.previous(True, True)
+                    if prevLex and prevLex.text() == '(':
+                        prevLex = prevLex.previous(True, True)
+                        if prevLex and prevLex.text() == 'strcmp':
+                            lexeme = lexeme.next(True, True)
+                            if lexeme and lexeme.token() == 'String':
+                                check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+
+        
+
