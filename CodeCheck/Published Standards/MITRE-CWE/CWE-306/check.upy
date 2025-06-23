@@ -1,0 +1,134 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6/19/25
+
+import re
+import Modules
+
+ERR1 = 'Missing Authentication for Critical Function'
+
+
+# The ID for the check
+def ids():
+    return ('CWE-306')
+
+# The short name of the check
+def name(id):
+    return {
+        'CWE-306': 'Published Standards/MITRE-CWE/' + """\
+Missing Authentication for Critical Function (Partial)""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'CWE-306': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MITRE CWE Top 25',
+            'Exceptional Behavior',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>There are two main variations:</p>
+<p>The product does not perform any authentication for functionality that
+requires a provable user identity or consumes a significant amount of resources.
+</p>
+<p><b>Non-Compliant Example</b></p>
+<pre><code language="C++">public BankAccount createBankAccount(String accountNumber, String accountType,
+String accountName, String accountSSN, double balance) {
+BankAccount account = new BankAccount();
+account.setAccountNumber(accountNumber);
+account.setAccountType(accountType);
+account.setAccountOwnerName(accountName);
+account.setAccountOwnerSSN(accountSSN);
+account.setBalance(balance);
+
+return account;
+}</code></pre>
+<p><b>Partial Check</b></p>
+<p>This check will look at the 'set' member functions of a class with a given
+keyword (see options) and if those 'set' member functions are not used outside
+of an 'if' statment.</p>
+"""
+    return {
+        'CWE-306': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def define_options(check):
+    check.option().text('crit', 'List keywords that will be used to find Classes containing critcal functions (comma separated):', 'account')
+
+
+def test_language(language):
+    return language in ['Java']
+
+def check(check, file):
+    lexer = None
+    crit = check.option().lookup('crit')
+    crit = re.sub(r'\s', '', crit)
+    crit = re.sub(r',', '|', crit)
+
+    if not re.search(re.escape(crit), file.contents().lower()):
+        return
+    lexers = {}
+    seen = {}
+    lexer = None
+    classRefs = file.filerefs('Define', 'Class')
+    for classRef in classRefs:
+        # Skip if no keyword given is not in name
+        if not re.search(re.escape(crit), classRef.ent().name().lower()):
+            continue
+        # Go through member functions looking for sets
+        mRefs = classRef.ent().refs('Define', 'Member')
+        for mRef in mRefs:
+            if not re.search(r'^set', mRef.ent().name()):
+                continue
+            # Go through callby refs
+            refs = mRef.ent().refs('Callby')
+            for ref in refs:
+                # Pull up the ref's file's lexer and store if it hasn't been
+                if not ref.file().name() in lexers.keys():
+                    lexers[ref.file().name()] = ref.file().lexer()
+                if not ref.file().name() in seen.keys():
+                    seen[ref.file().name()] = []
+                lexer = lexers[ref.file().name()]
+                lexeme = lexer.lexeme(ref.line(), ref.column())
+                # Look for 
+                while lexeme and lexeme.text() not in ['{', '}'] and lexeme.line_begin() not in seen[ref.file().name()]:
+                    lexeme = lexeme.previous(True, True)
+
+                if lexeme and lexeme.text() == '{':
+                    lexeme = lexeme.previous(True, True)
+                    if lexeme and lexeme.text() == ')':
+                        lexeme = Modules.findOpen(lexeme)
+                        if lexeme:
+                            lexeme = lexeme.previous(True, True)
+                            if lexeme and lexeme.text() in ['if', 'else']:
+                                seen[ref.file().name()] = seen[ref.file().name()] + [num for num in range(lexeme.line_begin(), ref.line() + 1) if num not in seen[ref.file().name()]]
+                                continue
+                if lexeme and lexeme.line_begin() in seen[ref.file().name()]:
+                    seen[ref.file().name()] = seen[ref.file().name()] + [num for num in range(lexeme.line_begin(), ref.line() + 1) if num not in seen[ref.file().name()]]
+                    continue
+                check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+
+
+
+
+
+
+
