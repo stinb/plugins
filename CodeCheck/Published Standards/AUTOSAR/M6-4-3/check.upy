@@ -1,5 +1,6 @@
 import re
 
+
 ERR1 = 'A switch statement shall be a well-formed switch statement'
 
 
@@ -11,14 +12,11 @@ def ids():
 # The short name of the check
 def name(id):
     return {
-        'M6-4-3': 'Published Standards/AUTOSAR/Switch Statement not Well-formed',
-        'MISRA12_16.1': 'Published Standards/MISRA C 2012/16.1 Switch Statement not Well-formed',
-        'MISRA23_16.1': 'Published Standards/MISRA C 2023/16.1 Switch Statement not Well-formed',
-        'CPP_C046': 'All Checks/Language Specific/C and C++/Control Flow/Switch Statement not Well-formed',
+        'M6-4-3': 'Published Standards/AUTOSAR/A switch statement shall be a well-formed switch statement',
+        'MISRA12_16.1': 'Published Standards/MISRA C 2012/16.1 All switch statements shall be well-formed',
+        'MISRA23_16.1': 'Published Standards/MISRA C 2023/16.1 All switch statements shall be well-formed',
+        'CPP_C046': 'All Checks/Language Specific/C and C++/Control Flow/All switch statements shall be well-formed',
     }[id]
-
-
-
 
 
 def tags(id):
@@ -49,6 +47,7 @@ def tags(id):
             'Control Flow',
         ],
     }.get(id)
+
 
 # The short description of the check
 def description():
@@ -143,78 +142,42 @@ def test_language(language):
 
 
 def check(check, file):
-    def check_violation(_lex):
-        check.violation(None, file, _lex.line_begin(),
-                        _lex.column_begin(), ERR1)
+    lexer = file.lexer(lookup_ents=False)
 
-    lexer = file.lexer(True, 8, False, False)
+    for func_ref in file.filerefs("Define", "Function"):
+        func_cfg = func_ref.ent().control_flow_graph()
 
-    if not (lexer and re.search(r"switch", file.contents())):
-        return
+        for node in func_cfg.nodes():
+            if node.kind() != "switch":
+                continue
 
-    lex = lexer.first()
-
-    while lex:
-        if lex.text() == "switch" and lex.token() == "Keyword":
-            switch_lex = lex
-            on_body = 0
+            end_switch = node.end_node()
             has_default = False
-            default_break_return = False
+            ill_formed = False
 
-            while lex:
-                if lex.text() == "{" and lex.token() == "Punctuation":
-                    on_body += 1
-                elif lex.text() == "}" and lex.token() == "Punctuation":
-                    on_body -= 1
+            for node_child in node.children():
+                if not str(node_child.kind()).startswith("switch-"):
+                    continue
 
-                    if not on_body:
+                lex = lexer.lexeme(node_child.line_begin(), node_child.column_begin())
+                has_exit = False
+
+                while lex and (lex.line_begin() <= node_child.line_end()):
+                    if (lex.text() == "default") and (lex.token() == "Keyword"):
+                        has_default = True
+
+                    lex = lex.next(True, True)
+
+                while lex and lex.text() not in ["case", "default"] and (lex.line_begin() <= end_switch.line_end()):
+                    if lex.text() in ["return", "break", "throw", "goto", "exit", "abort"] and (lex.token() in ["Keyword", "Identifier"]):
+                        has_exit = True
                         break
-                elif lex.text() == "case" and lex.token() == "Keyword":
-                    has_break_or_return = False
 
-                    while lex.text() != ":":
-                        lex = next_lex(lex)
+                    lex = lex.next(True, True)
 
-                    lex = next_lex(lex)
-
-                    if lex.text() != "case":
-                        while lex and lex.text() not in {"case", "default"}:
-                            if lex.text() == "{" and lex.token() == "Punctuation":
-                                on_body += 1
-                            elif lex.text() == "}" and lex.token() == "Punctuation":
-                                on_body -= 1
-
-                                if not on_body:
-                                    break
-                            elif lex.text() in {"break", "return"} and lex.token() == "Keyword":
-                                has_break_or_return = True
-                                break
-
-                            lex = next_lex(lex)
-                    elif lex.text() == "default" and lex.token() == "Keyword":
-                        check_violation(switch_lex)
-                        break
-                    else:
-                        continue
-
-                    if not has_break_or_return:
-                        check_violation(switch_lex)
-                        break
-                elif lex.text() == "default" and lex.token() == "Keyword":
-                    has_default = True
-                elif has_default and lex.text() in {"break", "return"} and lex.token() == "Keyword":
-                    default_break_return = True
-
-                lex = next_lex(lex)
-
-            if has_default and not default_break_return:
-                check_violation(switch_lex)
-
-        lex = next_lex(lex)
-
-
-def next_lex(_lex):
-    if _lex and _lex.next(ignore_whitespace=True, ignore_comments=True):
-        return _lex.next(ignore_whitespace=True, ignore_comments=True)
-    else:
-        return None
+                if not has_exit:
+                    ill_formed = True
+                    break
+                    
+            if ill_formed or not has_default:
+                check.violation(None, file, node.line_begin(), node.column_begin(), ERR1)
