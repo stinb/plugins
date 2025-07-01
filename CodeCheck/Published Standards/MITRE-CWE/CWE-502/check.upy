@@ -1,0 +1,119 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6/25/25
+
+import re
+
+ERR1 = ''
+
+
+# The ID for the check
+def ids():
+    return ('CWE-502')
+
+# The short name of the check
+def name(id):
+    return {
+        'CWE-502': 'Published Standards/MITRE-CWE/' + """\
+Deserialization of Untrusted Data (Partial)""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'CWE-502': [
+            'Language: Java',
+            'Language: Python',
+            'Standard: MITRE CWE Top 25',
+            'Exceptional Behavior',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The product deserializes untrusted data without sufficiently ensuring that
+the resulting data will be valid.</p>
+<p><b>Non-Compliant Example</b></p>
+<pre><code language="C++">try {
+File file = new File("object.obj");
+ObjectInputStream in = new ObjectInputStream(new FileInputStream(file));
+javax.swing.JButton button = (javax.swing.JButton) in.readObject();
+in.close();
+}
+</code></pre>
+<p><b>Partial Check</b></p>
+<p>This check will only be able to check for certain specific scenarios of
+Deserialization of Untrusted Data</p>
+"""
+    return {
+        'CWE-502': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def define_options(check):
+    check.option().text('crit', 'List keywords that will be used to find Classes containing critcal functions (comma separated):', 'account')
+
+
+def test_language(language):
+    return language in ['Java', 'Python']
+
+def check(check, file):
+    lexer = None
+    if file.language() == 'Python':
+        # Skip if neither pickle nor cPickle is used
+        if not re.search(r'pickle\.load|cPickle\.loads', file.contents()):
+            return
+
+        if not lexer:
+            lexer = file.lexer()
+        lexemes = lexer.lexemes()
+        for lexeme in lexemes:
+            # Find use of pickle or cPickle
+            if lexeme.text() in ['pickle', 'cPickle']:
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '.':
+                    lexeme = lexeme.next(True, True)
+                    # Check if load or loads is used
+                    if lexeme and lexeme.text() in ['load', 'loads']:
+                        lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.text() == '(':
+                            lexeme = lexeme.next(True, True)
+                            if lexeme:
+                                # Flag if base64.b64decode() was deserialized
+                                if lexeme.ent() and lexeme.ent().name() == 'base64' and lexeme.ent().kind().check('Module'):
+                                    lexeme = lexeme.next(True, True)
+                                    if lexeme and lexeme.text() == '.':
+                                        lexeme = lexeme.next(True, True)
+                                        if lexeme.text() == 'b64decode':
+                                            check.violation(lexeme.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                    
+
+    else:
+        # Skip if readObject is not used
+        if not re.search(r'readObject', file.contents()):
+            return
+        if not lexer:
+            lexer = file.lexer()
+        lexemes = lexer.lexemes()
+        for lexeme in lexemes:
+            # Find use of a public readObject
+            if lexeme.text() == 'readObject' and lexeme.ent() and lexeme.ent().kind().check('Public'):
+                violLex = lexeme
+                lexeme = lexeme.previous(True, True)
+                if lexeme and lexeme.text() == '.':
+                    lexeme = lexeme.previous(True, True)
+                    # Flag if type was of ObjectInputStream
+                    if lexeme and lexeme.ent() and str(lexeme.ent().type()) == 'ObjectInputStream':
+                        check.violation(violLex.ent(), file, violLex.line_begin(), violLex.column_begin(), ERR1)
