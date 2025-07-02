@@ -1,4 +1,4 @@
-#include <cstdint>          // UndCC_FalsePos(fast)
+#include <cstdint>
 #include <math.h>           // UndCC_Valid - sqrt (indirect on win32)
 #include <stdio.h>          // UndCC_Valid - printf
 #include "usedindirect.hpp" // UndCC_Valid - useindirect (indirect)

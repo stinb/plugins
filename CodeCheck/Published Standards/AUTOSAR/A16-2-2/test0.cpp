@@ -1,7 +1,7 @@
 // $Id: A16-2-2.cpp 289436 2017-10-04 10:45:23Z michal.szczepankiewicz $
 #include <algorithm> // UndCC_FalseNeg(slow) - nothing from algorithm header file is used
 #include <array>     // UndCC_FalseNeg(win(slow), mac(slow)) - nothing from array header file is used
-#include <cstdint>   // UndCC_FalsePos(fast) - std::int32_t, std::uint8_t are used
+#include <cstdint>   // UndCC_Valid - std::int32_t, std::uint8_t are used
 #include <iostream>  // UndCC_Valid - cout is used
 #include <stdexcept> // UndCC_Valid - out_of_range is used
 #include <vector>    // UndCC_Valid - vector is used
