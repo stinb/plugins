@@ -55,7 +55,59 @@ def description():
 
 
 # The long description of the check
-def detailed_description():
+def detailed_description(id):
+    if id in ["MISRA12_16.1", "MISRA23_16.1"]:
+        return """
+<p><b>Amplification</b></p>
+<p>A switch statement shall be considered to be well-formed if it conforms to the subset of C switch
+statements that is specified by the following syntax rules. If a syntax rule given here has the same
+name as one defined in the C Standard then it replaces the standard version for the scope of the
+switch statement; otherwise, all syntax rules given in the C Standard are unchanged.</p>
+<pre><code language="C++">switch-statement:
+    switch ( switch-expression ) { case-label-clause-list   final-default-clause-list }
+    switch ( switch-expression ) { initial-default-clause-list   case-label-clause-list }
+
+case-label-clause-list:
+    case-clause-list
+    case-label-clause-list   case-clause-list
+
+case-clause-list:
+    case-label   switch-clause
+    case-label   case-clause-list
+
+case-label:
+    case constant-expression:
+    
+final-default-clause-list:
+    default:       switch-clause
+    case-label   final-default-clause-list
+
+initial-default-clause-list:
+    default:       switch-clause
+    default:       case-clause-list
+
+switch-clause:
+    statement-listopt   break;
+    C90:                { declaration-listopt   statement-listopt   break; }
+    C99 and later: { block-item-listopt   break; }</code></pre>
+
+<p>Except where explicitly permitted by this syntax, the case and default keywords may not appear
+anywhere within a switch statement body.</p>
+<p>Note: some of the restrictions imposed on switch statements by this rule are expounded in the rules
+referenced in the “See also” section. It is therefore possible for code to violate both this rule and one
+of the more specific rules.</p>
+<p>Note: the term switch label is used within the text of the specific switch statement rules to denote
+either a case label or a default label.</p>
+
+<p><b>Rationale</b></p>
+<p>The syntax for the switch statement in C is not particularly rigorous and can allow complex,
+unstructured behaviour. This and other rules impose a simple and consistent structure on the switch
+statement.</p>
+
+<p><b>See also</b></p>
+<p>Rule 15.3, Rule 16.2, Rule 16.3, Rule 16.4, Rule 16.5, Rule 16.6</p>
+"""
+
     return """
 <p><b>Rule</b></p>
 <p>A switch statement shall be a well-formed switch statement.</p>
@@ -107,10 +159,6 @@ switch-clause Either a case-clause or a default-clause.
 <p>The syntax for the switch statement in C++ is weak, allowing complex, unstructured behaviour.
 The previous text describes the syntax for switch statements as defined by MISRA C++. This, and
 the associated rules, imposes a simple and consistent structure on to the switch statement.</p>
-<p><b>Note</b></p>
-<p>In this checking, a switch is well-formed when the following cases are satisfied:</p>
-<p>1. Default and non-empty clauses should have a break or return statement.</p>
-<p>2. A clause before the default statement should have a break or return statement.</p>
 <p><b>Example</b></p>
 <pre><code language="C++">switch ( x )
 {
@@ -152,8 +200,6 @@ def check(check, file):
                 continue
 
             end_switch = node.end_node()
-            has_default = False
-            ill_formed = False
 
             for node_child in node.children():
                 if not str(node_child.kind()).startswith("switch-"):
@@ -163,21 +209,32 @@ def check(check, file):
                 has_exit = False
 
                 while lex and (lex.line_begin() <= node_child.line_end()):
-                    if (lex.text() == "default") and (lex.token() == "Keyword"):
-                        has_default = True
+                    if (lex.line_begin() == node_child.line_end()) and (lex.text() == ":") and lex.next(True, True).text() not in ["case", "default"]:
+                        break
 
                     lex = lex.next(True, True)
+                
+                on_switch = False
+                out_of_scope = 0
 
-                while lex and lex.text() not in ["case", "default"] and (lex.line_begin() <= end_switch.line_end()):
-                    if lex.text() in ["return", "break", "throw", "goto", "exit", "abort"] and (lex.token() in ["Keyword", "Identifier"]):
+                while lex and (lex.line_begin() <= end_switch.line_end()):
+                    if (lex.text() == "switch") and (lex.token() == "Keyword"):
+                        on_switch = True
+                    if on_switch and (lex.text() == "{"):
+                        out_of_scope += 1
+                    elif on_switch and (lex.text() == "}"):
+                        out_of_scope -= 1
+
+                        if not out_of_scope:
+                            on_switch = False
+                    elif not out_of_scope and lex.text() in ["return", "break", "throw", "goto", "exit", "abort", "continue"] and (lex.token() in ["Keyword", "Identifier"]):
                         has_exit = True
+                        break                    
+                    elif not out_of_scope and lex.text() in ["case", "default"]:
                         break
 
                     lex = lex.next(True, True)
 
                 if not has_exit:
-                    ill_formed = True
+                    check.violation(None, file, node.line_begin(), node.column_begin(), ERR1)
                     break
-                    
-            if ill_formed or not has_default:
-                check.violation(None, file, node.line_begin(), node.column_begin(), ERR1)
