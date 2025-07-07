@@ -16,7 +16,7 @@ def error(string: str):
 
 def getNum(prompt: str):
     while True:
-        num = input(string)
+        num = input(prompt)
         if num:
             try:
                 num = int(num)
