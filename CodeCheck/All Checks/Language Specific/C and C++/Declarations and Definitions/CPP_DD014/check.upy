@@ -1,15 +1,10 @@
-# This script is designed to run with Understand - CodeCheck
-# Rewritten by Robby Bennett
-# 2023-02-23
-
-
 import re
 
 
 ERR1 = 'Declaration or definition is not compatible with another declaration or definition in file %1 at %2:%3'
 
 
-checkedEnts = set()
+scanned_ents = []
 
 
 def ids():
@@ -375,101 +370,191 @@ def test_language(language):
 
 
 def define_options(check):
-    skipUnnamed = True if (check.id() == 'MISRA23_8.3') else False
+    simplify = check.id() != 'MISRA04_8.3'
+    unnamed = check.id() == 'MISRA23_8.3'
 
-    check.options().checkbox('compatibleBasicTypes', 'Use compatible basic types interchangeably (example: int = signed = signed int)', check.id() != 'MISRA04_8.3')
-    check.options().checkbox('violationForFirst', 'Violation for first declaration/definition found', False)
-    check.options().checkbox('skipUnnamed', 'Skip function declaration with an unnamed parameter', skipUnnamed)
+    check.options().checkbox('simplify', 'Use compatible basic types interchangeably (example: int = signed = signed int)', simplify)
+    check.options().checkbox('unnamed', 'Do not apply naming requirements to unnamed function parameters', unnamed)
 
 
-def getObjectSignatureParts(ref):
-    sig = []
+def check(check, file):
+    simp_types = check.options().lookup('simplify')
+    accept_unnamed = check.options().lookup('unnamed')
+    
+    for func_ref in file.filerefs("Define, Declare ~Implicit", "Function ~Macro ~Lambda ~Member", True):
+        if func_ref.ent().id() in scanned_ents:
+            continue
+        
+        scanned_ents.append(func_ref.ent().id())
+        redef_refs = func_ref.ent().refs("Definein, Declarein ~Using")
+        flagged = False
 
-    # Lexer with ents to check for macros
-    lex = ref.file().lexer(True).lexeme(ref.line(), ref.column())
+        if len(redef_refs) <= 1:
+            continue
 
-    # Move the lexeme back until we see the previous statement or extern
-    while lex:
-        # Remove 'extern' from the signature
-        if lex.text() == 'extern':
-            lex = lex.next(True, True)
-            break
+        func_param = get_param(func_ref, func_ref.ent().name(), accept_unnamed)
 
-        # If we see a macro first, abort
-        if lex.token() == 'Identifier' and lex.ent() and lex.ent().kind().check('Macro'):
-            return None
+        if func_param is None:
+            continue
 
-        # Stop at the previous statement (new line for simplicity)
-        prev = lex.previous(ignore_comments=True)
-        if prev and prev.token() == 'Newline':
-            break
+        for redef_ref in redef_refs:
+            redef_param = get_param(redef_ref, func_ref.ent().name(), accept_unnamed)
 
-        lex = lex.previous(True, True)
+            if redef_param is None:
+                continue
 
-    if not lex:
+            if not is_param_identical(func_param, redef_param, simp_types, accept_unnamed):
+                check.violation(redef_ref.scope(), redef_ref.file(), redef_ref.line(), redef_ref.column(), ERR1, func_ref.file(), func_ref.line(), func_ref.column())
+                flagged = redef_ref
+
+        if flagged:
+            check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR1, flagged.file(), flagged.line(), flagged.column())
+
+    for obj_ref in file.filerefs("Define, Declare ~Implicit", "Global Object", True):
+        if obj_ref.ent().id() in scanned_ents:
+            continue
+
+        scanned_ents.append(obj_ref.ent().id())
+        redef_refs = obj_ref.ent().refs("Definein, Declarein ~Using")
+        flagged = None
+
+        if len(redef_refs) <= 1:
+            continue
+
+        obj_spec = get_spec(obj_ref, obj_ref.ent().name())
+
+        if obj_spec is None:
+            continue
+
+        for redef_ref in redef_refs:
+            redef_spec = get_spec(redef_ref, obj_ref.ent().name())
+
+            if redef_spec is None:
+                continue
+
+            if not is_spec_identical(obj_spec, redef_spec, simp_types):
+                check.violation(redef_ref.scope(), redef_ref.file(), redef_ref.line(), redef_ref.column(), ERR1, obj_ref.file(), obj_ref.line(), obj_ref.column())
+                flagged = redef_ref
+
+        if flagged:
+            check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1, flagged.file(), flagged.line(), flagged.column())
+
+
+def get_spec(ref, ent_name):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+    spec = []
+
+    # if Macro
+    if lex.text() != ent_name:
         return None
+    
+    while lex and (lex.line_begin() == ref.line()) and (lex.text() != "extern"):
+        if lex.text() == ",":
+            while lex.token() != "Whitespace":
+                lex = lex.previous()
+            
+            continue
 
-    # Build the signature
-    name = ref.scope().name()
-    while lex and lex.text() != name:
-        # If there is comma-separated declaration of multiple objects
-        if lex.text() == ',':
-            # Remove identifier of the other object
-            if sig:
-                sig.pop()
-            # Remove asterisks if that object was a pointer
-            while sig and sig[-1] == '* ':
-                sig.pop()
-        else:
-            sig.append(lex.text() + ' ')
-
-        lex = lex.next(True, True)
-
-    return sig
+        spec.insert(0, lex.text())
+        lex = lex.previous(ignore_comments=True)
+        
+    return spec
 
 
-def getFunctionSignatureParts(ref):
-    sig = []
+def is_spec_identical(spec1, spec2, simplify):
+    spec1 = "".join(spec1) if spec1 is not None else ""
+    spec2 = "".join(spec2) if spec2 is not None else ""
 
-    # Lexer with ents to check for macros
-    lex = ref.file().lexer(True).lexeme(ref.line(), ref.column())
-    if not lex:
-        return sig
+    if simplify:        
+        spec1 = simplifyTypes(spec1)
+        spec2 = simplifyTypes(spec2)    
 
-    # Skip identifier and closed parenthesis if it looks like (identifier)
-    l = lex.previous(True, True)
-    r = lex.next(True, True)
-    if l and l.text() == '(' and r and r.text() == ')':
-        lex = lex.next(True, True).next(True, True)
+    spec1 = spec1.replace(" ", "")
+    spec2 = spec2.replace(" ", "")
 
-    # Build the signature
-    paren = 0
-    while lex and lex.text() != '{' and not (lex.text() == ')' and paren == 1):
+    if spec1 == spec2:
+        return True
 
-        if lex.text() == '(':
-            paren += 1
-        elif lex.text() == ')':
-            paren -= 1
+    return False
 
-        # There is a strange scenario I encountered with many function macros
-        # that would break this check wide open. I could not find a solution.
-        # This is a special case to try and not check those instances.
-        if paren < 0:
-            return None
 
-        # This is another case of function macros being used to build
-        # definitions and declarations that needs to be ignored.
-        if lex.token() == 'Identifier' and lex.ent() and lex.ent().kind().check('Macro'):
-            return None
+def get_param(ref, ent_name, accept_unnamed):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    on_param = 0
+    param = []
 
-        if lex.token() == 'Keyword':
-            sig.append(lex.text() + ' ')
-        else:
-            sig.append(lex.text())
+    # if Macro or pointer function
+    if (lex.text() != ent_name):
+        return None
+    elif (lex.next(True, True).text() != "("):
+        return []
 
-        lex = lex.next(True, True)
+    prev_append = None
 
-    return sig
+    while lex:
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+        
+            if not on_param:
+                if accept_unnamed and prev_append and ((prev_append.token() != "Identifier") or (prev_append.ent() and prev_append.ent().kind().check("Type"))):
+                    param.append("[unnamed]")
+
+                break
+        elif lex.text() == "::":
+            if param:
+                param.pop()
+        elif (on_param == 1) and lex.text() == "=":
+            while lex.text() not in [",", ")"]:
+                lex = lex.next(ignore_comments=True)
+            continue
+        elif (on_param == 1) and (lex.text() == ",") and accept_unnamed and prev_append and ((prev_append.token() != "Identifier") or (prev_append.ent() and prev_append.ent().kind().check("Type"))):
+            param.append("[unnamed]")
+            param.append(lex.text())
+            prev_append = lex
+        elif (on_param == 1) and lex.token() in ["Identifier", "Keyword", "Operator"]:
+            param.append(lex.text())
+            prev_append = lex
+
+        lex = lex.next(ignore_comments=True)
+
+    return param
+
+
+def is_param_identical(param1, param2, simplify, accept_unnamed):
+    if accept_unnamed and param1 and param2 and ("[unnamed]" in param1 or "[unnamed]" in param2) and (len(param1) == len(param2)):
+        new_param1 = []
+        new_param2 = []
+
+        for i, (p1, p2) in enumerate(zip(param1, param2)):
+            if "[unnamed]" in (p1, p2):
+                continue
+
+            new_param1.append(p1)
+            new_param2.append(p2)
+
+        param1 = new_param1
+        param2 = new_param2
+
+    if simplify:
+        return simplify_param(param1) == simplify_param(param2)  
+
+    return param1 == param2
+
+
+def simplify_param(param):
+    if param is None:
+        return []
+    
+    param = " ".join(param)
+    param = param.split(",")
+    new_param = []
+
+    for p in param:
+        new_param.append(simplifyTypes(p))
+
+    return new_param
 
 
 def simplifyTypes(string):
@@ -512,106 +597,7 @@ def simplifyTypes(string):
     string = re.sub(r'\bint\b', 'si', string)
     string = re.sub(r'\bsigned\b', 'si', string)
 
+    # Remove all std::
+    string = re.sub(r'\bstd::\b', '', string)
+
     return string
-
-
-def getSignature(ref, compatibleBasicTypes):
-    # Create the signature with the lexer
-    if ref.scope().kind().check('Object'):
-        sig = getObjectSignatureParts(ref)
-    else:
-        sig = getFunctionSignatureParts(ref)
-
-    if not sig:
-        return None
-
-    # Simplify the signature
-    sig = ''.join(sig).strip()
-    if compatibleBasicTypes:
-        sig = simplifyTypes(sig)
-
-    return sig
-
-
-def check(check, file):
-    compatibleBasicTypes = check.options().lookup('compatibleBasicTypes')
-    violationForFirst = check.options().lookup('violationForFirst')
-    skipUnnamed = check.options().lookup('skipUnnamed')
-
-    for ref in file.filerefs('Declare, Define', 'Object Global, Function ~Member', True):
-        ent = ref.ent()
-
-        # Skip if entity already checked
-        if ent in checkedEnts:
-            continue
-        checkedEnts.add(ent)
-
-        # Function
-        if ent.kind().check('Function'):
-            # Skip built-in functions
-            if re.match(r'__', ent.name()):
-                continue
-            # Init
-            firstRef = None
-            firstSig = None
-            allRefs = ent.refs('Declarein ~Using, Definein')
-        # Object
-        else:
-            # Skip objects without a type
-            if not ent.type():
-                continue
-            # Init
-            firstRef = ent.ref('Definein')
-            # Skip objects without a definition
-            if not firstRef:
-                continue
-            # Init
-            firstSig = getSignature(firstRef, compatibleBasicTypes)
-            # Skip objects if the definition signature wasn't properly created
-            if not firstSig:
-                continue
-            # Init
-            allRefs = ent.refs('Declarein')
-
-        # Get declarations/definitions
-        if not allRefs:
-            continue
-
-        # Violation for each non-matching subsequent declaration/definition
-        firstFlagged = False
-        for otherRef in allRefs:
-            has_unnamed = False
-
-            for param_ref in otherRef.scope().refs("", "Parameter"):
-                lex = param_ref.file().lexer().lexeme(param_ref.line(), param_ref.column())
-
-                if (param_ref.line() == otherRef.line()) and (lex.text() != param_ref.ent().name()) and (lex.token() != "Identifier"):
-                    has_unnamed = True
-                    break
-
-            if skipUnnamed and has_unnamed:
-                continue
-
-            otherSig = getSignature(otherRef, compatibleBasicTypes)
-
-            # Skip if the signature wasn't properly created
-            if not otherSig:
-                continue
-
-            # Skip if this is the first signature properly created
-            if not firstRef:
-                firstRef = otherRef
-                firstSig = otherSig
-                continue
-
-            # Skip if the signatures match
-            if otherSig == firstSig:
-                continue
-
-            # Violation for first signature
-            if violationForFirst and not firstFlagged:
-                check.violation(ent, firstRef.file(), firstRef.line(), firstRef.column(), ERR1, otherRef.file(), otherRef.line(), otherRef.column())
-                violationForFirst = True
-
-            # Violation for this other signature
-            check.violation(ent, otherRef.file(), otherRef.line(), otherRef.column(), ERR1, firstRef.file(), firstRef.line(), firstRef.column())
