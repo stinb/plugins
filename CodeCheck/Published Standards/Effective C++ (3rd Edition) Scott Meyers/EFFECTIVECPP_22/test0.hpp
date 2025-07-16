@@ -9,9 +9,9 @@ class Test {
     float getLevel( ) const;
     void setPosition( int x, int y );
 
-    int a;    // UndCC_Violation(0)
-    float b;  // UndCC_Violation(0)
-    bool no;  // UndCC_Violation(0)
+    int a;    // UndCC_Violation
+    float b;  // UndCC_Violation
+    bool no;  // UndCC_Violation
 
   protected:
     int mX;        // UndCC_Violation(0)
