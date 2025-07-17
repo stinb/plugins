@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#define deref_1(x) *x = 0 // UndCC_Violation(0) - dereference operation in macro definition
+#define deref_1(x) *x = 0 // UndCC_Violation - dereference operation in macro definition
 
 typedef int INT;
 typedef INT *INTPTR; // UndCC_Violation - dereferencing in typedef

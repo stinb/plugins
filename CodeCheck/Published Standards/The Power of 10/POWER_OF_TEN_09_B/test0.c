@@ -48,37 +48,37 @@ static void deref_macros(void)
   NOTHING_0(string[0]);
   NOTHING_0(string)[0];
 
-  #define RESET_POINT_PTR_A_0(point_ptr) { point_t *_ptr = (point_ptr); _ptr->x = 0; _ptr->y = 0; } // UndCC_Violation(0)
+  #define RESET_POINT_PTR_A_0(point_ptr) { point_t *_ptr = (point_ptr); _ptr->x = 0; _ptr->y = 0; } // UndCC_Violation
   RESET_POINT_PTR_A_0(point_ptr);
 
-  #define RESET_POINT_PTR_B_0(point_ptr) { point_t *_ptr = (point_ptr); _ptr->x = 0; _ptr->y = 0; } // UndCC_Violation(0)
+  #define RESET_POINT_PTR_B_0(point_ptr) { point_t *_ptr = (point_ptr); _ptr->x = 0; _ptr->y = 0; } // UndCC_Violation
   RESET_POINT_PTR_B_0(get_origin_ptr());
 
-  #define CLEAR_STRING_A_0(char_ptr) { *(char_ptr) = 0; } // UndCC_Violation(0)
+  #define CLEAR_STRING_A_0(char_ptr) { *(char_ptr) = 0; } // UndCC_Violation
   CLEAR_STRING_A_0(string);
 
-  #define CLEAR_STRING_B_0(char_ptr) { *(char_ptr) = 0; } // UndCC_Violation(0)
+  #define CLEAR_STRING_B_0(char_ptr) { *(char_ptr) = 0; } // UndCC_Violation
   CLEAR_STRING_B_0(get_string());
 
-  #define GET_NUM_A_0(nums, n) (nums)[n] // UndCC_Violation(0)
+  #define GET_NUM_A_0(nums, n) (nums)[n] // UndCC_Violation
   GET_NUM_A_0(nums, 1);
 
   #define GET_NUM_B_0(nums, n) (nums)[n] // UndCC_FalseNeg
   GET_NUM_B_0(get_nums(), 1);
 
-  #define RESET_X_POINT_PTR_A_0(point_ptr) { (point_ptr)->x = 0; } // UndCC_Violation(0)
+  #define RESET_X_POINT_PTR_A_0(point_ptr) { (point_ptr)->x = 0; } // UndCC_Violation
   RESET_X_POINT_PTR_A_0(point_ptr);
 
-  #define RESET_X_POINT_PTR_B_0(point_ptr) { (point_ptr)->x = 0; } // UndCC_Violation(0)
+  #define RESET_X_POINT_PTR_B_0(point_ptr) { (point_ptr)->x = 0; } // UndCC_Violation
   RESET_X_POINT_PTR_B_0(get_origin_ptr());
 
-  #define DEREF_FUNCTIONAL_A_0(point_ptr) *(((point_ptr))) // UndCC_Violation(0)
+  #define DEREF_FUNCTIONAL_A_0(point_ptr) *(((point_ptr))) // UndCC_Violation
   DEREF_FUNCTIONAL_A_0(point_ptr);
 
-  #define DEREF_FUNCTIONAL_B_0(point_ptr) *(((point_ptr))) // UndCC_Violation(0)
+  #define DEREF_FUNCTIONAL_B_0(point_ptr) *(((point_ptr))) // UndCC_Violation
   DEREF_FUNCTIONAL_B_0(get_origin_ptr());
 
-  #define DEREF_POINT_PTR_0 *point_ptr // UndCC_Violation(0)
+  #define DEREF_POINT_PTR_0 *point_ptr // UndCC_Violation
   DEREF_POINT_PTR_0;
 }
 
