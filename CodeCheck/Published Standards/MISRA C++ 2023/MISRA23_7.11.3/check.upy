@@ -1,0 +1,160 @@
+import re
+
+
+ERR1 = "Inappropriate conversion from function type to pointer-to-function type"
+INVALID_OPS = ["++", "--", "+", "-", "*", "/", "%"]
+
+
+def ids():
+    return ('MISRA23_7.11.3')
+
+
+def name(id):
+    return {
+        'MISRA23_7.11.3': "Published Standards/MISRA C++ 2023/7.11.3 A conversion from function type to pointer-to-function type shall only occur in appropriate contexts",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_7.11.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Functions',
+            'Pointers'
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_7.11.3': """
+<p><b>Amplification</b></p>
+<p>A conversion to pointer to function is appropriate when it occurs:</p>
+<p>1. Through a static_cast; or</p>
+<p>2. In an assignment to an object with pointer-to-function type.</p>
+
+<p><b>Rationale</b></p>
+<p>The use of a function pointer in Boolean contexts may result in a well-formed program that is contrary
+to developer expectations. For example, if the developer writes if ( f ), then it is not clear whether
+the intent is to test if the address of the function evaluates to nullptr, or that a call to the function
+f should be made but the call operator has been unintentionally omitted. The use of the & (addressof) operator or an explicit conversion with a static_cast to a function pointer removes this ambiguity.</p>
+<p>Using a function as an operand in an arithmetic expression will trigger pointer decay.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">extern int * f();
+
+if ( f == nullptr ) // Non-compliant
+{
+}
+
+if ( &f != nullptr ) // Compliant - no conversion
+{
+ (f)(); // Compliant - no conversion
+}
+
+std::cout << std::boolalpha // Compliant - assignment to pointer-to-function type
+ << f; // Non-compliant - assignment is not to
+ // pointer-to-function type
+
+auto x = +f; // Non-compliant
+
+void f1( double );
+void f1( uint32_t );
+
+auto selected = static_cast< void(*)( uint32_t ) >( f1 ); // Compliant
+
+auto lam = [](){};
+void ( *p )() = lam; // Compliant
+auto x = +lam; // Non-compliant
+
+if ( lam ) // Non-compliant
+{
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 7.0.2, Rule 8.2.4</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define, Declare ~Implicit ~Using", "Function ~Macro ~Template ~Explicit", True):
+        if str(func_ref.ent().name()).startswith("operator"):
+            continue
+        
+        ass_refs = func_ref.ent().refs("Assignby ~Indirect")
+
+        ass_refs = {
+            f"{a.line()} {a.column()}": a
+            for a in ass_refs
+        }
+        
+        for ptr_ref in func_ref.ent().refs("Useby, Callby ~Inactive ~Implicit ~ObjC"):
+            compliant = False
+            ass_ref = ass_refs.get(f"{ptr_ref.line()} {ptr_ref.column()}")
+            lex = ptr_ref.file().lexer(lookup_ents=True).lexeme(ptr_ref.line(), ptr_ref.column())
+            lex_prev = lex.previous(True, True)
+            lex_next = lex.next(True, True)
+
+            while lex_prev and (lex_prev.text() == "::"):
+                while lex_prev.token() not in ["Whitespace"]:
+                    lex_prev = lex_prev.previous()
+
+                    if lex_prev.token() in ["Operator"] and (lex_prev.text() != "::"):
+                        break                
+
+            if lex_next and (lex_next.text() == "<"):
+                while lex_next.text() != ">":
+                    lex_next = lex_next.next(True, True)
+
+                    if lex_next.text() == ")":
+                        lex_next = lex
+                        break   
+                
+                lex_next = lex_next.next(True, True)
+
+            if ((lex and ((lex.text() in "({") or (lex.token() == "String") or (lex.ent() and lex.ent().kind().check("Macro"))))
+                or (lex_prev and (lex_prev.text() in ["&", ".", "->", ",", "="]))
+                or (lex_next and (lex_next.text() in "({="))
+                ):
+                continue
+            elif lex_prev and lex_next and lex_prev.text() in INVALID_OPS or lex_next.text() in INVALID_OPS:
+                check.violation(func_ref.ent(), ptr_ref.file(), ptr_ref.line(), ptr_ref.column(), ERR1)
+                continue      
+
+            if ass_ref:
+                ass_ent_type = str(ass_ref.ent().freetext("UnderlyingType"))
+                ass_lex = lex
+
+                if re.search(r".+ \*?\(\*.*\)\(.*\)", ass_ent_type) or ass_ref.ent().kind().check("Parameter"):
+                    continue                
+
+                while ass_lex and ass_lex.text() not in ["=", ";"]:
+                    if ass_lex.text() == "static_cast":
+                        compliant = True
+                        break
+
+                    ass_lex = ass_lex.previous(True, True)
+
+            if ((lex_prev and lex_next and (lex_prev.text() == "(") and (lex_next.text() == ")") and (lex_next.next(True,True).text() == "("))
+                or (lex_prev and (lex_prev.token() == "Operator") and lex_prev.text() in ["=","&",",","(",".","->"])
+                or (lex_next and (lex_next.token() == "Operator") and lex_next.text() in [";",",",".","->",")"])):
+                continue
+
+            if not compliant:
+                check.violation(func_ref.ent(), ptr_ref.file(), ptr_ref.line(), ptr_ref.column(), ERR1)
