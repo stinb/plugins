@@ -1,0 +1,128 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 7/22/25
+
+import re
+import Modules
+
+ERR1 = 'Usage of assembly was not documented'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA12_DIR_4.2', 'MISRA23_DIR_4.2', 'CPP_CM004')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA12_DIR_4.2': 'Published Standards/MISRA C 2012/' + """\
+4.2 All usage of assembly language should be documented""",
+        'MISRA23_DIR_4.2': 'Published Standards/MISRA C 2023/' + """\
+4.2 All usage of assembly language should be documented""",
+        'CPP_CM004': 'All Checks/Language Specific/C and C++/Comments/' + """\
+All usage of assembly language should be documented""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA12_DIR_4.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Comments',
+        ],
+        'MISRA23_DIR_4.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Comments',
+        ],
+        'CPP_CM004': [
+            'Language: C',
+            'Language: C++',
+            'Comments',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The rationale for the use of the assembly language and the mechanism for
+interfacing between C and the assembly language should be documented.</p>
+<p><b>Rationale</b></p>
+<p>Assembly language code is implementation-defined and therefore not portable.
+</p>
+"""
+    return {
+        'MISRA12_DIR_4.2': desc,
+        'MISRA23_DIR_4.2': desc,
+        'CPP_CM004': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not re.search(r'asm', file.contents()):
+        return
+    if not file.lexer():
+        return
+    lexer = file.lexer()
+    lexeme = lexer.first()
+    lastLex = None
+
+    while lexeme:
+        # Find assembly usage
+        if lexeme.text() in ['asm', '__asm__', '__asm']:
+            violLex = lexeme
+            prevLex = lexeme.previous(True)
+            # Look for comment before
+            if lastLex and lastLex.token() == 'Comment':
+                continue
+            lastLex = lexeme
+            lexeme = lexeme.next(True)
+            # Go through to end of statement to look for comments within
+            if lexeme and lexeme.text() == '(':
+                close = Modules.findClose(lexeme)
+                skip = False
+                while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    if lexeme.token() == 'Comment' and not re.search(r'undcc_violation', lexeme.text().lower()):
+                        skip = True
+                        break
+                    lastLex = lexeme
+                    lexeme = lexeme.next(True)
+                if skip:
+                    continue
+                if lexeme:
+                    lastLex = lexeme
+                    lexeme = lexeme.next(True) 
+                    # Check for comments after assembly statement on the same line
+                    if lexeme and lexeme.text() == ';':
+                        lastLex = lexeme
+                        lexeme = lexeme.next(True)
+                        if lexeme and lexeme.line_begin() == lastLex.line_begin() and lexeme.token() == 'Comment' and not re.search(r'undcc_violation', lexeme.text().lower()):
+                            continue
+
+                check.violation(file, file, violLex.line_begin(), violLex.column_begin(), ERR1)
+
+
+
+        if lexeme:
+            lastLex = lexeme
+            lexeme = lexeme.next(True, True)
+
