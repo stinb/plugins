@@ -1,3 +1,6 @@
+import re
+
+
 ERR1 = 'Unbounded functions of library <cstring> shall not be used'
 ERR2 = 'Unbounded functions of library <string.h> shall not be used'
 ERR3 = 'The string handling functions from <cstring>, <cstdlib>, <cwchar> and <cinttypes> shall not be used'
@@ -227,10 +230,13 @@ def define_options(check):
         all_libs = 'Unbounded functions of <cstdlib>'
 
     check.option().choice('all_libs', 'Functions from cstring/string.h, cstdlib/stdlib.h, cstring, cwchar/wchar.h, cinttypes/inttypes.h', ['All Libraries', 'Functions from <string.h>', 'Unbounded functions of <cstdlib>'],  all_libs)
+    check.option().checkbox('sizeof_exc', 'Allow function use if the argument has been checked with sizeof beforehand', check.id() == 'MISRA23_21.17')
 
 
 def check(check, file):
+    sizeof_exc = check.option().lookup('sizeof_exc')    
     all_libs = check.option().lookup('all_libs')
+    checked_funcs = {}
     func_list = []
     err = ""
 
@@ -248,4 +254,81 @@ def check(check, file):
 
     for ref in file.filerefs("Call", "~Virtual Function"):
         if ref.ent().longname() in func_list:
+            lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+
+            # Skip macro
+            if lex.text() != ref.ent().name():
+                continue
+
+            compliant = False
+
+            if sizeof_exc and "sizeof" in ref.scope().contents():
+                args_id = []
+                on_arg = 0
+
+                while lex:
+                    if lex.text() == "(":
+                        on_arg += 1
+                    elif lex.text() == ")":
+                        on_arg -= 1
+
+                        if not on_arg:
+                            break
+                    elif (on_arg == 1) and lex.ent():
+                        args_id.append(lex.ent().id())
+
+                    lex = lex.next(True, True)
+
+                check_sizeof(ref.scope(), checked_funcs)
+
+                for arg_id in args_id:
+                    if arg_id in checked_funcs[ref.scope().id()] and (checked_funcs[ref.scope().id()][arg_id] <= ref.line()):
+                        compliant = True
+                        break
+
+            if compliant:
+                continue
+
             check.violation(ref.ent(), file, ref.line(), ref.column(), err)
+
+
+def check_sizeof(func_ent, checked_funcs):
+    if func_ent.id() in checked_funcs:
+        return
+
+    checked_funcs[func_ent.id()] = {}
+    sizeof_list = re.findall("sizeof", func_ent.contents())
+
+    if not sizeof_list:
+        return
+
+    def_ref = func_ent.ref("Definein")
+
+    if not def_ref:
+        return
+
+    lex = def_ref.file().lexer().lexeme(def_ref.line(), def_ref.column())
+    ctr = 0
+
+    while lex:
+        if lex.text() == "sizeof":
+            ctr += 1
+            on_arg = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_arg += 1
+                elif lex.text() == ")":
+                    on_arg -= 1
+
+                    if not on_arg:
+                        break
+                elif (on_arg == 1) and lex.ent() and lex.ent().id() not in checked_funcs[func_ent.id()]:
+                    checked_funcs[func_ent.id()][lex.ent().id()] = lex.line_begin()
+
+                lex = lex.next(True, True)            
+
+        if ctr == len(sizeof_list):
+            break
+
+        lex = lex.next(True, True)
