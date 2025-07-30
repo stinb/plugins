@@ -45,9 +45,6 @@ This is what it will look look like in Python:
   def id():
       return 'CUST01'
 
-  def description():
-      return 'Verify that all files start with a letter.'
-
   def detailed_description():
       return """\
   Company coding standards specify that 
