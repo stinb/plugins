@@ -1,0 +1,248 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 7/29/25
+
+import re
+import Modules
+
+ERR1 = 'String literal was not assigned to const char *'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_7.4', 'MISRA12_7.4', 'CPP_DD027')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_7.4': 'Published Standards/MISRA C 2023/' + '''\
+7.4 A string literal shall not be assigned to an object unless the object's type
+is "pointer to const-qualified char''',
+        'MISRA12_7.4': 'Published Standards/MISRA C 2012/' + '''\
+7.4 A string literal shall not be assigned to an object unless the object’s type
+is "pointer to const-qualified char"''',
+        'CPP_DD027': 'All Checks/Language Specific/C and C++/Comments/' + """\
+All usage of assembly language should be documented""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_7.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Comments',
+        ],
+        'MISRA12_7.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Comments',
+        ],
+        'CPP_DD027': [
+            'Language: C',
+            'Language: C++',
+            'Comments',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The type used to represent characters within a string literal depends on the
+encoding prefix:</p>
+<ul>
+<li>char when there is no prefix — character string literal;</li>
+<li>char for a u8 prefix — UTF-8 string literal;</li>
+<li>wchar_t for an L prefix — wide string literal;</li>
+<li>char16_t for a u prefix — wide string literal;</li>
+<li>char32_t for a U prefix — wide string literal.</li>
+</ul>
+<p>No attempt shall be made to directly modify a character string literal, a
+UTF-8 string literal or a wide string literal. The result of the address-of
+operator, &, applied to a character string literal or a UTF-8 string literal
+shall not be assigned to an object unless that object’s type is "pointer to
+array of const-qualified char". The result of the address-of operator, &,
+applied to a wide string literal shall not be assigned to an object unless that
+object's type is "pointer to array of const-qualified wchar_t", "pointer to
+array of const-qualified char16_t" or "pointer to array of const-qualified
+char32_t", as appropriate for the encoding prefix.</p>
+<p><b>Rationale</b></p>
+<p>Any attempt to modify a string literal results in undefined behaviour. For
+example, some implementations may store string literals in read-only memory in
+which case an attempt to modify the string literal will fail and may also result
+in an exception or crash. This rule, when applied in conjunction with others,
+prevents a string literal from being modified. It is explicitly unspecified in
+C99 and later whether string literals that share a common ending are stored in
+distinct memory locations. Therefore, even if an attempt to modify a string
+literal appears to succeed, it is possible that another string literal might be
+inadvertently altered.</p>
+<p><b>Exception</b></p>
+<p>This rule does not apply to a string literal passed as an argument to the
+variable argument list of a variadic function.</p>
+<p><b>Exception</b></p>
+<p>The following example shows an attempt to modify a string literal directly:
+</p>
+<pre><code language="C++">"0123456789"[0] = '*'; /* Non-compliant */</code></pre>
+<p>These examples show how to prevent modification of string literals
+indirectly:</p>
+<pre><code language="C++">/* Non-compliant - s is not const-qualified */
+char *s = "string";
+/* Compliant - p is const-qualified; additional qualifiers are permitted */
+const volatile char *p = "string";
+extern void f1 ( char *s1 );
+extern void f2 ( const char *s2 );
+void g ( void )
+{
+  f1 ( "string" ); /* Non-compliant - parameter s1 is not
+  * const-qualified */
+  f2 ( "string" ); /* Compliant */
+}
+char *name1 ( void )
+{
+  return ( "MISRA" ); /* Non-compliant - return type is not
+                       * const-qualified */
+}
+const char *name2 ( void )
+{
+  return ( "MISRA" ); /* Compliant */
+}</code></pre>
+<p>This example shows the permitted exemption for variadic functions:</p>
+<pre><code language="C++">extern void f3( uint16_t x, ... ); /* Note: non-compliant with Rule 17.1 */
+extern void f4( char *text, ... ); /* Note: non-compliant with Rule 17.1 */
+void variadic( void )
+{
+f3( 42u, "MISRA" ); /* Compliant by exception */
+f4( "MISRA", 42u ); /* Non-compliant - exception only applies to
+variable argument lists */
+}</code></pre>
+<p><b>See also</b></p>
+<p>Rule 11.4, Rule 11.8, Rule 17.1</p>
+"""
+    return {
+        'MISRA23_7.4': desc,
+        'MISRA12_7.4': desc,
+        'CPP_DD027': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Object')
+    for ref in refs:
+        if re.search(r'const.*char.*\*', str(ref.ent().type())) or not re.search(r'char|string', str(ref.ent().type())):
+            continue
+
+        setRefs = ref.ent().refs('Setby')
+        for setRef in setRefs:
+            if not lexer:
+                lexer = file.lexer()
+            # Look for string literals in setby refs
+            lexeme = lexer.lexeme(setRef.line(), setRef.column())
+            if lexeme:
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '=':
+                    lexeme = lexeme.next(True, True)
+                    if lexeme and checkStringLiteral(lexeme, r';'):
+                        check.violation(setRef.ent(), file, setRef.line(), setRef.column(), ERR1)
+
+    refs = file.filerefs('Define, Declare', 'Function', True)
+    for ref in refs:
+        # Skip if not of type char or string or is of type 'const char *'
+        if re.search(r'char|string', ref.ent().freetext("UnderlyingType")) and not re.search(r'const.*char.*\*', ref.ent().freetext("UnderlyingType")):
+            if not lexer:
+                lexer = file.lexer()
+            # Look through function to find return
+            begin = ref.ent().ref("Begin")
+            end = ref.ent().ref("End")
+            if not (begin and end):
+                continue
+            lexeme = lexer.lexeme(begin.line(), begin.column())
+            close = lexer.lexeme(end.line(), end.column())
+            while lexeme and close and checkLexBounds(lexeme, close):
+                if lexeme.text() == 'return':
+                    lexeme = lexeme.next(True, True)
+                    if not lexeme:
+                        continue
+                    if lexeme.text() in ['(', '{']:
+                        if lexeme.text() == '(':
+                            last = r'\)'
+                        elif lexeme.text() == '{':
+                            last = r'\}'
+                        lexeme = lexeme.next(True, True)
+                        # Flag if string literal was returned
+                        if lexeme and checkStringLiteral(lexeme, last):
+                            check.violation(ref.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+                    # Flag if string literal was returned
+                    elif checkStringLiteral(lexeme, r';'):
+                        check.violation(ref.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+
+                lexeme = lexeme.next(True, True)
+        # Put parameters in a list for later use
+        parameters = ref.ent().parameters()
+        if not parameters:
+            continue
+        parameters = parameters.split(',')
+        callRefs = ref.ent().refs('Callby')
+        for callRef in callRefs:
+            if not lexer:
+                lexer = file.lexer()
+
+            lexeme = lexer.lexeme(callRef.line(), callRef.column())
+            if lexeme:
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '(':
+                    close = Modules.findClose(lexeme)
+                    count = 0
+                    # Go through all parameters defined and called
+                    skip = False
+                    while lexeme and close and checkLexBounds(lexeme, close):
+                        if not skip:
+                            # Skip variable argument for exception
+                            if parameters[count] == '...' or re.search(r'const.*char.*\*', parameters[count]) or not re.search(r'char|string', parameters[count]):
+                                skip = True
+                        if lexeme.text() == ',':
+                            skip = False
+                            count += 1
+                        if not skip and checkStringLiteral(lexeme, r',|\)'):
+                            check.violation(callRef.ent(), file, callRef.line(), callRef.column(), ERR1)
+                        lexeme = lexeme.next(True, True)
+
+
+
+
+
+# Checks for string literal after the '=' in a set
+def checkStringLiteral(lexeme, last):
+    if lexeme and lexeme.token() == 'String':
+        lexeme = lexeme.next(True, True)
+        if lexeme and re.search(last, lexeme.text()):
+            return True
+
+    return False
+
+# Return False if 'lexeme' has passed position of 'close'
+def checkLexBounds(lexeme, close):
+    if lexeme.line_begin() > close.line_begin():
+        return False
+    if lexeme.line_begin() == close.line_begin() and lexeme.column_begin() >= close.column_begin():
+        return False
+    return True
