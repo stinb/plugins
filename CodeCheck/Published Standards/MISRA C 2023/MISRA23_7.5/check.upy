@@ -1,0 +1,108 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8/01/25
+
+import re
+
+ERR1 = 'The argument of the integer constant macro did not have appropriate form'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_7.5', 'CPP_PR041')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_7.5': 'Published Standards/MISRA C 2023/' + """\
+7.5 The argument of an integer constant macro shall have an appropriate form""",
+        'CPP_PR041': 'All Checks/Language Specific/C and C++/Comments/' + """\
+The argument of an integer constant macro shall have an appropriate form""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_7.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+            'Preprocessor',
+        ],
+        'CPP_PR041': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The argument of an integer constant macro shall satisfy the following:</p>
+<ul>
+<li>The argument must be an unsuffixed integer (decimal, octal or hexadecimal)
+literal;</li>
+<li>The value of the argument must not exceed the limits for the equivalent
+exact-width type indicated by the name of the macro used. For example, the
+argument to UINT16_C must be representable as an unsigned 16-bit value.</li>
+</ul>
+<p></p>
+<p><b>Rationale</b></p>
+<p>The behaviour is undefined if the argument of an integer constant macro does
+not have an appropriate form.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include <stdint.h>
+uint32_t u1 = UINT32_C( 10 ); /* Compliant */
+uint32_t u2 = UINT32_C( 10UL ); /* Non-compliant - constant is suffixed */
+uint32_t u3 = UINT32_C( 10.0 ); /* Non-compliant - floating-point constant */
+uint16_t u4 = UINT16_C( -2 ); /* Non-compliant - constant expression */
+int32_t s1 = INT32_C( -2 ); /* Non-compliant - constant expression */
+int32_t s2 = -INT32_C( 2 ); /* Compliant */</code></pre>
+<p>In the following example, the constant has a value that cannot be represented in 16 bits.</p>
+<pre><code language="C++">uint_least16_t u5 = UINT16_C ( 0x10000 ); /* Non-compliant, even if uint_least16_t
+... is implemented as a 32-bit type */</code></pre>
+<p><b>See also</b></p>
+<p>Rule 7.6</p>
+"""
+    return {
+        'MISRA23_7.5': desc,
+        'CPP_PR041': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    macros = ['INT8_C', 'INT16_C', 'INT32_C', 'INT64_C', 'UINT8_C', 'UINT16_C', 'UINT32_C', 'UINT64_C', 'INTMAX_C', 'UINTMAX_C']
+    macrosReg = r'INT8_C|INT16_C|INT32_C|INT64_C|UINT8_C|UINT16_C|UINT32_C|UINT64_C|INTMAX_C|UINTMAX_C'
+    if not re.search(macrosReg, file.contents()):
+        return
+
+    if not file.lexer():
+        return
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+    for lexeme in lexemes:
+        # Look for integer contstant macros
+        if lexeme.text() in macros:
+            violLex = lexeme
+            lexeme = lexeme.next(True, True)
+            if lexeme and lexeme.text() == '(':
+                lexeme = lexeme.next(True, True)
+                # Throw violation if a negative sign or suffix is found
+                if lexeme and re.search(r'u|l|-', lexeme.text().lower()):
+                    check.violation(file, file, violLex.line_begin(), violLex.column_begin(), ERR1)
