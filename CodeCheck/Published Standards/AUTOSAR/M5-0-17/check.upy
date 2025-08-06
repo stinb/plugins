@@ -305,54 +305,61 @@ def define_options(check):
     check.option().checkbox('compare', 'Check pointer comparisons using the relational operators <, <=, >=, and >', compare)
 
 
-def get_left_op(lex):
-    on_bracket = 0
+def get_obj(lex):
+    while lex and lex.token() not in ["Whitespace", "Indent", "Newline"]:
+        if lex.ent() and lex.previous().text() not in ["->", "."]:
+            return lex.ent()
+        
+        lex = lex.previous()
 
-    while lex and (lex.text() != "=" ) and lex.token() not in ["Literal"]:
-        if lex.text() in "]})":
-            on_bracket += 1
-        elif lex.text() in "[{(":
-            on_bracket -= 1
-        elif not on_bracket and (lex.token() == "Identifier") and lex.ent():
+
+def get_left_op(lex):
+    parent_obj = None
+
+    while lex and (lex.text() != "=" ) and lex.token() not in ["Literal", "Whitespace", "Indent", "Newline"]:
+        if (lex.token() == "Identifier") and lex.ent():
             if not lex.ent().kind().check("Object, Parameter"):
-                return None
+                return None, None
             
             utype = str(lex.ent().freetext("UnderlyingType"))
 
-            if not (re.search(r"(\*$|\[.*\]$)", utype) or (lex.previous(True, True).text() == "&")):
-                return None
-            
-            return lex.ent()
+            if lex.ent().kind().check("Member") and lex.previous().text() in [".", "->"] and lex.ref() and lex.ref().kind().check("Addr"):
+                parent_obj = get_obj(lex.previous())
+            elif not (re.search(r"(\*$|\[.*\]$)", utype) or (lex.previous(True, True).text() == "&")):
+                return None, None
+                        
+            return lex.ent(), parent_obj
 
-        lex = lex.previous(True, True)
+        lex = lex.previous()
 
-    return None
+    return None, None
 
 
 def get_right_op(lex):
     right_ent = None
-    on_bracket = 0
+    parent_obj = None
 
-    while lex and lex.text() not in [";", ","] and lex.token() not in ["Literal"]:
-        if lex.text() in "[{(":
-            on_bracket += 1
-        elif lex.text() in "]})":
-            on_bracket -= 1
-        elif not on_bracket and (lex.token() == "Identifier") and lex.ent() and lex.next().text() not in ["->", "."]:
+    # compared to sizeof
+    if lex.token() == "Keyword":
+        return None, lex, None
+
+    while lex and lex.text() not in [";", ","] and lex.token() not in ["Literal", "Whitespace", "Indent", "Newline"]:
+        if (lex.token() == "Identifier") and lex.ent() and lex.next().text() not in ["->", "."]:
             if not lex.ent().kind().check("Object, Parameter"):
-                return None, lex
+                return None, lex, None
             
             utype = str(lex.ent().freetext("UnderlyingType"))
 
-            if not (re.search(r"(\*$|\[.*\]$)", utype) or (lex.previous(True, True).text() == "&")):
-                return None, lex
-
-            return lex.ent(), lex        
-            break
+            if lex.ent().kind().check("Member") and lex.previous().text() in [".", "->"] and lex.ref() and lex.ref().kind().check("Addr"):
+                parent_obj = get_obj(lex.previous())
+            elif not (re.search(r"(\*$|\[.*\]$)", utype) or (lex.previous(True, True).text() == "&")):
+                return None, lex, None
+            
+            return lex.ent(), lex, parent_obj        
         
-        lex = lex.next(True, True)
+        lex = lex.next()
     
-    return right_ent, lex
+    return right_ent, lex, None
 
 
 def get_ptrs(ent):
@@ -410,23 +417,37 @@ def get_ptrs(ent):
     return ptr_ids, has_array
 
 
+def check_violation(check, file, op):
+    error = ERR1 if (op.text() == "-") else ERR2
+    check.violation(None, file, op.line_begin(), op.column_begin(), error)
+
+
 def check(check, file):
-    OPERATORS = ["-", "<", "<=", ">=", ">"] if check.option().lookup('compare') else ["-"]
+    compare = check.option().lookup('compare')    
+    OPERATORS = ["-", "<", "<=", ">=", ">"] if compare else ["-"]
+
     lexer = file.lexer(True, 8, False, False)
     lex = lexer.first()
 
     while lex:
         if (lex.token() == "Operator") and (lex.text() in OPERATORS):
-            op = lex.text()
-            left_ent = get_left_op(lex)
+            op = lex
+            left_ent, l_parent = get_left_op(lex.previous(True, True))
 
             if not left_ent:
                 lex = lex.next(True, True)
                 continue
 
-            right_ent, lex = get_right_op(lex)
+            right_ent, lex, r_parent = get_right_op(lex.next(True, True))
 
             if not right_ent:
+                continue
+
+            if compare and l_parent and r_parent:
+                if l_parent.id() == r_parent.id():
+                    continue
+                
+                check_violation(check, file, op)
                 continue
             
             left_ptrs, l_has_array = get_ptrs(left_ent)
@@ -436,7 +457,6 @@ def check(check, file):
                 continue
 
             if not set(left_ptrs) & set(right_ptrs):
-                error = ERR1 if (op == "-") else ERR2
-                check.violation(None, file, lex.line_begin(), lex.column_begin(), error)
+                check_violation(check, file, op)
 
         lex = lex.next(True, True)
