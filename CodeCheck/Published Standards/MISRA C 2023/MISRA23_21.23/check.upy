@@ -1,0 +1,209 @@
+import re
+
+
+ERR1 = "All operand arguments in %1 shall have the same standard type"
+
+TGMATH_FUNCS = [
+            "atan2",
+            "copysign",
+            "fdim",
+            "fma",
+            "fmax",
+            "fmin",
+            "fmod",
+            # "frexp", only first param is operand
+            "hypot",
+            # "ldexp", only first param is operand
+            "nextafter",
+            # "nexttoward", should have different types
+            "pow",
+            "remainder",
+            "remquo",
+            # "scalbn", only first param is operand
+            # "scalbln" only first param is operand
+        ]
+
+INT_TYPES = [
+    "signed char",
+    "unsigned char",
+    "char",
+    "short",
+    "unsigned short",
+    "_Bool",
+    "bool"
+]
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_21.23')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_21.23': "Published Standards/MISRA C 2023/21.23 All operand arguments to any multi-argument type-generic macros declared in <tgmath.h> shall have the same standard type"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_21.23': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_21.23': """
+<p><b>Amplification</b></p>
+<p>The operand arguments passed to the type-generic macros defined in &lt;tgmath.h&gt; shall have
+essentially signed, essentially unsigned or essentially floating (either essentially real floating or essentially
+complex floating) type.</p>
+<p>Arguments to the following macros shall not have essentially complex floating type:</p>
+<p>atan2, cbrt, ceil, copysign, erf, erfc, exp2, expm1, fdim, floor, fma, fmax, fmin, fmod, frexp, hypot, ilogb,
+ldexp, lgamma, llrint, llround, log10, log1p, log2, logb, lrint, lround, nearbyint, nextafter, nexttoward,
+remainder, remquo, rint, round, scalbn, scalbln, tgamma, trunc.</p>
+<p>Note: The final parameter to the frexp and remquo macros is for output, and is not considered an
+operand.</p>
+
+<p><b>Rationale</b></p>
+<p>Arguments of non-arithmetic types are not convertible to any of the corresponding real types defined
+for the macros defined in &lt;tgmath.h&gt;. Attempting to use them therefore results in undefined
+behaviour.</p>
+<p>Casting an argument with essentially signed or essentially unsigned type to an essentially real floating
+type is not required because the purpose of these macros is to be type-generic. The essential type of
+the parameter derives from the argument.</p>
+<p>Passing an essentially complex floating argument to one of the macros listed in the amplification
+results in undefined behaviour.</p>
+
+<p><b>Example</b></p>
+<p>Real-valued arguments must have essentially signed or essentially unsigned or essentially floating type:</p>
+<pre><code language="C++">float f1, f2;
+int i1, i2;
+
+char c1, c2;
+void *p1, *p2;
+
+void fn1 (void)
+{
+f2 = sqrt (f1); /* Compliant - essentially floating real type */
+i2 = sqrt (i1); /* Compliant - essentially integer real type */
+c2 = sqrt (c1); /* Non-compliant - essentially character real type */
+p2 = sqrt (p1); /* Non-compliant - undefined behaviour */
+}</code></pre>
+<p>Arguments to the macros listed in the amplification must have a real type:</p>
+<pre><code language="C++">float f1, f2;
+_Complex float cf1, cf2;
+
+void fn2 (void)
+{
+f2 = sqrt ( f1); /* Compliant - real argument */
+cf2 = sqrt (cf1); /* Compliant - sqrt has a complex equivalent */
+f2 = ceil ( f1); /* Compliant - real argument */
+cf2 = ceil (cf1); /* Non-compliant - undefined behaviour */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.11, Rule 21.23</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_type(literal):
+    literal = literal.lower()
+
+    if re.search(r'ull$', literal) or re.search(r'llu$', literal):
+        return "unsigned long long"
+    elif re.search(r'll$', literal):
+        return "long long"
+    elif re.search(r'ul$', literal) or re.search(r'lu$', literal):
+        return "unsigned long"
+    elif re.search(r'l$', literal):
+        return "long"
+    elif re.search(r'u$', literal):
+        return "unsigned int"
+    else:
+        return "int"
+    
+
+def add_param(ent, param_types):
+    utype = str(ent.freetext("UnderlyingType"))
+
+    if utype in INT_TYPES:
+        utype = "int"
+
+    param_types.append(utype)    
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Call", "Function"):
+        if func_ref.ent().name() in TGMATH_FUNCS:
+            lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+
+            if lex and (lex.text() != func_ref.ent().name()):
+                continue
+
+            on_param = 0
+            param_ctr = 0
+            param_types = []
+
+            # macro call
+            if (lex.next().text() == ")") and (lex.next().next().text() == "("):
+                lex = lex.next().next()
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and (lex.text() == ","):
+                    param_ctr += 1
+                elif (on_param == 1) and lex.token() == "Literal":
+                    if str(lex.text()).isdigit():
+                        param_types.append("int")
+                    else:
+                        param_types.append(get_type(lex.text()))
+
+                elif (on_param == 1) and lex.ent():
+                    lex_ent = lex.ent()
+
+                    if lex.previous().text() == ")":
+                        prev = lex.previous().previous()
+                        
+                        if prev and prev.ent() and prev.ent().kind().check("Type"):
+                            lex_ent = prev.ent()
+                    
+                    add_param(lex_ent, param_types)
+
+                # only first two params is operand
+                if (len(param_types) == 2) and func_ref.ent().name() in ["remquo"]:
+                    break                                                               
+
+                lex = lex.next(True, True)
+            
+            if (len(param_types) > 1) and (len(set(param_types)) > 1):
+                check.violation(func_ref.ent(), file, func_ref.line(), func_ref.column(), ERR1, func_ref.ent().name())
