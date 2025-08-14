@@ -1,0 +1,241 @@
+import re
+
+
+ERR1 = "All operand arguments to %1 shall have an appropriate essential type"
+
+TGMATH_FUNCS = [
+    "acos", "asin", "atan", "cos", "sin", "tan",
+    "acosh", "asinh", "atanh", "cosh", "sinh", "tanh",
+    "exp", "log", "modf", "pow", "sqrt", "fabs",
+    "cacos", "casin", "catan", "ccos", "csin", "ctan",
+    "ccosh", "csinh", "ctanh", "cexp", "clog", "cpow",
+    "csqrt", "cabs", "carg", "conj", "cproj", "creal", "cimag"
+]
+
+TGMATH_NON_COMPLEX = [
+    "atan2", "cbrt", "ceil", "copysign", "erf", "erfc", "exp2", "expm1",
+    "fdim", "floor", "fma", "fmax", "fmin", "fmod", "frexp", "hypot", "ilogb",
+    "ldexp", "lgamma", "llrint", "llround", "log10", "log1p", "log2", "logb",
+    "lrint", "lround", "nearbyint", "nextafter", "nexttoward", "remainder",
+    "remquo", "rint", "round", "scalbn", "scalbln", "tgamma", "trunc"
+]
+
+ESSENTIAL_TYPES = [
+    "signed char", "short", "int", "long", "long long",
+    "unsigned char", "unsigned short", "unsigned int",
+    "unsigned long", "unsigned long long", "float", "double", "long double",
+    "_Complex float", "_Complex double", "_Complex long double"
+]
+
+ESSENTIAL_TYPES_NOCOMPLEX = [
+    "signed char", "short", "int",
+    "long", "long long", "unsigned char", 
+    "unsigned short", "unsigned int",
+    "unsigned long", "unsigned long long",
+    "float", "double", "long double"
+]
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_21.22')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_21.22': "Published Standards/MISRA C 2023/21.22 All operand \
+arguments to any type-generic macros declared in <tgmath.h> shall have an \
+appropriate essential type"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_21.22': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_21.22': """
+<p><b>Amplification</b></p>
+<p>The operand arguments passed to the type-generic macros defined in &lt;tgmath.h&gt; shall have
+essentially signed, essentially unsigned or essentially floating (either essentially real floating or essentially
+complex floating) type.</p>
+<p>Arguments to the following macros shall not have essentially complex floating type:</p>
+<p>atan2, cbrt, ceil, copysign, erf, erfc, exp2, expm1, fdim, floor, fma, fmax, fmin, fmod, frexp, hypot, ilogb,
+ldexp, lgamma, llrint, llround, log10, log1p, log2, logb, lrint, lround, nearbyint, nextafter, nexttoward,
+remainder, remquo, rint, round, scalbn, scalbln, tgamma, trunc.</p>
+<p>Note: The final parameter to the frexp and remquo macros is for output, and is not considered an
+operand.</p>
+
+<p><b>Rationale</b></p>
+<p>Arguments of non-arithmetic types are not convertible to any of the corresponding real types defined
+for the macros defined in &lt;tgmath.h&gt;. Attempting to use them therefore results in undefined
+behaviour.</p>
+<p>Casting an argument with essentially signed or essentially unsigned type to an essentially real floating
+type is not required because the purpose of these macros is to be type-generic. The essential type of
+the parameter derives from the argument.</p>
+<p>Passing an essentially complex floating argument to one of the macros listed in the amplification
+results in undefined behaviour.</p>
+
+<p><b>Example</b></p>
+<p>Real-valued arguments must have essentially signed or essentially unsigned or essentially floating type:</p>
+<pre><code language="C++">float f1, f2;
+int i1, i2;
+
+char c1, c2;
+void *p1, *p2;
+
+void fn1 (void)
+{
+    f2 = sqrt (f1); /* Compliant - essentially floating real type */
+    i2 = sqrt (i1); /* Compliant - essentially integer real type */
+    c2 = sqrt (c1); /* Non-compliant - essentially character real type */
+    p2 = sqrt (p1); /* Non-compliant - undefined behaviour */
+}</code></pre>
+<p>Arguments to the macros listed in the amplification must have a real type:</p>
+<pre><code language="C++">float f1, f2;
+_Complex float cf1, cf2;
+
+void fn2 (void)
+{
+    f2 = sqrt ( f1); /* Compliant - real argument */
+    cf2 = sqrt (cf1); /* Compliant - sqrt has a complex equivalent */
+    f2 = ceil ( f1); /* Compliant - real argument */
+    cf2 = ceil (cf1); /* Non-compliant - undefined behaviour */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.11, Rule 21.23</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def strip_qualifiers(type):
+    new_type = re.sub("const", "", type)
+    new_type = re.sub("volatile", "", new_type)
+    new_type = re.sub("_Atomic", "", new_type)
+    new_type = new_type.strip(" ")
+    new_type = new_type.strip("()")    
+
+    return new_type
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Call", "Function"):
+        lib = str(func_ref.ent().freetext("Library"))
+
+        if lib != "standard":
+            continue
+
+        if func_ref.ent().name() in TGMATH_FUNCS:
+            lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+
+            if lex and (lex.text() != func_ref.ent().name()):
+                continue
+
+            on_param = 0
+
+            # macro call
+            if (lex.next().text() == ")") and (lex.next().next().text() == "("):
+                lex = lex.next().next()
+
+            while lex:
+                if lex.text() in "([":
+                    on_param += 1
+                elif lex.text() in ")]":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and lex.ent() and lex.next().text() not in ["->", "."]:
+                    if lex.next().text() in "([":
+                        in_lex = lex
+
+                        while in_lex and in_lex.text() not in ")]":
+                            in_lex = in_lex.next()
+
+                        if in_lex.next().text() in ["->", "."]:
+                            lex = lex.next()
+                            continue
+
+                    utype = str(lex.ent().freetext("UnderlyingType"))
+                    utype = strip_qualifiers(utype)
+
+                    if utype not in ESSENTIAL_TYPES:
+                        check.violation(func_ref.ent(), file, func_ref.line(), 
+                                        func_ref.column(), ERR1, func_ref.ent().name())
+                        break                                                  
+
+                lex = lex.next(True, True)
+        elif func_ref.ent().name() in TGMATH_NON_COMPLEX:
+            lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+
+            if lex and (lex.text() != func_ref.ent().name()):
+                continue
+
+            on_param = 0
+            param_ctr = 0
+
+            # macro call
+            if (lex.next().text() == ")") and (lex.next().next().text() == "("):
+                lex = lex.next().next()
+
+            while lex:
+                if lex.text() in "([":
+                    on_param += 1
+                elif lex.text() in ")]":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param == 1) and (lex.text() == ","):
+                    param_ctr += 1
+
+                    # last param is not operand
+                    if (((param_ctr == 2) and (func_ref.ent().name() == "remquo"))
+                        or ((param_ctr == 1) and (func_ref.ent().name() == "frexp"))):
+                        break
+                elif (on_param == 1) and lex.ent() and lex.next().text() not in ["->", "."]:
+                    if lex.next().text() in "([":
+                        in_lex = lex
+
+                        while in_lex and in_lex.text() not in ")]":
+                            in_lex = in_lex.next()
+
+                        if in_lex.next().text() in ["->", "."]:
+                            lex = lex.next()
+                            continue
+
+                    utype = str(lex.ent().freetext("UnderlyingType"))
+                    utype = strip_qualifiers(utype)
+
+                    if utype not in ESSENTIAL_TYPES_NOCOMPLEX:
+                        check.violation(func_ref.ent(), file, func_ref.line(), 
+                                        func_ref.column(), ERR1, func_ref.ent().name())
+                        break 
+
+                lex = lex.next(True, True)
