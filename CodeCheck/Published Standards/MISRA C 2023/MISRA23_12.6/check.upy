@@ -1,0 +1,119 @@
+ERR1 = "Structure and union members of atomic objects shall not be directly accessed"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_12.6')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_12.6': "Published Standards/MISRA C 2023/12.6 Structure \
+and union members of atomic objects shall not be directly accessed"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_12.6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_12.6': """
+<p><b>Amplification</b></p>
+<p>The C Standard defines the following access functions for atomic objects: atomic_init(), atomic_store(),
+atomic_load(), atomic_exchange(), atomic_compare_exchange().</p>
+<p>Accesses to atomic objects of structure and union types shall only be made to the object as a whole,
+and only using these functions and the assignment operator =. In particular, the . and -&gt; operators
+shall not be used on atomic objects of structure and union type.</p>
+
+<p><b>Rationale</b></p>
+<p>The Standard guarantees absence of data races when performing atomic operations on data shared
+between threads without requiring explicit protection via mutex or condition variables. The
+operations have to be performed by dedicated access functions which provide an appropriate built-
+in protection. Direct access to structure or union members of atomic objects circumvents this
+protection, thus making them vulnerable to data races.</p>
+<p>Note: The atomic_init() functions does not avoid data races. Concurrent access to the variable being
+initialized, even via an atomic operation, constitutes a data race.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">typedef struct s {
+uint8_t a;
+uint8_t b;
+} s_t;
+_Atomic s_t astr;
+
+sint32_t main(void)
+{
+    s_t lstr = { 7U, 42U };
+
+    astr.b = 43U; /* Non-compliant */
+
+    lstr = atomic_load( &astr );
+    lstr.b = 43U;
+    atomic_store( &astr, lstr ); /* Compliant */
+
+    lstr.a = 8U;
+    astr = lstr; /* Compliant */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 5.1, Rule 11.4, Rule 9.7</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define, Declare", "Object"):
+        if not str(obj_ref.ent().type()).startswith("_Atomic"):
+            continue
+
+        obj_ent, _ = get_ent_type(obj_ref.ent())
+
+        if not (obj_ent and obj_ent.kind().check("Struct, Union")):
+            continue
+
+        for ref in obj_ref.ent().refs(""):
+            lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+            if lex and (lex.text() == obj_ref.ent().name()) and lex.next().text() in [".", "->"]:
+                check.violation(obj_ref.ent(), file,
+                                ref.line(), ref.column(), ERR1)
