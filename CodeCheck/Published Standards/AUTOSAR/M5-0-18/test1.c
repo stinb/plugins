@@ -30,7 +30,7 @@ void f2 ( void )
  if ( &limits_1.lwb <= &limits_1.upb ) /* UndCC_Valid */
  {
  }
- if ( &limits_1.lwb > &limits_2.upb )   /* UndCC_FalseNeg */
+ if ( &limits_1.lwb > &limits_2.upb )   /* UndCC_Violation */
  {
  }
 }
