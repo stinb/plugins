@@ -1,0 +1,159 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 8/15/25
+
+import re
+
+ERR1 = 'Inappropriate use of essentially character type in arithmetic.'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_10.2', 'MISRA12_10.2', 'CPP_E071')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_10.2': 'Published Standards/MISRA C 2023/' + """\
+10.2 Expressions of essentially character type shall not be used inappropriately
+in addition and subtraction operations""",
+        'MISRA12_10.2': 'Published Standards/MISRA C 2012/' + """\
+10.2 Expressions of essentially character type shall not be used inappropriately
+in addition and subtraction operations""",
+        'CPP_E071': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+Expressions of essentially character type shall not be used inappropriately in
+addition and subtraction operations""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_10.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA12_10.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E071': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The appropriate uses are:</p>
+<ol>
+<li>For the + operator, one operand shall have essentially character type and
+the other shall have essentially signed type or essentially unsigned type having
+a rank lower than or equal to that of int; the result of the operation has
+essentially character type.</li>
+<li>For the - operator, the first operand shall have essentially character type
+and the second shall have essentially signed type, essentially unsigned type or
+essentially character type. If both operands have essentially character type
+then the result has the standard type (usually int in this case) else the result
+has essentially character type.</li>
+</ol>
+<p><b>Rationale</b></p>
+<p>Expressions with essentially character type (character data) shall not be
+used arithmetically as the data does not represent numeric values.</p>
+<p>The uses above are permitted as they allow potentially reasonable
+manipulation of character data. For example:</p>
+<ul>
+<li>Subtraction of two operands with essentially character type might be used to
+convert between digits in the range ‘0’ to ‘9’ and the corresponding ordinal
+value;</li>
+<li>Addition of an essentially character type and an essentially unsigned type
+might be used to convert an ordinal value to the corresponding digit in the
+range ‘0’ to ‘9’;</li>
+<li>Subtraction of an essentially unsigned type from an essentially character
+type might be used to convert a character from lowercase to uppercase.</li>
+</ul>
+<p><b>Example</b></p>
+<p>The following examples are compliant:</p>
+<pre><code language="C++">'0' + u8a /* Convert u8a to digit */
+s8a + '0' /* Convert s8a to digit */
+cha - '0' /* Convert cha to ordinal */
+'0' - s8a /* Convert -s8a to digit */</code></pre>
+<p>The following examples are non-compliant:</p>
+<pre><code language="C++">s16a - 'a'
+'0' + f32a
+cha + ':'
+cha - ena</code></pre>
+<p><b>See Also</b></p>
+<p>Rule 10.1</p>
+"""
+    return {
+        'MISRA23_10.2': desc,
+        'MISRA12_10.2': desc,
+        'CPP_': desc,
+
+    }[id]
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+def test_global():
+    return False
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    if not re.search(r'\-|\+', file.contents()) or not file.lexer():
+        return
+
+    lexer = file.lexer()
+    lexemes = lexer.lexemes()
+    for lexeme in lexemes:
+        if lexeme.text() in ['+', '-']:
+            ok = True
+            charFound = False
+            bothChar = False
+            prevLex = lexeme.previous(True, True)
+            nextLex = lexeme.next(True, True)
+
+
+            # Check operand to the right of the operator
+            if nextLex:
+                if nextLex.ent():
+                    if 'char' in str(nextLex.ent().type()):
+                        charFound = True
+                    if not re.search(r'int|char|short', str(nextLex.ent().type()).lower()):
+                        ok = False
+                elif re.search(r'\'.*\'', nextLex.text()):
+                    charFound = True
+
+            # Check operand to the right of the operator
+            if prevLex:
+                if prevLex.ent():
+                    if 'char' in str(prevLex.ent().type()):
+                        if charFound:
+                            bothChar = True
+                        charFound = True
+                    if lexeme.text() == '+':
+                        if not re.search(r'int|char|short', str(prevLex.ent().type()).lower()):
+                            ok = False
+                    elif 'char' not in str(prevLex.ent().type()).lower():
+                        ok = False
+
+                elif re.search(r'\'.*\'', prevLex.text()):
+                    charFound = True
+            
+            if (not ok and charFound) or (bothChar and lexeme.text() == '+'):
+                check.violation(file, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
