@@ -459,17 +459,27 @@ def check(check, file):
     refKindString = 'C Call ~Virtual ~Implicit ~Indirect ~Undresolved, C Use Ptr ~Virtual ~Implicit ~Indirect ~Undresolved' if not check.option().lookup('lang') else 'ada call ~dispatch, c call ~Virtual ~Implicit ~Indirect ~Undresolved, c use ptr ~Virtual ~Implicit ~Indirect ~Undresolved, csharp call ~virtual, csharp use ptr, fortran call, java call, jovial call, jovial asm use, pascal call ~virtual, plm call, python call, vhdl call, web call'
     cache = check.cache()
     if cache.is_empty():
-        functions = check.db().ents(entKindString)
-        directRecursion = []
-        indirectRecursion = []
-        seen = []
-        for fun in functions:
-            stack = []
-            if fun.id() in seen:
-                continue
-            seen, directRecursion, indirectRecursion = checkRecursion(fun, stack,  directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr, 0, 500)
-        cache.insert(directRecursion, "Direct Recursion")
-        cache.insert(indirectRecursion, "Indirect Recursion")
+        # Manually lock the cache for writing to ensure that only one
+        # codecheck thread calculates teh cache.
+        cache.lock()
+        try:
+            # check cache empty again after obtaining lock in case another
+            # thread populated the cache while waiting on the lock
+            if cache.is_empty():
+                functions = check.db().ents(entKindString)
+                directRecursion = []
+                indirectRecursion = []
+                seen = []
+                for fun in functions:
+                    stack = []
+                    if fun.id() in seen:
+                        continue
+                    seen, directRecursion, indirectRecursion = checkRecursion(fun, stack,  directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr, 0, 500)
+                cache.insert(directRecursion, "Direct Recursion")
+                cache.insert(indirectRecursion, "Indirect Recursion")
+        finally:
+          # The cache must be manually unlocked
+          cache.unlock()
 
     directRecursions = cache.value("Direct Recursion")
     indirectRecursions = cache.value("Indirect Recursion")
