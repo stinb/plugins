@@ -1,10 +1,10 @@
 void func_56 ( void )
 {
 	{
-		typedef unsigned char u8_t_56;
+		typedef unsigned char u8_t_56; 	/* UndCC_Violation - reused */
 	}
 	{
-		typedef unsigned char u8_t_56; 	/* UndCC_Violation - reuse */
+		typedef unsigned char u8_t_56;
 	}
 }
 

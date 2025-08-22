@@ -1,7 +1,7 @@
 #include "header.h"
 
 
-typedef unsigned char uint8_t; /* UndCC_Violation - redefinition */
+typedef unsigned char uint8_t;
 
 
 void temp() {
