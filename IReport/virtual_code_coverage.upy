@@ -1,0 +1,119 @@
+# IReport used to generate virtual code coverage information
+# To use this plugin, the user must first generate an architecture that will serve are the 'testing' or 'unit tests' architecture
+# The name of this architecture does not matter as the user will select which architecture will serve as the 'testing' architecture when the plugin is invoked.
+# Once an architecture is selected, this plugin will generate a list of functions that exercise the current entity from the chosen architecture
+# Valid entities this plugin will run on are files, functions, methods and procedures
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Virtual Code Coverage"
+
+def description():
+  """
+  Optional, a description to show in the plugin manager
+  """
+  return '''
+  IReport used to generate virtual code coverage information.<br>
+  <br>
+  To use this plugin, the user must first generate an architecture that will serve are the 'testing' or 'unit tests' architecture.
+  The name of this architecture does not matter as the user will select which architecture will serve as the 'testing' architecture when the plugin is invoked.
+  Once an architecture is selected, this plugin will generate a list of functions that exercise the current entity from the chosen architecture.<br>
+  <br>
+  Valid entities this plugin will run on are files, functions, methods and procedures.
+    '''
+
+def tags():
+  """
+  Optional, tags to display in the plugin manager
+  """
+  return [
+    'Target: Files',
+    'Target: Functions',
+    'Target: Methods',
+    'Target: Procedure',
+    'Language: Any',
+  ]
+
+def test_entity(ent):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  if ent.kind().check('file ~unresolved, function ~unresolved, method ~unresolved, procedure ~unresolved'):
+      return True
+  else:
+      return False
+    
+def support_abort():
+  """
+  Optional method, return True if this report can be aborted.
+
+  Use report.is_aborted() to check if an abort has been requested
+  """
+  return True;
+    
+def init(report,target):
+  """
+  Optional method, define options that can be changed by the user
+  """
+  db = report.db()
+  root_arches = db.root_archs()
+  arch_list_strings = []
+  for arch in root_arches:
+     arch_list_strings.append( arch.longname() )
+  report.options().choice( 'chosen_arch', 'Coose which architecture contains your unit tests', arch_list_strings )
+
+def generate(report, target):
+  """
+  Required, generate the report
+
+  The pageId parameter is optional. It will be an empty string the first
+  time a report is generated. On subsequent generations, it can be any
+  value returned from pages() or provided as a pageId to report.pagelink()
+  or report.breadcrumbs() functions.
+  """
+
+  # Initialize 
+  db = report.db()
+  chosen_arch_name = report.options().lookup("chosen_arch")
+  chosen_arch = db.lookup_arch( chosen_arch_name )
+  ents = dict()
+
+  # Collect the ents that need to be tested based on target entity kind
+  if target.kind().check( "file ~unresolved" ):
+    report.print( "Entities that exercise file " + target.name() + ':\n' )
+    ents = target.dependsby()
+  else:
+    report.print( "Entities that exercise function " + target.name() + ':\n' )
+    entsList = target.ents( "callby", "function, method, procedure" )
+    for ent in entsList:
+      ents.update( { ent : [] } )
+
+  # Establish GUI abort
+  abort_counter = 0
+  refs = []
+  for ent, refs in ents.items():
+    if abort_counter > 10:
+      if report.is_aborted():
+        break
+      abort_counter = 0
+    else:
+      abort_counter += 1
+
+    file = False
+    if ent.kind().check( 'function ~unresolved, method ~unresolved, procedure ~unresolved' ):
+      defineRef = ent.ref( 'defineIn' )
+      if defineRef:
+        file = defineRef.file()
+    else:
+      file = ent
+    
+    # Test if the referencing entity exists in our testing architecture
+    if chosen_arch.contains( ent, True ) or chosen_arch.contains( file, True ):
+      report.print( ent.name() + ' - ' + ent.kindname() + '\n' )
+
+      for ref in refs:
+        report.print( ' - ' + ref.kindname() + ' ' + ref.scope().name() + ' at line ' + str( ref.line() ) + '\n' )
+
+  return
