@@ -1,0 +1,314 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 08-21-2025
+
+import re
+import Modules
+
+ERR1 = ""
+
+# The ID for the check
+def ids():
+    return ('MISRA23_10.3', 'MISRA12_10.3', 'CPP_E072')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_10.3': 'Published Standards/MISRA C 2023/' + """\
+10.3 The value of an expression shall not be assigned to an object with a
+narrower essential type or of a different essential type category""",
+        'MISRA12_10.3': 'Published Standards/MISRA C 2012/' + """\
+10.3 The value of an expression shall not be assigned to an object with a
+narrower essential type or of a different essential type category""",
+        'CPP_E072': 'All Checks/Language Specific/C and C++/Expressions/' + """\
+Expressions of essentially character type shall not be used inappropriately
+in addition and subtraction operations""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_10.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+        'MISRA12_10.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E072': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The following operations are covered by this rule:</p>
+<ol>
+<li>Assignment as defined in the Glossary;</li>
+<li>The conversion of the constant expression in a switch statement's case label
+to the essential type of the controlling expression.</li>
+</ol>
+<p><b>Rationale</b></p>
+<p>
+The C language allows the programmer considerable freedom and will permit
+assignments between different arithmetic types to be performed automatically.
+However, the use of these implicit conversions can lead to unintended results,
+with the potential for loss of value, sign or precision. Further details of
+concerns with the C type system can be found in Appendix C</p>
+<p>The use of stronger typing, as enforced by the MISRA essential type model,
+reduces the likelihood of these problems occurring.</p>
+<p><b>Exception</b></p>
+<ol>
+<li>An essentially signed integer constant expression, with a rank no greater
+than signed int, may be assigned to an object of essentially unsigned type if
+its value can be represented in that type.</li>
+<li>The initializer { 0 } may be used to initialize an aggregate or union type.
+</li>
+<li>A switch statement's case label that is a non-negative integer constant
+expression of essentially signed type is permitted when the controlling
+expression is of essentially unsigned type and the value can be represented in
+that type.</li>
+<li>An essentially real floating expression may be assigned to an object of
+essentially complex floating type provided that its corresponding real type is
+not narrower than the type of the expression.</li>
+</ol>
+<p><b>Example</b></p>
+<pre><code language="C++">enum enuma { A1, A2, A3 } ena;
+enum enumb { B1, B2, B3 } enb;
+enum { K1=1, K2=128 };</code></pre>
+<p>The following are compliant:</p>
+<pre><code language="C++">uint8_t u8a = 0; /* By exception */
+bool_t flag = ( bool_t ) 0;
+bool_t set = true; /* true is essentially Boolean */
+bool_t get = ( u8b > u8c );
+ena = A1;
+s8a = K1; /* Constant value fits */
+u8a = 2; /* By exception */
+u8a = 2 * 24; /* By exception */
+cha += 1; /* cha = cha + 1 assigns character to character */
+pu8a = pu8b; /* Same essential type */
+u8a = u8b + u8c + u8d; /* Same essential type */
+u8a = ( uint8_t ) s8a; /* Cast gives same essential type */
+u32a = u16a; /* Assignment to a wider essential type */
+u32a = 2U + 125U; /* Assignment to a wider essential type */
+use_uint16 ( u8a ); /* Assignment to a wider essential type */
+use_uint16 ( u8a + u16b ); /* Assignment to same essential type */
+cf32a = f32a; /* By exception 4 */
+cf64a = f64a; /* By exception 4 */</code></pre>
+<p>The following are non-compliant as they have different essential type
+categories:</p>
+<pre><code language="C++">uint8_t u8a = 1.0f; /* unsigned and floating */
+bool_t bla = 0; /* boolean and signed */
+cha = 7; /* character and signed */
+u8a = 'a'; /* unsigned and character */
+u8b = 1 - 2; /* unsigned and signed */
+u8c += 'a'; /* u8c = u8c + 'a' assigns character to unsigned */
+use_uint32 ( s32a ); /* signed and unsigned */
+f32a = cf32a; /* real floating and complex floating */
+f64a = cf64a; /* real floating and complex floating */</code></pre>
+<p>The following are non-compliant as they contain assignments to a narrower
+essential type:</p>
+<pre><code language="C++">s8a = K2; /* Constant value does not fit */
+u16a = u32a; /* uint32_t to uint16_t */
+use_uint16 ( u32a ); /* uint32_t to uint16_t */
+uint8_t foo1 ( uint16_t x )
+{
+return x; /* uint16_t to uint8_t */
+}
+cf32a = f64a; /* complex floating and real floating */</code></pre>
+<p><b>See Also</b></p>
+<p>Rule 10.1</p>
+"""
+    return {
+        'MISRA23_10.3': desc,
+        'MISRA12_10.3': desc,
+        'CPP_E072': desc,
+
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Object, Parameter')
+    types = ['long long', 'long', 'short', 'int', 'char', 'bool']
+
+    for ref in refs:
+        if not re.search(r'char|int|short|long|bool', str(ref.ent().type()).lower()):
+            continue
+        unsigned = False
+        signed = False
+        if re.search(r'unsigned|uint', str(ref.ent().type()).lower()):
+            unsigned = True
+        else:
+            signed = True
+
+        aRefs = ref.ent().refs('Assignby')
+
+        
+        for aRef in aRefs:
+            ok = True
+            if not lexer:
+                lexer = file.lexer()
+            lexeme = lexer.lexeme(aRef.line(), aRef.column())
+            if checkBool(lexeme):
+                if 'bool' in str(aRef.ent().type()).lower():
+                    continue
+                ok = False
+
+
+
+            # Check for signed to unsiged or unsigned to signed conversion
+            elif unsigned and re.search(r'(?<!un)signed|(?<!u)int', str(aRef.ent().type()).lower()):
+                ok = False
+            elif signed and re.search(r'unsigned|uint', str(aRef.ent().type()).lower()):
+                ok = False
+            # Check for potential data loss through type size change
+            elif re.search(r'long long', str(ref.ent().type()).lower()):
+                if checkType(types[1:], str(aRef.ent().type()).lower()):
+                    ok = False
+            elif re.search(r'long', str(ref.ent().type()).lower()):
+                if checkType(types[2:], str(aRef.ent().type()).lower()):
+                    ok = False
+            elif re.search(r'short|int', str(ref.ent().type()).lower()):
+                if checkType(types[4:], str(aRef.ent().type()).lower()):
+                    ok = False
+            if re.search(r'bool', str(ref.ent().type()).lower()):
+                if not re.search(r'bool', str(aRef.ent().type()).lower()):
+                    ok = False
+            elif re.search(r'char|short|int|long', str(ref.ent().type()).lower()):
+                if not re.search(r'char|short|int|long', str(aRef.ent().type()).lower()):
+                    ok = False
+            elif re.search(r'float|double', str(ref.ent().type()).lower()):
+                if not re.search(r'float|double', str(aRef.ent().type()).lower()):
+                    ok = False
+            else:
+                continue
+
+            # Check if checked in an 'if' statment
+            if not ok:
+                if not lexer:
+                    if file.lexer():
+                        lexer = file.lexer()
+                    else:
+                        return
+
+                lexeme = lexer.lexeme(aRef.line(), aRef.column())
+                if lexeme:
+                    lexeme = lexeme.previous(True, True)
+                    if lexeme and lexeme.text() == ')':
+                        lexeme = lexeme.previous(True, True)
+                        if lexeme and lexeme.text() == str(aRef.ent().type()):
+                            continue
+                if not checkIf(ref.ent(), lexer):
+                    check.violation(ref.ent(), file, aRef.line(), aRef.column(), ERR1)
+
+
+
+
+
+# Check to see if int is able to be cast to signed or unsigned char depending on function
+def checkCast(lexeme, argNum, signed, lexer, types):
+    if signed:
+        lower = -128
+        upper = 127
+    else:
+        lower = 0
+        upper = 256
+
+    lexeme = lexeme.next(True, True)
+    if lexeme and lexeme.text() == '(':
+        close = Modules.findClose(lexeme)
+        lexeme = lexeme.next(True, True)
+        commas = 0
+        negative = False
+        while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+            lastLex = lexeme
+            if lexeme.text() == '(':
+                lexeme = Modules.findClose(lexeme)
+            elif lexeme.text() == ',' and commas == argNum:
+                break
+            elif lexeme.text() == ',':
+                commas += 1
+            # Check for negative sign in separate lexeme
+            elif commas == argNum and lexeme.text() == '-':
+                negative = True
+            elif commas == argNum and not lexeme.ent() and re.search(r'[1-9]', lexeme.text()):
+                num = re.sub(r'[^-1-9]', '', lexeme.text())
+                if '-' not in num and negative:
+                    num = int(num)
+                    num *= -1
+                else:
+                    num = int(num)
+                if num > upper or num < lower:
+                    return True
+
+            elif commas == argNum and lexeme.ent() and checkIf(lexeme.ent(), lexer):
+                return False
+
+
+
+            elif commas == argNum and lexeme.ent() and lexeme.ent().type():
+                if checkType(types, str(lexeme.ent().type())) and not checkIf(lexeme.ent(), lexer):
+                    return True
+
+            elif commas == argNum and lexeme.ent() and lexeme.ent().value() and re.search(r'[1-9]', str(lexeme.ent().value())):
+                value = re.sub(r'[^-1-9]', '', lexeme.ent().value())
+                num = eval(value)
+                if num > upper or num < lower:
+                    return True
+
+
+
+
+
+            if lexeme and lexeme.line_begin() == lastLex.line_begin() and lexeme.column_begin() == lastLex.column_begin():
+                lexeme = lexeme.next(True, True)
+
+        return False
+
+
+def checkIf(ent, lexer):
+    uRefs = ent.refs('Useby')
+    for uRef in uRefs:
+        lexeme = lexer.lexeme(uRef.line(), uRef.column())
+        while lexeme and not re.search(r';|{|}', lexeme.text()):
+            if lexeme.text() == 'if':
+                return True
+            lexeme = lexeme.previous(True, True)
+
+
+
+def checkType(types, str):
+    for type in types:
+        if re.search(type, str):
+            return True
+
+def checkBool(lexeme):
+    if lexeme:
+        prevLex = lexeme.previous(True, True)
+        nextLex = lexeme.next(True, True)
+        if prevLex and re.search(r'<|>|==|!|&|\|', prevLex.text()):
+            return True
+        if nextLex and re.search(r'<|>|==|!|&|\|', nextLex.text()):
+            return True
+
+    return False
