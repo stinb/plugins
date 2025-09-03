@@ -272,7 +272,7 @@ enum E
 
 
 def test_entity(file):
-    return file.kind().check('Code File, Header File')
+    return file.kind().check('Code File, Header File, Ada File')
 
 
 def test_global():
@@ -280,7 +280,7 @@ def test_global():
 
 
 def test_language(language):
-    return language == 'C++'
+    return language in ('C++', 'Ada')
 
 
 def define_options(check):
@@ -302,7 +302,7 @@ def makeOperatorRegex():
     _operatorsw = ['!', '*', '&']
     _operators_ = ['+', '~', '*', '&', '/', '%', '<<', '>>', '<=>', '<',
         '<=', '>', '>=', '==', '!=', '^', '|', '&&', '||', '?', ':', '=', '+=',
-        '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '^=', '|=']
+        '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '^=', '|=',]
     regexChars = r'(\+|\*|\.|\^|\||\/|\?)'
     exprEnd = r'[,;\)]'
 
@@ -337,6 +337,9 @@ def makeOperatorRegex():
         op = re.sub(regexChars, r'\\\1', op)
         pattern.append(rf' \w+{op}\{exprEnd}')
 
+    # Add the Ada assignment operator
+    pattern.append(r'\s*:=\s*')
+
     return '|'.join(pattern)
 
 
@@ -353,6 +356,25 @@ def commentIsCode(text, strict):
     operators     = len(re.findall(OPERATOR, text))
     statements    = len(re.findall(STATEMENT, text))
     conditions    = len(re.findall(CONDITION, text))
+
+    # Add Ada-specific syntax
+    ada_preprocessors = len(re.findall(r'^\s*pragma($|\s)', text, re.MULTILINE))
+    ada_statements = len(re.findall(r'(\b(end)\s+\w+;)', text, re.MULTILINE | re.IGNORECASE))
+    ada_conditions = len(re.findall(r'^\s*\b(if|loop|for|while)\b', text, re.MULTILINE | re.IGNORECASE))
+    
+    # Common Ada Keywords
+    ada_keywords = ['is', 'begin', 'end', 'if', 'then', 'else', 'elsif', 'case',
+                    'when', 'loop', 'for', 'while', 'in', 'reverse', 'package',
+                    'body', 'private', 'procedure', 'function', 'return',
+                    'with', 'use', 'type', 'record', 'access', 'task',
+                    'protected', 'entry', 'accept', 'select', 'delay', 'abort',
+                    'raise', 'exception', 'declare']
+    ada_keywords_regex = r'\b(' + '|'.join(ada_keywords) + r')\b'
+    ada_keywords_found = len(re.findall(ada_keywords_regex, text, re.MULTILINE | re.IGNORECASE))
+    
+    if ada_preprocessors > 0 or ada_statements > 0 or ada_conditions > 0 or ada_keywords_found > 0:
+        return True
+    # End Ada-specific changes
 
     # Ignore statements of ; that are after 3 words
     fakeStatements = len(re.findall(FAKE_STATEMENT_0, text))
@@ -417,11 +439,15 @@ def check(check, file):
             lex = nextLex(lex)
             continue
 
-        # Remove outer comment symbols // or /* */
-        text = re.sub(r'(^\s*(\/\/|\/\*))|(\*\/$)', '', lex.text())
+        # Use a single regex to handle both C/C++ and Ada comments
+        if file.language() == 'Ada':
+            text = re.sub(r'(^|\n)\s*--', '', lex.text())
+        else: # C/C++
+            # Remove outer comment symbols // or /* */
+            text = re.sub(r'(^\s*(\/\/|\/\*))|(\*\/$)', '', lex.text())
 
-        # Remove inner comment symbols: * at beginning of line
-        text = re.sub(r'(^|\n)[ \t]*\*+[ \t]+', '\n', text)
+            # Remove inner comment symbols: * at beginning of line
+            text = re.sub(r'(^|\n)[ \t]*\*+[ \t]+', '\n', text)
 
         line   = lex.line_begin()
         column = lex.column_begin()

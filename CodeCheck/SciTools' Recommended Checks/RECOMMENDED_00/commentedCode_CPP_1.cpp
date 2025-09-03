@@ -26,9 +26,8 @@ void Fn2() noexcept
 void Fn3() noexcept
 {
     std::int32_t i = 0;
-    ++i;  // Incrementing the variable i using ++i syntax // UndCC_Valid - code
-          // is not commented-out, but ++i occurs in a
-          // comment too
+    ++i;  // Incrementing the variable i using increment operator // UndCC_Valid - code
+
     for (; i < 10; ++i)
     {
         // ...
