@@ -365,6 +365,11 @@ def getEdgeInfo(
                 outgoing[scope] = set()
             outgoing[scope].add(edgeKey)
 
+            # Add assignby ref to edge
+            for assby_ref in call.ent().refs("Assignby Functionptr"):
+                getEdgeInfo(visited, tasks, incoming, outgoing,
+                            edgeInfo, root, assby_ref.ent(), options)
+
         getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
 
 
