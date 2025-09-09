@@ -1,3 +1,4 @@
+#if defined(__linux__) || defined(__APPLE__)
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <string.h>
@@ -14,5 +15,6 @@ void host_lookup(char *user_supplied_addr) {
   validate_addr_form(user_supplied_addr);
   addr = inet_addr(user_supplied_addr);
   hp = gethostbyaddr(&addr, sizeof(struct in_addr), AF_INET);
-  strcpy(hostname, hp->h_name); // UndCC_Violation
+  strcpy(hostname, hp->h_name); // UndCC_Violation(Lin, Mac)
 }
+#endif
