@@ -8,11 +8,6 @@
 namespace std
 {
 
-#if defined(_WIN32)
-// This is a compile error in C++17, since std::byte is already defined.
-using byte = std::uint8_t; // UndCC_Violation(WIN)
-#endif
-
 
 pair<int, int> operator+(pair<int, int> const& x, pair<int, int> const& y) // UndCC_Violation
 {
