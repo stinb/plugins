@@ -1,3 +1,4 @@
+#if defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
 void f(pthread_mutex_t *mutex) {
   pthread_mutex_lock(mutex); // UndCC_Violation
@@ -7,3 +8,4 @@ void f(pthread_mutex_t *mutex) {
 
   pthread_mutex_unlock(mutex);
 }
+#endif

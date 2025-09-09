@@ -1,3 +1,4 @@
+#if defined(__linux__) || defined(__APPLE__)
 #include <pthread.h>
 int f(pthread_mutex_t *mutex) {
   int result;
@@ -12,3 +13,4 @@ int f(pthread_mutex_t *mutex) {
 
   return pthread_mutex_unlock(mutex);
 }
+#endif
