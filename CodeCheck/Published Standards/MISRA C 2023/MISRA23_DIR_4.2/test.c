@@ -10,7 +10,7 @@ int main() {
     "movl %%eax, %0;"    // Store result in result
     : "=r" (result)      // Output operand
     : "r" (a), "r" (b)   // Input operands
-    : "%eax"             // Clobbered register
+    : "%rax"             // Clobbered register
   );
 
   __asm__ ( // UndCC_Violation
@@ -19,7 +19,7 @@ int main() {
     "movl %%eax, %0;"   
     : "=r" (result)      
     : "r" (a), "r" (b)   
-    : "%eax"             
+    : "%rax"             
   );
   printf("Sum of %d and %d is %d\n", a, b, result);
   return 0;
