@@ -11,7 +11,7 @@ int32_t t2(void *ignore) /* Thread T2 entry */
 
 int32_t t1(void *ignore) /* Thread T1 entry */
 {
-    thrd_create(&id2, t2, NULL); /* UndCC_Violation, not constrained to start-up */
+    thrd_create(&id2, t2, NULL); /* UndCC_Violation(lin, win) , not constrained to start-up */
     ///
 }
 
