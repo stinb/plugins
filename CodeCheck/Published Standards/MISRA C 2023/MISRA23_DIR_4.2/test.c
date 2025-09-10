@@ -3,7 +3,7 @@
 int main() {
   int a = 5, b = 10, result;
 
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(_WIN32)
   // Inline assembly to add a and b UndCC_Valid
   __asm__ (
     "movl %1, %%eax;"    // Move a into eax
