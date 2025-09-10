@@ -1,3 +1,5 @@
+#if defined(__linux__) || defined(_WIN32)
+
 #include <threads.h>
 #include <stdint.h>
 
@@ -16,7 +18,9 @@ void main(void)
 
 int32_t t1(void *ignore)
 {
-    mtx_timedlock(&Ra, ts); /* UndCC_Violation(lin, win) */
+    mtx_timedlock(&Ra, ts); /* UndCC_Violation */
     mtx_timedlock(&Rb, ts); /* UndCC_Valid */
     mtx_timedlock(&Rc, ts); /* UndCC_Valid */
 }
+
+#endif

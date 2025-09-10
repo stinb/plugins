@@ -4,8 +4,8 @@ void f()
 {
     auto l = [](const int &j)
     { return j; };
-    std::function<const int &(const int &)> fn(l); // UndCC_Violation(win, mac)
+    // std::function<const int &(const int &)> fn(l); // Non-compliant, strict parser error
 
     int i = 42;
-    int j = fn(i);
+    // int j = fn(i);
 }

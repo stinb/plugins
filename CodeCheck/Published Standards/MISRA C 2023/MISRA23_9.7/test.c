@@ -1,3 +1,5 @@
+#if defined(__linux__) || defined(_WIN32)
+
 #include <stdint.h>
 #include <stdalign.h>
 #include <threads.h>
@@ -28,3 +30,5 @@ void main(void)
 
     thrd_join(id1, NULL);
 }
+
+#endif

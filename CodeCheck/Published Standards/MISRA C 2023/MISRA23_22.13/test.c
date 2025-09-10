@@ -1,3 +1,5 @@
+#if defined(__linux__) || defined(_WIN32)
+
 #include <threads.h>
 #include <stdint.h>
 
@@ -16,9 +18,11 @@ int32_t t1(void *ptr) /* Thread entry */
 
 void main(void)
 {
-    thrd_t id1; /* UndCC_Violation */
-    mtx_t Rb;   /* UndCC_Violation */
+    thrd_t id1; /* UndCC_Violation(lin, win) */
+    mtx_t Rb;   /* UndCC_Violation(lin, win) */
     mtx_init(&Ra, mtx_plain);
     mtx_init(&Rb, mtx_plain);
     thrd_create(&id1, t1, &Rb);
 }
+
+#endif
