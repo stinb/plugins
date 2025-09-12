@@ -1,0 +1,220 @@
+ERR1 = "'%1' is already defined in %2"
+ERR2 = "Specialization must be defined with the primary template in %1"
+
+
+def ids():
+    return ('MISRA23_6.2.3')
+
+
+def name(id):
+    return {
+        'MISRA23_6.2.3': """Published Standards/MISRA C++ 2023/\
+6.2.3 The source code used to implement an entity shall appear only once""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_6.2.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Identifiers',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_6.2.3': """
+<p><b>Amplification</b></p>
+<p>For the purposes of this rule, an entity is a variable, type, function, or template thereof.</p>
+<p>Note: multiple different specializations for the same primary template and multiple overloads for a
+function with the same name but with different signatures are different entities.</p>
+<p>This rule requires that the source code used to implement an entity shall appear only once within a
+project. If the entity is inline, it can be implemented within a header file; it is permitted to include such
+a header file in multiple translation units.</p>
+<p>Additionally, explicit specializations of templates shall either be implemented in the same file as the
+primary template, or in a file where one of the fully specialized arguments is defined.</p>
+<p>Note: an entity may have no implementation — for example, an incomplete type does not need a
+definition when it is used as a tag.</p>
+
+<p><b>Rationale</b></p>
+<p>Non-inline entities shall only be defined once in a program. Inline entities can be defined once for each
+translation unit, but the definitions shall be identical. This principle is known as the one-definition rule.</p>
+<p>Requiring that the source code for the definition of any entity appears only once reduces the risk of
+violating the one-definition rule and makes the code simpler.</p>
+<p>The declaration of a template's explicit specialization must be visible when it matches the arguments
+of the template that is being instantiated, otherwise, an implicit specialization will be generated,
+violating the one-definition rule. Implementing an explicit specialization in the same file as the primary
+template or the argument for which it is specialized ensures that this constraint is satisfied.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">// file1.h
+inline int16_t i = 10;
+
+// file2.h
+inline int16_t i = 10; // Non-compliant - two definitions of i</code></pre>
+
+<p>The following example demonstrates inconsistent definitions of b:</p>
+
+<pre><code language="C++">// file1.cpp
+int16_t b; // Non-compliant - ill-formed (see file2.cpp)
+
+// file2.cpp
+int32_t b; // Non-compliant - ill-formed (see file1.cpp)</code></pre>
+
+<p>In the following example, the full template specialization within a different file results in a violation of the
+one-definition rule (which is not the case for the template specialization A< D >, as that is within the file
+that defines D):</p>
+
+<pre><code language="C++">// a.h - #include guard omitted for brevity
+template< typename T >
+class A {};
+
+// b.h
+#include "a.h"
+A< int32_t > const a1 {};
+
+// c.h
+#include "a.h"
+template<>
+class A< int32_t > {}; // Non-compliant
+
+// d.h
+#include "a.h"
+class D {};
+template<>
+class A< D > {}; // Compliant
+
+// main.cpp
+#include "b.h"
+#include "c.h" // ODR violation
+#include "d.h"
+A< D > const a2 {}; // OK - requires inclusion of d.h</code></pre>
+
+<p>In the following example, the partial template specialization within a different file results in a violation
+of the one-definition rule:</p>
+
+<pre><code language="C++">// wrap.h
+template< typename V >
+struct wrap
+{
+V value;
+};
+// wrap_ptr.h
+
+#include "wrap.h"
+template< typename V >
+struct wrap< V * > {} // Non-compliant - should be in wrap.h
+
+// w.cpp
+#include "wrap.h" // No specialization visible
+wrap< char * > a_wrap; // ODR violation - see wp.cpp
+
+// wp.cpp
+#include "wrap_ptr.h" // Specialization visible
+wrap< char * > b_wrap; // ODR violation - see w.cpp</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return False
+
+
+def test_global():
+    return True
+
+
+def is_diff_files(ref_1, ref_2):
+    if (ref_1.ent().parent() and ref_2.ent().parent()
+        and ref_1.ent().parent().kind().check("File")
+        and ref_2.ent().parent().kind().check("File")
+            and (ref_1.ent().parent().id() != ref_2.ent().parent().id())):
+        return True
+
+    return False
+
+
+def is_same_kind(ref_1, ref_2):
+    return ref_1.ent().kind().longname() == ref_2.ent().kind().longname()
+
+
+def check_violation(ref_1, ref_2, check):
+    check.violation(ref_1.ent(), ref_1.file(), ref_1.line(
+    ), ref_1.column(), ERR1, ref_1.ent().name(), ref_2.file().name())
+
+
+def is_same_type(ref_1, ref_2):
+    return str(ref_1.ent().type()) == str(ref_2.ent().type())
+
+
+def check_violation(ref_1, ref_2, check):
+    check.violation(ref_1.ent(), ref_1.file(), ref_1.line(
+    ), ref_1.column(), ERR1, ref_1.ent().name(), ref_2.file().name())
+
+
+def ref_diffs(ref, defined_list, flagged_defs, check):
+    defined_ref = defined_list[ref.ent().longname()]
+
+    if not (is_diff_files(ref, defined_ref) and is_same_kind(ref, defined_ref)):
+        return
+
+    if defined_ref.ent().id() not in flagged_defs:
+        check_violation(defined_ref, ref, check)
+        flagged_defs.append(defined_ref.ent().id())
+
+    check_violation(ref, defined_ref, check)
+
+
+def check(check):
+    db = check.db()
+    files = db.ents("code file, header file")
+    defined_types = {}
+    defined_funcs = {}
+    defined_objs = {}
+    flagged_defs = []
+
+    for file in files:
+        for type_ref in file.filerefs("Define", "Type ~Unnamed ~TemplateParameter ~Alias ~Typedef ~Template ~Enum"):
+            if type_ref.ent().longname() not in defined_types:
+                defined_types[type_ref.ent().longname()] = type_ref
+            else:
+                ref_diffs(type_ref, defined_types, flagged_defs, check)
+
+        for func_ref in file.filerefs("Define", "Function ~Macro ~Member ~Lambda ~Template ~Static"):
+            if str(func_ref.ent().name()).startswith("operator") or (func_ref.ent().name() == "main"):
+                continue
+
+            if func_ref.ent().longname() not in defined_funcs:
+                defined_funcs[func_ref.ent().longname()] = func_ref
+            else:
+                ref_diffs(func_ref, defined_funcs, flagged_defs, check)
+
+        for global_ref in file.filerefs("Define", "Global ~Static"):
+            if global_ref.ent().longname() not in defined_objs:
+                defined_objs[global_ref.ent().longname()] = global_ref
+            else:
+                ref_diffs(global_ref, defined_objs, flagged_defs, check)
+
+        for temp_ref in file.filerefs("Define", "Type Template"):
+            for spec_ref in temp_ref.ent().refs("Specializeby"):
+                if spec_ref.file().id() != temp_ref.file().id():
+                    compliant = False
+
+                    for temp_arg in spec_ref.ent().refs("Use TemplateArgument", "~TemplateParameter"):
+                        def_ref = temp_arg.ent().ref("Definein, Define")
+
+                        if def_ref and (def_ref.file().id() == spec_ref.file().id()):
+                            compliant = True
+                            break
+
+                    if not compliant:
+                        check.violation(temp_ref.ent(), spec_ref.file(), spec_ref.line(
+                        ), spec_ref.column(), ERR2, temp_ref.file().name())
