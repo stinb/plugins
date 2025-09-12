@@ -1,10 +1,10 @@
-import re
-
 ERR1 = 'For-init-statement and expression should not perform actions other than loop-counter initialization and modification'
+
 
 # The ID for the check
 def ids():
     return ('A6-5-4', 'CPP_C042')
+
 
 # The short name of the check
 def name(id):
@@ -30,6 +30,7 @@ def tags(id):
             'Control Flow',
         ],
     }.get(id)
+
 
 # The long description of the check
 def detailed_description():
@@ -73,57 +74,47 @@ def test_entity(file):
 # Optional - Return True if this check should be run on the entire project
 # regardless of what files are selected. Should only be used for
 # project-level checks
+
+
 def test_global():
     return False
+
 
 def test_language(language):
     return language == 'C++'
 
-def check_for_statement(lex, file, check):
-    is_valid = True
-    lex_temp = lex
-    return_lex = None
-    #go to end of for-loop statement
-    while lex_temp and (lex_temp.text() != ")" and lex_temp.text() != "{"):
-        lex_temp = lex_temp.next(ignore_whitespace=True, ignore_comments=True)
-
-    return_lex = lex_temp
-    #travel back to validate
-    ent = None
-    #loop modification
-    while lex_temp and lex_temp.text() != ";":
-        if ent == None and lex_temp.ent() and lex_temp.text() != ";":
-            #ent used in loop modification
-            ent = lex_temp.ent()
-        elif ent != None and lex_temp.ent():
-            is_valid = False
-        lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
-
-    #loop condition
-    if lex_temp and is_valid:
-        lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
-        while lex_temp and lex_temp.text() != ";":
-            lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
-
-    #loop init
-    if lex_temp and is_valid:
-        while lex_temp and lex_temp.text() != "(":
-            if lex_temp.ent() and lex_temp.ent().kind().check("Object") and lex_temp.ent().ref("Init"):
-                if ent != lex_temp.ent():
-                    is_valid = False
-            lex_temp = lex_temp.previous(ignore_whitespace=True, ignore_comments=True)
-
-    #validation
-    if not is_valid:
-        check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
-
-    return return_lex
 
 def check(check, file):
     lexer = file.lexer(True, 8, False, False)
-    lex = lexer.first()
-    while lex:
-        if lex.text() == "for" and lex.token() == "Keyword":
-            lex = check_for_statement(lex, file, check)
-        else:
-            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    for func_ref in file.filerefs("Define", "Function"):
+        if "for" not in str(func_ref.ent().contents()):
+            continue
+
+        lex = lexer.lexeme(func_ref.line(), func_ref.column())
+        end_ref = func_ref.ent().ref("End, Endby")
+
+        while lex and (lex.line_begin() != end_ref.line()):
+            if (lex.text() == "for") and (lex.token() == "Keyword") and (lex.next(True, True).text() == "("):
+                on_for = 0
+                iterator = None
+
+                while lex:
+                    if lex.text() == "(":
+                        on_for += 1
+                    elif lex.text() == ")":
+                        on_for -= 1
+
+                        if not on_for:
+                            break
+                    elif (on_for == 1) and lex.ent() and lex.ref() and lex.ref().kind().check("Definein, Setby, Modifyby"):
+                        if not iterator:
+                            iterator = lex.ent().id()
+                        elif iterator != lex.ent().id():
+                            check.violation(
+                                lex.ent(), file, lex.line_begin(), lex.column_begin(), ERR1)
+                            break
+
+                    lex = lex.next(True, True)
+
+            lex = lex.next(True, True)
