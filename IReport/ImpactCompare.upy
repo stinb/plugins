@@ -1,0 +1,142 @@
+def description():
+    """
+    Return a description of this iReport for display in Understand's UI.
+    """
+    return (
+        "This Understand iReport plugin compares functions in the current project against "
+        "a comparison database and categorizes them into new, removed, and changed functions "
+        "based on their PercentChanged metric. It then recursively finds and lists all functions "
+        "that call any removed or changed function, reporting them as 'Impacted Callers' to "
+        "visualize downstream dependencies."
+    )
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Function Comparison Impact Report"
+
+def test_global(db):
+  """
+  Optional method, return true for project level reports
+  """
+  return True
+
+def test_entity(ent):
+  return False
+
+def test_architecture(arch):
+  return False
+
+def support_abort():
+  return False
+
+def init(report, target):
+  """
+  Optional: Define user-configurable options
+  """
+  pass
+
+def walkCallbyTree(func, impactList):
+  """
+  Recursively add all callers of `func` to `impactList`.
+  Avoids duplicates and cycles.
+  """
+  for ref in func.refs("Callby", "Function"):
+    caller = ref.ent()
+    if caller and caller not in impactList:
+      impactList.append(caller)
+      walkCallbyTree(caller, impactList)
+
+def generate(report, target, pageId):
+  db = report.db()
+  if db is None:
+    report.print("No database defined")
+    return
+
+  comparison_db = db.comparison_db()
+  if comparison_db is not None:
+    report.print("Comparison database: {}\n\n".format(comparison_db.name()))
+  else:
+    report.print("No comparison database defined")
+    return
+
+  newProjFuncList = []
+  oldProjFuncList = []
+
+  for func in sorted(db.ents('~Unknown ~Unresolved Function'), key=lambda x: x.longname()):
+    changed = float(func.metric("PercentChanged", "raw"))
+    if changed > 0.0:
+      newProjFuncList.append(func)
+
+  newProjNames = {func.uniquename() for func in newProjFuncList}
+
+  report.print("Comparison Database Changes:\n")
+  for func in sorted(comparison_db.ents('~Unknown ~Unresolved Function'), key=lambda x: x.longname()):
+    changed = float(func.metric("PercentChanged", "raw"))
+    if changed > 0.0:
+      oldProjFuncList.append(func)
+
+  oldProjNames = {func.uniquename() for func in oldProjFuncList}
+
+  addedFuncList = [func for func in newProjFuncList if func.uniquename() not in oldProjNames]
+  removedFuncList = [func for func in oldProjFuncList if func.uniquename() not in newProjNames]
+  changeFuncList = [func for func in newProjFuncList if func.uniquename() in oldProjNames]
+
+  def sum_loc(func_list):
+    return sum(int(func.metric("CountLineCode", "raw") or 0) for func in func_list)
+
+  report.tree(1)
+  report.bold()
+  report.fontcolor("green")
+  report.print("New Functions ({}) {} LOC".format(len(addedFuncList), sum_loc(addedFuncList)))
+  report.fontcolor(None)
+  report.bold(False)
+  for func in sorted(addedFuncList, key=lambda x: x.longname()):
+    loc = int(func.metric("CountLineCode", "raw") or 0)
+    report.tree(2, True)
+    report.entity(func)
+    report.print(" {} ({} LOC)".format(func.longname(), loc))
+    report.entity()
+
+  report.print("\n")
+  report.tree(1)
+  report.bold()
+  report.fontcolor("red")
+  report.print("Removed Functions ({}) {} LOC".format(len(removedFuncList), sum_loc(removedFuncList)))
+  report.fontcolor(None)
+  report.bold(False)
+  for func in sorted(removedFuncList, key=lambda x: x.longname()):
+    loc = int(func.metric("CountLineCode", "raw") or 0)
+    report.tree(2, True)
+    report.print(" {} ({} LOC)".format(func.longname(), loc))
+
+  report.print("\n")
+  report.tree(1)
+  report.bold()
+  report.print("Changed Functions ({}) {} LOC".format(len(changeFuncList), sum_loc(changeFuncList)))
+  report.bold(False)
+  for func in sorted(changeFuncList, key=lambda x: x.longname()):
+    loc = int(func.metric("CountLineCode", "raw") or 0)
+    report.tree(2, True)
+    report.entity(func)
+    report.print(" {} ({} LOC)".format(func.longname(), loc))
+    report.print(" ({:.2f}%)".format(func.metric("PercentChanged", "raw")))
+    report.entity()
+
+  # Compute impacted functions
+  impactList = []
+  for func in removedFuncList + changeFuncList:
+    walkCallbyTree(func, impactList)
+
+  report.print("\n")
+  report.tree(1)
+  report.bold()
+  report.print("Impacted Callers ({}) {} LOC".format(len(impactList), sum_loc(impactList)))
+  report.bold(False)
+  for func in sorted(impactList, key=lambda x: x.longname()):
+    loc = int(func.metric("CountLineCode", "raw") or 0)
+    report.tree(2, True)
+    report.entity(func)
+    report.print(" {} {} LOC)".format(func.longname(), loc))
+    report.entity()
