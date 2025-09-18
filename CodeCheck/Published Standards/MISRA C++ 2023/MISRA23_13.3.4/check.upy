@@ -1,0 +1,224 @@
+import re
+
+
+ERR1 = "Potentially virtual pointer to member function shall only be compared with nullptr"
+WHITESPACE = ["Whitespace", "Newline", "Indent", "Dedent"]
+
+
+def ids():
+    return ('MISRA23_13.3.4')
+
+
+def name(id):
+    return {
+        'MISRA23_13.3.4': """Published Standards/MISRA C++ 2023/\
+13.3.4 A comparison of a potentially virtual pointer to member function shall only be with nullptr""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_13.3.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Functions',
+            'Pointers'
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_13.3.4': """
+<p><b>Amplification</b></p>
+<p>A pointer to member function is potentially virtual if it is:</p>
+<p>1. A compile-time constant that points to a virtual member function; or</p>
+<p>2. A pointer to member function of a class that is incomplete at the end of the translation unit; or</p>
+<p>3. Not a compile-time constant pointer to member function and has a type matching that of a virtual member function of its class.</p>
+
+<p><b>Rationale</b></p>
+<p>The result of comparing a pointer to member function that points to a virtual function with anything
+other than nullptr is unspecified.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class A
+{
+public:
+void f1();
+void f2();
+virtual void f3();
+};
+
+void foo()
+{
+if ( &A::f1 != &A::f2 ) {} // Compliant
+if ( &A::f1 != nullptr ) {} // Compliant
+if ( &A::f3 == &A::f2 ) {} // Non-compliant - f3 virtual
+if ( &A::f3 == nullptr ) {} // Compliant
+}
+
+void bar( void ( A::*ptr )() )
+{
+if ( ptr == &A::f2 ) {} // Non-compliant - ptr potentially points to A::f3,
+// which is virtual
+}</code></pre>
+
+<p>Note: the example above would be compliant if A had no virtual members.</p>
+
+<pre><code language="C++">class B
+{
+public:
+void f1();
+void f2();
+virtual void f3( int32_t i );
+};
+
+void bar( void ( B::*ptr )() )
+{
+if ( ptr == &B::f2 ) {} // Compliant - there are no virtual functions
+// in B with the appropriate signature
+}
+
+class D: public A // Inherits virtual functions from A
+{
+public:
+void f4();
+};
+
+void car( void ( D::*ptr )() )
+{
+if ( ptr == &D::f4 ) {} // Non-compliant - ptr potentially points to A::f3,
+// which is virtual
+}
+
+struct E;
+void foo ( void ( E::*p1 )(), void ( E::*p2 )() )
+{
+if ( p1 == p2 ) {} // Non-compliant - 'E' is incomplete, so it is
+// unknown if the pointers are to virtual members
+}
+
+// The following definition of E anywhere in the translation
+// unit would make the above example compliant
+// struct E{ void f1(); void f2(); };
+</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def get_virt_signs(class_ref):
+    virt_signs = []
+
+    for virt_ref in class_ref.ent().refs("Define, Declare", "Virtual Member Function", True):
+        virt_type = str(virt_ref.ent().freetext("UnderlyingType"))
+        param_types = []
+
+        for param_ref in virt_ref.ent().refs("Define, Declare", "Parameter", True):
+            param_utype = param_ref.ent().freetext("UnderlyingType")
+
+            if param_utype:
+                param_utype = str(param_utype).replace("*", r"\*")
+                param_types.append(param_utype)
+
+        signature = fr"{virt_type} \(.*\)()"
+        param_types = ", ".join(param_types)
+        signature = signature.replace("()", fr"\({param_types}\)")
+        virt_signs.append(signature)
+
+    for base_ref in class_ref.ent().refs("Base"):
+        base_virts = []
+        base_virts = get_virt_signs(base_ref)
+        virt_signs.extend(base_virts)
+
+    return virt_signs
+
+
+def is_addr(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(
+        ref.line(), ref.column())
+
+    while lex and lex.token() not in WHITESPACE:
+        if (lex.text() == "&") and (lex.token() == "Operator"):
+            return True
+
+        lex = lex.previous()
+
+    return False
+
+
+def check_comparison(check, ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+    if not lex or (lex.text() != ref.scope().name()):
+        return
+
+    if ref.kind().check("Ptr") and not is_addr(ref):
+        return
+
+    while lex and lex.token() not in WHITESPACE:
+        lex = lex.next()
+
+    lex = lex.next()
+
+    if lex.text() in [">", ">=", "<", "<="]:
+        check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
+    elif lex.text() in ["==", "!="]:
+        while lex.token() not in WHITESPACE:
+            lex = lex.next()
+
+        lex = lex.next()
+
+        if lex.text() != "nullptr":
+            check.violation(ref.scope(), ref.file(),
+                            ref.line(), ref.column(), ERR1)
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class ~Template, Struct ~Template"):
+        virt_signs = get_virt_signs(class_ref)
+
+        for virt_ref in class_ref.ent().refs("Define, Declare", "Virtual Member Function", True):
+            for use_ref in virt_ref.ent().refs("Useby Ptr"):
+                check_comparison(check, use_ref)
+
+            for ass_ref in virt_ref.ent().refs("Assignby Value"):
+                if not is_addr(ass_ref):
+                    continue
+
+                for use_ref in ass_ref.ent().refs("Useby"):
+                    check_comparison(check, use_ref)
+
+        if not virt_signs:
+            continue
+
+        for typed_ref in class_ref.ent().refs("Typedby"):
+            utype = str(typed_ref.ent().freetext("UnderlyingType"))
+
+            for virt_sign in virt_signs:
+                if re.search(virt_sign, utype):
+                    for use_ref in typed_ref.ent().refs("Useby"):
+                        check_comparison(check, use_ref)
+
+    for class_ref in file.filerefs("Declare", "Unresolved Class ~Template, Unresolved Struct ~Template"):
+        for typed_ref in class_ref.ent().refs("Typedby"):
+            utype = str(typed_ref.ent().freetext("UnderlyingType"))
+
+            if not re.search(r"\(.*\)\(.*\)$", utype):
+                continue
+
+            for use_ref in typed_ref.ent().refs("Useby"):
+                check_comparison(check, use_ref)
