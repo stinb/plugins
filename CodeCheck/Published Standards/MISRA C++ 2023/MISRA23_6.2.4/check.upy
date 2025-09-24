@@ -93,31 +93,49 @@ def test_language(language):
     return language == 'C++'
 
 
+def check_spec(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(
+        ref.line(), ref.column())
+    is_inline = False
+    is_extern = False
+
+    while lex and lex.line_begin() == ref.line():
+        if lex.text() in ["inline", "constexpr"]:
+            is_inline = True
+        elif lex.text() == "extern":
+            is_extern = True
+            break
+
+        lex = lex.previous(True, True)
+
+    return is_inline, is_extern
+
+
 def check(check, file):
     if not re.search(r"\.h(h|pp|xx)?$", file.name()):
         return
 
-    for def_ref in file.filerefs("Define", "~Template ~Lambda Function, ~Member ~Template ~TemplateParameter ~Local Object"):
-        if def_ref.ent().freetext("Inline"):
-            continue     
+    for def_ref in file.filerefs("Define", "~Template ~Lambda ~Static Function, ~Member ~Template ~TemplateParameter ~Local ~Static Object"):
+        if def_ref.ent().freetext("Inline") or def_ref.ent().freetext("DefinedInMacro"):
+            continue
 
-        lex = file.lexer(lookup_ents=False).lexeme(def_ref.line(), def_ref.column())
-        is_inline = False
+        is_inline, is_extern = check_spec(def_ref)
 
-        while lex and lex.line_begin() == def_ref.line():
-            if lex.text() in ["inline", "constexpr"]:
-                is_inline = True
-            elif lex.text() == "extern":
-                is_inline = False
-                break
+        if (def_ref.ent().kind().check("Object")
+                and "const" in str(def_ref.ent().freetext("UnderlyingType"))
+                and not is_extern):
+            continue
 
-            lex = lex.previous(True, True)
+        if not is_inline or is_extern:
+            check.violation(def_ref.ent(), file, def_ref.line(),
+                            def_ref.column(), ERR1)
 
-        if not is_inline:
-            check.violation(def_ref.ent(), file, def_ref.line(), def_ref.column(), ERR1)
+    for mem_ref in file.filerefs("Define", "Static Member Object"):
+        if mem_ref.ent().freetext("DefinedInMacro"):
+            continue
 
-    for mem_ref in file.filerefs("Declare", "Static Member"):
-        utype = mem_ref.ent().freetext("UnderlyingType")
+        is_inline, _ = check_spec(mem_ref)
 
-        if utype and "const" not in utype:
-            check.violation(mem_ref.ent(), file, mem_ref.line(), mem_ref.column(), ERR1)
+        if "const" not in str(mem_ref.ent().freetext("UnderlyingType")):
+            check.violation(mem_ref.ent(), file, mem_ref.line(),
+                            mem_ref.column(), ERR1)

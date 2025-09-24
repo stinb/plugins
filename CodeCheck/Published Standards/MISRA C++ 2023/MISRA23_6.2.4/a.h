@@ -15,7 +15,7 @@ extern constexpr auto ans_2{42}; // UndCC_Violation - external linkage
 struct X
 {
     int32_t a;                        // UndCC_Valid - no linkage
-    static int32_t b;                 // UndCC_Violation
+    static int32_t b;                 // UndCC_Valid
     static const int32_t c{0};        // UndCC_Valid - const
     inline static const int32_t d{2}; // UndCC_Valid - X::b has external linkage but is inline
 };
