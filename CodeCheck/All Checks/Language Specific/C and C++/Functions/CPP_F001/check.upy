@@ -1,0 +1,128 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-10-01
+
+
+import re
+
+
+ERR1 = 'Template not instantiated'
+
+
+def ids():
+    return ('MISRA08_14-7-1', 'CPP_F001')
+
+
+def name(id):
+    return {
+        'MISRA08_14-7-1': '''Published Standards/MISRA-C++ 2008/\
+14-7-1 Templates Not Instantiated''',
+        'CPP_F001': '''All Checks/Language Specific/C and C++/Functions/\
+Templates Not Instantiated''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_14-7-1': [
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Declarations and Definitions',
+            'Functions',
+        ],
+        'CPP_F001': [
+            'Language: C++',
+            'Declarations and Definitions',
+            'Functions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>All class templates, function templates, class template member functions and
+class template static members shall be instantiated at least once.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Similar to uncalled functions, un-instantiated class and function templates
+are a potential source of noise and they may be symptomatic of a more serious
+problem such as missing paths.</p>
+
+<p>Note: Even though a given class template may be instantiated many times, it
+is possible that some of its member functions are never instantiated.</p>
+
+<p>See Section 3.5 for associated library issues.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+template &lt; typename T &gt;
+class Sample
+{
+public:
+  void inst_mem ( )
+  {
+    ...
+  }
+  void uninst_mem ( ) // Non-compliant
+  {
+    ...
+  }
+};
+
+Sample&lt;int64_t&gt; s;
+s.inst_mem ( ); // Call to s.inst_mem instantiates the member.
+                // s.uninst_mem is not called within the program
+                // and is not instantiated.\
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # Loop through each template
+    prev = None
+    for templateRef in file.filerefs('Define, Declare', 'Template', False):
+        template = templateRef.ent()
+
+        # Check to make sure this template is instantiated at least once
+        if not used(template):
+            check.violation(template, file, templateRef.line(), templateRef.column(), ERR1)
+
+        # Check that all methods are actually used
+        for methodRef in template.refs('Define'):
+            method = methodRef.ent()
+            longname = method.longname()
+            name = method.name()
+            if longname == f'{name}::{name}':
+                continue
+
+            parent = method.parent()
+            if parent:
+                parentName = parent.name()
+                if longname == f'{parentName}::~{parentName}':
+                    continue
+
+            if used(method):
+                continue
+
+            check.violation(method, file, methodRef.line(), methodRef.column(), ERR1)
+
+
+def used(ent):
+    return ent.ref('Typedby, Useby, Callby, Setby') != None
