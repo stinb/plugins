@@ -1,0 +1,173 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 09-30-2025
+
+import re
+import Modules
+
+ERR1 = "The function argument corresponding to a parameter declared to have an \
+array type shall have an appropriate number of elements"
+
+# The ID for the check
+def ids():
+    return ('MISRA23_17.5', 'MISRA12_17.5', 'CPP_F068')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_17.5': 'Published Standards/MISRA C 2023/' + """\
+17.5 The function argument corresponding to a parameter declared to have an \
+array type shall have an appropriate number of elements""",
+        'MISRA12_17.5': 'Published Standards/MISRA C 2012/' + """\
+17.5 The function argument corresponding to a parameter declared to have an \
+array type shall have an appropriate number of elements""",
+        'CPP_F068': 'All Checks/Language Specific/C and C++/Functions/' + """\
+The function argument corresponding to a parameter declared to have an array \
+type shall have an appropriate number of elements""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_17.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Functions',
+        ],
+        'MISRA12_17.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Functions',
+        ],
+        'CPP_F068': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>If a parameter is declared as an array with a specified size, the
+corresponding argument in each function call shall point into an object that has
+at least as many elements as the array.</p>
+<p><b>Rationale</b></p>
+<p>The use of an array declarator for a function parameter specifies the
+function interface more clearly than using a pointer. The minimum number of
+elements expected by the function is explicitly stated, whereas this is not
+possible with a pointer.</p>
+<p>A function parameter array declarator which does not specify a size is
+assumed to indicate that the function can handle an array of any size. In such
+cases, it is expected that the array size will be communicated by some other
+means, for example by being passed as another parameter, or by terminating the
+array with a sentinel value.</p>
+<p>The use of an array bound is recommended as it allows out-of-bounds checking
+to be implemented within the function body and extra checks on parameter
+passing. It is legal in C to pass an array of the incorrect size to a parameter
+with a specified size, which can lead to unexpected behaviour.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">/*
+ * Intent is that function does not access outside the range
+ * array1[ 0 ] .. array1[ 3 ]
+ */
+void fn1 ( int32_t array1[ 4 ] );
+/* Intent is that function handles arrays of any size */
+void fn2 ( int32_t array2[ ] );
+
+void fn ( int32_t *ptr )
+{
+  int32_t arr3[ 3 ] = { 1, 2, 3 };
+  int32_t arr4[ 4 ] = { 0, 1, 2, 3 };
+
+  /* Compliant - size of array matches the prototype */
+  fn1 ( arr4 );
+
+  /* Non-compliant - size of array does not match prototype */
+  fn1 ( arr3 );
+
+  /* Compliant only if ptr points to at least 4 elements */
+  fn1 ( ptr );
+
+  /* Compliant */
+  fn2 ( arr4 );
+
+  /* Compliant */
+  fn2 ( ptr );
+}
+</code></pre>
+<p><b>See Also</b></p>
+<p>Rule 17.6</p>
+"""
+    return {
+        'MISRA23_17.5': desc,
+        'MISRA12_17.5': desc,
+        'CPP_F068': desc,
+
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define, Declare', 'Function', True)
+    for ref in refs:
+        if not re.search(r'\[', ref.ent().parameters()):
+            continue
+
+        parameters = ref.ent().parameters().split(',')
+        sizes = []
+
+        # Get array sizes in parameters
+        for parameter in parameters:
+            if '[' in parameter:
+                sizes.append(re.sub(r'.*\[|\].*|\s', '', parameter))
+
+        # Go through all call refs
+        callRefs = ref.ent().refs("Callby")
+        for callRef in callRefs:
+            if not lexer:
+                lexer = file.lexer()
+
+            lexeme = lexer.lexeme(callRef.line(), callRef.column())
+            if lexeme:
+                lexeme = lexeme.next(True, True)
+                if lexeme and lexeme.text() == '(':
+                    close = Modules.findClose(lexeme)
+                    numParam = 0
+                    lexeme = lexeme.next(True, True)
+                    # Go through parameters passed through
+                    while lexeme and close and not (lexeme.line_begin() >= close.line_begin() and lexeme.column_begin() >= close.column_begin()):
+                        if lexeme.ent() and '[' in str(lexeme.ent().type()):
+                            size = re.sub(r'.*\[|\].*|\s', '', str(lexeme.ent().type()))
+                            # Check if both sizes are digits
+                            if size.isdigit() and sizes[numParam].isdigit():
+                                # Check if sizes match
+                                if size != sizes[numParam]:
+                                    check.violation(ref.ent(), file, callRef.line(), callRef.column(), ERR1)
+                                    break
+
+                        # Skip any nested parenthesis
+                        if lexeme.text() == '(':
+                            lexeme = Modules.findClose(lexeme)
+                            continue
+                        # Count which parameter that should be checked
+                        if lexeme.text() == ',':
+                            numParam += 1
+
+
+
+
+                        lexeme = lexeme.next(True, True)
