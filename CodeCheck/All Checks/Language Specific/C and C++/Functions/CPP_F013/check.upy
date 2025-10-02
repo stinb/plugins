@@ -1,0 +1,161 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2025-10-02
+
+
+import re
+
+
+ERR1 = 'Member function returning non-const handle to class data'
+
+
+def ids():
+    return ('MISRA08_9-3-2', 'CPP_F013')
+
+
+def name(id):
+    return {
+        'MISRA08_9-3-2': '''Published Standards/MISRA-C++ 2008/\
+9-3-2: Method Returning Non-const Handle to Class Data''',
+        'CPP_F013': '''All Checks/Language Specific/C and C++/CATEGORY/\
+Method Returning Non-const Handle to Class Data''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_9-3-2': [
+            'Functions',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+        ],
+        'CPP_F013': [
+            'Functions',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Member functions shall not return non-const <i>handles</i> to <i>class-data</i>.</p>
+
+<p><b>Rationale</b></p>
+
+<p>By implementing class interfaces with member functions the implementation
+retains more control over how the object state can be modified and helps to
+allow a class to be maintained without affecting clients. Returning a
+<i>handle</i> to <i>class-data</i> allows for clients to modify the state of the
+object without using any interfaces.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+class C
+{
+public:
+   int32_t & getA ()   // Non-compliant
+   {
+      return a;
+   }
+private:
+   int32_t a;
+};
+
+void b ( C & c )
+{
+   int32_t & a_ref = c.getA ();
+   a_ref = 10;                  // External modification of private C::a
+}\
+</code></pre>
+
+<p><code>c.getA()</code> returns a reference to the member, which is then stored
+and modified by <code>a_ref</code>. The class, therefore, has no control over
+changes to its state.</p>
+
+<p>Where a <i>resource</i> is used by the class, but is not <i>class-data</i>,
+non-const <i>handles</i> to this data may be returned.</p>
+
+<pre><code language="C++">\
+class C
+{
+public:
+   C ( int32_t * shared ) : m_shared ( shared )
+   {
+   }
+
+   int32_t * getA ()
+   {
+      return m_shared;   // Compliant - m_shared is not class-data
+   }
+
+private:
+   int32_t * m_shared;
+};\
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+
+<p>It is not always possible to statically check to see if a classes data member
+is shared or owned by the class. A heurisitic is used to determine whether a
+variable has external storage or not, but indeterminate data members, such as
+those set by a function or complex expression, are flagged as violations if
+those data members are returned as non-const value.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    # Loop through each class
+    for classRef in file.filerefs('Define', 'Class'):
+        classEnt = classRef.ent()
+
+        # Pull all the data members defined by this class, move onto the next class if none
+        members = set(classEnt.ents('Define', 'Member Object'))
+        if not members:
+            continue
+
+        # Loop through each method
+        for methodRef in classEnt.refs('Define', 'Member Function'):
+            method = methodRef.ent()
+            # Test if the method returns a pointer or a reference
+            methodType = method.type() or ''
+            if not re.search(r'[*&]', methodType):
+                continue
+            if re.search(r'^[^\*]*?\bconst\b', methodType):
+                continue
+
+            # Each returned member
+            for returnRef in method.refs('Return'):
+                returnEnt = returnRef.ent()
+                if returnEnt not in members:
+                    continue
+
+                if not isDataMember(returnEnt):
+                    continue
+
+                check.violation(method, methodRef.file(), methodRef.line(), methodRef.column(), ERR1)
+
+
+def isDataMember(member) -> bool:
+    setRef = member.ref('Setby Init')
+    setEnt = setRef.ent() if setRef else None
+
+    if setEnt and setEnt.kind().check('Object, Function, Parameter'):
+        return isDataMember(setEnt)
+    if setEnt and setEnt.kind().check('Parameter'):
+        return False
+    if member.kind().check('Member Function'):
+        return False
+
+    return True
