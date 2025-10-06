@@ -65,3 +65,13 @@ int32_t f2(int32_t i,                  // UndCC_Violation(Win) for f2< false >
     }
     return 0;
 }
+void f3([[maybe_unused]] int32_t i, // UndCC_Valid
+        int32_t j)                  // UndCC_Valid - explicitly cast to void
+{
+    (void)j;
+    auto l = [](int32_t m,                  // UndCC_Valid
+                [[maybe_unused]] int32_t n) // UndCC_Valid
+    {
+        return m;
+    };
+}

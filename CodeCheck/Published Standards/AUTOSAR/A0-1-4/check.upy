@@ -225,9 +225,40 @@ def test_language(language):
 
 
 def define_options(check):
-    include_virtual_overrides = True if (check.id() == 'MISRA23_0.2.2') else False
+    include_virtual_overrides = True if (
+        check.id() == 'MISRA23_0.2.2') else False
 
-    check.option().checkbox('include_virtual_overrides', 'Include overridden virtual functions', include_virtual_overrides)
+    check.option().checkbox('include_virtual_overrides',
+                            'Include overridden virtual functions', include_virtual_overrides)
+
+
+def is_maybe_unused(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    prev_lex = lex.previous(True, True)
+
+    while prev_lex and prev_lex.text() not in ["(", ",", ref.scope().name()]:
+        if (prev_lex.text() == "maybe_unused") and (prev_lex.token() == "Identifier"):
+            return True
+
+        prev_lex = prev_lex.previous(True, True)
+
+    if lex and (lex.next(True, True).text() == "["):
+        on_index = 0
+
+        while lex:
+            if lex.text() == "[":
+                on_index += 1
+            elif lex.text() == "]":
+                on_index -= 1
+
+                if not on_index:
+                    break
+            elif on_index and (lex.text() == "maybe_unused") and (lex.token() == "Identifier"):
+                return True
+
+            lex = lex.next(True, True)
+
+    return False
 
 
 def check(check, file):
@@ -241,36 +272,13 @@ def check(check, file):
 
         if (lex.ent() and lex.ent().kind().check("Macro") or
             (func_ref.kind().check("Define") and func_ref.ent().kind().check("Virtual")) or
-            (func_ref.ent().kind().check("Member Function") and func_ref.ent().parent() and func_ref.ent().parent().kind().check("Template") and (func_ref.ent().parent().name() == func_ref.ent().name()))):
+                (func_ref.ent().kind().check("Member Function") and func_ref.ent().parent() and func_ref.ent().parent().kind().check("Template") and (func_ref.ent().parent().name() == func_ref.ent().name()))):
             continue
 
         func_ent = func_ref.ent() if func_ref.kind().check("Define") else func_ref.scope()
 
         for param_ref in func_ent.refs("Define", "~Unnamed Parameter"):
-            if param_ref.ent().name() == "...":
-                continue
-
-            lex = param_ref.file().lexer().lexeme(param_ref.line(), param_ref.column())
-            maybe_unused = False
-
-            if lex and (lex.next(True, True).text() == "["):
-                on_index = 0
-
-                while lex:
-                    if lex.text() == "[":
-                        on_index += 1
-                    elif lex.text() == "]":
-                        on_index -= 1
-
-                        if not on_index:
-                            break
-                    elif on_index and (lex.text() == "maybe_unused") and (lex.token() == "Identifier"):
-                        maybe_unused = True
-                        break
-
-                    lex = lex.next(True, True)
-
-            if maybe_unused:
+            if param_ref.ent().name() == "..." or is_maybe_unused(param_ref):
                 continue
 
             refs = param_ref.ent().refs("~Declarein ~Definein ~Typed ~Name")
@@ -290,4 +298,5 @@ def check(check, file):
                         ref_infunc.append(False)
 
                 if not any(ref_infunc):
-                    check.violation(param_ref.ent(), file, param_ref.line(), param_ref.column(), ERR1)
+                    check.violation(param_ref.ent(), file,
+                                    param_ref.line(), param_ref.column(), ERR1)
