@@ -1,0 +1,174 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-06-2025
+
+import re
+import Modules
+
+ERR1 = "Mixed designated and positional initializers found"
+
+# The ID for the check
+def ids():
+    return ('MISRA23_9.6', 'CPP_S005')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_9.6': 'Published Standards/MISRA C 2023/' + """\
+9.6 An initializer using chained designators shall not contain initializers \
+without designators""",
+        'CPP_S005': """\
+All Checks/Language Specific/C and C++/Structures and Unions/An initializer \
+using chained designators shall not contain initializers without designators""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_9.6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Structures and Unions',
+        ],
+        'CPP_S005': [
+            'Language: C',
+            'Language: C++',
+            'Structures and Unions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>A chained designator is a designator list that has more than one item, thus
+specifying an element of a sub-object within the current object.</p>
+<p>If an aggregate initializer uses designators to specify elements, and any
+designator in the initializer is chained, every initializer in the entire
+containing initializer list shall specify an element explicitly using a
+designator.</p>
+<p>This rule applies to initializers for both objects and sub-objects.</p>
+<p><b>Rationale</b></p>
+<p>Using chained designators for selective sub-object designation can make the
+intent of the initializer clear for some constructs such as sparse matrices.
+However, combining chained designators with positional initialization is
+extremely unclear — a human reader cannot easily tell whether the intended next
+object is within the sub-object, or within the same object level from which the
+designator started lookup. The syntactic brace structure of the initializer list
+may also no longer match the depth of the selected element, adding to the
+confusion.</p>
+<p><b>Exception</b></p>
+<p>A braced sub-object initializer may omit designators to specify elements if
+it does not contain any chained designators, and no chained designators in the
+containing initializer list specify an element inside it as the current object.
+</p>
+<p><b>Example</b></p>
+<pre><code language="C++">
+struct S
+{
+int x;
+int y;
+};
+struct T
+{
+int w;
+struct S s;
+int z;
+};
+/* Non-compliant - chained designators and implicit positional initializers mixed */
+struct T tt = {
+1,
+.s.x = 2, /* To a human reader, this looks like .z is being initialized */
+3, /* tt is actually initialized as { 1, { 2, 3 }, 0 } */
+}; /* This also violates Rule 9.2 */</code></pre>
+<p><b>See Also</b></p>
+<p>Rule 9.2, Rule 9.4</p>
+"""
+    return {
+        'MISRA23_9.6': desc,
+        'CPP_S005': desc,
+
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    refs = file.filerefs('Define', 'Object')
+    for ref in refs:
+        # Skip if not struct
+        if 'struct' not in str(ref.ent().type()):
+            continue
+        if not lexer:
+            lexer = file.lexer()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        while lexeme and lexeme.text() not in [';', '=']:
+            lexeme = lexeme.next(True, True)
+
+        # Find start of initializer
+        if lexeme and lexeme.text() == '=':
+            lexeme = lexeme.next(True, True)
+            if lexeme and lexeme.text() == '{':
+                close = Modules.findClose(lexeme)
+                # Check for mixed designated and positional initializers
+                if not checkInitializerList(lexeme, close):
+                    check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+                lexeme = close
+                continue
+
+# Detect mixing of designated and positional initializers
+def checkInitializerList(lexeme, close):
+    ok = True
+    lexeme = lexeme.next(True, True)
+    equals = False
+    curEquals = False
+    first = True
+
+    # Go through bounds of curly braces
+    while lexeme and ok and checkBounds(lexeme, close):
+        # Recurse if nested braces are found
+        if lexeme.text() == '{':
+            close = Modules.findClose(lexeme)
+            ok = checkInitializerList(lexeme, close)
+            lexeme = close
+            continue
+        # Keep track of each initializer
+        if lexeme.text() == ',':
+            if first:
+                first = False
+            # Found mixed initializers
+            elif equals and not curEquals:
+                return False
+            if first:
+                first = False
+        # Found designated initializer
+        elif lexeme.text() == '=':
+            if first:
+                equals = True
+            # Found mixed initializers
+            elif not equals:
+                return False
+            if not first and equals:
+                curEquals = True
+
+        lexeme = lexeme.next(True, True)
+
+
+
+    return True
+
+# check if still within the bounds of the current set of curly braces
+def checkBounds(lexeme, close):
+    if (lexeme.line_begin() >= close.line_begin() and 
+            lexeme.column_begin() >= close.column_begin()):
+        return False
+    return True
