@@ -1,0 +1,158 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2025-10-13
+
+
+import re
+from understand import Ref
+
+
+ERR1 = 'Non-macro identifier is not distinct from macro identifier %1 on line %2'
+
+
+def ids():
+    return ('MISRA12_5.5', 'MISRA23_5.5', 'CPP_I006')
+
+
+def name(id):
+    return {
+        'MISRA12_5.5': '''Published Standards/MISRA C 2012/\
+5.5 Same Identify and Macro Name''',
+        'MISRA23_5.5': '''Published Standards/MISRA C 2023/\
+5.5 Same Identify and Macro Name''',
+        'CPP_I006': '''All Checks/Language Specific/C and C++/Identifiers/\
+Same Identify and Macro Name''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_5.5': [
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+        ],
+        'MISRA23_5.5': [
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_I006': [
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Identifiers shall be distinct from macro names.</p>
+
+<p><b>Amplification</b></p>
+
+<p>This rule requires that the names of macros that exist prior to preprocessing
+be distinct from the identifiers that exist after preprocessing. It applies to
+identifiers, regardless of scope or name space, and to any macros that have been
+defined regardless of whether the definition is still in force when the
+identifier is declared.</p>
+
+<p>The definition of distinct depends on the implementation and the version of
+the C language that is being used:</p>
+
+<ul>
+
+<li>In C90 the <b>minimum</b> requirement is that the first 31 characters are
+significant;</li>
+
+<li>In C99 the <b>minimum</b> requirement is that the first 63 characters are
+significant, with each universal character or extended source character counting
+as a single character.</li>
+
+</ul>
+
+<p><b>Rationale</b></p>
+
+<p>Keeping macro names and identifiers distinct can help to avoid developer
+confusion.</p>
+
+<p><b>Example</b></p>
+
+<p>In the following non-compliant example, the name of the <i>function-like
+macro</i> <code>Sum</code> is also used as an identifier. The declaration of the
+object <code>Sum</code> is not subject to macro-expansion because it is not
+followed by a <code>(</code> character. The identifier therefore exists after
+preprocessing has been performed.</p>
+
+<pre><code language="C++">\
+#define Sum(x, y) ( ( x ) + ( y ) )
+
+int16_t Sum;\
+</code></pre>
+
+<p>The following example is compliant because there is no instance of the
+identifier <code>Sum</code> after preprocessing.</p>
+
+<pre><code language="C++">\
+#define Sum(x, y) ( ( x ) + ( y ) )
+
+int16_t x = Sum ( 1, 2 );\
+</code></pre>
+
+<p>In the following example, the implementation in question supports 31
+significant case-sensitive characters in identifiers that do not have external
+linkage. The example is non-compliant because the macro name is not distinct
+from an identifier name with internal linkage in the first 31 characters.</p>
+
+<pre><code language="C++">\
+/*              1234567890123456789012345678901********* Characters */
+#define         low_pressure_turbine_temperature_1 lp_tb_temp_1
+static int32_t  low_pressure_turbine_temperature_2;\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 5.1, Rule 5.2, Rule 5.4</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('C99', 'Use C99 standard? (C90 default)', False)
+
+
+def check(check, file):
+    length = 63 if check.options().lookup('C99') else 31
+
+    # Get macros: truncated name to definition
+    macros: dict[str, Ref] = dict()
+    for ref in file.filerefs('Define, Declare', 'Macro'):
+        shortName = ref.ent().name()[:length]
+        macros[shortName] = ref
+
+    # Each non-macro that clashes with a macro
+    for ref in file.filerefs('Define, Declare', '~Macro'):
+        ent = ref.ent()
+        shortName = ent.name()[:length]
+        macroRef = macros.get(shortName)
+        if not macroRef:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, macroRef.ent().name(), macroRef.line())
