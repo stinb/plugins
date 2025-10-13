@@ -63,19 +63,28 @@ def fileLines(file, ignoredTokens = ["Whitespace", "Comment", "Newline"]):
 
   return text, numbers
 
-def addToPluginCache(duplLines, plugin):
-  '''Store the duplicated line counts in the cache'''
-  if not hasattr(plugin, "cache"):
+def defineOptions(plugin):
+  if not hasattr(plugin, "options"):
     return
-  cache = plugin.cache("Duplicates")
-  if not cache:
-    return
-  cache.clear()
-  total = 0
-  for file, lineset in duplLines.items():
-    cache.insert(len(lineset), ent=file)
-    total += len(lineset)
-  cache.insert(total)
+  plugin.options().integer("lines","Minimum # lines to match",5)
+  plugin.options().checkbox("ws","Ignore Whitespace",True)
+  plugin.options().checkbox("comments","Ignore Comments",True)
+
+def lineOption(plugin):
+  if not hasattr(plugin, "options"):
+    return 5
+  return plugin.options().lookup("lines")
+
+def ignoresOption(plugin):
+  if not hasattr(plugin, "options"):
+    return ["Whitespace", "Comment", "Newline"]
+  ignores = []
+  if plugin.options().lookup("ws"):
+    ignores.append("Whitespace")
+    ignores.append("Newline")
+  if plugin.options().lookup("comments"):
+    ignores.append("Comment")
+  return ignores
 
 
 class Matches:

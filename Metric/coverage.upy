@@ -7,8 +7,9 @@ about_coverage="""
 <p>Code coverage is run time information about how many times a line of code
 was executed. These plugins support reading coverage information from a
 <a href="https://github.com/linux-test-project/lcov">lcov &#8599;</a> ".info" file.
-The file must be in the same directory as the .und project and be named
-"coverage.info".</p>
+By default, the file is assumed to be in the same directory as the .und project
+and be named "coverage.info", but the file can be set per project from
+project configuration.</p>
 
 <ul>
   <li>Directory</li><ul>
@@ -78,6 +79,10 @@ def tags(id):
     ])
   return taglist
 
+def define_options(metric):
+  path = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
+  metric.options().file("coveragefile", "Coverage File (LCOV Format)", path)
+
 def is_integer(id):
    """
    Optional, return True if the metric value is an integer.
@@ -92,7 +97,7 @@ def test_entity(metric, ent):
   """
   Optional, return True if metric can be calculated for the given entity.
   """
-  if not has_coverage(metric.db()):
+  if not has_coverage(metric):
     return False
   if metric.id() == "CoverageHits":
     return ent.kind().check("function ~unknown ~unresolved")
@@ -103,7 +108,7 @@ def test_architecture(metric, arch):
   """
   Optional, return True if metric can be calculated for the given architecture.
   """
-  if not has_coverage(metric.db()):
+  if not has_coverage(metric):
     return False
   return metric.id() != "CoverageHits"
 
@@ -111,7 +116,7 @@ def test_global(metric, db):
   """
   Optional, return True if metric can be calculated for the given database.
   """
-  if not has_coverage(metric.db()):
+  if not has_coverage(metric):
     return False
   return metric.id() != "CoverageHits"
 
@@ -138,7 +143,7 @@ def test_available(metric,entkindstr):
   """
   # Coverage metrics rely on finding the coverage file from the database
   # name.
-  if not has_coverage(metric.db()):
+  if not has_coverage(metric):
     return False
 
   # Kind check if requested
@@ -163,7 +168,7 @@ def test_line(metric):
   Values per line are returned as a dictionary from line number to line
   value from the lines function (see below).
   """
-  return metric.id() == "CoverageHits" and has_coverage(metric.db())
+  return metric.id() == "CoverageHits" and has_coverage(metric)
 
 def value(metric, target):
   """
@@ -192,7 +197,7 @@ def value(metric, target):
     for ent in fileents:
       sums.addFromCache(ent, und_cache)
   else:
-    cov_file = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
+    cov_file = coverage_file(metric)
     for cov in scanCoverageFile(cov_file, fileents):
       sums.addCoverageObject(cov)
 
@@ -210,9 +215,14 @@ def lines(metric, file):
 
   return fileCoverage(metric,file).lines
 
-def has_coverage(db):
-  path = os.path.join(os.path.dirname(db.name()), "coverage.info")
-  return os.path.exists(path)
+def has_coverage(metric):
+  cov_file = coverage_file(metric)
+  return cov_file and os.path.exists(cov_file)
+
+def coverage_file(metric):
+  if hasattr(metric, "options"):
+    return metric.options().lookup("coveragefile")
+  return os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
 
 def countFound(countsDict):
   return len(countsDict)
@@ -333,10 +343,9 @@ class SumMetrics:
 def findCache(metric):
   und_cache = None
   if hasattr(metric, "cache"):
-    und_cache = metric.cache()
+    cov_file = coverage_file(metric)
+    und_cache = metric.cache(cov_file)
     if und_cache:
-      cov_file = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
-
       # Clear cache if coverage file has been updated
       modtime = os.path.getmtime(cov_file)
       if und_cache.value(key="filemod",value=modtime) < modtime:
@@ -351,7 +360,7 @@ def findCache(metric):
   return und_cache
 
 def fileCoverage(metric, file):
-  cov_file = os.path.join(os.path.dirname(metric.db().name()), "coverage.info")
+  cov_file = coverage_file(metric)
 
   und_cache = findCache(metric)
   if und_cache:

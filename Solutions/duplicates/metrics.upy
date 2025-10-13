@@ -13,9 +13,10 @@ def name(id):
 
 def description(id):
   return """<p>The {} of unique lines that are duplicated.</p>
-  <p>If the ireport or check is run, those numbers are reported. Otherwise,
-  the metric script calculates duplicates using a 5 line window ignoring comments
-  and whitespace.</p>
+  <p>This metric plugin searches the entire project for duplicate lines. The
+  number minimum number of lines to match and options to ignore whitespace and
+  comments can be edited per project through the Project Configuration dialog
+  metrics page.</p>
 
   <p>See also the interactive report
   <a href="und://plugin/ireport/Duplicate%20Lines%20of%20Code">Duplicate Lines of
@@ -36,6 +37,9 @@ def tags(id):
     'Language: Any',
     'Duplicate Code'
   ]
+
+def define_options(metric):
+  duplicates.defineOptions(metric)
 
 def is_integer(id):
    return id == "DuplicateLinesOfCode"
@@ -59,13 +63,27 @@ def test_available(metric,entkindstr):
   return True
 
 def value(metric, target):
-  cache = metric.cache("Duplicates")
+  ignores = duplicates.ignoresOption(metric)
+  lines = duplicates.lineOption(metric)
+
+  cachename = "Duplicates_{}_{}".format(lines, ",".join(ignores))
+
+  cache = metric.cache(cachename)
   if cache.is_empty():
-    # Calculate Duplicate Lines if another plugin has not
-    matches = duplicates.Matches(5)
+    # Find matches
+    matches = duplicates.Matches(lines)
+
     for file in metric.db().ents(FILE_KINDSTR):
-      matches.processFile(file, duplicates.fileLines(file)[0])
-    duplicates.addToPluginCache(matches.duplicateLines(), metric)
+      matches.processFile(file, duplicates.fileLines(file,ignores)[0])
+
+    # store
+    cache.clear()
+    total = 0
+    duplLines = matches.duplicateLines()
+    for file, lineset in duplLines.items():
+      cache.insert(len(lineset), ent=file)
+      total += len(lineset)
+    cache.insert(total)
 
   # Return count from cache
   dupls = 0
@@ -85,3 +103,4 @@ def value(metric, target):
   if metric.id() == "DuplicateLinesOfCodePercent":
     return dupls / loc if loc else 0
   return dupls
+
