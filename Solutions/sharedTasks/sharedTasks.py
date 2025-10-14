@@ -283,7 +283,7 @@ def getEdgeInfo(
         options: dict[str, str | bool]):
 
     # Base case: visiting a function again from the same root
-    funKey = str(root) + ' ' + str(fun)
+    funKey = f'{root.id()} {fun.id()}'
     if funKey in visited:
         return
     visited.add(funKey)
