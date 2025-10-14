@@ -19,7 +19,8 @@ class Option:
 
 # Ref kinds and ent kinds
 FUN_REF_KINDS = 'Call, Assign FunctionPtr'
-FUN_REF_KINDS_OPTION = ', Use Ptr'
+FUN_REF_KINDS_OPTION_PTR = ', Use Ptr'
+FUN_REF_KINDS_OPTION_OVERRIDE = ', Overriddenby'
 OBJ_ENT_KINDS = 'Object'
 OBJ_REF_KINDS = 'Modify, Set, Use'
 OBJ_REF_KINDS_OPTION = ', Deref Call'
@@ -34,6 +35,7 @@ MEMBER_FUNCTIONS = 'memberFunctions'
 MEMBER_OBJECT_PARENTS = 'memberObjectParents'
 MEMBER_OBJECTS = 'memberObjects'
 OBJECTS = 'objects'
+OVERRIDES = 'overrides'
 REFERENCE = 'reference'
 FUNCTION_POINTER = 'functionPointer'
 
@@ -50,8 +52,9 @@ COMMON_OPTIONS = (
     Option(MEMBER_OBJECT_PARENTS, 'Member object parents', OPTION_BOOL_CHOICES, OPTION_BOOL_TRUE),
     Option(MEMBER_OBJECTS, 'Member objects', ['Long name', 'Name', 'Off'], 'Long name'),
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
+    Option(OVERRIDES, 'Overrides', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(REFERENCE, 'Reference', ['All', 'Simple'], 'All'),
-    Option(FUNCTION_POINTER, 'Function Pointer', ['Off', 'On'], 'Off'),
+    Option(FUNCTION_POINTER, 'Function Pointer', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
 )
 
 
@@ -74,8 +77,8 @@ refComparator = functools.cmp_to_key(refComparator)
 
 def refStr(ref: Ref) -> str:
     if ref.isforward():
-        return f'{ref.scope().uniquename()} {ref.kind().longname()} {ref.ent().uniquename()} {ref.line()} {ref.column()}'
-    return f'{ref.ent().uniquename()} {ref.kind().inv().longname()} {ref.scope().uniquename()} {ref.line()} {ref.column()}'
+        return f'{ref.scope().id()} {ref.kind().longname()} {ref.ent().id()} {ref.line()} {ref.column()}'
+    return f'{ref.ent().id()} {ref.kind().inv().longname()} {ref.scope().id()} {ref.line()} {ref.column()}'
 
 
 def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
@@ -118,14 +121,23 @@ def getLongerName(ent: Ent, parentEnt: Ent) -> str:
     return f'{parentTypes[0].name()}::{longname}'
 
 
+def getFnRefKinds(options: dict[str, str | bool] | None = None) -> str:
+    refKinds = FUN_REF_KINDS
+    if not options:
+        return refKinds
+    if options[FUNCTION_POINTER]:
+        refKinds += FUN_REF_KINDS_OPTION_PTR
+    if options[OVERRIDES]:
+        refKinds += FUN_REF_KINDS_OPTION_OVERRIDE
+    return refKinds
+
+
 def getFnOrObjRefs(
         function: Ent,
         enableDisableFunctions: dict,
         options: dict[str, str | bool] | None = None) -> list[Ref]:
 
-    refKinds = FUN_REF_KINDS
-    if options and options[FUNCTION_POINTER] == 'On':
-        refKinds += FUN_REF_KINDS_OPTION
+    refKinds = getFnRefKinds(options)
 
     refs = function.refs(refKinds)
     refs += globalObjRefs(function, options)
@@ -331,9 +343,7 @@ def getEdgeInfo(
         outgoing[scope].add(edgeKey)
 
     # Function calls
-    refKinds = FUN_REF_KINDS
-    if options[FUNCTION_POINTER] == 'On':
-        refKinds += FUN_REF_KINDS_OPTION
+    refKinds = getFnRefKinds(options)
 
     for call in fun.refs(refKinds, '~Unknown ~Unresolved', True):
         if options[REFERENCE] == 'All':
