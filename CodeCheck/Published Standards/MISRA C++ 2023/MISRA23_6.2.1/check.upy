@@ -88,6 +88,9 @@ void f2()
 {
  h( 42 ); // Nested call in h is to int64_t overload of f
 }</code></pre>
+
+<p><b>Developer's Note:</b></p>
+<p>This check cannot flag a non-compliant function definition where a call to another function resolves to different overloads in each definition.</p>
 """,
     }[id]
 
@@ -110,11 +113,10 @@ def check(check):
     defined_objs = {}
     defined_types = {}
     defined_funcs = {}
-    declared_funcs = {}
     flagged_defs = []
 
     for file in files:
-        for type_ref in file.filerefs("Define", "Type ~Unnamed ~TemplateParameter ~Alias ~Typedef"):
+        for type_ref in file.filerefs("Define", "Type ~Unnamed ~TemplateParameter"):
             if type_ref.ent().longname() not in defined_types:
                 defined_types[type_ref.ent().longname()] = type_ref
             else:
@@ -130,25 +132,6 @@ def check(check):
 
                     check_violation(type_ref, defined_ref, check)
 
-        for func_ref in file.filerefs("Declare ~Implicit", "Function ~Macro ~Member ~Lambda ~Template ~Static"):
-            if str(func_ref.ent().name()).startswith("operator"):
-                continue
-
-            if func_ref.ent().longname() not in declared_funcs:
-                declared_funcs[func_ref.ent().longname()] = func_ref
-            else:
-                defined_ref = declared_funcs[func_ref.ent().longname()]
-
-                if not (is_diff_files(func_ref, defined_ref) and is_same_kind(func_ref, defined_ref)):
-                    continue
-
-                if ent_definition(defined_ref) != ent_definition(func_ref):
-                    if defined_ref.ent().id() not in flagged_defs:
-                        check_violation(defined_ref, func_ref, check)
-                        flagged_defs.append(defined_ref.ent().id())
-
-                    check_violation(func_ref, defined_ref, check)
-
         for func_ref in file.filerefs("Define", "Function ~Macro ~Member ~Lambda ~Template ~Static"):
             if (func_ref.ent().name() == "main") or (str(func_ref.ent().name()).startswith("operator")) or (func_ref.ent().parent().kind().check("Unnamed Namespace")):
                 continue
@@ -158,8 +141,8 @@ def check(check):
             else:
                 defined_ref = defined_funcs[func_ref.ent().longname()]
 
-                if ((not func_ref.ent().freetext("Inline") and is_diff_files(func_ref, defined_ref)) or 
-                    (func_ref.ent().freetext("Inline") and is_diff_files(func_ref, defined_ref) and (defined_ref.ent().contents() != func_ref.ent().contents()))):
+                if ((not func_ref.ent().freetext("Inline") and is_diff_files(func_ref, defined_ref)) or
+                        (func_ref.ent().freetext("Inline") and is_diff_files(func_ref, defined_ref) and (defined_ref.ent().contents() != func_ref.ent().contents()))):
                     if defined_ref.ent().id() not in flagged_defs:
                         check_violation(defined_ref, func_ref, check)
                         flagged_defs.append(defined_ref.ent().id())
@@ -182,7 +165,7 @@ def check(check):
 
                     check_violation(global_ref, defined_ref, check)
 
-                    
+
 def ent_definition(ref):
     body = ""
     lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
@@ -203,9 +186,13 @@ def ent_definition(ref):
 
 def is_diff_files(ref_1, ref_2):
     # True if ref_1 and ref_2 on diff files
-    if ref_1.ent().parent() and ref_2.ent().parent() and ref_1.ent().parent().kind().check("File") and ref_2.ent().parent().kind().check("File") and (ref_1.ent().parent().id() != ref_2.ent().parent().id()):
+    if (ref_1.ent().parent()
+        and ref_2.ent().parent()
+        and ref_1.ent().parent().kind().check("File")
+        and ref_2.ent().parent().kind().check("File")
+            and (ref_1.ent().parent().id() != ref_2.ent().parent().id())):
         return True
-    
+
     return False
 
 
@@ -214,4 +201,5 @@ def is_same_kind(ref_1, ref_2):
 
 
 def check_violation(ref_1, ref_2, check):
-    check.violation(ref_1.ent(), ref_1.file(), ref_1.line(), ref_1.column(), ERR1, ref_1.ent().name(), ref_2.file().name())
+    check.violation(ref_1.ent(), ref_1.file(), ref_1.line(
+    ), ref_1.column(), ERR1, ref_1.ent().name(), ref_2.file().name())
