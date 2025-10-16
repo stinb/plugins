@@ -21,6 +21,7 @@ class Option:
 FUN_REF_KINDS = 'Call, Assign FunctionPtr'
 FUN_REF_KINDS_OPTION_PTR = ', Use Ptr'
 FUN_REF_KINDS_OPTION_OVERRIDE = ', Overriddenby'
+FUN_REF_KINDS_OPTION_INSTANCEOF = ', Instanceof'
 OBJ_ENT_KINDS = 'Object'
 OBJ_REF_KINDS = 'Modify, Set, Use'
 OBJ_REF_KINDS_OPTION = ', Deref Call'
@@ -31,6 +32,7 @@ TASK_FIELDS = ('priority', 'core')
 # Option keys
 FILTER_MODIFY_SET_ONLY = 'filterModifySetOnly'
 FILTER_USE_ONLY = 'filterUseOnly'
+FUNCTION_INSTANCES = 'functionInstances'
 MEMBER_FUNCTIONS = 'memberFunctions'
 MEMBER_OBJECT_PARENTS = 'memberObjectParents'
 MEMBER_OBJECTS = 'memberObjects'
@@ -48,13 +50,14 @@ OPTION_BOOL_CHOICES = [OPTION_BOOL_TRUE, OPTION_BOOL_FALSE]
 COMMON_OPTIONS = (
     Option(FILTER_MODIFY_SET_ONLY, 'Filter out modify/set only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FILTER_USE_ONLY, 'Filter out use only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
+    Option(FUNCTION_INSTANCES, 'Function instances', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
+    Option(FUNCTION_POINTER, 'Function pointers', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(MEMBER_FUNCTIONS, 'Member functions', ['Longer name', 'Long name', 'Name'], 'Long name'),
     Option(MEMBER_OBJECT_PARENTS, 'Member object parents', OPTION_BOOL_CHOICES, OPTION_BOOL_TRUE),
     Option(MEMBER_OBJECTS, 'Member objects', ['Long name', 'Name', 'Off'], 'Long name'),
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
     Option(OVERRIDES, 'Overrides', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(REFERENCE, 'Reference', ['All', 'Simple'], 'All'),
-    Option(FUNCTION_POINTER, 'Function Pointer', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
 )
 
 
@@ -129,6 +132,8 @@ def getFnRefKinds(options: dict[str, str | bool] | None = None) -> str:
         refKinds += FUN_REF_KINDS_OPTION_PTR
     if options[OVERRIDES]:
         refKinds += FUN_REF_KINDS_OPTION_OVERRIDE
+    if options[FUNCTION_INSTANCES]:
+        refKinds += FUN_REF_KINDS_OPTION_INSTANCEOF
     return refKinds
 
 
