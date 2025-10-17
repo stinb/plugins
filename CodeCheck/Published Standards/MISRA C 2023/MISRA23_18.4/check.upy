@@ -1,0 +1,200 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-14-2025
+
+import re
+
+ERR1 = "%1 was applied to an expression of pointer type"
+
+# The ID for the check
+def ids():
+    return ('MISRA23_18.4', 'MISRA12_18.4', 'CPP_DD030')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_18.4': 'Published Standards/MISRA C 2023/' + """\
+18.4 The +, -, += and -= operators should not be applied to an expression
+of pointer type""",
+        'MISRA12_18.4': 'Published Standards/MISRA C 2012/' + """\
+18.4 The +, -, += and -= operators should not be applied to an expression
+of pointer type""",
+        'CPP_DD030': """\
+All Checks/Language Specific/C and C++/Definitions and Declarations/
+Variable-length arrays shall not be used""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_18.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+        'MISRA12_18.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+        'CPP_DD030': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Rationale</b></p>
+<p>Array indexing using the array subscript syntax, ptr[expr], is the preferred
+form of pointer arithmetic because it is often clearer and hence less error
+prone than pointer manipulation. Any explicitly calculated pointer value has the
+potential to access unintended or invalid memory addresses. Such behaviour is
+also possible with array indexing, but the subscript syntax may ease the task of
+manual review.</p>
+<p>Pointer arithmetic in C can be confusing to the novice. The expression ptr+1
+may be mistakenly interpreted as the addition of 1 to the address held in ptr.
+In fact the new memory address depends on the size in bytes of the pointer’s
+target. This misunderstanding can lead to unexpected behaviour if sizeof is
+applied incorrectly.</p>
+<p>When used with caution however, pointer manipulation using ++ can in some
+cases be considered more natural; e.g. sequentially accessing locations during a
+memory test where it is more convenient to treat the memory space as a
+contiguous set of locations and the address bounds can be determined at
+compilation time.</p>
+<p><b>Exception</b></p>
+<p>Subject to Rule 18.2, pointer subtraction between two pointers is allowed.
+</p>
+<p><b>Example</b></p>
+<pre><code language="C++">void fn1 ( void )
+{
+uint8_t a[ 10 ];
+uint8_t *ptr;
+uint8_t index = 0U;
+index = index + 1U; /* Compliant - rule only applies to pointers */
+a[ index ] = 0U; /* Compliant */
+ptr = &a[ 5 ]; /* Compliant */
+ptr = a;
+ptr++; /* Compliant - increment operator not + */
+*( ptr + 5 ) = 0U; /* Non-compliant */
+ptr[ 5 ] = 0U; /* Compliant */
+}
+void fn2 ( void )
+{
+uint8_t array_2_2[ 2 ][ 2 ] = { { 1U, 2U }, { 4U, 5U } };
+uint8_t i = 0U;
+uint8_t j = 0U;
+uint8_t sum = 0U;
+for ( i = 0U; i < 2U; i++ )
+{
+uint8_t *row = array_2_2[ i ];
+for ( j = 0U; j < 2U; j++ )
+{
+sum += row[ j ]; /* Compliant */
+}
+}
+}</code></pre>
+<p>In the following example, Rule 18.1 may also be violated if p1 does not point
+to an array with at least six elements and p2 does not point to an array with at
+least 4 elements.</p>
+
+<pre><code language="C++">void fn3 ( uint8_t *p1, uint8_t p2[ ] )
+{
+p1++; /* Compliant */
+p1 = p1 + 5; /* Non-compliant */
+p1[ 5 ] = 0U; /* Compliant */
+p2++; /* Compliant */
+p2 = p2 + 3; /* Non-compliant */
+p2[ 3 ] = 0U; /* Compliant */
+}
+uint8_t a1[ 16 ];
+uint8_t a2[ 16 ];
+uint8_t data = 0U;
+void fn4 ( void )
+{
+fn3 ( a1, a2 );
+fn3 ( &data, &a2[ 4 ] );
+}</code></pre>
+<p><b>See also</b></p>
+<p>Rule 18.1, Rule 18.2</p>
+"""
+    return {
+        'MISRA23_18.4': desc,
+        'MISRA12_18.4': desc,
+        'CPP_DD030': desc,
+
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = None
+    lexers = {}
+    # Operators to check around pointer usage
+    operators = ['+', '-', '+=', '-=']
+
+    # Get all references to defined objects or parameters in the file
+    refs = file.filerefs('Define', 'Object, Parameter')
+
+    for ref in refs:
+        # Skip if the entity is not a pointer
+        if '*' not in str(ref.ent().freetext("underlyingtype")):
+            continue
+
+        # Get all dereference and usage references of the pointer
+        useRefs = ref.ent().refs('Deref Setby, Useby')
+
+        for useRef in useRefs:
+            # Reuse lexer for each file to avoid reloading
+            if useRef.file().uniquename() not in lexers.keys():
+                lexer = useRef.file().lexer()
+                lexers[useRef.file().uniquename()] = lexer
+            else:
+                lexer = lexers[useRef.file().uniquename()]
+
+            # Get the lexeme at the reference position
+            lexeme = lexer.lexeme(useRef.line(), useRef.column())
+            if lexeme:
+                prevLex = lexeme.previous(True, True)
+                nextLex = lexeme.next(True, True)
+
+                # Skip if followed by array indexing
+                if nextLex and nextLex.text() == '[':
+                    continue
+
+                # Check operator before pointer use
+                if prevLex and prevLex.text() in operators:
+                    if prevLex.text() == '-':
+                        tempLex = prevLex.previous(True, True)
+                        # Skip if previous entity is also a pointer (exception)
+                        if tempLex and tempLex.ent():
+                            if '*' in tempLex.ent().type():
+                                continue
+                    # Report violation if invalid pointer operation
+                    check.violation(useRef.ent(), useRef.file(),
+                                    useRef.line(), useRef.column(), ERR1, prevLex.text())
+
+                # Check operator after pointer use
+                if nextLex and nextLex.text() in operators:
+                    if nextLex.text() == '-':
+                        tempLex = nextLex.next(True, True)
+                        # Skip if next entity is also a pointer
+                        if tempLex and tempLex.ent():
+                            if '*' in tempLex.ent().type():
+                                continue
+                    # Report violation if invalid pointer operation
+                    check.violation(useRef.ent(), useRef.file(),
+                                    useRef.line(), useRef.column(), ERR1, nextLex.text())
+
