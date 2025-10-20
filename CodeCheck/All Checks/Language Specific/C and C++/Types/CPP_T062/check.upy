@@ -1,0 +1,121 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-10-20
+
+
+import re
+
+
+ERR1 = 'Used small minimum-width integer constant macro'
+
+
+def ids():
+    return ('MISRA23_7.6', 'CPP_T062')
+
+
+def name(id):
+    return {
+        'MISRA23_7.6': '''Published Standards/MISRA C 2023/\
+7.6 Small Integer Constant Macros''',
+        'CPP_T062': '''All Checks/Language Specific/C and C++/Types/\
+Small Integer Constant Macros''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_7.6': [
+            'Types',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_T062': [
+            'Types',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>The small integer variants of the minimum-width integer constant macros shall
+not be used.</p>
+
+<p><b>Amplification</b></p>
+
+<p>The minimum-width integer constant macros are of the form
+<code>INTn_C(value)</code> and <code>UINTn_C(value)</code>, where <i>n</i> is a
+value corresponding to a type <code>int_leastn_t</code>.</p>
+
+<p><i>Small integer</i> refers to any integer type with width less than that of
+type <i>int</i>.</p>
+
+<p><b>Rationale</b></p>
+
+<p>The C Standard requires that the minimum-width integer constant macros expand
+to an integer constant expression suitable for use in <code>#if</code>
+pre-processing directive, and that the type of the expression has the same type
+as would result from integer promotion. Consequentially many implementations of
+the small integer macros have opted to simply substitute the macro for the
+argument. This results in an expression with type <i>int</i> and not the type
+that may have been anticipated by the use of the macro.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+int main( void )
+{
+  uint8_t a = UINT8_C( 100 );  /* Non-compliant - typically expands as plain 100
+                                                  i.e. as a signed int */
+}
+
+#define M(x) _Generic( (x), uint8_t: fu8, default: fi )(x)
+
+int main( void )
+{
+  M( UINT8_C( 100 ) );         /* Non-compliant - selects fi, not fu8 */
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 7.5</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().integer('bitsOfInt', 'Bits of int', 32)
+
+
+def check(check, file):
+    bitsOfInt = check.options().lookup('bitsOfInt')
+
+    for ref in file.filerefs('Use', 'Macro'):
+        ent = ref.ent()
+
+        match = re.search(r'^U?INT(\d+)_C$', ent.name())
+        if not match:
+            continue
+
+        bitsOfMacro = int(match[1])
+        if bitsOfMacro >= bitsOfInt:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
