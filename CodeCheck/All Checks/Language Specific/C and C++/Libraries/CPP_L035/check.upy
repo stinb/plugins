@@ -1,0 +1,193 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-10-20
+
+
+import re
+
+from Modules import nthParamOfCall
+from understand import Lexeme
+
+
+ERR1 = 'Atomic operation should use memory_order_seq_cst in second-to-last argument'
+ERR2 = 'Atomic operation should use memory_order_seq_cst in last argument'
+ERR3 = 'Atomic operation should use memory_order_seq_cst in last two arguments'
+
+OPERATIONS: dict[str, list[int]] = {
+    'atomic_compare_exchange_strong_explicit': [3, 4],
+    'atomic_compare_exchange_weak_explicit': [3, 4],
+    'atomic_exchange_explicit': [2],
+    'atomic_fetch_add_explicit': [2],
+    'atomic_fetch_and_explicit': [2],
+    'atomic_fetch_or_explicit': [2],
+    'atomic_fetch_sub_explicit': [2],
+    'atomic_fetch_xor_explicit': [2],
+    'atomic_flag_clear_explicit': [1],
+    'atomic_flag_test_and_set_explicit': [1],
+    'atomic_load_explicit': [1],
+    'atomic_signal_fence': [0],
+    'atomic_store_explicit': [2],
+    'atomic_thread_fence': [0],
+}
+
+ORDER = 'memory_order_seq_cst'
+
+
+def ids():
+    return ('MISRA23_21.25', 'CPP_L035')
+
+
+def name(id):
+    return {
+        'MISRA23_21.25': '''Published Standards/MISRA C 2023/\
+21.25 Atomic Operations with Inconsistent Order''',
+        'CPP_L035': '''All Checks/Language Specific/C and C++/Libraries/\
+Atomic Operations with Inconsistent Order''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_21.25': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_L035': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>All memory synchronization operations shall be executed in
+sequentially consistent order.</p>
+
+<p><b>Amplification</b></p>
+
+<p>The Standard provides an enumerated type <i>memory_order</i> to specify the behaviour of memory
+synchronization operations. Only the memory order <i>memory_order_seq_cst</i> shall be used. </p>
+
+<p>The following library functions implicitly use memory ordering <i>memory_order_seq_cst</i>:</p>
+
+<p><code>atomic_store, atomic_load, atomic_flag_test_and_set, atomic_flag_clear,
+atomic_exchange, atomic_compare_exchange_strong, atomic_compare_exchange_weak,
+atomic_fetch_add, atomic_fetch_sub, atomic_fetch_or, atomic_fetch_xor,
+atomic_fetch_and</code></p>
+
+<p>For each of these functions, there exists an alternate version with the function name ending in
+<i>_explicit()</i>, which takes an explicit <i>memory_order</i> parameter. The functions ending in <i>_explicit()</i> shall
+only be called with the enumeration <i>memory_order_seq_cst</i> as the <i>memory_order</i> parameter.</p>
+
+<p>Also the following functions shall only be called with the enumeration <i>memory_order_seq_cst</i> as the
+<i>memory_order</i> parameter:</p>
+
+<p><code>atomic_thread_fence, atomic_signal_fence</code></p>
+
+<p><b>Rationale</b></p>
+
+<p>The Standard defines <i>memory_order_seq_cst</i> as the default memory order for objects with atomic
+types. This ordering is fully defined in the C Standard and enables sequential consistency. The
+behaviour of other memory orders is non-portable, as it depends on hardware architecture and
+compiler.</p>
+
+<p>For <i>memory_order_relaxed</i>, no operation orders memory. Usage of <i>memory_order_relaxed</i> can cause
+unintuitive behaviour and is error-prone.</p>
+
+<p>Many of those library functions listed above impose restrictions on the memory order allowed, e.g. it
+is undefined behaviour if the atomic_store generic function is called with a <i>memory_order_acquire</i>,
+<i>memory_order_consume</i>, or <i>memory_order_acq_rel</i> order argument. In case of non-compliant usage,
+compilers may show warnings but still generate code.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+typedef struct s {
+  uint8_t a;
+  uint8_t b;
+} s_t;
+_Atomic s_t astr;
+
+
+void main( void )
+{
+  s_t lstr = {7, 42};
+
+  atomic_init( &astr, lstr );
+
+  lstr = atomic_load( &astr );                                /* Compliant */
+  lstr = atomic_load_explicit( &astr, memory_order_relaxed ); /* Non-compliant */
+
+  lstr.b = 43;
+  atomic_store_explicit( &astr, lstr, memory_order_release ); /* Non-compliant */
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Dir 4.13</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Call', '~Member ~Static Function'):
+        checkRef(check, file, ref)
+
+    for ref in file.filerefs('Use', 'Macro'):
+        checkRef(check, file, ref)
+
+
+def checkRef(check, file, ref):
+    ent = ref.ent()
+
+    # Get all arguments that are of the type `memory_order`
+    argIndexes: list[int] = OPERATIONS.get(ent.name())
+    if not argIndexes or ent.library() != 'standard':
+        return
+
+    badIndexes = []
+
+    for i in argIndexes:
+        argParts: list[Lexeme] = nthParamOfCall(ref, i)
+
+        # Skip if the argument is `memory_order_seq_cst`
+        if len(argParts) == 1:
+            lex = argParts[0]
+            argEnt = lex.ent()
+            if argEnt:
+                if argEnt.name() == ORDER and argEnt.kind().check('Enumerator') \
+                and argEnt.library() == 'standard':
+                    continue
+                if argEnt.value() == ORDER and re.search(r'^const\b', argEnt.type()):
+                    continue
+            elif lex.text() == ORDER:
+                continue
+
+        badIndexes.append(i)
+
+    if len(badIndexes) == 1:
+        if len(argIndexes) == 2 and argIndexes[0] == badIndexes[0]:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+        else:
+            check.violation(ent, file, ref.line(), ref.column(), ERR2)
+    elif len(badIndexes) == 2:
+        check.violation(ent, file, ref.line(), ref.column(), ERR3)

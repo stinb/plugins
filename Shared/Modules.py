@@ -1,6 +1,8 @@
 import functools
 import re
 
+from understand import Lexeme, Ref
+
 
 
 ###########
@@ -256,9 +258,9 @@ def functionCalled(lex):
 
     return lex.ent()
 
-# Given a function call ref and a zero-based index for the parameter,
-# gets an array of lexemes that make the parameter
-def nthParamOfCall(call_ref, n, lookup_ents=True):
+# Given a function call ref and a zero-based index for the argument (what is
+# given to the parameter), gets an array of lexemes that make the argument
+def nthParamOfCall(call_ref: Ref, n: int, lookup_ents: bool = True) -> list[Lexeme]:
     lex = call_ref.file().lexer(lookup_ents).lexeme(call_ref.line(), call_ref.column())
 
     lexemes = []
