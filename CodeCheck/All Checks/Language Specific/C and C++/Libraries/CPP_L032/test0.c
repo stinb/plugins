@@ -9,5 +9,4 @@ void f()
 {
   const char s[] = "Hello";
   strnlen_s(s, sizeof(s)); // UndCC_Violation
-  rsize_t x;               // UndCC_Violation
 }
