@@ -1,4 +1,4 @@
-// MISRA C 2023
+// MISRA C 2012 & 2023
 
 #include <stdbool.h>
 
