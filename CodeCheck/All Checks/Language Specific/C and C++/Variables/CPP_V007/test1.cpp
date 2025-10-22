@@ -1,3 +1,5 @@
+// MISRA C++ 2023
+
 #include <cstdint>
 #include <cassert>
 #include <fstream>

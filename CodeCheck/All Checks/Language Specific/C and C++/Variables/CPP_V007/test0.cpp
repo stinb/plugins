@@ -1,3 +1,5 @@
+// MISRA C++ 2008
+
 #include <cstdint>
 extern void usefn ( int16_t a, int16_t b );
 class C

@@ -1,4 +1,4 @@
-// Unused local variables.
+// Custom
 
 void func1(int);
 void func2() {
