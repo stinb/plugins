@@ -1,0 +1,228 @@
+ERR1 = "Function is not appropriately ref-qualified"
+
+
+def ids():
+    return ('MISRA23_6.8.4')
+
+
+def name(id):
+    return {
+        'MISRA23_6.8.4': """Published Standards/MISRA C++ 2023/\
+6.8.4 Member functions returning references to their object should be ref-qualified appropriately""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_6.8.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Functions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_6.8.4': """
+<p><b>Amplification</b></p>
+<p>This rule applies to member functions with reference or pointer return type, where, in the definition
+of the function, at least one return expression explicitly designates this, *this or a subobject of
+*this.</p>
+<p>Such a function is only appropriately ref-qualified when:</p>
+<p>1. It is non-const-lvalue-ref-qualified (&); or</p>
+<p>2. It is const-lvalue-ref-qualified (const &) and another overload of that function is declared that is
+rvalue-ref-qualified (&&) with the same parameter-type-list.</p>
+<p>Note: this implies that a member function returning a pointer or reference to its object should be ref-
+qualified, but not rvalue-ref-qualified.</p>
+
+<p><b>Rationale</b></p>
+<p>Returning a reference or pointer to a temporary object, or one of its subobjects, from a member
+function can lead to immediate dangling.</p>
+<p>Ref-qualification of member functions can be used to control which of them can be called on a
+temporary object:</p>
+<p>1. A non-const-lvalue-ref-qualified function will never bind to a temporary object; and</p>
+<p>2. A const-lvalue-ref-qualified function could bind to a temporary object, but this will not occur if an
+rvalue-ref-qualified overload is present as it will be preferred during overload resolution.</p>
+<p>Compliance with this rule ensures that member functions directly returning references to their object
+members cannot be called on temporary objects. This rule is limited to direct references so that checks
+for compliance are decidable. Use of an indirect reference to a temporary object after its lifetime has
+ended is covered by Rule 6.8.1.</p>
+<p>Notes:</p>
+<p>1. An rvalue-ref-qualified member function will only bind to temporary objects and should therefore
+never return a reference or pointer to its object or one of its subobjects.</p>
+<p>2. This rule does not apply to defaulted assignment operators as they do not have a definition.
+However, Rule 8.18.2 prevents the implicitly returned reference from being used.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">struct A
+{
+    int32_t a; // a is a subobject of *this
+    int32_t & b; // b is a reference, not a subobject of *this
+    int32_t & geta1() & // Compliant - non-const-lvalue-ref-qualified
+    { return a; }
+    int32_t const & geta2() const & // Compliant - const-lvalue-ref-qualified and
+    { return a; }
+    int32_t geta2() && // this rvalue-ref overload exists
+    { return a; }
+    int32_t & getb() // Rule does not apply - b is not a subobject
+    { return b; }
+    A const * getMe1() const & { return this; } // Compliant
+    void getMe1() const && = delete; // - because this overload exists
+    A & getMe2() { return *this; } // Non-compliant - not ref-qualified
+};
+
+A createA();
+
+// A call to the non-compliant getMe2 on a temporary results in immediate dangling
+A & dangling = createA().getMe2();</code></pre>
+
+<p>This rule does not apply to the following example, which is still dangerous and could lead to the use of a
+dangling pointer (see Rule 6.8.1):</p>
+<pre><code language="C++">class C
+{
+    C * f()
+    {
+        C * me = this;
+        return me; // Indirectly designates 'this'
+    }
+};</code></pre>
+
+<p>In the following example, the instantiation of f in the call at #2 is compliant because #1 is an overload
+of f with the same parameter-type-list. However, the instantiation of f in the call at #3 does not have
+such an overload and is therefore non-compliant.</p>
+<pre><code language="C++">struct Tmpl
+{
+    template&lt; typename T &gt;
+    Tmpl const * f( T ) const & { return this; } // Non-compliant when instantiated
+    // for #3
+    void f( int32_t ) const && = delete; // #1
+};
+
+void bar( int32_t s32, int8_t s8 )
+{
+    Tmpl tpl;
+    tpl.f( s32 ); // #2
+    tpl.f( s8 ); // #3
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 6.8.1, Rule 8.18.2, Rule 15.0.2</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_reforptr(ent):
+    if str(ent.freetext("UnderlyingType")).endswith(("&", "*")):
+        return True
+
+    return False
+
+
+def get_qualifiers(func_ref):
+    lex = func_ref.file().lexer(lookup_ents=False).lexeme(
+        func_ref.line(), func_ref.column())
+    on_param = 0
+    get_q = False
+    qualifiers = ""
+
+    while lex:
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+                get_q = True
+        elif get_q and lex.text() in "{;":
+            break
+        elif get_q:
+            qualifiers += lex.text()
+
+        lex = lex.next(True, True)
+
+    return qualifiers
+
+
+def is_qualified(func_ref):
+    qualifiers = get_qualifiers(func_ref)
+
+    if func_ref.ent().kind().check("Const"):
+        if is_overloaded(func_ref) and "const&" in qualifiers:
+            return True
+    elif "&" in qualifiers:
+        return True
+
+    return False
+
+
+def is_overloaded(func_ref):
+    for ref in func_ref.ent().parent().refs("Define, Declare", "Member Function", True):
+        if ref.ent().id() == func_ref.ent().id():
+            continue
+
+        qualifiers = get_qualifiers(ref)
+
+        if (ref.ent().name() == func_ref.ent().name()) and "&&" in qualifiers:
+            return True
+
+    return False
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class Type, Struct Type"):
+        mem_ents = []
+
+        for mem_ref in class_ref.ent().refs("Define, Declare", "Member Object"):
+            if is_reforptr(mem_ref.ent()):
+                continue
+
+            mem_ents.append(mem_ref.ent().id())
+
+        for func_ref in class_ref.ent().refs("Define, Declare ~Implicit", "Member Function", True):
+            if not is_reforptr(func_ref.ent()) or str(func_ref.ent().name()).startswith("operator"):
+                continue
+
+            func_cfg = func_ref.ent().control_flow_graph()
+
+            if not func_cfg:
+                continue
+
+            for node in func_cfg.nodes():
+                next_func = False
+
+                if node.kind() == "return":
+                    start_line = node.line_begin()
+                    start_column = node.column_begin()
+
+                    lex = file.lexer().lexeme(start_line, start_column)
+
+                    while lex and lex.text() != ";":
+                        if ((lex.ent() and lex.ent().id() in mem_ents)
+                                or lex.text() == "this"):
+
+                            if not is_qualified(func_ref):
+                                check.violation(func_ref.ent(), func_ref.file(), func_ref.line(),
+                                                func_ref.column(), ERR1)
+
+                            next_func = True
+                            break
+
+                        lex = lex.next(True, True)
+
+                if next_func:
+                    break
