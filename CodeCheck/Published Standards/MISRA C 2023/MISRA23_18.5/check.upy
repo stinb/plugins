@@ -1,0 +1,139 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 10-22-2025
+
+import re
+
+ERR1 = "Declaration contains more than two levels of pointer nesting"
+
+# The ID for the check
+def ids():
+    return ('MISRA23_18.5', 'MISRA12_18.5', 'CPP_P063')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_18.5': 'Published Standards/MISRA C 2023/' + """\
+18.5 Declarations should contain no more than two levels of pointer nesting""",
+        'MISRA12_18.5': 'Published Standards/MISRA C 2012/' + """\
+18.5 Declarations should contain no more than two levels of pointer nesting""",
+        'CPP_P063': """\
+All Checks/Language Specific/C and C++/Definitions and Declarations/
+Declarations should contain no more than two levels of pointer nesting""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_18.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+        'MISRA12_18.5': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+        'CPP_P063': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>No more than two pointer declarators should be applied consecutively to a
+type. Any typedef-name appearing in a declaration is treated as if it were
+replaced by the type that it denotes.</p>
+<p><b>Rationale</b></p>
+<p>The use of more than two levels of pointer nesting can impair the ability to
+understand the behaviour of the code, and should therefore be avoided.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">typedef int8_t * INTPTR;
+void function ( int8_t ** arrPar[ ] ) /* Non-compliant */
+{
+int8_t ** obj2; /* Compliant */
+int8_t *** obj3; /* Non-compliant */
+INTPTR * obj4; /* Compliant */
+INTPTR * const * const obj5; /* Non-compliant */
+int8_t ** arr[ 10 ]; /* Compliant */
+int8_t ** ( *parr )[ 10 ]; /* Compliant */
+int8_t * ( **pparr )[ 10 ]; /* Compliant */
+}
+struct s
+{
+int8_t * s1; /* Compliant */
+int8_t ** s2; /* Compliant */
+int8_t *** s3; /* Non-compliant */
+};
+struct s * ps1; /* Compliant */
+struct s ** ps2; /* Compliant */
+struct s *** ps3; /* Non-compliant */
+int8_t ** ( *pfunc1 )( void ); /* Compliant */
+int8_t ** ( **pfunc2 )( void ); /* Compliant */
+int8_t ** ( ***pfunc3 )( void ); /* Non-compliant */
+int8_t *** ( **pfunc4 )( void ); /* Non-compliant */
+</code></pre>
+<p>Note:</p>
+<p>
+<ul>
+<li>arrPar is of type pointer to pointer to pointer to int8_t because parameters
+declared with array type are converted to a pointer to the initial element of
+the array — this is three levels and is non-compliant;</li>
+<li>arr is of type array of pointer to pointer to int8_t — this is compliant;
+</li>
+<li>parr is of type pointer to array of pointer to pointer to int8_t — this is
+compliant;</li>
+<li>pparr is of type pointer to pointer to array of pointer to int8_t — this is
+compliant.</li>
+</ul></p>
+"""
+    return {
+        'MISRA23_18.5': desc,
+        'MISRA12_18.5': desc,
+        'CPP_P063': desc,
+
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    # Find all pointer refs
+    refs = file.filerefs('Define', 'Object, Parameter')
+    for ref in refs:
+        type = ref.ent().freetext("UnderlyingType")
+        # Skip if not pointer
+        if '*' not in type:
+            continue
+        # Split type into parts within parenthesis and outside
+        parts = re.split(r'(\([^)]*\))', type)
+        # String for all text not in parenthesis
+        notInParenthesis = ''
+        ok = True
+        for part in parts:
+            # Instantly flag if part is found with more than 2 '*'
+            if part.count('*') > 2:
+                ok = False
+                break
+            # Collect parts that are outside parenthesis
+            elif '(' not in part:
+                notInParenthesis += part
+
+        # Final check for if more than double pointer was used
+        if not ok or notInParenthesis.count('*') > 2:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
