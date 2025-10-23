@@ -1,0 +1,164 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-10-23
+
+
+import re
+
+from Modules import cParseIntLiteral
+
+
+ERR1 = 'Expression may not be an unsigned character'
+ERR2 = 'Expression is not an unsigned character'
+
+FUNCTIONS = {'isalnum', 'isalpha', 'isblank', 'iscntrl', 'isdigit', 'isgraph', 'islower', 'isprint', 'ispunct', 'isspace', 'isupper', 'isxdigit', 'tolower', 'toupper'}
+
+
+def ids():
+    return ('MISRA23_13.13', 'CPP_L036')
+
+
+def name(id):
+    return {
+        'MISRA23_13.13': '''Published Standards/MISRA C 2023/\
+13.13 Character Function Misuse''',
+        'CPP_L036': '''All Checks/Language Specific/C and C++/Libraries/\
+Character Function Misuse''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_13.13': [
+            'Libraries',
+            'Types',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+        ],
+        'CPP_L036': [
+            'Libraries',
+            'Types',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Any value passed to a function in <code>&lt;ctype.h&gt;</code> shall be representable
+as an <i>unsigned char</i> or be the value <code>EOF</code></p>
+
+<p><b>Amplification</b></p>
+
+<p>The relevant functions from <code>&lt;ctype.h&gt;</code> are defined to take an <i>int</i> argument where the expected
+value is either in the range of an <i>unsigned char</i> or is a negative value equivalent to <code>EOF</code>. The use of
+any other values results in <i>undefined behaviour</i>.</p>
+
+<p><b>Rationale</b></p>
+
+<p><i>Note</i>: The <code>int</code> casts in the following example are required to comply with Rule 10.3.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+bool_t f ( uint8_t a )
+{
+ return (    isdigit ( ( int32_t )  a )        /* Compliant */
+          && isalpha ( ( int32_t ) 'b' )       /* Compliant */
+          && islower (             EOF )       /* Compliant */
+          && isalpha (             256 ) );    /* Non-compliant */
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 10.3</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+
+    for ref in file.filerefs('Call', '~Member Function'):
+        ent = ref.ent()
+
+        # Find one of the "character" functions or skip
+        if ent.freetext('Library') != 'standard' or ent.name() not in FUNCTIONS:
+            continue
+
+        # Get to the first lexeme of the argument
+        if not lexer:
+            lexer = file.lexer()
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex or lex.text() != ent.name():
+            continue
+        lex = lex.next(True, True)
+        if not lex or lex.text() != '(':
+            continue
+        lex = lex.next(True, True)
+
+        # Get the lexemes for the argument
+        arg = []
+        paren = 1
+        i = 0
+        cast = False
+        endOfCast = False
+        while lex:
+            match lex.text():
+                case '(':
+                    if i == 0:
+                        cast = True
+                    paren += 1
+                case ')':
+                    paren -= 1
+                    if paren == 1:
+                        endOfCast = True
+                    elif paren == 0:
+                        break
+            if endOfCast:
+                cast = False
+                endOfCast = False
+            elif not cast:
+                arg.append(lex)
+            lex = lex.next(True, True)
+            i += 1
+
+        # Get a simple expression or give up
+        if len(arg) != 1:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+            continue
+        lex = arg[0]
+
+        # Skip character literals and EOF macro
+        text = lex.text()
+        if text.startswith("'") or text == 'EOF':
+            continue
+
+        # Skip entities of the correct type
+        ent = lex.ent()
+        if ent and ent.freetext('UnderlyingType') == 'unsigned char':
+            continue
+
+        # Skip numbers in the correct range
+        num = cParseIntLiteral(text)
+        if num != None and num >= 0 and num <= 255:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR2)

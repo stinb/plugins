@@ -504,15 +504,15 @@ C_INTEGER_BASES = (
     (r'-?0x([\d|a-f]+)[u|l]?$', 16),
 )
 
-# Given a string, return a integer or None
-def cParseIntLiteral(string):
+# Try to parse an integer literal
+def cParseIntLiteral(string: str) -> int | None:
     for pattern, base in C_INTEGER_BASES:
         match = re.match(pattern, string, re.IGNORECASE)
         if match:
             try:
                 return int(match[1], base)
             except:
-                return
+                return None
 
 # Given a declaration reference, return the width of a bit-field object or None
 def cGetBitFieldWidth(ref):
