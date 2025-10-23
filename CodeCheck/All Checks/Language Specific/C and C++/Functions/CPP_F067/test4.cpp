@@ -1,3 +1,5 @@
+// MISRA C++ 2023
+
 #include <cstdlib>
 #include <exception>
 

@@ -1,4 +1,5 @@
-// $Id: A7-6-1.cpp 305629 2018-01-29 13:29:25Z piotr.serwa $
+// AUTOSAR C++ 2014
+
 #include <cstdint>
 #include <exception>
 
@@ -11,9 +12,9 @@ class PositiveInputException : public std::exception {};
         throw PositiveInputException();
     }
     //undefined behaviour for non-positive i
-} // UNDCC_Violation
+} // UndCC_Violation
 
-[[noreturn]] void g(int i) // UNDCC_Valid
+[[noreturn]] void g(int i) // UndCC_Valid
 {
     if (i > 0)
     {
