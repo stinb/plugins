@@ -18,13 +18,13 @@ void main(void)
 {
     _Atomic int32_t ai1 = 22; /* UndCC_Valid - directly initialized */
     _Atomic int32_t ai2;
-    ai2 = 777; /* UndCC_Violation - not initialized by atomic_init */
+    ai2 = 777; /* UndCC_Violation(lin, win) - not initialized by atomic_init */
     _Atomic int32_t ai3;
     atomic_init(&ai3, 333); /* UndCC_Valid - Initialized by atomic_init */
     /* ------------ */
 
     _Atomic int32_t ai4;
-    thrd_create(&id1, t1, &ai4); /* UndCC_Violation */
+    thrd_create(&id1, t1, &ai4); /* UndCC_Violation(lin, win) */
 
     atomic_init(&ai4, 666); /*  Initialized after user-thread T1 is created */
 
