@@ -18,7 +18,7 @@ void main(void)
 
 int32_t t1(void *ignore)
 {
-    mtx_timedlock(&Ra, ts); /* UndCC_Violation */
+    mtx_timedlock(&Ra, ts); /* UndCC_Violation(lin, win) */
     mtx_timedlock(&Rb, ts); /* UndCC_Valid */
     mtx_timedlock(&Rc, ts); /* UndCC_Valid */
 }
