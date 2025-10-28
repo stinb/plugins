@@ -56,7 +56,7 @@ void f1(int32_t i, // UndCC_Violation
     };
 }
 template <bool b>
-int32_t f2(int32_t i,                  // UndCC_Violation(Win) for f2< false >
+int32_t f2(int32_t i,                  // UndCC_FalseNeg for f2< false > [can not be flagged due to limitations]
            int32_t j [[maybe_unused]]) // Rule does not apply - [[maybe_unused]]
 {
     if constexpr (b)
