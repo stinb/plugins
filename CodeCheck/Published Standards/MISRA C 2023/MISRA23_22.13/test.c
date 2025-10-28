@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 mtx_t Ra;                         /* UndCC_Valid */
-_Thread_local mtx_t thread_mutex; /* UndCC_Violation, thread storage duration */
+_Thread_local mtx_t thread_mutex; /* UndCC_Violation(lin, win), thread storage duration */
 
 int32_t t1(void *ptr) /* Thread entry */
 {
