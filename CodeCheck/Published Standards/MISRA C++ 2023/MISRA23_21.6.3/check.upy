@@ -1,0 +1,165 @@
+ERR1 = "Advanced memory management function shall not be used"
+ERR2 = "Destructor shall not be called explicitly"
+ERR3 = "operator new/delete shall not be user-declared"
+ADV_MEM_FUNCS = [
+    "std::launder",
+    "std::uninitialized_default_construct",
+    "std::uninitialized_default_construct_n",
+    "std::destroy",
+    "std::uninitialized_value_construct",
+    "std::uninitialized_value_construct_n",
+    "std::destroy_at",
+    "std::uninitialized_copy",
+    "std::uninitialized_copy_n",
+    "std::destroy_n",
+    "std::uninitialized_move",
+    "std::uninitialized_move_n",
+    "std::uninitialized_fill",
+    "std::uninitialized_fill_n"
+]
+
+
+def ids():
+    return ('MISRA23_21.6.3')
+
+
+def name(id):
+    return {
+        'MISRA23_21.6.3': """Published Standards/MISRA C++ 2023/\
+21.6.3 Advanced memory management shall not be used""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_21.6.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_21.6.3': """
+<p><b>Amplification</b></p>
+<p>All overloads of operator new and operator delete that are not listed below are advanced
+memory management functions:</p>
+<p>void * operator new ( std::size_t count );</p>
+<p>void * operator new[]( std::size_t count );</p>
+<p>void * operator new ( std::size_t count, const std::nothrow_t & tag );</p>
+<p>void * operator new[]( std::size_t count, const std::nothrow_t & tag );</p>
+<p>void operator delete ( void * ptr ) noexcept;</p>
+<p>void operator delete[]( void * ptr ) noexcept;</p>
+<p>void operator delete ( void * ptr, std::size_t sz ) noexcept;</p>
+<p>void operator delete[]( void * ptr, std::size_t sz ) noexcept;</p>
+<p>void operator delete ( void * ptr, const std::nothrow_t & tag ) noexcept;</p>
+<p>void operator delete[]( void * ptr, const std::nothrow_t & tag ) noexcept;</p>
+<p>Additionally, std::launder and the following functions from the &lt;memory&gt; header file are also
+advanced memory management functions:</p>
+<p>uninitialized_default_construct, uninitialized_default_construct_n, destroy,
+uninitialized_value_construct, uninitialized_value_construct_n, destroy_at,
+uninitialized_copy, uninitialized_copy_n destroy_n,
+uninitialized_move, uninitialized_move_n,
+uninitialized_fill, uninitialized_fill_n</p>
+<p>Advanced memory management occurs when:</p>
+<p>1. An advanced memory management function is either called directly or through a new-expression
+or a delete-expression; or</p>
+<p>2. The address of an advanced memory management function is taken; or</p>
+<p>3. A destructor is called explicitly; or</p>
+<p>4. Any operator new or operator delete is user-declared.</p>
+
+<p><b>Rationale</b></p>
+<p>There are a number of complex issues, such as alignment, object lifetimes and the need to use
+std::launder, that must be considered when using advanced memory management. Failure to deal
+with these appropriately results in the introduction of undefined behaviour that is hard to identify.</p>
+<p>In addition, undefined behaviour results if a user does not provide matching versions of operator
+new and operator delete.</p>
+<p>These features are generally only used (requiring a deviation) for low-level programming. Ideally, they
+should be encapsulated to reduce the amount of additional code review that will be required.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">auto f() noexcept
+{
+    return new( std::nothrow ) int{ 42 }; // Compliant
+}
+
+struct X { int32_t a; };
+
+int32_t g()
+{
+    alignas( X ) std::byte mem[ sizeof( X ) ];
+    X * px = new( &mem ) X{ 1 }; // Non-compliant - placement new
+    px-&gt;~X(); // Non-compliant - explicit destructor call
+    new( px ) X { 2 }; // Non-compliant - placement new
+    return px-&gt;a ; // Undefined behaviour
+}
+
+struct A
+{
+    void * operator new( size_t ); // Non-compliant
+};
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.6.4</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def check_violation(check, ref, err):
+    check.violation(ref.ent(), ref.file(), ref.line(),
+                    ref.column(), err)
+
+
+def check(check, file):
+    for call_ref in file.filerefs("Call ~Implicit", "Function"):
+        func_name = str(call_ref.ent().name())
+
+        if call_ref.ent().longname() in ADV_MEM_FUNCS:
+            check_violation(check, call_ref, ERR1)
+        elif func_name.startswith("~"):
+            check_violation(check, call_ref, ERR2)
+        elif func_name == "operator new":
+            lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+
+            if lex.next(True, True).text() != "(":
+                continue
+
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param and (lex.text() == "nothrow") and (lex.token() == "Identifier"):
+                    break
+                elif on_param and lex.ent() and (lex.token() == "Identifier") and lex.ent().kind().check("Object"):
+                    check_violation(check, call_ref, ERR1)
+
+                lex = lex.next(True, True)
+
+    for func_ref in file.filerefs("Define, Declare", "Function"):
+        func_name = str(func_ref.ent().name())
+
+        if func_name in ["operator new", "operator delete"]:
+            check_violation(check, func_ref, ERR3)
