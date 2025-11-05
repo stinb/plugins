@@ -1,6 +1,8 @@
 # Graph of shared tasks starting from an architecture
 
 
+import re
+
 import understand
 from understand import Ent
 
@@ -8,6 +10,7 @@ from sharedTasks import *
 
 
 orange = '#e45721'
+yellow = '#e3c015'
 green  = '#569f38'
 blue   = '#4e8cb9'
 purple = '#974eb9'
@@ -117,6 +120,7 @@ def init(graph, target):
     graph.legend().define('function', 'rectangle', 'Function', '', '', 0, 0)
     graph.legend().define('globalObject', 'ellipse', 'Global Object', '', gray + opacity, 1, 0)
     graph.legend().define('sharedGlobalObject', 'ellipse', 'Shared Global Object', '', blue + opacity, 2, 0)
+    graph.legend().define('functionPointer', 'ellipse', 'Function Pointer', '', yellow + opacity, 3, 0)
     # Legend - Edges
     graph.legend().define('refCall', 'arrow', 'Ref: Call', '', '', 0, 1)
     graph.legend().define('refModify', 'arrow', 'Ref: Modify', orange, orange, 1, 1)
@@ -187,11 +191,12 @@ def draw(graph, target):
         # Draw or get head node
         scope = edgeObj['scope']
         if scope not in nodes:
+            isFunctionPointer = checkIsFunctionPointer(scope)
             # Style node
             name = getNodeName(scope, options, tasks)
-            box = checkIsCallable(scope)
+            box = checkIsCallable(scope) and not isFunctionPointer
             bold = edgeObj['root'] and box
-            color = None
+            color = yellow + opacity if isFunctionPointer else None
 
             # Draw and add
             head = drawNode(graph, scope, name, box=box, bold=bold, color=color)
@@ -203,14 +208,19 @@ def draw(graph, target):
         ent = edgeObj['ent']
         isObject = ent.kind().check(OBJ_ENT_KINDS)
         isCallable = checkIsCallable(ent)
+        isFunctionPointer = checkIsFunctionPointer(ent)
         if ent not in nodes:
             # Edge options
             name = getNodeName(ent, options, tasks)
-            box = isCallable and not isObject
+            box = isCallable and not isObject and not isFunctionPointer
             bold = False
             # Edge option: color
-            if isObject:
-                color = (blue + opacity) if edgeObj['shared'] else (gray + opacity)
+            if isObject and edgeObj['shared']:
+                color = blue + opacity
+            elif isFunctionPointer:
+                color = yellow + opacity
+            elif isObject:
+                color = gray + opacity
             else:
                 color = None
 
@@ -249,3 +259,11 @@ def draw(graph, target):
 
         # Draw edge
         edge = drawEdge(graph, head, tail, '/'.join(kindnames), color=color, style=style)
+
+
+def checkIsFunctionPointer(ent: Ent) -> bool:
+    if not ent.kind().check('Parameter, Object'):
+        return False
+    t = ent.freetext('UnderlyingType')
+    t = re.sub(r'\b(const|restrict|volatile)\s*', '', t)
+    return bool(re.search(r'\(\*+\)\(', t))
