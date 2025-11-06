@@ -1,0 +1,149 @@
+ERR1 = "The raw pointer constructor of %1 should not be used"
+
+
+def ids():
+    return ('MISRA23_23.11.1')
+
+
+def name(id):
+    return {
+        'MISRA23_23.11.1': """Published Standards/MISRA C++ 2023/\
+23.11.1 The raw pointer constructors of std::shared_ptr and std::unique_ptr should not be used""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_23.11.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_23.11.1': """
+<p><b>Amplification</b></p>
+<p>This rule applies to the use of the constructors of std::shared_ptr and std::unique_ptr that
+take ownership of the raw pointer passed as an argument.</p>
+
+<p><b>Rationale</b></p>
+<p>The functions std::make_shared and std::make_unique perform two operations at the same
+time:</p>
+<p>1. Creating an object dynamically (equivalent to new); and</p>
+<p>2. Creating a smart pointer that will manage the newly created object’s lifetime.</p>
+<p>Performing both operations in one step ensures that there is no interleaved operation that could
+throw an exception before the smart pointer has taken ownership of the object. This also prevents
+two unique_ptr or unrelated shared_ptr instances from “owning” the same object.</p>
+<p>Notes:</p>
+<p>1. std::make_shared will allocate a single memory area for both the object and the bookkeeping
+data required for shared pointers (the reference counts). While this is usually beneficial in terms
+of performance, it has the drawback that the memory for the object will not be reclaimed when
+the last shared_ptr pointing to it is destroyed, but only when all weak_ptr references to the
+object are also destroyed. If this behaviour is unwanted, a custom variant of std::make_shared
+can be provided that omits this optimisation.</p>
+<p>2. Since C++17, the evaluation order of function calls has been made stricter and some of the
+issues with interleaved calls can no longer happen. However, the use of make_shared or
+make_unique is still clearer and can result in better performance.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">struct A { int8_t i; };
+class B { };
+
+void f0()
+{
+    auto p = std::make_shared&lt; A &gt; (); // Compliant
+    int8_t * pi = &( p-&gt;i );
+    std::shared_ptr&lt; int8_t &gt; q ( p, pi ); // Does not apply - not taking ownership
+}
+
+auto f1()
+{
+    auto * p1 = new A ();
+    auto p2 = std::make_unique&lt; A &gt;(); // make_unique may throw
+
+    return std::shared_ptr&lt; A &gt;( p1 ); // Non-compliant - memory leak if
+} // make_unique throws
+
+auto f2( std::unique_ptr&lt; A &gt; p )
+{
+    auto q = p.get();
+    // ...
+    return std::unique_ptr&lt; A &gt;( q ); // Non-compliant - causes double delete
+}
+
+void f3( std::shared_ptr&lt; A &gt; a, std::shared_ptr&lt; B &gt; b );
+
+void f4()
+{
+    f3( std::shared_ptr&lt; A &gt;( new A() ),
+    std::shared_ptr&lt; B &gt;( new B() ) ); // Non-compliant - but well defined
+}</code></pre>
+<p>Prior to C++ 17, a possible sequencing for the operations in the call to f3, where $n represents an
+object in the abstract machine, was:</p>
+<p>1. new A() -&gt; $1</p>
+<p>2. new B() -&gt; $2</p>
+<p>3. std::shared_ptr&lt; A &gt;( $1 ) -&gt; $3</p>
+<p>4. std::shared_ptr&lt; B &gt;( $2 ) -&gt; $4</p>
+<p>5. f3( $3, $4 )</p>
+<p>If an exception is thrown during the construction of B, the object of type A will leak. This does not
+happen in the following as there are no interleaving operations:</p>
+<pre><code language="C++">void f5()
+{
+    f3( std::make_shared&lt; A &gt;(),
+    std::make_shared&lt; B &gt;() ); // Compliant
+}</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def check(check, file):
+    for call_ref in file.filerefs("Call ~Implicit", "Explicit Public Member Function Template"):
+        func_name = str(call_ref.ent().name())
+
+        if func_name in ["shared_ptr", "unique_ptr"]:
+            lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+            func_call = False
+            on_param = 0
+
+            while lex and lex.text() != ";":
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif not on_param and (lex.text() == func_name):
+                    func_call = True
+                elif on_param and not func_call:
+                    break
+                elif (on_param == 1) and (lex.text() == "new") and (lex.token() == "Keyword"):
+                    check.violation(call_ref.ent(), file, call_ref.line(
+                    ), call_ref.column(), ERR1, func_name)
+                    break
+                elif (on_param == 1) and lex.ent():
+                    utype = str(lex.ent().freetext("UnderlyingType"))
+
+                    if utype.endswith("*"):
+                        check.violation(call_ref.ent(), file, call_ref.line(
+                        ), call_ref.column(), ERR1, func_name)
+                        break
+
+                lex = lex.next()
