@@ -1,0 +1,196 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-05-2025
+
+import re
+import Modules
+
+ERR1 = "Write to stream that was opened in read-only mode"
+WRITE_FUNCS = {
+    "fprintf", "vfprintf",
+    "fputs", "fputc", "fwrite",
+    "putc", "puts", "putchar",
+    "printf", "vprintf",
+    "fwprintf", "vfwprintf",
+    "fputws", "fputwc",
+    "putwc", "putwchar"
+}
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.4', 'MISRA12_22.4', 'CPP_L038')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.4': 'Published Standards/MISRA C 2023/' + """\
+22.4 There shall be no attempt to write to a stream which has been opened as \
+read-only""",
+        'MISRA12_22.4': 'Published Standards/MISRA C 2012/' + """\
+22.4 There shall be no attempt to write to a stream which has been opened as \
+read-only""",
+        'CPP_L038': """\
+All Checks/Language Specific/C and C++/Libraries/\
+There shall be no attempt to write to a stream which has been opened as \
+read-only""",
+    }[id]
+
+
+
+
+def tags(id):
+    return {
+        'MISRA23_22.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+            'Libraries',
+        ],
+        'MISRA12_22.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Mandatory',
+            'Libraries',
+        ],
+        'CPP_L038': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Rationale</b></p>
+<p>The C Standard does not specify the behaviour if an attempt is made to write
+to a read-only stream. For this reason it is considered unsafe to write to a
+read-only stream.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include <stdio.h>
+void fn ( void )
+{
+FILE *fp = fopen ( "tmp", "r" );
+( void ) fprintf ( fp, "What happens now?" ); /* Non-compliant */
+( void ) fclose ( fp );
+}</code></pre>
+<p><b>See also</b></p>
+<p>Rule 21.6</p>
+"""
+    return {
+        'MISRA23_22.4': desc,
+        'MISRA12_22.4': desc,
+        'CPP_L038': desc,
+
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+    lexers = {}
+    lastFile = file.longname()
+    refs = file.filerefs("Call ~Inactive", "Function")
+
+    # find fopen/freopen calls
+    for ref in refs:
+        if ref.ent().name() not in ['fopen', 'freopen']:
+            continue
+
+        # get lexer for current file
+        if not lexer:
+            if not file.lexer():
+                return
+            lexer = file.lexer()
+            lexers[file.longname()] = lexer
+
+        # locate '(' after fopen/freopen
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        start = lexeme
+        if lexeme:
+            lexeme = lexeme.next(True, True)
+            if lexeme and lexeme.text() == '(':
+                close = Modules.findClose(lexeme)
+                count = 0
+                lexeme = lexeme.next(True, True)
+
+                # walk arguments until closing ')'
+                while lexeme and close and checkBounds(lexeme.line_begin(),
+                                                       lexeme.column_begin(), close):
+                    if lexeme.text() == ',':
+                        # stop at 2nd argument
+                        if count == 1:
+                            break
+                        count += 1
+                    elif lexeme.text() == '(':
+                        lexeme = Modules.findClose(lexeme)
+
+                    # check 2nd argument (mode string)
+                    elif count == 1 and lexeme.token() == 'String':
+                        if lexeme.token() == 'String':
+                            s = lexeme.text()
+                        elif lexeme.ent() and re.search(r'char|string',
+                                                        str(lexeme.ent().type()).lower()):
+                            s = str(lexeme.ent().value())
+
+                        # if mode has no w/a/+, it’s read-only
+                        if not re.search(r'w|a|\+', s):
+                            # find assigned variable
+                            lexeme = start.previous(True, True)
+                            if lexeme and lexeme.text() == '=':
+                                lexeme = lexeme.previous(True, True)
+                                if lexeme and lexeme.ent():
+                                    # ensure variable is FILE *
+                                    if lexeme.ent().freetext("UnderlyingType") == '_IO_FILE *':
+                                        useRefs = lexeme.ent().refs("Useby")
+
+                                        # process each use of that FILE *
+                                        for useRef in useRefs:
+                                            if useRef.file().longname() != lastFile:
+                                                lastFile = useRef.file().longname()
+                                                lexer = lexers.get(lastFile) or \
+                                                        useRef.file().lexer()
+                                                lexers[lastFile] = lexer
+
+                                            # backtrack from use to find function call
+                                            lexeme = lexer.lexeme(useRef.line(),
+                                                                  useRef.column())
+                                            while lexeme and lexeme.text() not in ['(', ';', '=']:
+                                                if lexeme.text() == ')':
+                                                    lexeme = Modules.findOpen(lexeme)
+                                                if lexeme:
+                                                    lexeme = lexeme.previous(True, True)
+
+                                            # if call to a write function, flag violation
+                                            if lexeme and lexeme.text() == '(':
+                                                lexeme = lexeme.previous(True, True)
+                                                if lexeme and lexeme.text() in WRITE_FUNCS:
+                                                    check.violation(useRef.ent(), file,
+                                                                    useRef.line(),
+                                                                    useRef.column(), ERR1)
+                    lexeme = lexeme.next(True, True)
+
+
+# Returns true if still before the given closing parenthesis
+# and after the begin if given
+def checkBounds(line, column, close, begin=None):
+    if not close:
+        return False
+    if line > close.line_begin():
+        return False
+    if line == close.line_begin() and column >= close.column_begin():
+        return False
+    if begin:
+        if line < begin.line_begin():
+            return False
+        if line == begin.line_begin() and column < begin.column_begin():
+            return False
+    return True
+
