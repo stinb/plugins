@@ -304,6 +304,11 @@ def parseArguments() -> dict[str, str | bool]:
             # Fail if the boolean value was bad
             else:
                 printHelpAndExit(f'value for -{optionKey}', arg)
+        elif option.choices == OPTION_DEPTH_CHOICES and arg != 'All':
+            try:
+                result[optionKey] = int(arg)
+            except:
+                printHelpAndExit(f'value for -{optionKey} from {option.choices}', arg)
         # Option type: string from choices
         elif option.choices:
             argLower = arg.lower()

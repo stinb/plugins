@@ -30,6 +30,7 @@ OBJ_REF_KINDS_OPTION = ', Deref Call'
 TASK_FIELDS = ('priority', 'core')
 
 # Option keys
+DEPTH = 'depth'
 FILTER_MODIFY_SET_ONLY = 'filterModifySetOnly'
 FILTER_USE_ONLY = 'filterUseOnly'
 FUNCTION_INSTANCES = 'functionInstances'
@@ -45,9 +46,11 @@ FUNCTION_POINTER = 'functionPointer'
 OPTION_BOOL_TRUE = 'On'
 OPTION_BOOL_FALSE = 'Off'
 OPTION_BOOL_CHOICES = [OPTION_BOOL_TRUE, OPTION_BOOL_FALSE]
+OPTION_DEPTH_CHOICES = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'All']
 
 # Options used in all shared tasks plugins and scripts
 COMMON_OPTIONS = (
+    Option(DEPTH, 'Depth', OPTION_DEPTH_CHOICES, 'All'),
     Option(FILTER_MODIFY_SET_ONLY, 'Filter out modify/set only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FILTER_USE_ONLY, 'Filter out use only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FUNCTION_INSTANCES, 'Function instances', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
@@ -297,13 +300,19 @@ def getEdgeInfo(
         edgeInfo: dict,
         root: Ent,
         fun: Ent,
-        options: dict[str, str | bool]):
+        options: dict[str, str | bool],
+        depth: int):
 
     # Base case: visiting a function again from the same root
     funKey = f'{root.id()} {fun.id()}'
     if funKey in visited:
         return
     visited.add(funKey)
+
+    # Base case: max depth
+    maxDepth = options[DEPTH]
+    if maxDepth != 'All' and depth >= maxDepth:
+        return
 
     # References to global objects
     for ref in globalObjRefs(fun, options):
@@ -383,9 +392,9 @@ def getEdgeInfo(
             # Add assignby ref to edge
             for assby_ref in call.ent().refs("Assignby Functionptr"):
                 getEdgeInfo(visited, tasks, incoming, outgoing,
-                            edgeInfo, root, assby_ref.ent(), options)
+                            edgeInfo, root, assby_ref.ent(), options, depth + 1)
 
-        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options)
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options, depth + 1)
 
 
 def filterIncomingEdges(
@@ -513,7 +522,7 @@ def buildEdgeInfo(
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
-        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options)
+        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options, 0)
 
     # See which edges are filtered out
     if options[FILTER_MODIFY_SET_ONLY] or options[FILTER_USE_ONLY]:
