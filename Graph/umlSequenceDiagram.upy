@@ -1,0 +1,620 @@
+import understand
+
+
+def name():
+  """
+  Required, the name of the graph.
+  """
+  return "UML Sequence Diagram"
+
+def description():
+  """
+  Optional, the description to display in the plugin manager.
+  """
+  return '''A plugin version of the UML Sequence Diagram
+    <p>The UML Sequence Diagram in Understand is drawn with a custom layout
+    algorithm, not Graphviz. This graph demonstrates how to use the
+    otherwise undocumented layout algorithm. It can be used as a basis
+    for customizing the UML Sequence Diagram. </p>
+
+    <h2>UML Sequence Diagram Layout</h2>
+
+    <p>Consider a simple UML Sequence Diagram that just contains a single
+    activation:</p>
+
+    <br>
+    <img src=".doc/umlSeqSimple.png"/>
+
+    <p>The black circle on the left is the "Found Message", the beginning
+    of the graph. It connects to an activation box for the initial function.
+    The function belongs to the object "Object". Representing this graph in a
+    simplified Graphviz dot format would be something like this</p>
+
+    <pre>
+    digraph "name" {
+      foundmessage -> activation [label="activation"];
+      object -> activation;
+    }
+    </pre>
+
+    <p>The problem for the layout algorithm is how to know which node is
+    the found message, drawn directly to the left of the activation node,
+    and which node is the object node, drawn directly above it. Because the
+    model generation code and the layout code where initially combined, the
+    layout relies on the model to say where the items are. Specifically, the
+    attributes "row" and "col" are nearly always required.</p>
+
+    <p>The following image shows where the rows and columns are. Note that
+    row and column are not final positions. They just place all the objects
+    onto a grid. Also, not all objects are necessarily drawn. Rows 4 and 9 are
+    defined by return edges that are not visible in the final graph. Row 8 isn't
+    defined at all, but it's absence signals the end of the cluster.</p>
+
+    <br>
+    <img src=".doc/umlSeqGrid.png"/>
+
+    <p>There are three other attributes unique to the layout to be aware of:</p>
+    <ul>
+      <li><b>uml</b> This is required for every node, edge, and cluster. It is
+          similar to the Graphviz "shape" attribute and determines how objects
+          are drawn.</li>
+      <li><b>nesting</b> This is required on every activation node. It's used to
+          indent self calls.</li>
+      <li><b>visible</b> This is required on every return edge. Every activation
+          node has to have a return edge, used to define the end row of the
+          activation box. Since return edges should not always be drawn, the
+          "visible" attribute controls visibility.</li>
+    </ul>
+
+
+    <p>In addition to the than the five attributes described above ("row",
+    "col", "uml", "nesting" and "visible"), the layout supports a few
+    Graphviz attributes. They are:</p>
+    <ul>
+      <li><b>color</b> the line color</li>
+      <li><b>fillcolor</b> the fill color</li>
+      <li><b>fontcolor</b> the font color</li>
+      <li><b>style</b> specifically line styles, like "dashed"</li>
+      <li><b>width</b> spacer items only, required</li>
+      <li><b>height</b> spacer items only, required</li>
+    </ul>
+
+    <p>A list of possible "uml" values are below. Note that unlike the Graphviz
+    shape attribute, values of "uml" cannot appear just anywhere. The layout
+    algorithm will not work if items do not appear as expected. The possible
+    values of "uml" are:</p>
+    <ul>
+    <li>Nodes:<ul>
+      <li><b>object</b> the objects in row 0 </li>
+      <li><b>foundmessage</b> the initial point, the only item in column 0</li>
+      <li><b>activation</b> activation boxes drawn along an object's lifeline</li>
+      <li><b>spacer</b> the final row of the diagram, used as an end point for lifelines</li>
+    </ul></li>
+    <li>Edges:<ul>
+      <li><b>message</b> an edge from left to right, beginning an activation node</li>
+      <li><b>return</b> an edge from right to left, ending an activation node</li>
+      <li><b>lifeline</b> a vertical edge, showing an object's lifeline</li>
+    </ul></li>
+    <li>Clusters: <ul>
+      <li><b>combinedfragment</b> the bounding box of an entire cluster. The label is "alt" or "loop".</li>
+      <li><b>section</b> the area within a combined fragment. Every combined
+          fragment must have at least one section. Section labels are usually
+          the condition for the loop or alt.</li>
+    </ul></li>
+    </ul>
+  '''
+
+def tags():
+  """
+  Optional, the tags to display in the plugin manager
+  """
+  return [
+    'Target: Functions',
+    'Language: Any',
+    'Layout: UML Sequence',
+    'Customize',
+  ]
+
+
+def test_entity(ent):
+  """
+  Optional, return True if the graph exists for the given entity
+
+  If True, this graph will appear in the Graphical Views menu for the
+  entity.
+  """
+  return ent.kind().check("function, method, procedure, task") and len(diagramRefs(ent)) > 0
+
+
+def init(graph, target):
+  """
+  Initialize the graph
+
+  This function is called once on graph creation. Use it to define the
+  available graph options and/or a legend.
+  """
+  # Staring with 7.1 (build 1221) graph plugins may use all the option()
+  # object methods, not just define.
+  graph.options().define("Name Format", ["Short", "Long"], "Short")
+  graph.options().checkbox("Show Edge Labels", "Show Edge Labels", True)
+  graph.options().checkbox("Parameters", "Parameters", False)
+
+  graph.options().checkbox("Cluster", "Cluster", True)
+  graph.options().checkbox("Collapse 'else if'", "Collapse 'else if'", True)
+
+  # With build 1225+, the integer option supports a range.
+  graph.options().integer("Level", "Level", 1, 1, 10)
+
+  graph.options().checkbox("Show Returns", "Show Returns", True)
+  graph.options().checkbox("Show Self Calls", "Show Self Calls", True)
+  graph.options().checkbox("Function Pointer", "Function Pointer", True)
+  graph.options().checkbox("Functional Macros", "Functional Macros", True)
+
+  graph.options().define("Show Unresolved Entities", ["Hide", "Show", "Show in 'Unresolved Column'"], "Hide")
+  graph.options().define("Aggregate by Architecture", ["Off"] + [arch.name() for arch in graph.db().root_archs()], "Off")
+
+
+def draw(graph, ent):
+  """
+  Draw the graph
+
+  The second argument can be a database, architecture, or an entity depending
+  which test functions return True.
+  """
+  diagram = UmlSequenceDiagram(graph)
+  diagram.draw(ent)
+
+class UmlSequenceDiagram:
+  """
+  The UML Sequence Diagram algorithm is recursive. Bundle together all the
+  variables into a class to reduce the parameters passed around.
+  """
+  def __init__(self, graph):
+    self.graph = graph
+    self.row = 0
+    self.level = graph.options().lookup("Level")
+    self.visited = set()
+
+    # Track the objects that appear along the top of the diagram by columns
+    self.columnNumber = dict() # entity -> column number
+    self.columnNode = dict() # column number -> last node in column
+    self.columnNesting = dict() # column number -> current nesting
+
+    # Track the clusters
+    self.clusterStack = [ self.graph ]
+    self.controlFlowNodeStack = list()
+    self.lexerCache = dict() # lexers needed for control flow text
+
+    # Support grouping by architecture
+    self.arch = None
+    archName = graph.options().lookup("Aggregate by Architecture")
+    if archName != "Off":
+      self.arch = graph.db().lookup_arch(archName)
+
+
+  def draw(self, ent):
+    # Since this is a UML Sequence Diagram, it needs to use the UML Sequence
+    # Diagram layout.
+    self.graph.set("layout", "umlseq")
+
+    # Other drawing default used by the built-in graph
+    self.graph.default("color", "#90c4e4", "node")
+    self.graph.default("color", "#4e8cb9", "edge")
+
+
+    # A UML Sequence Diagram must begin with a found message node
+    start = self.graph.node()
+    start.set("uml", "foundmessage") # Attribute required by layout
+    start.set("row", "1") # Attribute required by layout, leave row 0 for objects
+    start.set("col", "0") # Attribute required by layout
+
+    # optional, Graphviz color and fill color attributes are supported by the
+    # layout. The found message is black
+    start.set("color", "#000000")
+    start.set("fillcolor", "#000000")
+
+    # Add the activation box for the start entity, connecting it to
+    # the found message node. addActivation is recursive, and builds
+    # the main part of the graph
+    self.addActivation(start, 0, ent)
+
+    # To complete the graph, draw lifelines down to the bottom of the graph
+    # This requires making an invisible node to connect the life line edges to.
+    end = self.graph.node()
+    end.set("uml", "spacer")  # Attribute required by layout
+    end.set("width", "0")     # Attribute required by layout
+    end.set("height", "10")   # Attribute required by layout
+    self.row += 1
+    end.set("row", str(self.row)) # Attribute required by layout
+    end.set("col", "0") # Attribute required by layout
+
+    for colEnd in self.columnNode.values():
+      lifelineEdge = self.graph.edge(colEnd, end)
+      lifelineEdge.set("uml", "lifeline") # Attribute required by layout
+      lifelineEdge.set("style", "dashed") # Optional attribute
+
+  def columnOf(self, ent):
+    """
+    Returns the column number the entity should appear in.
+    Creates the object at the head of the column if necessary.
+    """
+    colParent = None
+
+    if not ent.kind().check("unresolved") or self.graph.options().lookup("Show Unresolved Entities") == "Show":
+      # If aggregating by architecture, search for an architecture containing
+      # the entity
+      if self.arch:
+        # Get the list of architectures the entity belongs to, including implicit
+        for a in self.graph.db().archs(ent, True):
+          # Find the root architecture
+          par = a
+          while par and par != self.arch:
+            par = par.parent()
+          if par:
+            # root matched, use this arch as the column parent
+            colParent = a
+            break
+
+      # No arch parent, check for an entity parent
+      if not colParent:
+        par = ent.parent()
+        if par and par.kind().check("class,package,interface,struct,program,c# member property"):
+          # prefer class parent
+          colParent = par
+        else:
+          file = entFile(ent)
+          if file: # File is next priority
+            colParent = file
+          elif par: # any parent
+            colParent = par
+          else: # entity is it's own column
+            colParent = ent
+
+    # Check for existing column for the parent
+    if colParent in self.columnNumber:
+      return self.columnNumber[colParent]
+
+    # Create the column, starting at 1
+    colNum = len(self.columnNumber) + 1
+    self.columnNumber[colParent] = colNum
+
+    self.columnNesting[colNum] = 0
+
+    name = "Unresolved"
+    if colParent:
+      name = self.formattedName(colParent)
+
+    # Create Object Node
+    node = self.graph.node(name)
+    if colParent:
+      node.sync(colParent)
+
+    node.set("uml", "object") # Attribute required by layout
+    node.set("row", "0") # Attribute required by layout, objects are always row 0
+    node.set("col", str(colNum)) # Attribute required by layout
+    self.columnNode[colNum] = node
+
+    return colNum
+
+
+  def addActivation(self, tailNode, tailNodeColumn, ref):
+    """
+    Add an activation box for the given reference (or entity), connecting
+    it to the tailNode (Graphviz node) in tailNodeColumn (int).
+    """
+    if self.graph.is_aborted():
+      return # support abort
+
+    # Find the column
+    ent = ref
+    if isinstance(ent, understand.Ref):
+      ent = ref.ent()
+
+    col = self.columnOf(ent)
+    self.row += 1
+
+    # Create the activation node inside the current graph
+    actNode = self.clusterStack[-1].node()
+    actNode.sync(ref)
+    actNode.set("uml", "activation") # Attribute required by layout
+    actNode.set("row", str(self.row)) # Attribute required by layout
+    actNode.set("col", str(col)) # Attribute required by layout
+    actNode.set("nesting", str(self.columnNesting[col])) # Attribute required by layout for activation nodes
+
+    # Create the message edge from the tail node to the activation node
+    isEdgeLabels = self.graph.options().lookup("Show Edge Labels")
+    messageEdge = self.graph.edge(tailNode, actNode)
+    if isEdgeLabels:
+      messageLabel = self.formattedName(ent)
+      if self.graph.options().lookup("Parameters"):
+        messageLabel = messageLabel + "(" + ent.parameters(True) +")"
+      messageEdge.set("label", messageLabel)
+    if ref != ent:
+      messageEdge.sync(ref)
+    messageEdge.set("uml", "message")
+
+    # Recurse, add edges from this activation node to what it calls
+    self.columnNesting[col] += 1
+    self.level -= 1
+
+    if self.level >= 0:
+      self.expand(actNode, col, ent)
+
+    self.level += 1
+    self.columnNesting[col] -= 1
+
+    # Create the return edge from this activation node to the tail node
+    # Note this edge must always be created for the layout even if it
+    # will not be visible. Visibility is controlled with the required
+    # "visible" attribute.
+    returnEdge = self.graph.edge(actNode, tailNode)
+    if isEdgeLabels:
+      returnEdge.set("label", ent.type()) # Use type text as return value
+    if col != 1 and col != tailNodeColumn and self.graph.options().lookup("Show Returns"):
+      returnEdge.set("visible", "true") # Attribute required by layout
+    else:
+      returnEdge.set("visible", "false") # Attribute required by layout
+    self.row += 1
+    returnEdge.set("row", str(self.row)) # Attribute required by layout
+    returnEdge.set("uml", "return") # Attribute required by layout
+    returnEdge.set("style", "dashed") # Optional attribute
+
+    # Update the life line that goes the length of the column
+    if self.columnNesting[col] == 0:
+      # This activation is not nested, draw a lifeline from the last node
+      # on the column to the activation node
+      lifelineEdge = self.graph.edge(self.columnNode[col], actNode)
+      lifelineEdge.set("uml", "lifeline") # Attribute required by layout
+      lifelineEdge.set("style", "dashed") # Optional attribute
+      self.columnNode[col] = actNode # update last node
+
+  def expand(self, tailNode, tailNodeColumn, ent):
+    """
+    Add children for the given entity, from the entity's node and column number
+    """
+    # References create activation boxes
+    refs = diagramRefs(ent, self.graph)
+    refs.sort(key=lambda ref: (ref.line(), ref.column()))
+
+    # control flow nodes create clusters
+    cfnodes = []
+    elseIfs = set() # node - > section parent
+    if self.graph.options().lookup("Cluster"):
+      filteredCFNodes(ent, cfnodes, elseIfs, self.graph.options().lookup("Collapse 'else if'"))
+
+    # For control flow nodes labels
+    file = None
+    if cfnodes:
+      file = entFile(ent)
+
+    # Combine the control flow nodes and references by line/column, keeping
+    # only non-empty clusters
+    combined = []
+    while cfnodes:
+      # Determine whether reference or control flow node comes next
+      if refs and before(refs[0].line(), refs[0].column(), cfnodes[0].line_begin(), cfnodes[0].column_begin()):
+        if self.isIncluded(refs[0]):
+          combined.append(refs[0])
+        del refs[0] # reference handled
+      else:
+        if combined and isinstance(combined[-1], understand.CFNode):
+          if combined[-1].end_node() == cfnodes[0]:
+            del combined[-1] # Empty section, start followed by end
+          elif (combined[-1].kind() not in CONTROL_FLOW_ENDS and             # previous node was not an end
+                (not combined[-1].end_node() or combined[-1] in elseIfs) and # previous node was did not start a cluster
+                (not cfnodes[0].end_node() or cfnodes[0] in elseIfs)):       # current current did not start a cluster
+            # Previous node and current node are siblings within the same
+            # cluster and the previous node was empty, so delete the empty section
+            del combined[-1]
+
+            # Check if now this node ends the parent cluster
+            if combined and isinstance(combined[-1], understand.CFNode) and combined[-1].end_node() == cfnodes[0]:
+              del combined[-1] # Empty section, start followed by end
+            else:
+              combined.append(cfnodes[0]) # new section in current cluster
+          else:
+            combined.append(cfnodes[0]) # begin section/cluster
+        else:
+          combined.append(cfnodes[0]) # begin/end of section/cluster
+
+        del cfnodes[0] # control flow graph node handled
+
+    # append remaining references
+    for ref in refs:
+      if self.isIncluded(ref):
+        combined.append(ref)
+
+    # Now add to graph
+    for object in combined:
+      if isinstance(object, understand.Ref):
+        self.addActivation(tailNode, tailNodeColumn, object)
+      else:
+        self.addControlFlow(object, tailNodeColumn, elseIfs, file)
+
+  def addControlFlow(self, node, col, elseIfs, file):
+    """
+    Control flow nodes are combined fragments and sections of combined
+    fragments, both represented as clusters for the layout
+    """
+    if node.end_node() and not node in elseIfs:
+      # start a new cluster (combined fragment)
+      cluster = self.clusterStack[-1].cluster()
+      if node.kind() in CONTROL_FLOW_ALT:
+        cluster.set("label", "alt")
+      else:
+        cluster.set("label", "loop")
+      cluster.set("uml", "combinedfragment") # Attribute required by layout
+      self.row += 1
+      cluster.set("row", str(self.row)) # Attribute required by layout
+      cluster.set("col", str(col)) # Attribute required by layout
+
+      # Find the depth. Subtract one for the root, and divide by two because
+      # every combined fragment has a section, so there are half the visible
+      # clusters as there are graphs on the stack
+      depth = int((len(self.clusterStack) - 1) / 2)
+      color = CLUSTER_COLORS[depth % len(CLUSTER_COLORS)]
+      cluster.set("color", color) # optional
+      cluster.set("fontcolor", color) # optional
+
+      self.clusterStack.append(cluster)
+
+      # Add a cluster for the first section within the combined fragment
+      section = self.clusterStack[-1].cluster()
+      self.formatSection(section, node, file, col)
+      self.clusterStack.append(section)
+
+      self.controlFlowNodeStack.append(node)
+    elif self.controlFlowNodeStack and self.controlFlowNodeStack[-1].end_node() == node:
+      # End the current cluster
+      self.row += 1
+      del self.controlFlowNodeStack[-1]
+      del self.clusterStack[-1] # delete section
+      del self.clusterStack[-1] # delete combined fragment
+    elif self.controlFlowNodeStack:
+      # New section within current combined fragment
+      del self.clusterStack[-1] # end previous section
+
+      # Create new section
+      self.row += 1
+      section = self.clusterStack[-1].cluster()
+      self.formatSection(section, node, file, col)
+      self.clusterStack.append(section)
+
+
+  def formatSection(self, section, cfnode, file, col):
+    """
+    Format a section node. Most of this is to find the text from the lexer
+    """
+    section.set("uml", "section") # Attribute required by layout
+    section.set("row", str(self.row)) # Attribute required by layout
+    section.set("col", str(col)) # Attribute required by layout
+
+    text = ""
+    if file:
+      lexer = None
+      if file not in self.lexerCache:
+        try:
+          lexer = file.lexer()
+        except:
+          pass
+        self.lexerCache[file] = lexer
+      else:
+        lexer = self.lexerCache[file]
+
+      if lexer:
+        eline = cfnode.line_end()
+        ecol = cfnode.column_end()
+        lexeme = lexer.lexeme(cfnode.line_begin(), cfnode.column_begin())
+        while lexeme and before(lexeme.line_begin(), lexeme.column_begin(), eline, ecol):
+          text += lexeme.text()
+          lexeme = lexeme.next()
+
+    # set this even if empty so that the parent's label is not inherited
+    section.set("label", text) # Attribute required by layout
+
+
+  def isIncluded(self, ref):
+    """
+    Screen call references to see if they should be added to the graph.
+    Calling this function counts as visiting the reference
+    """
+    # Avoid visiting the exact same reference twice. This makes it so
+    # repeat calls to the same function only show the first function expanded
+    if repr(ref) in self.visited:
+      return False
+    self.visited.add(repr(ref))
+    if self.graph.options().lookup("Show Unresolved Entities") == "Hide" and ref.ent().kind().check("unresolved"):
+      return False
+    if not self.graph.options().lookup("Show Self Calls") and ref.ent().parent() == ref.scope().parent():
+      return False
+    return True
+
+  def formattedName(self, target):
+    """
+    Return an entity or architecture name based on the graph's name format
+    """
+    if self.graph.options().lookup("Name Format") == "Short":
+      return target.name()
+    return target.longname()
+
+CLUSTER_COLORS = ["#afd870", "#fcad56", "#569f38", "#e45721"]
+
+CONTROL_FLOW_ENDS=[ "end-do-while", "end-if", "end-loop", "end-switch"]
+CONTROL_FLOW_ALT= [ "if", "elsif", "switch" ]
+CONTROL_FLOW_KINDS=[
+  "do-while",
+  "end-do-while",
+  "if",
+  "elsif",
+  "else",
+  "end-if",
+  "while-for",
+  "while",
+  "for",
+  "end-loop",
+  "switch",
+  "switch-case",
+  "switch-default",
+  "end-switch"
+]
+
+def filteredCFNodes(ent, cfnodes, elseIfs, collapseElseIf):
+  """
+  Get the list of control flow nodes that may appear in the diagram
+  """
+  cgraph = ent.control_flow_graph()
+  if not cgraph:
+    return
+
+  skipEnd = set()
+  for node in cgraph.nodes():
+    if node.kind() not in CONTROL_FLOW_KINDS or node in skipEnd:
+      continue
+
+    # Combine else node + if node
+    if cfnodes and cfnodes[-1].kind() == "else" and node.kind() == "if" and collapseElseIf:
+      del cfnodes[-1] # skip the else node
+      skipEnd.add(node.end_node()) # Use end of original if, not this if's end
+      elseIfs.add(node) # Flag this node as an else-if node
+
+    # Add the node to the list
+    cfnodes.append(node)
+
+
+
+ENT_KIND_STR=(
+  "ada entry, ada function, ada procedure,"
+  "object ~unknown ~unresolved,"
+  "member function ~unknown,"
+  "member method ~unknown,"
+  "c function ~unknown,"
+  "pascal function method ~unknown ~unresolved,"
+  "pascal procedure method ~unknown ~unresolved,"
+  "python function ~unknown ~unresolved"
+)
+
+def diagramRefs(ent, graph = None):
+  """
+  Return the references to be shown in the diagram for a given entity.
+  """
+  refs = ent.refs("call ~inactive", ENT_KIND_STR, False)
+  if not graph or graph.options().lookup("Function Pointer"):
+    refs.extend(ent.refs("use ptr ~inactive, c assign functionptr", ENT_KIND_STR, False))
+  if not graph or graph.options().lookup("Functional Macros"):
+    refs.extend(ent.refs("c use", "c functional macro", False))
+
+  return refs
+
+def entFile(ent):
+  """
+  Find the file for the given entity
+  """
+  defref = ent.refs("definein")
+  if len(defref) == 1:
+    return defref[0].file()
+
+def before(line, col, beforeLine, beforeCol):
+  """
+  Range check
+  """
+  return line < beforeLine or (line == beforeLine and col <= beforeCol)
