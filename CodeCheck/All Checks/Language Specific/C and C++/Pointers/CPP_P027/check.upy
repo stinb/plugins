@@ -1,0 +1,124 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-10
+
+
+import re
+
+
+ERR1 = 'Pointer to FILE dereferenced'
+
+
+def ids():
+    return ('MISRA12_22.5', 'MISRA23_22.5', 'CPP_P027')
+
+
+def name(id):
+    return {
+        'MISRA12_22.5': '''Published Standards/MISRA C 2012/\
+22.5 Dereference of FILE Pointer''',
+        'MISRA23_22.5': '''Published Standards/MISRA C 2023/\
+22.5 Dereference of FILE Pointer''',
+        'CPP_P027': '''All Checks/Language Specific/C and C++/Pointers/\
+Dereference of FILE Pointer''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_22.5': [
+            'Pointers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Mandatory',
+        ],
+        'MISRA23_22.5': [
+            'Pointers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+        ],
+        'CPP_P027': [
+            'Pointers',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A pointer to a <code>FILE</code> object shall not be dereferenced.</p>
+
+<p><b>Amplification</b></p>
+
+<p>A pointer to a <code>FILE</code> object shall not be dereferenced directly or indirectly (e.g. by a call to <code>memcpy</code> or
+<code>memcmp</code>).</p>
+
+<p><b>Rationale</b></p>
+
+<p>Within the section on “files”, the C Standard states that the address of a <code>FILE</code> object used to control
+a stream may be significant and a copy of the object may not give the same behaviour. This rule
+ensures that such a copy cannot be made.</p>
+
+<p>The direct manipulation of a <code>FILE</code> object is prohibited as this may be incompatible with its use as a
+stream designator.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+#include &lt;stdio.h&gt;
+FILE *pf1;
+FILE *pf2;
+FILE f3;
+pf2 = pf1;      /* Compliant */
+ f3 = *pf2;     /* Non-compliant */\
+</code></pre>
+
+<p>The following example assumes that <code>FILE *</code> specifies a complete type with a member named <code>pos</code>:</p>
+
+<pre><code language="C++">\
+pf1->pos = 0;    /* Non-compliant */\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 21.6</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Deref, Assign Ptr', 'Object, Parameter'):
+        ent = ref.ent()
+
+        # Skip if the type is not FILE *
+        t = ent.freetext('UnderlyingType')
+        t = re.sub(r'\b(const|restrict|volatile)\s*', '', t)
+        if t not in ('_iobuf *', '_IO_FILE *', 'FILE *'):
+            continue
+
+        # Skip if the pointer is simply copied, except for the mem functions
+        if ref.kind().check('Assign Ptr'):
+            scope = ref.scope()
+            parent = scope.parent()
+            if not parent or parent.library() != 'standard' \
+            or parent.name() not in ('memchr', 'memcmp', 'memcpy', 'memmove', 'memset'):
+                continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
