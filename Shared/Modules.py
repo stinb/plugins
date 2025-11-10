@@ -1,7 +1,7 @@
 import functools
 import re
 
-from understand import Lexeme, Ref
+from understand import Ent, Lexeme, Ref
 
 
 
@@ -571,6 +571,14 @@ def isConstructor(ent):
 
 
 # Libraries
+
+
+# Whether the entity is a pointer to a FILE
+def isFilePointer(ent: Ent) -> bool:
+    t = ent.freetext('UnderlyingType')
+    t = re.sub(r'\b(const|restrict|volatile)\s*', '', t)
+    return t in ('_iobuf *', '_IO_FILE *', 'FILE *')
+
 
 # Given a long string like "std::anything::cout" and a string like "cout"
 # Returns true if the ent longname is something like "std::cout" or "std::anything::cout"
