@@ -1,0 +1,144 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-10
+
+
+import re
+
+from understand import Lexeme
+
+
+ERR1 = '_Generic outside of a macro definition'
+
+
+def ids():
+    return ('MISRA23_23.1', 'CPP_PR008')
+
+
+def name(id):
+    return {
+        'MISRA23_23.1': '''Published Standards/MISRA C 2023/\
+23.1 Generic Outside of Macro''',
+        'CPP_PR008': '''All Checks/Language Specific/C and C++/Preprocessor/\
+Generic Outside of Macro''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_23.1': [
+            'Preprocessor',
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+        ],
+        'CPP_PR008': [
+            'Preprocessor',
+            'Language: C',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A generic selection should only be expanded from a macro.</p>
+
+<p><b>Amplification</b></p>
+
+<p>A generic selection expression should only be expanded from a function-like macro, with one of the
+macro's arguments expanded into the controlling expression of the generic selection.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Generic selections are useful to implement type queries or checks, or generic functions. If the generic
+selection is applied directly rather than expanded from a macro body, the type of the operand is
+already known locally and querying it is not necessary.</p>
+
+<p><b>Example</b></p>
+
+<p>The following example is non-compliant, as it is not a macro:</p>
+
+<pre><code language="C++">\
+#include &lt;stdint.h&gt;
+
+int32_t x = 0;
+
+/* Non-compliant - not a macro */
+int32_t y = _Generic( x
+          , int32_t   : 1
+          , float32_t : 2 );\
+</code></pre>
+
+<p>The following example implements a regular generic function, and can be expanded into contexts
+where the operand type may vary:</p>
+
+<pre><code language="C++">\
+/* Compliant - used to implement a generic function */
+#define arith(X) ( _Generic( (X)                    \\
+                 , int32_t   : handle_int32         \\
+                 , float32_t : handle_float         \\
+                 , default   : handle_any   ) (X) )\
+</code></pre>
+
+<p>The following example is not compliant because it expands to a generic selection which does not
+depend on the type of an argument:</p>
+
+<pre><code language="C++">\
+/* Non-compliant */
+#define maybe_inc(Y) ( _Generic( x                  \\
+                     , int32_t : 1                  \\
+                     , default : 0 ) + (Y) )\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Dir 4.9, Rule 13.6, Rule 23.2</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    define: bool = False
+    params: list[str] = []
+
+    for lex in file.lexer().lexemes():
+        token = lex.token()
+
+        if token in ('Identifier', 'Keyword'):
+            if lex.text() == '_Generic':
+                if not define or not using_param(lex, params):
+                    check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+        elif token == 'Newline':
+            define = False
+
+        elif token == 'Preprocessor' and lex.text() == 'define':
+            define = True
+            # Get the macro parameter names
+            params = []
+            lex = lex.next(True, True)
+            if lex:
+                ent = lex.ent()
+                if ent and ent.kind().check('Functional Macro'):
+                    params = ent.parameters().split(',')
+
+
+def using_param(lex: Lexeme, params: list[str]) -> bool:
+    lex = lex.next(True, True)
+    while lex and lex.text() == '(':
+        lex = lex.next(True, True)
+
+    return bool(lex and lex.text() in params)
