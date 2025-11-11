@@ -1,0 +1,156 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-11
+
+
+import re
+
+from Modules import isFilePointer, refBeforeRef
+from understand import CFNode, Ent, Ref
+
+
+ERR1 = 'Use of pointer to closed FILE'
+
+
+def ids():
+    return ('MISRA23_22.6', 'CPP_L039')
+
+
+def name(id):
+    return {
+        'MISRA23_22.6': '''Published Standards/MISRA C 2023/\
+22.6 Use of Closed FILE Pointers''',
+        'CPP_L039': '''All Checks/Language Specific/C and C++/Libraries/\
+Use of Closed FILE Pointers''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_22.6': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+        ],
+        'CPP_L039': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>The value of a pointer to a <code>FILE</code> shall not be used after the associated
+stream has been closed</p>
+
+<p><b>Rationale</b></p>
+
+<p>The C Standard states that the value of a <code>FILE</code> pointer is indeterminate after a close operation on a
+stream.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+#include &lt;stdio.h&gt;
+
+void fn ( void )
+{
+  FILE *fp;
+  void *p;
+
+  fp = fopen ( "tmp", "w" );
+
+  if ( fp == NULL )
+  {
+    error_action ( );
+  }
+
+  fclose ( fp );
+
+  fprintf ( fp, "?" ); /* Non-compliant */
+  p = fp;              /* Non-compliant */
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Dir 4.13, Rule 21.6</p>
+
+<p><b>Developer's Notes</b></p>
+
+<p>Usage after close is only checked for in 1 function at a time. If a file is
+closed in 1 function and then used in another function, it will not be detected
+by this check.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for fnRef in file.filerefs('Define', 'Function'):
+        fn = fnRef.ent()
+
+        cfg = fn.control_flow_graph()
+        if not cfg:
+            continue
+
+        for ref in fn.refs('Use', 'Object, Parameter'):
+            ent = ref.ent()
+
+            if not isFilePointer(ent):
+                continue
+
+            if not previouslyClosed(file, fn, cfg, ref):
+                continue
+
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+
+def previouslyClosed(file: Ent, fn: Ent, cfg: CFNode, use: Ref) -> bool:
+    filePtr = use.ent()
+
+    # Figure out all of the uses of this pointer in this function
+    usesInFn: set[str] = set()
+    for otherUse in filePtr.refs('Useby', 'Function'):
+        if otherUse.ent() == fn and otherUse.file() == file:
+            usesInFn.add(refPosition(otherUse))
+
+    # Each call to fclose using this FILE pointer in this function
+    for close in filePtr.refs('Assignby Ptr', 'Parameter'):
+        # Skip if the usage is in this fclose
+        if close.line() == use.line() and close.column() == use.column():
+            continue
+        # Skip uses not in this function
+        if close.file() != file or refPosition(close) not in usesInFn:
+            continue
+        # Skip functions besides fclose
+        param = close.ent()
+        fclose = param.parent()
+        if fclose.longname() != 'fclose' or fclose.library() != 'standard':
+            continue
+
+        # If closed before used
+        if refBeforeRef(cfg, close, use):
+            return True
+
+    return False
+
+
+def refPosition(ref: Ref) -> str:
+    return f'{ref.line()}:{ref.column()}'

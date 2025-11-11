@@ -1,7 +1,7 @@
 import functools
 import re
 
-from understand import Ent, Lexeme, Ref
+from understand import CFGraph, CFNode, Ent, Lexeme, Ref
 
 
 
@@ -68,6 +68,29 @@ def findOpen(lexeme):
 
     return lexeme
 
+
+# Given a node/lexeme, node/lexeme, and another node/lexeme
+# See if the order of the parameters is really the order
+def lexemeBetweenNodes(node1, lexeme, node2):
+    # Make sure both nodes have position information
+    if node1.line_begin() == None or node2.line_begin() == None:
+        return False
+
+    # Make sure the order is node1, lexeme
+    if lexeme.line_begin() < node1.line_begin():
+        return False
+    if lexeme.line_begin() == node1.line_begin() and lexeme.column_begin() <= node1.column_begin():
+        return False
+
+    # Make sure the order is lexeme, node2
+    if lexeme.line_begin() > node2.line_begin():
+        return False
+    if lexeme.line_begin() == node2.line_begin() and lexeme.column_begin() >= node2.column_begin():
+        return False
+
+    return True
+
+
 # Given a CFGraph, get a dictionary:
     # Key: a CFNode
     # Value: the next sibling CFNode
@@ -118,6 +141,33 @@ def nextSiblingDictionary(cfg):
 
     return result
 
+# Whether ref A can be before ref B in the control flow, assuming that they are
+# both in the same function as the given CFG
+def refBeforeRef(cfg: CFGraph, refA: Ref, refB: Ref) -> bool:
+    # Find a node with ref A
+    nodeA = None
+    for node in cfg.nodes():
+        if refInNode(refA, node):
+            nodeA = node
+    if not nodeA:
+        return False
+
+    # Find a node afterward with ref B
+    stack: list[CFNode] = [nodeA]
+    seen: set[CFNode] = {nodeA}
+    while stack:
+        node = stack.pop()
+        if refInNode(refB, node):
+            return True
+        for child in node.children():
+            if child in seen:
+                continue
+            seen.add(child)
+            stack.append(child)
+
+    return False
+
+
 # Given a node/lexeme, ref, and another node/lexeme
 # See if the order of the parameters is really the order
 def refBetweenNodes(node1, ref, node2):
@@ -139,27 +189,22 @@ def refBetweenNodes(node1, ref, node2):
 
     return True
 
-# Given a node/lexeme, node/lexeme, and another node/lexeme
-# See if the order of the parameters is really the order
-def lexemeBetweenNodes(node1, lexeme, node2):
-    # Make sure both nodes have position information
-    if node1.line_begin() == None or node2.line_begin() == None:
-        return False
 
-    # Make sure the order is node1, lexeme
-    if lexeme.line_begin() < node1.line_begin():
+# Whether the reference is in the node range (not the same as the curly braces)
+def refInNode(ref: Ref, node: CFNode) -> bool:
+    refLine = ref.line()
+    refColumn = ref.column()
+    nodeLineBegin = node.line_begin()
+    if nodeLineBegin == None:
         return False
-    if lexeme.line_begin() == node1.line_begin() and lexeme.column_begin() <= node1.column_begin():
+    nodeLineEnd = node.line_end()
+    if refLine < nodeLineBegin or refLine > nodeLineEnd:
         return False
-
-    # Make sure the order is lexeme, node2
-    if lexeme.line_begin() > node2.line_begin():
+    if refLine == nodeLineBegin and refColumn < node.column_begin():
         return False
-    if lexeme.line_begin() == node2.line_begin() and lexeme.column_begin() >= node2.column_begin():
+    if refLine == nodeLineEnd and refColumn > node.column_end():
         return False
-
     return True
-
 
 
 # References
