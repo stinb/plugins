@@ -1,0 +1,137 @@
+ERR1 = "'errno' shall be set to zero prior to a call to an errno-setting-function"
+ERRNO_SETT_FUNCS = ["ftell", "fgetpos", "fsetpos", "fgetwc", "fputwc",
+                    "strtoimax", "strtoumax", "strtol", "strtoul",
+                    "strtoll", "strtoull", "strtof", "strtod", "strtold",
+                    "wcstoimax", "wcstoumax", "wcstol", "wcstoul",
+                    "wcstoll", "wcstoull", "wcstof", "wcstod", "wcstold",
+                    "wcrtomb", "wcsrtombs", "mbrtowc"]
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.8')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.8': "Published Standards/MISRA C 2023/22.8 \
+The value of errno shall be set to zero prior to a call to an errno-setting-function"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_22.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_22.8': """
+<p><b>Amplification</b></p>
+<p>An errno-setting-function is one of the following:</p>
+<p>ftell, fgetpos, fsetpos, fgetwc, fputwc,
+strtoimax, strtoumax, strtol, strtoul, strtoll, strtoull, strtof, strtod, strtold,
+wcstoimax, wcstoumax, wcstol, wcstoul, wcstoll, wcstoull, wcstof, wcstod, wcstold,
+wcrtomb, wcsrtombs, mbrtowc</p>
+<p>Any other function which returns error information using errno is also an errno-setting-function.
+Note: this may include additional functions from the Standard Library, as permitted by the C
+Standard.</p>
+<p>"Prior" requires that errno shall be set to zero in the same function and on all paths leading to a call
+of an errno-setting-function. Furthermore, there shall be no calls to functions that may set errno in
+these paths. This includes calls to any function within the Standard Library as these are permitted
+(but not required) to set errno.</p>
+
+<p><b>Rationale</b></p>
+<p>An errno-setting-function writes a non-zero value to errno if an error is detected, leaving the value
+unmodified otherwise. The C Standard includes non-normative advice that "a program that uses
+errno for error checking should set it to zero before a library function call, then inspect it before a
+subsequent library function call".</p>
+<p>In order that errors can be detected, this rule requires that errno shall be set to zero before an
+errno-setting-function is called. Rule 22.9 then requires that errno be tested after the call.</p>
+
+<p><b>Exception</b></p>
+<p>The value of errno need not be set to zero when it can be proven to be zero.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f ( void )
+{
+    errnoSettingFunction1(); /* Non-compliant */
+    if ( 0 == errno )
+    {
+        errnoSettingFunction2(); /* Compliant by exception */
+        if ( 0 == errno )
+    {
+    }
+    }
+    else
+    {
+        errno = 0;
+        errnoSettingFunction3(); /* Compliant */
+        if ( 0 == errno )
+    {
+    }
+    }
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 22.9, Rule 22.10</p>
+
+<p><b>Developer's Note:</b></p>
+<p>This check only considers the functions listed in the Amplification as errno-setting-functions.</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for func_ref in file.filerefs("Define", "Function"):
+        errno_zero = False
+
+        for ref in sorted(func_ref.ent().refs("Use, Call", "Macro, Function"), key=lambda r: r.line()):
+            if ref.ent().name() in ERRNO_SETT_FUNCS:
+                if not errno_zero:
+                    check.violation(ref.ent(), file, ref.line(),
+                                    ref.column(), ERR1)
+
+                errno_zero = False
+            elif ref.ent().name() == "errno":
+                lex = lexer.lexeme(ref.line(), ref.column())
+                next_lex = lex.next(True, True)
+                prev_lex = lex.previous(True, True)
+
+                if lex and (lex.text() != "errno"):
+                    continue
+                elif next_lex.text() in ["==", "="]:
+                    next_lex = next_lex.next(True, True)
+
+                    if next_lex.text() == "0":
+                        errno_zero = True
+                elif prev_lex.text() == "==":
+                    prev_lex = prev_lex.previous(True, True)
+
+                    if prev_lex.text() == "0":
+                        errno_zero = True
