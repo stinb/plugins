@@ -1,0 +1,163 @@
+ERR1 = "The value of 'errno' shall be tested against zero after calling an errno-setting function"
+ERRNO_SETT_FUNCS = ["ftell", "fgetpos", "fsetpos", "fgetwc", "fputwc",
+                    "strtoimax", "strtoumax", "strtol", "strtoul",
+                    "strtoll", "strtoull", "strtof", "strtod", "strtold",
+                    "wcstoimax", "wcstoumax", "wcstol", "wcstoul",
+                    "wcstoll", "wcstoull", "wcstof", "wcstod", "wcstold",
+                    "wcrtomb", "wcsrtombs", "mbrtowc"]
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.9')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.9': "Published Standards/MISRA C 2023/22.9 \
+The value of errno shall be tested against zero after calling an errno-setting-function"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_22.9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_22.9': """
+<p><b>Amplification</b></p>
+<p>An errno-setting-function is one of those described in Rule 22.8.</p>
+<p>The test of errno shall occur in the same function on all paths from the call of interest, and before
+any subsequent function calls.</p>
+<p>The results of an errno-setting-function shall not be used prior to the testing of errno.</p>
+
+<p><b>Rationale</b></p>
+<p>An errno-setting-function writes a non-zero value to errno if an error is detected, leaving the value
+unmodified otherwise. The C Standard includes non-normative advice that "a program that uses
+errno for error checking should set it to zero before a library function call, then inspect it before a
+subsequent library function call".</p>
+<p>As the value returned by an errno-setting-function is unlikely to be correct when errno is non-zero,
+the program shall test errno to ensure that it is appropriate to use the returned value.</p>
+
+<p><b>Exception</b></p>
+<p>The value of errno does not have to be tested when the return value of an errno-setting-function can
+be used to determine if an error has occurred.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1 ( void )
+{
+    errno = 0;
+    errnoSettingFunction1 ();
+    someFunction (); /* Non-compliant - function call */
+    if ( 0 != errno )
+    {
+    }
+    errno = 0;
+    errnoSettingFunction2 ();
+    if ( 0 != errno ) /* Compliant */
+    {
+    }
+}
+void f2 ( FILE *f, fpos_t *pos )
+{
+    errno = 0;
+    if ( fsetpos ( f, pos ) == 0 )
+    {
+    /* Compliant by exception - no need to test errno as no out-of-band error
+    reported. */
+    }
+    else
+    {
+    /* Something went wrong - errno holds an implementation-defined positive value.
+    */
+    handleError ( errno );
+    }
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 22.8, Rule 22.10</p>
+
+<p><b>Developer's Note:</b></p>
+<p>This check only considers the functions listed in Rule 22.8 as errno-setting-functions.</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Function"):
+            if call_ref.ent().name() in ERRNO_SETT_FUNCS:
+                lex = lexer.lexeme(call_ref.line(), call_ref.column())
+                prev_lex = lex.previous(True, True)
+                is_tested = False
+
+                if prev_lex.text() in ["==", "!="]:
+                    prev_lex = prev_lex.previous(True, True)
+
+                    if prev_lex.text() == "0":
+                        is_tested = True
+                else:
+                    on_param = 0
+
+                    while lex:
+                        if lex.text() == "(":
+                            on_param += 1
+                        elif lex.text() == ")":
+                            on_param -= 1
+
+                            if not on_param:
+                                if ((lex.next(True, True).text() in ["==", "!="])
+                                        and (lex.next(True, True).next(True, True).text() == "0")):
+                                    is_tested = True
+                                break
+
+                        lex = lex.next(True, True)
+
+                    if not is_tested:
+                        while lex.text() != ";":
+                            lex = lex.next(True, True)
+
+                        # next line
+                        lex = lex.next(True, True)
+
+                        while lex and lex.text() != ";":
+                            if lex.text() == "errno":
+                                next_lex = lex.next(True, True)
+                                prev_lex = lex.previous(True, True)
+
+                                if ((next_lex.text() in ["==", "!="] and next_lex.next(True, True).text() == "0")
+                                        or (prev_lex.text() in ["==", "!="] and prev_lex.previous(True, True).text() == "0")):
+                                    is_tested = True
+
+                            lex = lex.next(True, True)
+
+                if not is_tested:
+                    check.violation(call_ref.ent(), file,
+                                    call_ref.line(), call_ref.column(), ERR1)
