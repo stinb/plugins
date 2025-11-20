@@ -1,4 +1,5 @@
 import re
+from Modules import findOpen
 
 
 ERR1 = "An increment (++) or decrement (--) operator should have no other potential side effects"
@@ -167,51 +168,78 @@ def test_language(language):
 def check(check, file):
     if not re.search(r'\+\+|--', file.contents()):
         return
-    
+
     lexer = file.lexer(True, 8, False, False)
     lex = lexer.first()
-    
+
     while lex:
         if lex.text() in ["++", "--"]:
-            curr_lex = lex
-            lex = lexer.lexeme(lex.line_begin(), 0)            
+            op_lex = lex
+            lex = lexer.lexeme(lex.line_begin(), 0)
             operator = 0
+            bracket_ctr = 0
+            passed = False  # passed the operator
 
             while lex:
+                if ((op_lex.line_begin() == lex.line_begin())
+                        and (op_lex.column_begin() == lex.column_begin())):
+                    passed = True
+
+                if (lex.token() == "Punctuation") and lex.text() in "([{":
+                    bracket_ctr += 1
+                elif (lex.token() == "Punctuation") and lex.text() in "}])":
+                    if not bracket_ctr:
+                        lex = findOpen(lex)
+                        lex = lex.previous(True, True)
+                        operator = 0
+                        passed = False
+                        continue
+
+                    bracket_ctr -= 1
+
                 if lex.text() == ";":
-                    if (curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin()):
-                        operator, lex = check_next_statement(curr_lex, lex, operator)
-                    break
+                    if not passed:
+                        operator = 0
+                    else:
+                        break
                 elif lex.text() in ["if", "while", "for", "switch"]:
                     on_cond = 0
 
                     while lex:
+                        if ((op_lex.line_begin() == lex.line_begin())
+                                and (op_lex.column_begin() == lex.column_begin())):
+                            passed = True
+
                         if lex.text() == "(":
                             on_cond += 1
                         elif lex.text() == ")":
                             on_cond -= 1
 
                             if not on_cond:
-                                if (curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin()):
-                                    operator, lex = check_next_statement(curr_lex, lex, operator)
+                                if not passed:
+                                    operator = 0
+
                                 break
                         elif (lex.token() == "Operator") and lex.text() not in ["->", ".", "[", "]"]:
                             operator += 1
                         elif on_cond and lex.text() == ";":
-                            if operator > 1 and not ((curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin())):
-                                check.violation(None, file, curr_lex.line_begin(), curr_lex.column_begin(), ERR1)
-                        
+                            if passed:
+                                break
+
                             operator = 0
                         elif not on_cond and lex.text() == ";":
                             break
 
                         lex = lex.next(True, True)
 
-                    break
+                    if passed:
+                        break
                 elif lex.text() == "*" and lex.next().ent() and ("*" in lex.next().ent().type()):
                     lex = lex.next(True, True)
                     continue
-                elif lex.ent() and lex.ent().kind().check("Function") and lex.ref() and lex.ref().kind().check("Callby"):
+                elif (lex.ent()
+                      and lex.ent().kind().check("Function")
+                      and lex.ref() and lex.ref().kind().check("Callby")):
                     operator += 1
                 elif (lex.token() == "Operator") and lex.text() not in ["->", ".", "[", "]"]:
                     operator += 1
@@ -219,23 +247,7 @@ def check(check, file):
                 lex = lex.next(True, True)
 
             if operator > 1:
-                check.violation(None, file, curr_lex.line_begin(), curr_lex.column_begin(), ERR1)
+                check.violation(None, file, op_lex.line_begin(),
+                                op_lex.column_begin(), ERR1)
 
         lex = lex.next(True, True)
-
-
-def check_next_statement(curr_lex, lex, operator):
-    lex = lex.next(True, True)
-    operator = 0
-
-    while lex:
-        if lex.text() == ";":
-            if (curr_lex.line_begin() == lex.line_begin()) and (curr_lex.column_begin() > lex.column_begin()):
-                operator, lex = check_next_statement(curr_lex, lex, operator)
-            return operator, lex
-        elif (lex.token() == "Operator") and lex.text() not in ["->", ".", "[", "]"]:
-            operator += 1
-
-        lex = lex.next(True, True)
-
-    return operator, lex
