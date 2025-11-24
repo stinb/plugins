@@ -622,7 +622,7 @@ def isConstructor(ent):
 def isFilePointer(ent: Ent) -> bool:
     t = ent.freetext('UnderlyingType')
     t = re.sub(r'\b(const|restrict|volatile)\s*', '', t)
-    return t in ('_iobuf *', '_IO_FILE *', 'FILE *')
+    return t in ('_iobuf *', '_IO_FILE *', '__sFILE *')
 
 
 # Given a long string like "std::anything::cout" and a string like "cout"
