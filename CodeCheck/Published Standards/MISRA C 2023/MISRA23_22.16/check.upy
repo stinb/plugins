@@ -1,0 +1,172 @@
+ERR1 = "Locked mutex shall be explicitly unlocked"
+ERR2 = "Mutex was not unlocked on one of its paths"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.16')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.16': "Published Standards/MISRA C 2023/22.16 \
+All mutex objects locked by a thread shall be explicitly unlocked by the same thread"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_22.16': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_22.16': """
+<p><b>Amplification</b></p>
+<p>If a mutex object mtx is locked by mtx_lock(mtx) at a program point p there shall be an explicit
+mtx_unlock(mtx) for mutex object mtx on all programs paths reachable from p before exiting the
+thread.</p>
+
+<p><b>Rationale</b></p>
+<p>When a thread terminates without releasing a lock, that lock may be held for indeterminate time. If
+the life range of a mutex object ends while there are threads waiting for it the behaviour is
+undefined.</p>
+<p>Destroying a mutex on which threads are waiting is undefined behaviour.</p>
+<p>Note: it is good practice to unlock mutexes in the same function and under the same control
+dependences in which they have been locked.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">int32_t t1( void *ignore ) /* Thread 1 */
+{
+    bool_t b;
+
+    mtx_lock ( &Ra ); /* Compliant */
+    mtx_unlock( &Ra );
+
+    mtx_lock ( &Rb ); /* Non-compliant - unlock missing on one path */
+    if ( b )
+    {
+        mtx_unlock( &Rb );
+    }
+    return 0;
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 4.13, Rule 22.1</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def flag_mtxs(check, scope_mtxs, err):
+    for scope in scope_mtxs.values():
+        for ent_id, mtx_ref in scope.items():
+            mtx_ent = check.db().ent_from_id(ent_id)
+
+            check.violation(mtx_ent, mtx_ref.file(),
+                            mtx_ref.line(), mtx_ref.column(), err)
+
+
+def is_mutex(obj_ent):
+    utype = str(obj_ent.freetext("UnderlyingType"))
+
+    if "mtx_t" in utype:
+        return True
+
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        if "mtx_lock" not in str(func_ref.ent().contents()):
+            continue
+
+        lex = file.lexer().lexeme(func_ref.line(), func_ref.column())
+        scope_ctr = 0
+        scope_mtxs = {}  # key: scope, value: {mtx id: mtx_lock ref}
+
+        while lex:
+            if lex.text() == "{":
+                scope_ctr += 1
+
+                if scope_ctr not in scope_mtxs:
+                    scope_mtxs[scope_ctr] = {}
+            elif lex.text() == "}":
+                scope_ctr -= 1
+
+                if not scope_ctr:
+                    break
+            elif ((lex.text() == "mtx_lock")
+                  and lex.token() == "Identifier"
+                  and lex.ref() and lex.ref().kind().check("Callby")):
+                on_param = 0
+                mtx_ref = lex.ref()
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and is_mutex(lex.ent()):
+                        scope_mtxs[scope_ctr][int(
+                            lex.ent().id())] = mtx_ref
+
+                    lex = lex.next(True, True)
+            elif ((lex.text() == "mtx_unlock")
+                  and lex.token() == "Identifier"
+                  and lex.ref()
+                  and lex.ref().kind().check("Callby")):
+                on_param = 0
+                mtx_ref = lex.ref()
+
+                while lex:
+                    if lex.text() == "(":
+                        on_param += 1
+                    elif lex.text() == ")":
+                        on_param -= 1
+
+                        if not on_param:
+                            break
+                    elif on_param and lex.ent() and is_mutex(lex.ent()):
+                        mtx = lex.ent()
+
+                        if int(mtx.id()) in scope_mtxs[scope_ctr]:
+                            del scope_mtxs[scope_ctr][int(mtx.id())]
+
+                        break
+
+                    lex = lex.next(True, True)
+            elif (lex.text() in ["return", "exit"]
+                  and lex.token() in ["Keyword", "Identifier"]
+                  and scope_mtxs
+                  and scope_ctr > 1):
+                flag_mtxs(check, scope_mtxs, ERR2)
+
+            lex = lex.next(True, True)
+
+        flag_mtxs(check, scope_mtxs, ERR1)
