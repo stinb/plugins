@@ -1,0 +1,141 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-24
+
+
+import re
+
+
+ERR1 = 'No specific types in generic'
+
+
+def ids():
+    return ('MISRA23_23.3', 'CPP_T065')
+
+
+def name(id):
+    return {
+        'MISRA23_23.3': '''Published Standards/MISRA C 2023/\
+23.3 Unconditional Generic''',
+        'CPP_T065': '''All Checks/Language Specific/C and C++/Types/\
+Unconditional Generic''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_23.3': [
+            'Types',
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+        ],
+        'CPP_T065': [
+            'Types',
+            'Language: C',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A generic selection should contain at least one non-default
+association.</p>
+
+<p><b>Amplification</b></p>
+
+<p>A generic selection should contain at least one association which explicitly specifies an object type.
+The presence of a <code>default</code> association is always optional.</p>
+
+<p><b>Rationale</b></p>
+
+<p>A generic selection that consists only of a usable <code>default</code> association does not do anything useful;
+the default association's result value is evaluated unconditionally.</p>
+
+<p>Omitting a default association indicates intent to check the operand type, by introducing a constraint
+violation when the type does not match.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+/* Non-compliant - consists only of a default association */
+#define no_op(X) _Generic( (X), default: (X) )
+
+/* Compliant - has a non-default and a default association */
+#define filter_ints(X) ( _Generic( (X)                          \\
+                       , int32_t: handle_int                    \\
+                       , default: handle_numeric_value ) (X) )
+
+/* Compliant - has non-default associations */
+#define only_ints(X) ( _Generic( (X)                 \\
+                     , int32_t: handle_int           \\
+                     , uint32_t: handle_int ) (X) )\
+</code></pre>
+
+<p>The following example demonstrates that, by omitting a default association, there is a clear intent to
+check the operand type, by introducing a constraint violation when the type does not match:</p>
+
+<pre><code language="C++">\
+/* Compliant - it has a single permitted type and is
+               intended to prevent implicit conversion */
+#define require_char(X) ( _Generic ( (X), char8_t: (X) ) )\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 23.4, Rule 23.8</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lex = file.lexer(False).first()
+    if not lex:
+        return
+
+    while lex:
+        if lex.text() == '_Generic' and not good_generic(lex):
+            check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+        lex = lex.next(True, True)
+
+
+def good_generic(lex) -> bool:
+    braces = 0
+    brackets = 0
+    parentheses = 0
+    while lex:
+        match lex.text():
+            case '{':
+                braces += 1
+            case '}':
+                braces -= 1
+            case '[':
+                brackets += 1
+            case ']':
+                brackets -= 1
+            case '(':
+                parentheses += 1
+            case ')':
+                parentheses -= 1
+                if parentheses <= 0:
+                    return False
+            case ',':
+                if braces <= 0 and brackets <= 0 and parentheses == 1:
+                    next_lex = lex.next(True, True)
+                    if next_lex and next_lex.text() != 'default':
+                        return True
+        lex = lex.next(True, True)
+    return False
