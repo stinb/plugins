@@ -1,0 +1,261 @@
+# The sfdp layout this graph plugin uses requires build 1165 or later
+
+import und_lib.kind_util as kind_util
+import und_lib.graphs.und_colors as und_colors
+import und_lib.graphs.metric_charts as metric_charts
+import understand
+
+def name():
+  return "Calls && Called By"
+
+def style():
+  return "Internal with Objects"
+
+def description():
+  return '''<p>Show the connectivity of functions and objects in a class or file</p>
+
+    <p>Get an overview of the contents and cohesion of a class or file. The
+    layout algorithm tends to form natural clusters from highly connected
+    nodes, revealing structure around the components.</p>
+
+    <p>Size and color scales draw attention to the most relevant features.
+    Functions are squares, with size by lines of code and color by cyclomatic
+    complexity. So large functions and darker blue functions are likely to be
+    key components.</p>
+
+    <p>Objects are circles sized by total number of uses, sets, and modifications,
+    making relevant objects more obvious. Objects are colored by the ratio
+    of sets/modifications to uses, drawing attention to objects that change
+    frequently</p>
+
+    <p>Edges are colored by the type of reference, following the Object
+    References graph with calls and uses shown in blue, sets in green, and
+    modifications in red. Edges are scaled by the number of references. So,
+    for example, if function1() calls function2() multiple times, the edge
+    will be a darker blue.</p>
+
+    <p>For example, check out the graph from the CMake sample project of the
+    class cmTarget. The natural clusters highlight a key function on the
+    left, and a key object in the right, with only a few functions connecting
+    the two parts of the class.</p>
+
+    <br>
+    <img src=".doc/callsWithObjsSfdp.png"/>
+    '''
+
+def tags():
+  return [
+    'Target: Files',
+    'Target: Classes',
+    'Language: Any',
+    'Layout: Graphviz SFDP'
+  ]
+
+def test_global(db):
+  return kind_util.can_contain_functions(db)
+
+def test_architecture(arch):
+  return kind_util.can_contain_functions(arch)
+
+def test_entity(ent):
+  return kind_util.can_contain_functions(ent)
+
+def init(graph, arch):
+  funcMetrics = metric_charts.list_function_metrics(graph.db()) + ["None"]
+  objMetrics = understand.Metric.list(OBJECT_KINDS, db=graph.db(), filter=False) + ["None"]
+
+  # Options
+  graph.options().define("Function Size By", funcMetrics, "CountLineCode")
+  graph.options().define("Function Color By", funcMetrics, "Cyclomatic")
+  graph.options().checkbox("Show Functions with No Edges", "Show Functions with No Edges", True)
+
+  graph.options().define("Objects Size By", objMetrics, "CountUseSetModify")
+  graph.options().define("Objects Color By", objMetrics, "RatioSetModifyToUse")
+  graph.options().checkbox("Show Objects with No Edges", "Show Objects with No Edges", True)
+  graph.options().checkbox_vert("Reference Kinds", "Reference Kinds",
+                              ["Call", "Use", "Set", "Modify"],
+                              ["Call", "Use", "Set", "Modify"])
+
+  # Legend
+  graph.legend().define("entObj", "ellipse", "Object", "#90c4e4", "#90c4e4", 0,0)
+  graph.legend().define("entFn", "rectangle", "Function/Method", "#90c4e4", "", 1,0)
+
+  graph.legend().define("refUseby", "arrow", "Call/Use", "#4e8cb9", "#4e8cb9", 0,1)
+  graph.legend().define("refSetby", "arrow", "Set", "#569f38", "#569f38", 1,1)
+  graph.legend().define("refModby", "arrow", "Modify", "#e45721", "#e45721", 2,1)
+
+
+def draw(graph, target):
+  graph.set("layout", "sfdp") # Override default layout algorithm (Usually dot)
+  graph.set("overlap_scaling", "6")
+  graph.set("overlap", "prism")
+
+  graph.default("shape","rectangle","node")
+  graph.default("arrowhead", "none", "edge") # Arrowheads are too big and drown out nodes
+  graph.default("color", "#4e8cb9", "edge")
+
+
+  # Load Options
+  sizeMetric = graph.options().lookup("Function Size By")
+  sizeScale = None
+  sizeValCache = dict()
+  if sizeMetric != "None":
+    sizeScale = SizeScale()
+
+  colorMetric = graph.options().lookup("Function Color By")
+  colorScale = None
+  colorValCache = dict()
+  if colorMetric != "None":
+    colorScale = und_colors.ColorScale()
+    colorScale.set_color = False
+
+  objSizeMetric = graph.options().lookup("Objects Size By")
+  objSizeScale = None
+  if objSizeMetric != "None":
+    objSizeScale = SizeScale()
+
+  objColorMetric = graph.options().lookup("Objects Color By")
+  objColorScale = None
+  if objColorMetric != "None":
+    objColorScale = und_colors.ColorScale()
+    objColorScale.set_color = False
+
+  showAllFuncs = graph.options().lookup("Show Functions with No Edges")
+  showAllObjects = graph.options().lookup("Show Objects with No Edges")
+  refkinds = graph.options().lookup("Reference Kinds")
+
+  # Nodes
+  nodes = dict()
+  def grab_node(entity):
+    if entity in nodes:
+      return nodes[entity]
+
+    node = graph.node()
+    node.sync(entity)
+
+    if entity.kind().check(OBJECT_KINDS):
+      node.set("shape", "circle")
+      if objSizeScale:
+        objSizeScale.set_size(node, sizeValCache.get(entity, None))
+      if objColorScale:
+        objColorScale.set_colors(node, colorValCache.get(entity, None))
+    else:
+      if sizeScale:
+        sizeScale.set_size(node, sizeValCache.get(entity, None))
+      if colorScale:
+        colorScale.set_colors(node, colorValCache.get(entity, None))
+
+    nodes[entity] = node
+    return node
+
+  # Build caches / scales
+  funcs = kind_util.list_functions(target)
+  if sizeScale or colorScale:
+    for func in funcs:
+      if sizeScale:
+        v = func.metric(sizeMetric)
+        sizeValCache[func] = v
+        sizeScale.update_val_range(v)
+      if colorScale:
+        v = func.metric(colorMetric)
+        colorValCache[func] = v
+        colorScale.update_val_range(v)
+
+  if showAllFuncs: # own loop, because scales not complete in previous loop
+    for func in funcs:
+      grab_node(func)
+
+  objects = kind_util.list_by_kind(target, OBJECT_KINDS, expand_classes=True)
+  if sizeScale or colorScale:
+    for obj in objects:
+      if objSizeScale:
+        v = obj.metric(objSizeMetric)
+        sizeValCache[obj] = v
+        objSizeScale.update_val_range(v)
+      if objColorScale:
+        v = obj.metric(objColorMetric)
+        colorValCache[obj] = v
+        objColorScale.update_val_range(v)
+
+  if showAllObjects: # own loop, because scales not complete in previous loop
+    for obj in objects:
+      grab_node(obj)
+
+  # Calculate Edges
+  edgeKinds = []
+  if "Call" in refkinds:
+    edgeKinds.append(EdgesCache("call", funcs, (144, 196, 228), (78, 140, 185) )) # #90c4e4 - #4e8cb9
+  if "Use" in refkinds:
+    edgeKinds.append(EdgesCache("use", objects, (144, 196, 228), (78, 140, 185) )) # #90c4e4 - #4e8cb9
+  if "Set" in refkinds:
+    edgeKinds.append(EdgesCache("set", objects, (161, 216, 112), (86, 159, 56) )) # #a1d970 - #569f38
+  if "Modify" in refkinds:
+    edgeKinds.append(EdgesCache("modify", objects, (252, 173, 86), (228, 87, 33))) #fcad56 - e45721
+
+
+  for func in funcs:
+    for edges in edgeKinds:
+      edges.add_refs(func)
+
+  # Draw Edges
+  for edges in edgeKinds:
+    edges.draw_edges(graph, grab_node)
+
+OBJECT_KINDS = "Object ~local, Variable ~local, Field ~local, Property"
+
+class SizeScale:
+  def __init__(self):
+    self.min_val = None
+    self.max_val = None
+    self.min_size = 0.05
+    self.max_size = 0.25
+
+  def update_val_range(self, val):
+    """ Find the size scale range by calling this function with each value"""
+    val = und_colors.to_float(val)
+    if val is None:
+      return
+    if self.min_val is None or val < self.min_val:
+      self.min_val = val
+    if self.max_val is None or val > self.max_val:
+      self.max_val = val
+
+  def set_size(self, node, val):
+    """ Set the size on an understand.Node based on val """
+    percent = 0.5
+    val = und_colors.to_float(val)
+    if self.max_val - self.min_val > 0 and val is not None:
+      percent = (val - self.min_val) / (self.max_val - self.min_val)
+
+    s = str(self.min_size + percent * (self.max_size - self.min_size))
+    node.set("width",s)
+    node.set("height",s)
+
+class EdgesCache:
+  def __init__(self, refkinds, allowed, min_color, max_color):
+    self.all = dict()
+    self.colors = und_colors.ColorScale()
+    self.colors.set_fill = False
+    self.colors.font_color = None
+    self.colors.min_color = min_color
+    self.colors.max_color = max_color
+    self.refkinds = refkinds
+    self.allowed = allowed
+
+  def add_refs(self, entity):
+    cur = dict()
+    for ref in entity.refs(self.refkinds):
+      toEnt = ref.ent()
+      if toEnt in self.allowed:
+        cur[toEnt] = cur.get(toEnt, 0) + 1
+    if cur:
+      for v in cur.values():
+        self.colors.update_val_range(v)
+      self.all[entity] = cur
+
+  def draw_edges(self,graph, grab_node):
+    for entity, cur in self.all.items():
+      for toEnt, cnt in cur.items():
+        edge = graph.edge(grab_node(entity), grab_node(toEnt))
+        self.colors.set_colors(edge, cnt)
+
