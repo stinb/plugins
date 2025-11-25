@@ -1,0 +1,140 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-25
+
+
+import re
+
+
+ERR1 = 'Generic default is not first or last'
+
+
+def ids():
+    return ('MISRA23_23.8', 'CPP_T066')
+
+
+def name(id):
+    return {
+        'MISRA23_23.8': '''Published Standards/MISRA C 2023/\
+23.8 Generic Default Not First or Last''',
+        'CPP_T066': '''All Checks/Language Specific/C and C++/Types/\
+Generic Default Not First or Last''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_23.8': [
+            'Types',
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_T066': [
+            'Types',
+            'Language: C',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A default association shall appear as either the first or the last
+association of a generic selection.</p>
+
+<p><b>Amplification</b></p>
+
+<p>A default association shall only appear as either the first generic association in the association list, or
+the last - this rule only applies when a generic selection contains a default association.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Having a default association appear as either the first or last in the association list makes it easy to
+locate, clarifying the intent of the selection structure.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+/* Non-compliant - default is not first or last association */
+#define sqrt(X) ( _Generic((X)             \\
+                , float32_t : sqrtf        \\
+                , default   : sqrt         \\
+                , float128_t: sqrtl) (X) )
+
+/* Compliant - default is first association */
+#define cbrt(X) ( _Generic((X)             \\
+                , default   : cbrt         \\
+                , float32_t : cbrtf        \\
+                , float128_t: cbrtl) (X) )
+
+/* Compliant - no default */
+#define assert_untyped_nonatomic(X) ( _Generic((X)                            \\
+                                    , void                * : handle_ptr      \\
+                                    , void const          * : handle_ptr      \\
+                                    , void volatile       * : handle_ptr      \\
+                                    , void const volatile * : handle_ptr) (X)\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 16.5, Rule 23.3</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lex = file.lexer(False).first()
+    if not lex:
+        return
+
+    while lex:
+        if lex.text() == '_Generic':
+            check_generic(check, file, lex)
+        lex = lex.next(True, True)
+
+
+def check_generic(check, file, lex):
+    first_lex_of_types = []
+    braces = 0
+    brackets = 0
+    parentheses = 0
+    while lex:
+        match lex.text():
+            case '{':
+                braces += 1
+            case '}':
+                braces -= 1
+            case '[':
+                brackets += 1
+            case ']':
+                brackets -= 1
+            case '(':
+                parentheses += 1
+            case ')':
+                parentheses -= 1
+                if parentheses <= 0:
+                    break
+            case ',':
+                if braces <= 0 and brackets <= 0 and parentheses == 1:
+                    next_lex = lex.next(True, True)
+                    if next_lex:
+                        first_lex_of_types.append(next_lex)
+        lex = lex.next(True, True)
+
+    for lex in first_lex_of_types[1:-1]:
+        if lex.text() != 'default':
+            continue
+        check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
