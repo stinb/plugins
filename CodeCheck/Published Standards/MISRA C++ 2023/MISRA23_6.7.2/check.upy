@@ -100,40 +100,50 @@ def test_language(language):
     return language == 'C++'
 
 
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
 def check(check, file):
     global_refs = file.filerefs("Define", "Global Object")
 
     for class_ref in file.filerefs("Define", "Class, Struct"):
-        global_refs.extend(class_ref.ent().refs("Define", "Static Member Object"))
-    
+        global_refs.extend(class_ref.ent().refs(
+            "Define", "Static Member Object"))
+
     for ref in global_refs:
         if ref.ent().freetext("DefinedInMacro"):
             continue
-        
-        lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+        add_kinds = str(ref.ent().freetext("AdditionalKinds")).lower()
+        utype = str(ref.ent().freetext("UnderlyingType"))
         compliant = False
 
-        while lex and (lex.line_begin() == ref.line()):
-            if lex.text() == "constexpr":
-                compliant = True
-                break
-            elif lex.text() == "const":
-                compliant = True
+        if "constexpr" in add_kinds:
+            compliant = True
+        elif utype.startswith("const"):
+            compliant = True
 
-                for ass_ref in ref.ent().refs("Assign Value"):
-                    # dynamic initialization
-                    if ass_ref.line() == ref.line():
-                        compliant = False
+            for ass_ref in ref.ent().refs("Assign Value"):
+                # dynamic initialization
+                if ass_ref.line() == ref.line():
+                    compliant = False
+                    break
 
-                break
+            ent_type, _ = get_ent_type(ref.ent())
 
-            lex = lex.previous(True, True)
+            if ent_type and ent_type.kind().check("Class, Struct"):
+                compliant = False
 
         if not compliant:
             check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
-
-        
-            
-
-
-            
