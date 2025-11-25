@@ -1,5 +1,6 @@
 // $Id: A20-8-1.cpp 305588 2018-01-29 11:07:35Z michal.szczepankiewicz $
 
+#include <stdint.h>
 #include <memory>
 
 void Foo()
