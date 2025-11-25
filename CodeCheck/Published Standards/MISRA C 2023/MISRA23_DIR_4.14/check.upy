@@ -1,0 +1,281 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 11-17-2025
+
+
+import re
+import Modules
+
+ERR1 = "Value from external source used without clear validation"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_DIR_4.14', 'CPP_CF009')
+
+def name(id):
+    return {
+        'MISRA23_DIR_4.14':
+            'Published Standards/MISRA C 2023/Directive 4.14 The validity of values received from external sources shall be checked',
+        'CPP_CF009':
+            'All Checks/Language Specific/C and C++/Control Flow/The validity of values received from external sources shall be checked'
+            'values',
+    }[id]
+
+def tags(id):
+    return {
+        'MISRA23_DIR_4.14': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Directive',
+            'Security',
+            'Robustness',
+        ],
+        'CPP_CF009': [
+            'Language: C',
+            'Language: C++',
+            'Security',
+        ],
+    }.get(id)
+
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>"External sources" include data:</p>
+<ul>
+<li>Read from a file;</li>
+<li>Read from an environment variable;</li>
+<li>Resulting from user input;</li>
+<li>Received over a communications channel.</li></ul>
+<p><b>Rationale</b></p>
+<p>A program has no control over the values given to data originating from
+external sources. The values may therefore be invalid, either as the result of
+errors or due to malicious modification by an external agent. Data from external
+sources shall therefore be validated before it is used.</p>
+<p>In the security domain, external sources of data are usually regarded as
+untrusted as they may have been modified by someone trying to harm or gain
+control of the program and/or system it is running on; such data needs to be
+validated before it can be used safely.</p>
+<p>In the safety domain, external sources are regarded as "suspicious" and
+values obtained from them require validation.</p>
+<p>In both domains, data from an external source shall be tested to ensure that
+its value respects all the constraints placed on its use (i.e. its value is not
+harmful), even if the value cannot be proven to be correct. For example:</p>
+<ul><li>A value used to compute an array index shall not result in an array bounds error;</li>
+<li>A value used to control a loop shall not cause excessive (e.g. infinite)
+iteration;</li>
+<li>A value used to compute a divisor shall not result in division by zero;</li>
+<li>A value used to compute an amount of dynamic memory shall not result in
+excessive memory allocation;</li>
+<li>A string used as a query to an SQL database shall be checked to ensure that
+it does not include a ; character.</li></ul>
+<p><b>Example</b></p>
+<p>The following example is non-compliant as there is no check made to ensure
+that a string resulting from user input is null terminated. This may lead to an
+array bounds error, commonly known as a buffer overrun, when the string is
+output through the call to printf.</p>
+<pre><code language="C++">void f1( void )
+{
+char input [ 128 ];
+( void ) scanf ( "%128c", input );
+( void ) printf ( "%s", input ); /* Non-compliant */</code></pre>
+"""
+    return {
+        'MISRA23_DIR_4.14': desc,
+        'CPP_CF009': desc,
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    calls = file.filerefs("Call", "Function")
+    lexer = None
+
+    for call in calls:
+        # Only process these five external-input functions
+        if call.ent().name() not in ['scanf', 'fgets', 'getenv',
+                                     'read', 'recv']:
+            continue
+
+        scope = call.scope()
+        if not scope:
+            continue
+
+        # Scope boundaries (function begin/end)
+        begin = scope.ref("begin")
+        end = scope.ref("end")
+        if not (begin and end):
+            continue
+
+        assignObj = None
+        inputObj = None
+
+        if not lexer:
+            lexer = file.lexer()
+
+        # ----------------------------------------------------
+        # 1. Check for validation immediately around the call
+        #    (in an if(), sanitize(), etc.)
+        # ----------------------------------------------------
+        if call.ent().name() in ['scanf', 'fgets', 'read', 'recv',
+                                 'getenv']:
+
+            lexeme = lexer.lexeme(call.line(), call.column())
+            nextLex = lexeme.next(True, True)
+            if not lexeme:
+                continue
+
+            # Check if call is inside a validating construct
+            isValid, lexeme = checkValidation(lexeme)
+            if isValid:
+                continue
+
+            # ------------------------------------------------
+            # 2. If assignment exists:  x = scanf(...);
+            #    track variable x and see how it is used
+            # ------------------------------------------------
+            if lexeme and lexeme.text() == '=':
+                lexeme = lexeme.previous(True, True)
+                if lexeme and lexeme.ent():
+                    refs = lexeme.ent().refs('Useby')
+                    ok = False
+                    useFound = False
+                    violations = []
+
+                    # Examine every use of the assigned variable
+                    for ref in refs:
+                        if ref.file().id() != call.file().id():
+                            continue
+
+                        # Only uses within the same scope
+                        if (ref.line() >= begin.line() and
+                            ref.line() <= end.line()):
+
+                            lexeme = lexer.lexeme(ref.line(), ref.column())
+                            isValid, lexeme = checkValidation(lexeme)
+
+                            # Found validation
+                            if isValid:
+                                ok = True
+                                break
+
+                            # Unsafe usage patterns
+                            elif lexeme and lexeme.text() in ['printf',
+                                                              'strcpy',
+                                                              'puts']:
+                                useFound = True
+                                violations.append(lexeme)
+
+                    # Report violations if unsafe use but no validation
+                    if useFound and not ok:
+                        for violation in violations:
+                            check.violation(
+                                violation.ent(), file,
+                                violation.line_begin(),
+                                violation.column_begin(), ERR1
+                            )
+                    elif ok:
+                        continue
+
+            # ------------------------------------------------
+            # 3. Process call arguments to find which ones
+            #    receive external input (buf, x, etc.)
+            # ------------------------------------------------
+            if nextLex.text() == '(':
+                close = Modules.findClose(nextLex)
+                nextLex = nextLex.next(True, True)
+                ok = False
+                count = 0
+
+                # Walk all tokens inside parentheses
+                while (nextLex and close and not
+                      (nextLex.line_begin() == close.line_begin() and
+                       nextLex.column_begin() == close.column_begin())):
+
+                    # Skip nested parentheses
+                    if nextLex.text() == '(':
+                        nextLex = Modules.findClose(nextLex)
+                        continue
+
+                    # Track argument index
+                    if nextLex.text() == ',':
+                        count += 1
+
+                    # Determine which argument receives input
+                    if nextLex.ent() and (
+                        (call.ent().name() == 'scanf' and count > 0) or
+                        (call.ent().name() in ['read', 'recv']
+                         and count == 1) or
+                        (call.ent().name() == 'fgets' and count == 0)
+                    ):
+                        refs = nextLex.ent().refs('Useby')
+                        useFound = False
+                        violations = []
+
+                        # Look for uses of this argument
+                        for ref in refs:
+                            if ref.file().id() != call.file().id():
+                                continue
+
+                            if (ref.line() >= begin.line() and
+                                ref.line() <= end.line()):
+
+                                lexeme = lexer.lexeme(ref.line(),
+                                                      ref.column())
+                                isValid, lexeme = checkValidation(lexeme)
+
+                                # Validated
+                                if isValid:
+                                    ok = True
+                                    break
+
+                                # Unsafe use
+                                elif lexeme and lexeme.text() in [
+                                         'printf', 'strcpy', 'puts'
+                                     ]:
+                                    useFound = True
+                                    violations.append(lexeme)
+
+                        # Issue violation if used unsafely and unvalidated
+                        if useFound and not ok:
+                            for violation in violations:
+                                check.violation(
+                                    violation.ent(), file,
+                                    violation.line_begin(),
+                                    violation.column_begin(), ERR1
+                                )
+
+                    nextLex = nextLex.next(True, True)
+
+
+# ------------------------------------------------------------
+# Validation detector:
+# Returns True if lexeme is inside an if(), sanitize(),
+# or other basic validation context.
+# ------------------------------------------------------------
+def checkValidation(lexeme):
+    if not lexeme:
+        return False, lexeme
+
+    # Walk backward until a boundary or keyword
+    while lexeme and lexeme.text() not in [';', '{', '}', '=', 'printf',
+                                           'strcpy', 'puts']:
+
+        # Validation keywords
+        if lexeme.text() in ['if', 'sanitize']:
+            return True, lexeme
+
+        # Handle closing parentheses by jumping to opener
+        elif lexeme.text() == ')':
+            lexeme = Modules.findOpen(lexeme)
+            continue
+
+        # Continue scanning backward
+        lexeme = lexeme.previous(True, True)
+
+    return False, lexeme
