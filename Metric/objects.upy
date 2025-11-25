@@ -1,0 +1,743 @@
+import und_lib.kind_util as kind_util
+import understand
+
+OBJECT_KINDS="Object, Macro, Variable, Field, Property, Parameter"
+GLOBAL_KINDS="Global Object, Global Variable"
+GLOBAL_LANGS=("C++", "Pascal", "Python", "Web")
+
+def ids():
+  return [
+    "CountUses", "CountUsesUnique",
+    "CountSets", "CountSetsUnique",
+    "CountModifies", "CountModifiesUnique",
+    "CountUseSetModify", "CountUseSetModifyUnique",
+    "RatioUseToSetModify", "RatioSetModifyToUse",
+
+    "CountObjectsUsed", "CountObjectsUsedUnique",
+    "CountObjectsSet", "CountObjectsSetUnique",
+    "CountObjectsModified", "CountObjectsModifiedUnique",
+    "CountObjectsUsedSetModified", "CountObjectsUsedSetModifiedUnique",
+
+    "CountGlobalsUsed", "CountGlobalsUsedUnique",
+    "CountGlobalsSet", "CountGlobalsSetUnique",
+    "CountGlobalsModified", "CountGlobalsModifiedUnique",
+    "CountGlobalsUsedSetModified", "CountGlobalsUsedSetModifiedUnique",
+  ]
+
+def name(id):
+  return {
+    "CountUses" : "Uses",
+    "CountUsesUnique": "Unique Uses",
+    "CountSets": "Sets",
+    "CountSetsUnique": "Unique Sets",
+    "CountModifies": "Modifies",
+    "CountModifiesUnique": "Unique Modifies",
+    "CountUseSetModify": "Uses/Sets/Modifies",
+    "CountUseSetModifyUnique": "Unique Uses/Sets/Modifies",
+    "RatioUseToSetModify": "Use to Sets/Modify Ratio",
+    "RatioSetModifyToUse": "Set/Modify to Use Ratio",
+
+    "CountObjectsUsed": "Objects Used",
+    "CountObjectsUsedUnique": "Unique Objects Used",
+    "CountObjectsSet": "Objects Set",
+    "CountObjectsSetUnique": "Unique Objects Set",
+    "CountObjectsModified": "Objects Modified",
+    "CountObjectsModifiedUnique": "Unique Objects Modified",
+    "CountObjectsUsedSetModified": "Objects Used/Set/Modified",
+    "CountObjectsUsedSetModifiedUnique": "Unique Objects Used/Set/Modified",
+
+    "CountGlobalsUsed": "Globals Used",
+    "CountGlobalsUsedUnique": "Unique Globals Used",
+    "CountGlobalsSet": "Globals Set",
+    "CountGlobalsSetUnique": "Unique Globals Set",
+    "CountGlobalsModified": "Globals Modified",
+    "CountGlobalsModifiedUnique": "Unique Globals Modified",
+    "CountGlobalsUsedSetModified": "Globals Used/Set/Modified",
+    "CountGlobalsUsedSetModifiedUnique": "Unique Globals Used/Set/Modified",
+  }.get(id, "")
+
+def tags(id):
+  if id.startswith("CountObjects"):
+    return [
+      'Target: Functions',
+      'Language: Any',
+    ]
+  if id.startswith("CountGlobals"):
+    return [
+      'Target: Functions',
+      'Language: C',
+      'Language: C++',
+      'Language: Python',
+      'Language: Pascal',
+      'Language: Web',
+    ]
+  return [
+    'Target: Objects',
+    'Language: Any',
+  ]
+
+def test_available(metric,entkindstr):
+  if metric.id().startswith("CountGlobals") and not any([val in metric.db().language() for val in GLOBAL_LANGS]):
+    return False
+
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity(kindstr(metric)))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  return True
+
+def is_integer(id):
+   return not id.startswith("Ratio")
+
+def test_entity(metric, ent):
+  if metric.id().startswith("CountGlobals") and ent.language() not in GLOBAL_LANGS:
+    return False
+  return ent.kind().check(kindstr(metric))
+
+def value(metric, ent):
+  unique = metric.id().endswith("Unique")
+
+  if metric.id().startswith("CountUseSetModify"):
+    return len(ent.refs("useby, setby, modifyby", unique=unique))
+  if metric.id().startswith("CountUses"):
+    return len(ent.refs("useby", unique=unique))
+  if metric.id().startswith("CountSets"):
+    return len(ent.refs("setby", unique=unique))
+  if metric.id().startswith("CountModifies"):
+    return len(ent.refs("modifyby", unique=unique))
+
+  if metric.id().startswith("Ratio"):
+    uses = len(ent.refs("useby", unique=False))
+    setmodify = len(ent.refs("setby, modifyby", unique=False))
+    if metric.id() == "RatioUseToSetModify" and setmodify > 0:
+      return uses / setmodify
+    if metric.id() == "RatioSetModifyToUse" and uses > 0:
+      return setmodify / uses
+    return 0
+
+  if metric.id().startswith("CountObjectsUsedSetModified"):
+    return len(ent.refs("use, set, modify", OBJECT_KINDS, unique=unique))
+  if metric.id().startswith("CountObjectsUsed"):
+    return len(ent.refs("use", OBJECT_KINDS, unique=unique))
+  if metric.id().startswith("CountObjectsSet"):
+    return len(ent.refs("set", OBJECT_KINDS, unique=unique))
+  if metric.id().startswith("CountObjectsModified"):
+    return len(ent.refs("modify", OBJECT_KINDS, unique=unique))
+
+  if metric.id().startswith("CountGlobalsUsedSetModified"):
+    return len(ent.refs("use, set, modify", GLOBAL_KINDS, unique=unique))
+  if metric.id().startswith("CountGlobalsUsed"):
+    return len(ent.refs("use", GLOBAL_KINDS, unique=unique))
+  if metric.id().startswith("CountGlobalsSet"):
+    return len(ent.refs("set", GLOBAL_KINDS, unique=unique))
+  if metric.id().startswith("CountGlobalsModified"):
+    return len(ent.refs("modify", GLOBAL_KINDS, unique=unique))
+
+def kindstr(metric):
+  if metric.id().startswith("CountObjects") or metric.id().startswith("CountGlobals"):
+    return kind_util.FUNCTION_KIND_STR
+  return OBJECT_KINDS
+
+def description(id):
+  if id == "CountUses":
+    return '''<p>The number of times this object is used</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;
+    void function1() {
+      a_global += 1;
+      if (a_global &gt; 1)    // + 1 use reference
+        a_global = 0;
+    }
+    void function2() {
+      a_global -= 1;
+      a_global -= 1;
+      if (a_global &lt; 0)    // + 1 use reference
+        a_global = 0;
+      if (a_global &gt; 10)   // + 1 use reference
+        a_global = 10;
+    }
+                           // CountUses = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountUsesUnique">
+    CountUsesUnique</a> which counts unique entities that use this object.</p>
+    '''
+  if id == "CountUsesUnique":
+    return '''<p>The number of unique entities that use this object</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;
+    void function1() {
+      a_global += 1;
+      if (a_global &gt; 1)    // + 1 use reference
+        a_global = 0;
+    }
+    void function2() {
+      a_global -= 1;
+      a_global -= 1;
+      if (a_global &lt; 0)    // + 1 use reference
+        a_global = 0;
+      if (a_global &gt; 10)   //     duplicate does not count
+        a_global = 10;
+    }
+                           // CountUsesUnique = 2
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountUses">
+    CountUses</a> which counts all uses.</p>
+    '''
+  if id == "CountSets":
+    return '''<p>The number of times this object is set</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;      // + 1 set reference
+    void function1() {
+      a_global += 1;
+      if (a_global &gt; 1)
+        a_global = 0;      // + 1 set reference
+    }
+    void function2() {
+      a_global -= 1;
+      a_global -= 1;
+      if (a_global &lt; 0)
+        a_global = 0;      // + 1 set reference
+      if (a_global &gt; 10)
+        a_global = 10;     // + 1 set reference
+    }
+                           // CountSets = 4
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountSetsUnique">
+    CountSetsUnique</a> which counts unique entities that set this object.</p>
+    '''
+  if id == "CountSetsUnique":
+    return '''<p>The number of unique entities that set this object</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;      // + 1 set reference (by file)
+    void function1() {
+      a_global += 1;
+      if (a_global &gt; 1)
+        a_global = 0;      // + 1 set reference (by function1)
+    }
+    void function2() {
+      a_global -= 1;
+      a_global -= 1;
+      if (a_global &lt; 0)
+        a_global = 0;      // + 1 set reference (by function2)
+      if (a_global &gt; 10)
+        a_global = 10;     //     duplicate reference does not count
+    }
+                           // CountSetsUnique = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountSets">
+    CountSets</a> which counts all sets.</p>
+    '''
+  if id == "CountModifies":
+    return '''<p>The number of times this object is modified</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;
+    void function1() {
+      a_global += 1;       // + 1 modify reference
+      if (a_global &gt; 1)
+        a_global = 0;
+    }
+    void function2() {
+      a_global -= 1;       // + 1 modify reference
+      a_global -= 1;       // + 1 modify reference
+      if (a_global &lt; 0)
+        a_global = 0;
+      if (a_global &gt; 10)
+        a_global = 10;
+    }
+                           // CountModifies = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountModifiesUnique">
+    CountModifiesUnique</a> which counts unique entities that modify this
+    object.</p>
+    '''
+  if id == "CountModifiesUnique":
+    return '''<p>The number of unique entities that modify this object</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;
+    void function1() {
+      a_global += 1;       // + 1 modify reference
+      if (a_global &gt; 1)
+        a_global = 0;
+    }
+    void function2() {
+      a_global -= 1;       // + 1 modify reference
+      a_global -= 1;       //     duplicate reference does not count
+      if (a_global &lt; 0)
+        a_global = 0;
+      if (a_global &gt; 10)
+        a_global = 10;
+    }
+                           // CountModifiesUnique = 2
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountModifies">
+    CountModifies</a> which counts all modifications.</p>
+    '''
+  if id == "CountUseSetModify":
+    return '''<p>The number of times this object is used, set, and/or modified</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;      // + 1 set reference
+    void function1() {
+      a_global += 1;       // + 1 modify reference
+      if (a_global &gt; 1)    // + 1 use reference
+        a_global = 0;      // + 1 set reference
+    }
+    void function2() {
+      a_global -= 1;       // + 1 modify reference
+      a_global -= 1;       // + 1 modify reference
+      if (a_global &lt; 0)    // + 1 use reference
+        a_global = 0;      // + 1 set reference
+      if (a_global &gt; 10)   // + 1 use reference
+        a_global = 10;     // + 1 set reference
+    }
+                           // CountUseSetModify = 10
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountUseSetModifyUnique">
+    CountUseSetModifyUnique</a> which counts unique entities that use, set, or
+    modify this object.</p>
+    '''
+  if id == "CountUseSetModifyUnique":
+    return '''<p>The number of unique entities that use, set, and/or modify this object</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int a_global = 0;      // + 1 set reference (by file)
+    void function1() {
+      a_global += 1;       // + 1 modify reference
+      if (a_global &gt; 1)    //     duplicate reference does not count
+        a_global = 0;      //     duplicate reference does not count
+    }
+    void function2() {
+      a_global -= 1;       // + 1 modify reference
+      a_global -= 1;       //     duplicate reference does not count
+      if (a_global &lt; 0)    //     duplicate reference does not count
+        a_global = 0;      //     duplicate reference does not count
+      if (a_global &gt; 10)   //     duplicate reference does not count
+        a_global = 10;     //     duplicate reference does not count
+    }
+                           // CountUseSetModifyUnique = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountUseSetModify">
+    CountUseSetModify</a> which counts all uses, sets, and modifications.</p>
+    '''
+
+  if id == "RatioUseToSetModify":
+    return '''<p>The ratio of object uses to object sets and modifications</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    void ratio(int x, int y)
+    {
+      x += 1;       // + 1 modify
+      if (x == 1);  // + 1 use
+      if (x == 2);  // + 1 use
+      if (x == 3);  // + 1 use
+                    // for x: 3 uses to 1 set/modify, RatioUseToSetModify = 3 / 1 = 3
+
+      y = 1;        // + 1 set
+      y += 2;       // + 1 modify
+      if (y == 10); // + 1 use
+                    // for y: 1 use to 2 set/modify,  RatioUseToSetModify = 1 / 2 = 0.5
+    }
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/RatioSetModifyToUse">
+    RatioSetModifyToUse</a> for the opposite direction.</p>
+    '''
+  if id == "RatioSetModifyToUse":
+    return '''<p>The ratio of object sets and modifications to object uses</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    void ratio(int x, int y)
+    {
+      x += 1;       // + 1 modify
+      if (x == 1);  // + 1 use
+      if (x == 2);  // + 1 use
+      if (x == 3);  // + 1 use
+                    // for x: 3 uses to 1 set/modify, RatioSetModifyToUse = 1 / 3 = 0.33
+
+      y = 1;        // + 1 set
+      y += 2;       // + 1 modify
+      if (y == 10); // + 1 use
+                    // for y: 1 use to 2 set/modify,  RatioSetModifyToUse = 2 / 1 = 2
+    }
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/RatioUseToSetModify">
+    RatioUseToSetModify</a> for the opposite direction.</p>
+    '''
+
+  if id == "CountObjectsUsed":
+    return '''<p>The number of times this function uses objects</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void uses(int x)
+    {
+      int y, z;
+      if (x == 1);           // + 1 Parameters count
+      if (x == 2);           // + 1 Duplicates count
+      if (y == 1);           // + 1 Locals count
+      if (y == 2);           // + 1 Duplicates count
+      if (my_global == 1);   // + 1 Globals count
+      if (my_global == 2);   // + 1 Duplicates count
+    }                        // CountObjectsUsed = 6
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsUsedUnique">
+    CountObjectsUsedUnique</a> which counts unique objects this function
+    uses. </p>
+    '''
+  if id == "CountObjectsUsedUnique":
+    return '''<p>The number of unique objects used by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void sets(int x)
+    {
+      int y, z;
+      if (x == 1);           // + 1 Parameters count
+      if (x == 2);           //     Duplicates do not count
+      if (y == 1);           // + 1 Locals count
+      if (y == 2);           //     Duplicates do not count
+      if (my_global == 1);   // + 1 Globals count
+      if (my_global == 2);   //     Duplicates do not count
+    }                        // CountObjectsUsedUnique = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsUsed">
+    CountObjectsUsed</a> which counts all uses to objects by this function. </p>
+    '''
+  if id == "CountObjectsSet":
+    return '''<p>The number of times this function sets objects</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void sets(int x)
+    {
+      int y, z;
+      x = 1;           // + 1 Parameters count
+      x = 2;           // + 1 Duplicates count
+      y = 1;           // + 1 Locals count
+      y = 2;           // + 1 Duplicates count
+      my_global = 1;   // + 1 Globals count
+      my_global = 2;   // + 1 Duplicates count
+    }                  // CountObjectsSet = 6
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsSetUnique">
+    CountObjectsSetUnique</a> which counts unique objects this function
+    sets. </p>
+    '''
+  if id == "CountObjectsSetUnique":
+    return '''<p>The number of unique objects set by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void sets(int x)
+    {
+      int y, z;
+      x = 1;           // + 1 Parameters count
+      x = 2;           //     Duplicates do not count
+      y = 1;           // + 1 Locals count
+      y = 2;           //     Duplicates do not count
+      my_global = 1;   // + 1 Globals count
+      my_global = 2;   //     Duplicates do not count
+    }                  // CountObjectsSetUnique = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsSet">
+    CountObjectsSet</a> which counts all sets to objects by this function. </p>
+    '''
+  if id == "CountObjectsModified":
+    return '''<p>The number of modifications to objects by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void modifies(int x)
+    {
+      int y, z;
+      x += 1;           // + 1 Parameters count
+      x ++;             // + 1 Duplicates count
+      y += 1;           // + 1 Locals count
+      y ++;             // + 1 Duplicates count
+      my_global += 1;   // + 1 Globals count
+      my_global ++;     // + 1 Duplicates count
+    }                   // CountObjectsModified = 6
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsModifiedUnique">
+    CountObjectsModifiedUnique</a> which counts unique objects this function
+    modifies. </p>
+    '''
+  if id == "CountObjectsModifiedUnique":
+    return '''<p>The number of unique objects modified by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void modifies(int x)
+    {
+      int y, z;
+      x += 1;           // + 1 Parameters count
+      x ++;             //     Duplicates do not count
+      y += 1;           // + 1 Locals count
+      y ++;             //     Duplicates do not count
+      my_global += 1;   // + 1 Globals count
+      my_global ++;     //     Duplicates do not count
+    }                   // CountObjectsModifiedUnique = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsModified">
+    CountObjectsModified</a> which counts all modifications to objects by
+    this function. </p>
+    '''
+  if id == "CountObjectsUsedSetModified":
+    return '''<p>The number of uses, sets, or modifications to objects by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void combined(int x)
+    {
+      int y, z;
+
+      x ++;                // + 1 Parameters count
+      if (x > 10)          // + 1 Duplicates count
+        x = 0;             // + 1 Duplicates count
+
+      y ++;                // + 1 Locals count
+      if (y > 10)          // + 1 Duplicates count
+        y = 0;             // + 1 Duplicates count
+
+      my_global ++;        // + 1 Globals count
+      if (my_global > 10)  // + 1 Duplicates count
+        my_global= 0;      // + 1 Duplicates count
+    }                      // CountObjectsUsedSetModified = 9
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsUsedSetModifiedUnique">
+    CountObjectsModifiedUnique</a> which counts unique objects this function
+    uses, sets, and/or modifies. </p>
+    '''
+  if id == "CountObjectsUsedSetModifiedUnique":
+    return '''<p>The number of unique objects used, set, and/or modified by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void combined(int x)
+    {
+      int y, z;
+
+      x ++;                // + 1 Parameters count
+      if (x > 10)          //     Duplicates do not count
+        x = 0;             //     Duplicates do not count
+
+      y ++;                // + 1 Locals count
+      if (y > 10)          //     Duplicates do not count
+        y = 0;             //     Duplicates do not count
+
+      my_global ++;        // + 1 Globals count
+      if (my_global > 10)  //     Duplicates do not count
+        my_global= 0;      //     Duplicates do not count
+    }                      // CountObjectsUsedSetModifiedUnique = 3
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountObjectsUsedSetModified">
+    CountObjectsUsedSetModified</a> which counts all uses, sets, or
+    modifications to objects by this function. </p>
+    '''
+
+  if id == "CountGlobalsUsed":
+    return '''<p>The number of times this function uses global objects</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void uses(int x)
+    {
+      int y, z;
+      x = 1;           //     Parameters do not count
+      x = 2;           //     Parameters do not count
+      y = 1;           //     Locals do not count
+      y = 2;           //     Locals do not count
+      my_global = 1;   // + 1 Globals count
+      my_global = 2;   // + 1 Duplicates count
+    }                  // CountGlobalsUsed = 2
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsUsedUnique">
+    CountGlobalsUsedUnique</a> which counts unique global objects this function
+    uses. </p>
+    '''
+  if id == "CountGlobalsUsedUnique":
+    return '''<p>The number of unique global objects used by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void uses(int x)
+    {
+      int y, z;
+      x = 1;           //     Parameters do not count
+      x = 2;           //     Parameters do not count
+      y = 1;           //     Locals do not count
+      y = 2;           //     Locals do not count
+      my_global = 1;   // + 1 Globals count
+      my_global = 2;   //     Duplicates do not count
+    }                  // CountGlobalsUsedUnique = 1
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsUsed">
+    CountGlobalsUsed</a> which counts all uses to global objects by this
+    function. </p>
+    '''
+  if id == "CountGlobalsSet":
+    return '''<p>The number of times this function sets global objects</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void sets(int x)
+    {
+      int y, z;
+      x = 1;           //     Parameters do not count
+      x = 2;           //     Parameters do not count
+      y = 1;           //     Locals do not count
+      y = 2;           //     Locals do not count
+      my_global = 1;   // + 1 Globals count
+      my_global = 2;   // + 1 Duplicates count
+    }                  // CountGlobalsSet = 2
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsSetUnique">
+    CountGlobalsSetUnique</a> which counts unique global objects this function
+    sets. </p>
+    '''
+  if id == "CountGlobalsSetUnique":
+    return '''<p>The number of unique global objects set by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void sets(int x)
+    {
+      int y, z;
+      x = 1;           //     Parameters do not count
+      x = 2;           //     Parameters do not count
+      y = 1;           //     Locals do not count
+      y = 2;           //     Locals do not count
+      my_global = 1;   // + 1 Globals count
+      my_global = 2;   //     Duplicates do not count
+    }                  // CountObjectsSetUnique = 1
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsSet">
+    CountGlobalsSet</a> which counts all sets to global objects by this
+    function. </p>
+    '''
+  if id == "CountGlobalsModified":
+    return '''<p>The number of modifications to global objects by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void modifies(int x)
+    {
+      int y, z;
+      x += 1;           //     Parameters do not count
+      x ++;             //     Parameters do not count
+      y += 1;           //     Locals do not count
+      y ++;             //     Locals do not count
+      my_global += 1;   // + 1 Globals count
+      my_global ++;     // + 1 Duplicates count
+    }                   // CountGlobalsModified = 2
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsModifiedUnique">
+    CountGlobalsModifiedUnique</a> which counts unique global objects this
+    function modifies. </p>
+    '''
+  if id == "CountGlobalsModifiedUnique":
+    return '''<p>The number of unique global objects modified by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void modifies(int x)
+    {
+      int y, z;
+      x += 1;           //     Parameters do not count
+      x ++;             //     Parameters do not count
+      y += 1;           //     Locals do not count
+      y ++;             //     Locals do not count
+      my_global += 1;   // + 1 Globals count
+      my_global ++;     //     Duplicates do not count
+    }                   // CountGlobalsModifiedUnique = 1
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsModified">
+    CountGlobalsModified</a> which counts all modifications to global objects
+    by this function. </p>
+    '''
+  if id == "CountGlobalsUsedSetModified":
+    return '''<p>The number of uses, sets, or modifications to global objects by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void combined(int x)
+    {
+      int y, z;
+
+      x ++;                //     Parameters do not count
+      if (x > 10)          //     Parameters do not count
+        x = 0;             //     Parameters do not count
+
+      y ++;                //     Locals do not count
+      if (y > 10)          //     Locals do not count
+        y = 0;             //     Locals do not count
+
+      my_global ++;        // + 1 Globals count
+      if (my_global > 10)  // + 1 Duplicates count
+        my_global= 0;      // + 1 Duplicates count
+    }                      // CountGlobalsUsedSetModified = 9
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsUsedSetModifiedUnique">
+    CountGlobalsUsedSetModifiedUnique</a> which counts unique global objects
+    this function uses, sets, and/or modifies. </p>
+    '''
+  if id == "CountGlobalsUsedSetModifiedUnique":
+    return '''<p>The number of unique global objects used, set, and/or modified by this function</p>
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int my_global = 10;
+    void combined(int x)
+    {
+      int y, z;
+
+      x ++;                //     Parameters do not count
+      if (x > 10)          //     Parameters do not count
+        x = 0;             //     Parameters do not count
+
+      y ++;                //     Locals do not count
+      if (y > 10)          //     Locals do not count
+        y = 0;             //     Locals do not count
+
+      my_global ++;        // + 1 Globals count
+      if (my_global > 10)  //     Duplicates do not count
+        my_global= 0;      //     Duplicates do not count
+    }                      // CountGlobalsUsedSetModifiedUnique = 1
+    </code></pre>
+
+    <p>Compare to <a href="und://plugin/metric/CountGlobalsUsedSetModified">
+    CountGlobalsUsedSetModified</a> which counts all uses, sets, or
+    modifications to global objects by this function. </p>
+    '''
+
