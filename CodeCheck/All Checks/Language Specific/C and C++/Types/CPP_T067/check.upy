@@ -1,0 +1,256 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-25
+
+
+import re
+from dataclasses import dataclass
+
+from understand import Lexeme
+
+
+@dataclass
+class Counts:
+    initial: int
+    current: int
+
+    def is_good(self) -> bool:
+        return self.initial in (0, 1) and self.current == self.initial
+
+
+ERR1 = 'Expression given to generic is not always evaluated only once'
+
+
+def ids():
+    return ('MISRA23_23.7', 'CPP_T067')
+
+
+def name(id):
+    return {
+        'MISRA23_23.7': '''Published Standards/MISRA C 2023/\
+23.7 Generic Expression Not Always Evaluated Once''',
+        'CPP_T067': '''All Checks/Language Specific/C and C++/Types/\
+Generic Expression Not Always Evaluated Once''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_23.7': [
+            'Types',
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+        ],
+        'CPP_T067': [
+            'Types',
+            'Language: C',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p> A generic selection that is expanded from a macro should evaluate its
+argument only once.</p>
+
+<p><b>Amplification</b></p>
+
+<p>If the controlling expression of a generic selection is expanded from a macro argument, it should also
+be expanded elsewhere in the macro body so that it is evaluated exactly once in the entire expanded
+macro body. The number of times that the expression is evaluated should not depend on which
+association is selected, and should be consistent for all associations in the generic selection.</p>
+
+<p>This rule does not depend on the presence of side effects in the operand expression.</p>
+
+<p><b>Rationale</b></p>
+
+<p>The controlling expression of a generic selection is never evaluated. It is only used for its type, and
+usually has to be repeated in order to be combined with the result value in some way.</p>
+
+<p>If an expression is specified which syntactically contains a side effect, that effect will not be applied. If
+the generic selection is (as is usually the case) the result of a macro expansion which uses one of the
+macro's arguments to select the type, this non-evaluation is concealed from the invoking code.</p>
+
+<p>Combining the input value with the result expression "outside" the generic selection (such as
+choosing a function to call as the result, rather than the complete function call) is more likely to
+guarantee consistent evaluation of the expanded operand.</p>
+
+<p><b>Exception</b></p>
+
+<p>This rule is not violated if all result expressions for the generic selection are constant expressions,
+and the macro never expands the argument outside of the controlling expression. This allows for the
+implementation of type queries like <code>is_pointer_const</code>.</p>
+
+<p><b>Example</b></p>
+
+<p>The following examples are consistent in their expansion of side effects for all associations. In the
+first example, the argument used for the controlling expression are expanded exactly once outside of
+the generic selection, so the generic selection does not prevent it from being evaluated. In the
+second example, the argument expands once each into the result expression of each association. It
+will be evaluated exactly once regardless of which generic association is <i>selected</i>.</p>
+
+<pre><code language="C++">\
+/* Compliant */
+#define gfun1(X) ( _Generic((X)             \\
+                 , float32_t: fun1f         \\
+                 , float64_t: fun1          \\
+                 , default  : fun1l) (X) )
+
+#define gfun2(X)   _Generic((X)             \\
+                 , float32_t: fun2f (X)     \\
+                 , float64_t: fun2  (X)     \\
+                 , default  : fun2l (X) )\
+</code></pre>
+
+<p>The following example is non-compliant because whether or not the macro argument is evaluated
+depends on whether the default association is <i>selected</i> or not. The default association does not
+evaluate it because it has no use for the value, but this dangerously assumes that there were no side
+effects in the expression.</p>
+
+<pre><code language="C++">\
+/* Non-compliant */
+#define gfun3(X)   _Generic((X)                 \\
+                 , float32_t : fun3f (X)        \\
+                 , float64_t : fun3  (X)        \\
+                 , float128_t: fun3l (X)        \\
+                 , default   : default_result )\
+</code></pre>
+
+<p>The following example only expands a macro argument into the controlling expression, and all
+possible result expressions are integer constant expressions. This implements a type query that can
+be used for type checking.</p>
+
+<pre><code language="C++">\
+/* Compliant by exception */
+#define is_pointer_const(P) _Generic(1 ? (P) : (void *)(P)  \\
+                          , void const          *: 1        \\
+                          , void const volatile *: 1        \\
+                          , default              : 0 )
+
+_Static_assert (is_pointer_const (pi), "must not be an out-parameter");\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 23.2</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lex = file.lexer(False).first()
+    if not lex:
+        return
+
+    args = []
+
+    while lex:
+        text = lex.text()
+        if text == 'define' and lex.token() == 'Preprocessor':
+            args = get_macro_args(lex)
+        elif text == '_Generic' and not good_generic(lex, args):
+            check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+        elif text == '\n':
+            args = []
+        lex = next_useful(lex)
+
+
+def get_macro_args(lex: Lexeme) -> list[str]:
+    lex = next_useful(lex)
+    if not lex or lex.token() != 'Identifier':
+        return []
+
+    lex = next_useful(lex)
+    if not lex or lex.text() != '(':
+        return []
+
+    result = []
+    while lex:
+        if lex.text() == ')':
+            break
+        if lex.token() == 'Identifier':
+            result.append(lex.text())
+        lex = next_useful(lex)
+    return result
+
+
+def good_generic(lex: Lexeme, args: list[str]) -> bool:
+    if not args:
+        return True
+
+    usages: dict[str, Counts] = dict()
+
+    braces = 0
+    brackets = 0
+    commas = 0
+    parentheses = 0
+
+    while lex:
+        text = lex.text()
+        match text:
+            case '{':
+                braces += 1
+            case '}':
+                braces -= 1
+            case '[':
+                brackets += 1
+            case ']':
+                brackets -= 1
+            case '(':
+                parentheses += 1
+            case ')':
+                parentheses -= 1
+                if parentheses <= 0:
+                    break
+            # Separator between each type in the generic
+            case ',':
+                if braces <= 0 and brackets <= 0 and parentheses == 1:
+                    commas += 1
+                    # Reset the current counts
+                    counts: Counts
+                    for counts in usages.values():
+                        if not counts.is_good():
+                            return False
+                        counts.current = 0
+            # Count usages of the macro argmument
+            case _:
+                if lex.token() == 'Identifier' and text in args:
+                    if commas == 0:
+                        usages[text] = Counts(0, 0)
+                    elif commas == 1 and text in usages:
+                        counts = usages[text]
+                        counts.initial += 1
+                        counts.current += 1
+                    elif text in usages:
+                        counts.current += 1
+        lex = lex.next(True, True)
+
+    # Check the usages in the final result
+    counts: Counts
+    for counts in usages.values():
+        if not counts.is_good():
+            return False
+
+    return True
+
+
+# Next useful for macros (anything but space, tab, comments or \r)
+def next_useful(lex: Lexeme) -> Lexeme | None:
+    lex = lex.next(False, True)
+    while lex and lex.token() == 'Whitespace':
+        lex = lex.next(False, True)
+    return lex
