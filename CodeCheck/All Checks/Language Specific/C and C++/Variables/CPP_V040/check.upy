@@ -1,0 +1,176 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-12-03
+
+
+import re
+
+from Modules import findClose
+from understand import Ent, Ref
+
+
+ERR1 = 'Multiple mutexes used with one condition variable'
+
+
+def ids():
+    return ('MISRA23_22.19', 'CPP_V040')
+
+
+def name(id):
+    return {
+        'MISRA23_22.19': '''Published Standards/MISRA C 2023/\
+22.19 Mutexes with One Condition Variable''',
+        'CPP_V040': '''All Checks/Language Specific/C and C++/Variables/\
+Mutexes with One Condition Variable''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_22.19': [
+            'Variables',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_V040': [
+            'Variables',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A condition variable shall be associated with at most one mutex object.</p>
+
+<p><b>Rationale</b></p>
+
+<p>If the same condition variable is used with different mutex objects by two threads, it is undefined
+which mutex will be unlocked upon signalling the condition variable.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+mtx_t Ra;
+mtx_t Rb;
+cnd_t Cnd;
+
+
+int32_t t1(void *ignore )
+{
+  mtx_lock  ( &Ra       );
+  cnd_wait  ( &Cnd, &Ra );    /* UndCC_Violation - t2 uses Cnd with Rb */
+  mtx_unlock( &Ra       );
+  return 0;
+}
+
+
+int32_t t2(void *ignore )
+{
+ mtx_lock  ( &Rb       );
+ cnd_wait  ( &Cnd, &Rb );     /* UndCC_Violation - t1 uses Cnd with Ra */
+ mtx_unlock( &Rb       );
+ return 0;
+}
+
+
+int32_t t3(void* ignore)
+{
+ cnd_signal( &Cnd );          /* Unblocks one of Ra and Rb...
+                                 ... unclear whether t1 or t2 resumes */
+ return 0;
+}\
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    condition_refs: list[Ref] = get_arg_refs(file, 'cnd_t')
+    mutex_refs: list[Ref] = get_arg_refs(file, 'mtx_t')
+
+    # Find the parentheses of each condition argument
+    range_to_condition: dict[str, Ent] = dict()
+    for ref in condition_refs:
+        arg_range = get_arg_range(file, ref)
+        if not arg_range:
+            continue
+        range_to_condition[arg_range] = ref.ent()
+
+    # Figure the mutex arguments of each condition
+    condition_to_mutex_refs: dict[Ent, list[Ref]] = dict()
+    for ref in mutex_refs:
+        arg_range = get_arg_range(file, ref)
+        condition = range_to_condition.get(arg_range)
+        if not condition:
+            continue
+        if condition not in condition_to_mutex_refs:
+            condition_to_mutex_refs[condition] = [ref]
+        else:
+            condition_to_mutex_refs[condition].append(ref)
+
+    # Find the conditions with multiple mutexes
+    for mutex_refs in condition_to_mutex_refs.values():
+        if len(mutex_refs) < 2:
+            continue
+        for ref in mutex_refs:
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+
+# Get the positions of the parentheses around the argument
+def get_arg_range(file: Ent, ref: Ref) -> str | None:
+    lex = file.lexer(False).lexeme(ref.line(), ref.column())
+    while lex:
+        if lex.text() == 'cnd_wait':
+            l = lex.next(True, True)
+            if not l or l.text() != '(':
+                return None
+            r = findClose(l)
+            if not r:
+                return None
+            return f'{l.line_begin()}:{l.column_begin()} to {r.line_end()}:{r.column_end()}'
+        lex = lex.previous(True, True)
+    return None
+
+
+# Get arguments of `cnd_wait` of the specified type
+def get_arg_refs(file: Ent, arg_type: str) -> list[Ref]:
+    result = []
+
+    for ref in file.filerefs('Assign Ptr', 'Object, Parameter'):
+        ent = ref.ent()
+
+        # Skip if not the specified type
+        t = ent.freetext('UnderlyingType')
+        t = re.sub(r'\b(const|restrict|volatile) ', '', t)
+        if t != arg_type:
+            continue
+
+        # Skip if not used in `cnd_wait`
+        param = ref.scope()
+        if not param.kind().check('Parameter'):
+            continue
+        fn = param.parent()
+        if not fn or fn.library() != 'standard' \
+        or not fn.kind().check('Function') or fn.longname() != 'cnd_wait':
+            continue
+
+        result.append(ref)
+
+    return result
