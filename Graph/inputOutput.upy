@@ -1,0 +1,242 @@
+import und_lib.kind_util as kind_util
+import understand
+
+def name():
+  return "Input Output Diagram"
+
+def description():
+  return '''<p>Show how function inputs affect outputs</p>
+
+  <p>Show the inputs and outputs of a function, with edges showing how the
+  two connect. Inputs are calculated similar to the CountInput metric except that
+  all parameters are always shown as inputs and calls are not considered. Outputs
+  are calculated like CountOutput except calls are not considered. More information
+  on those two metrics can be found in the Metrics Documentation, and in the
+  interactive reports <a href="und://plugin/ireport/Inputs%20Metric">Inputs
+  Metric</a> and  <a href="und://plugin/ireport/Outputs%20Metric">Outpts
+  Metric</a>.</p>
+
+  <p>For example, see the following code and corresponding graph</p>
+
+  <pre><code language="C++">
+  unsigned int in_global;
+  unsigned int out_global;
+  unsigned int in_out_global;
+  int inOutFunc(
+    int in,
+    int *in_out_1,
+    int &in_out_2,
+    int* out_1,
+    int & out_2)
+  {
+    // direct assignments
+    *out_1 = *in_out_1;
+    out_2 = in_out_2;
+    out_global = in_out_global;
+
+    // Things that are both inputs and outputs appear in both parts of the graph
+    *in_out_1 = in;
+    in_out_2 = in;
+    in_out_global = in_global;
+
+    // The graph shows conditionals as dashed edges
+    if (in &gt; in_global) {
+      return 1;
+    }
+
+    // Returns work like assignments
+    return in_out_global + in_out_2;
+  }
+  </code></pre>
+
+  <br>
+  <img src=".doc/inputOutput.png"/>
+    '''
+
+def tags():
+  return [
+    'Target: Functions',
+    'Language: C',
+    'Language: C++',
+  ]
+
+def test_entity(ent):
+  return ent.kind().check(kind_util.FUNCTION_KIND_STR) and ( # is a function
+           ent.parameters() or # has inputs
+           (ent.type() and ent.type() != "void") or # has output (return)
+           len(ent.refs("use, set, modify", "global object"))) # or accesses globals (in/out)
+
+def init(graph, arch):
+  # Options
+  graph.options().define("References", ["Simple", "All"], "All")
+
+  # Legend
+  graph.legend().define("global", "ellipse", "Global Object", "#90c4e4", "", 0,0)
+  graph.legend().define("param", "roundedrect", "Parameter", "#90c4e4", "", 1,0)
+
+  graph.legend().define("assign", "arrow", "Assign", "#4e8cb9", "#4e8cb9", 0,1)
+  graph.legend().define("condition", "dasharrow", "Condition", "#4e8cb9", "#4e8cb9", 1,1)
+
+
+def draw(graph, ent):
+  # Set graph defaults
+  graph.default('color', '#90c4e4', 'node')
+  graph.default('shape', 'box', 'node')
+  graph.default('color', '#4e8cb9', 'edge')
+  graph.default('rankdir', 'LR')
+
+  # Decide whether to show every edge, or max on edge between every pair of objects
+  checkvisits = graph.options().lookup("References") == "Simple"
+  visited = set()
+
+  # Track the input and output nodes
+  inputs = dict()
+  inputCluster = graph.cluster("Inputs")
+
+  outputs = dict()
+  outputCluster = graph.cluster("Outputs")
+
+  # Determine the nodes that appear in the graph
+  for ref in ent.refs("define,declare","c parameter", True):
+    # parameters are always inputs even if they aren't used
+    inputs[ref.ent()] = create_node(inputCluster, ref.ent())
+
+  # Find additional inputs/outputs
+  refs = ent.refs("use ~ptr,set,modify", "global object,parameter", False)
+  for ref in refs:
+    if ref.kind().check("use ~ptr"):
+      # Uses of global objects / parameters make it an input
+      if not ref.ent() in inputs:
+        inputs[ref.ent()] = create_node(inputCluster, ref.ent())
+    else:
+      # possible output
+      if ref.ent().kind().check("parameter"):
+        # A parameter is also an output if it is pass by reference, or is a
+        # pointer that is dereferenced
+        paramtype = ref.ent().type()
+        if not paramtype or ('&' not in paramtype and ('*' not in paramtype or not ref.kind().check("c deref set"))):
+          continue # parameter not an output
+      if not ref.ent() in outputs:
+        outputs[ref.ent()] = create_node(outputCluster, ref.ent())
+
+  if ent.type() and ent.type() != "void":
+    # The return value is an output. Assign references to the function
+    # show what variables were assigned to the return value, so use
+    # the function entity as the output entity.
+    outputs[ent] = outputCluster.node("return")
+
+  # Global variables might be assigned to each other outside of this function.
+  # So find the range of this function to screen assign references.
+  beginref = ent.ref("begin")
+  if not beginref:
+    beginref = ent.ref("define")
+  endref = ent.ref("end")
+
+  # Connect assignments (which will also connect returns)
+  for output, node in outputs.items():
+    for assignref in output.refs("assign", unique=False):
+      # For tracking visited, the pair of nodes to connect
+      edgeEnts = (assignref.ent(), output)
+      if (assignref.ent() in inputs and # entity in graph
+          refInRange(beginref, assignref, endref) and # assign reference inside function
+          (not checkvisits or edgeEnts not in visited)): # References Simple/All
+        visited.add(edgeEnts)
+        edge = graph.edge(inputs[assignref.ent()], node)
+        edge.sync(assignref)
+
+  # connect conditionals. Find inputs that are used inside if statement
+  # conditions and connect them to outputs that are set/modified inside
+  # the body of the if.
+  cgraph = ent.control_flow_graph()
+  if not cgraph:
+    return # Can't find conditionals without a control flow graph.
+
+  # Control flow graph nodes appear in the same order they would in the code.
+  # Sort references the same way.
+  refs.sort(key=lambda ref: (ref.line(), ref.column()))
+
+  # Track all the if conditions that contain inputs. Use a list to allow
+  # nested if statements. The list will contain tuples of
+  #   (control flow node, list of use references)
+  ifstack = []
+
+  # A function to add the edges
+  def add_condition_edges(ent):
+    for ifnode, userefs in ifstack: # loop over if stack
+      for useref in userefs: # loop over use references
+        edgeEnts = (useref.ent(), ent) # For tracking visited edges
+        if not checkvisits or edgeEnts not in visited:
+          visited.add(edgeEnts)
+          edge = graph.edge(inputs[useref.ent()], outputs[ent])
+          edge.set("style", "dashed") # Style conditional edges as dashed
+          edge.sync(useref)
+
+  # Iterate over the control flow graph
+  for cfnode in cgraph.nodes():
+    if not cfnode.line_begin() or not cfnode.column_begin():
+      continue # ignore nodes with no location data
+
+    # Handle any references that occurred before this node
+    while refs and refBeforeCF(refs[0], cfnode, True):
+      ref = refs.pop(0)
+      if ifstack and ref.kind().check("set, modify") and ref.ent() in outputs:
+        # This reference affects an output, connect to all the inputs
+        add_condition_edges(ref.ent())
+
+    # Handle the end of an if statement
+    if ifstack and ifstack[-1][0].end_node() == cfnode:
+      del ifstack[-1] # End affect of conditional
+
+    # Handle the beginning of an if statement
+    elif cfnode.kind() == "if":
+      # Find uses of inputs that occur in the conditional of the if
+      userefs = []
+      while refs and refBeforeCF(refs[0], cfnode, False):
+        ref = refs.pop(0)
+        if ref.kind().check("use") and ref.ent() in inputs:
+          userefs.append(ref)
+      # if there were inputs, they could affect outputs, so remember them in the ifstack.
+      if userefs:
+        ifstack.append( (cfnode, userefs) )
+
+    # Handle returns affected by conditionals
+    elif cfnode.kind() == "return" and ifstack and ent in outputs:
+      # Return is an output, connect all inputs
+      add_condition_edges(ent)
+
+
+def create_node(graph, ent):
+  """
+  Create and style nodes
+  """
+  node = graph.node(ent.name(), ent)
+  if ent.kind().check("global object"):
+    node.set("shape", "oval")
+  elif ent.kind().check("parameter"):
+    node.set("style", "rounded")
+
+  return node
+
+def refBeforeCF(ref, cfnode, start):
+  """
+  Range check for reference and control flow node. Start controls whether
+  to use the beginning or end of the control flow node range.
+  """
+  if start:
+    return before(ref.line(), ref.column(), cfnode.line_begin(), cfnode.column_begin())
+  return before(ref.line(), ref.column(), cfnode.line_end(), cfnode.column_end())
+
+def refInRange(startRef, ref, endRef):
+  """
+  Range check for ref in the bounds given by the startRef and endRef
+  """
+  if not startRef or not endRef:
+    return True
+  return (before(startRef.line(), startRef.column(), ref.line(), ref.column()) and
+          before(ref.line(), ref.column(), endRef.line(), endRef.column()))
+
+def before(line, col, beforeLine, beforeCol):
+  """
+  Generic range check
+  """
+  return line < beforeLine or (line == beforeLine and col < beforeCol)
