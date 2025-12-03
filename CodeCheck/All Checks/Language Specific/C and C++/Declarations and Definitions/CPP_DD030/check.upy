@@ -1,0 +1,138 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-12-03
+
+
+import re
+
+
+ERR1 = 'Storage class specifier %1 not at the beginning'
+
+SPECIFIERS = {'_Thread_local', 'auto', 'extern', 'mutable', 'register', 'static', 'thread_local'}
+
+
+def ids():
+    return ('MISRA23_1.5', 'CPP_DD030')
+
+
+def name(id):
+    return {
+        'MISRA23_1.5': '''Published Standards/MISRA C 2023/\
+1.5 Storage Class Specifiers Not At Beginning''',
+        'CPP_DD030': '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+Storage Class Specifiers Not At Beginning''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_1.5': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_DD030': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Obsolescent language features shall not be used.</p>
+
+<p><b>Amplification</b></p>
+
+<p>Obsolescent features are those identified in the <i>Future language directions</i> and <i>Future library
+directions</i> sections of the C Standard, and are listed in Appendix F.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Features are declared as obsolescent by the C Standard when they are superseded by safer or better
+alternatives, or are considered to exhibit undesirable behaviour. Features declared as obsolescent by
+a particular edition of the C Standard may be withdrawn in a later edition.</p>
+
+<p><b>See also</b></p>
+
+<p>Rule 1.1</p>
+
+<p><b>Developer's Notes</b></p>
+
+<p>Implemented here:</p>
+
+<ul>
+<li>The placement of a storage-class specifier other than at the beginning of the declaration specifiers in a declaration is an obsolescent feature.</li>
+</ul>
+
+<p>Implemented elsewhere in MISRA C 2023:</p>
+
+<ul>
+<li>Rule 8.8: Declaring an identifier with internal linkage at file scope without the <code>static</code> storage class specifier is an obsolescent feature.</li>
+<li>Rule 8.2: The use of function declarators with empty parentheses (not prototype-format parameter type declarators) is an obsolescent feature.</li>
+<li>Rule 8.2: The use of function definitions with separate parameter identifier and declaration lists (not prototype-format parameter type and identifier declarators) is an obsolescent feature.</li>
+<li>Rule 1.4: The macro <code>ATOMIC_VAR_INIT</code> is an obsolescent feature.</li>
+<li>Rule 21.1: The ability to undefine and perhaps then redefine the macros <code>bool</code>, <code>true</code>, and <code>false</code> is an obsolescent feature.</li>
+<li>Rule 21.6: The <code>gets</code> function is obsolescent, and is deprecated.</li>
+<li>Rule 21.6: The use of <code>ungetc</code> on a binary stream where the file position indicator is zero prior to the call is an obsolescent feature.</li>
+<li>Rule 21.3: Invoking <code>realloc</code> with a size argument equal to zero is an obsolescent feature.</li>
+</ul>
+
+<p>Not implemented:</p>
+
+<ul>
+<li>Restriction of the significance of an external name to fewer than 255 characters [...] is an obsolescent feature.</li>
+</ul>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer(False)
+
+    for ref in file.filerefs('Declare, Define', 'Object'):
+        ent = ref.ent()
+
+        # Go to the variable name
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex or lex.text() != ent.name():
+            continue
+        original = lex
+
+        # Go back to the previous statement
+        while True:
+            new_lex = lex.previous(True, True)
+            if not new_lex or new_lex.text() in ('{', '}', ';'):
+                break
+            lex = new_lex
+
+        # Go forward until the variable
+        non_specifier_seen = False
+        while lex and not same_lex(lex, original):
+            text = lex.text()
+            if lex.token() == 'Keyword' and text in SPECIFIERS:
+                if non_specifier_seen:
+                    check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1, text)
+            else:
+                non_specifier_seen = True
+            lex = lex.next(True, True)
+
+
+def same_lex(lex_a, lex_b) -> bool:
+    return lex_a.line_begin() == lex_b.line_begin() and lex_a.column_begin() == lex_b.column_begin()
