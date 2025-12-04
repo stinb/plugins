@@ -98,8 +98,8 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
     for obj in objects:
 
         # See how many tasks it is from
-        fromTasks = set()
-        fromTasksFiltered = set()
+        fromTasks: set[Ent] = set()
+        fromTasksFiltered: set[Ent] = set()
         edgeKeys = incoming[obj] if obj in incoming else set()
         for edgeKey in edgeKeys:
             info = edgeInfo[edgeKey]
@@ -138,7 +138,7 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
             for task in fromTasks:
 
                 # Info for each column for this single row
-                taskName = task.name()
+                taskName = getLongName(task, options)
                 entFields = [tasks[task].get(field, '') for field in headerFields]
 
                 # Make the clickable row for interactive report
