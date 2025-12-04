@@ -1,0 +1,164 @@
+ERR1 = "Same file shall not be open for read and write access at the same time on different stream"
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.3')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.3': "Published Standards/MISRA C 2023/22.3 \
+The same file shall not be open for read and write access at the same \
+time on different streams"
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_22.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_22.3': """
+<p><b>Amplification</b></p>
+<p>This rule applies to files opened with the Standard Library functions. It may also apply to similar
+features provided by the execution environment.</p>
+
+<p><b>Rationale</b></p>
+<p>The C Standard does not specify the behaviour if a file is both written and read via different streams.</p>
+<p>Note: it is acceptable to open a file multiple times for read-only access.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">#include &lt;stdio.h&gt;
+
+void fn ( void )
+{
+FILE *fw = fopen ( "tmp", "r+" ); /* "r+" opens for read/write */
+FILE *fr = fopen ( "tmp", "r" ); /* Non-compliant */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.6</p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check can only flag violations that happen in the same function.</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_file(ref):
+    fname = None
+    mode = None
+    on_param = 0
+    param = 0
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+
+    while lex:
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+                break
+        elif (on_param == 1) and (lex.text() == ","):
+            param += 1
+        elif (on_param == 1) and not fname and (lex.ent() or lex.token() == "String"):
+            if lex.token() == "String":
+                fname = str(lex.text()).strip('"')
+            else:
+                fname = lex.text()
+        elif (on_param == 1) and (param == 1) and not mode and (lex.token() == "String"):
+            mode = str(lex.text()).strip('"')
+            break
+
+        lex = lex.next(True, True)
+
+    return fname, mode
+
+
+def get_stream(ref):
+    for ass_ref in ref.ent().refs("Assignby Ptr"):
+        if ass_ref.file().id() != ref.file().id():
+            continue
+        elif ass_ref.line() == ref.line() and ass_ref.column() == ref.column():
+            return ass_ref.ent()
+
+    return None
+
+
+def get_closed_stream(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    on_param = 0
+
+    while lex:
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+                break
+        elif (on_param == 1) and lex.ent():
+            return lex.ent()
+
+        lex = lex.next(True, True)
+
+    return None
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        open_files = {}  # key: file name, value: mode
+        streams = {}  # key: stream ent id, value: file name
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda x: x.line()):
+            if call_ref.ent().name() in ["fopen", "freopen"]:
+                fname, mode = get_file(call_ref)
+                stream = get_stream(call_ref)
+
+                if not fname:
+                    continue
+                elif fname not in open_files:
+                    open_files[fname] = mode
+
+                    if stream:
+                        streams[stream.id()] = fname
+                elif fname in open_files:
+                    if ((open_files[fname] == "r" and mode == "r")
+                            or (stream and stream.id() in streams and streams[stream.id()] == fname)):
+                        pass
+                    else:
+                        check.violation(call_ref.ent(), file,
+                                        call_ref.line(), call_ref.column(), ERR1)
+            elif call_ref.ent().name() == "fclose":
+                stream = get_closed_stream(call_ref)
+
+                if stream and stream.id() in streams and streams[stream.id()] in open_files:
+                    del open_files[streams[stream.id()]]
+                    del streams[stream.id()]
