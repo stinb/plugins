@@ -118,8 +118,8 @@ def check(check, file):
         return
 
     lexer = file.lexer()
+
     lexeme = lexer.first()
-    
     while lexeme:
         # Find 'for' loops
         if lexeme.text() == 'for':
@@ -127,83 +127,64 @@ def check(check, file):
             lexeme = lexeme.next(True, True)
             openBrace = None
             closeBrace = None
-            
             # Find the three clauses of for loop
             if lexeme and lexeme.text() == '(':
                 close = Modules.findClose(lexeme)
                 if close:
                     # Find the opening and closing curly braces
                     openBrace = close.next(True, True)
-                    if openBrace:
-                        closeBrace = findCloseBrace(openBrace)
-
+                    if openBrace and openBrace.text() == '{':
+                        closeBrace = Modules.findClose(openBrace)
                 count = 0
                 ok = True
                 equals = False
                 loopCounter = None
-                conditionUsesCounter = False
-                
                 # Go through clauses
                 while ok and lexeme and close and checkBounds(lexeme.line_begin(), lexeme.column_begin(), close):
-                    # Check for comma operator (multiple expressions)
                     if lexeme.text() == ',':
                         ok = False
-                    # Check side effects from function calls
+                    # Check side effects
                     elif lexeme.ent() and lexeme.ent().kind().check("Function"):
                         ok = False
                     # Keep track of which clause
                     elif lexeme.text() == ';':
-                        # Check if condition uses loop counter
-                        if count == 1 and loopCounter and not conditionUsesCounter:
-                            ok = False
                         count += 1
-                        equals = False  # Reset for next clause
-                        conditionUsesCounter = False  # Reset
                         lexeme = lexeme.next(True, True)
-                        # Check for empty clauses (except all three empty)
                         if lexeme and (lexeme.text() == ';') or (count == 2 and not checkBounds(lexeme.line_begin(), lexeme.column_begin(), close)):
                             ok = False
                         continue
-                    # Check for increment/decrement operators in condition (clause 1)
-                    elif count == 1 and lexeme.text() in ['++', '--']:
-                        ok = False
-                    # Check if non-loop-counter variables in clauses 2 & 3 are modified in body
                     elif count > 0 and loopCounter and lexeme.ent() and lexeme.ent().name() != loopCounter.name():
                         if openBrace and closeBrace:
-                            refs = lexeme.ent().refs()
+                            refs == lexeme.ent().refs('Modifyby')
                             for ref in refs:
-                                if ref.file().id() == file.id() and checkBounds(ref.line(), ref.column(), closeBrace, openBrace):
+                                if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, openBrace):
                                     ok = False
-                    # Check for assignment in clauses 1 & 2
+                    
                     elif lexeme.text() == '=' and count < 2:
                         if equals:
                             ok = False
                         equals = True
-                    # Check for modify operations (++, --) in any clause
-                    elif lexeme.ent() and count < 2:
+                    elif lexeme.ref() and count < 2:
                         refs = lexeme.ent().refs('Modifyby')
                         for ref in refs:
                             if ref.line() == lexeme.line_begin() and ref.column() == lexeme.column_begin():
-                                # In clause 0: only loop counter can be modified
-                                # In clause 1: no modifications allowed
-                                if count == 1 or (count == 0 and loopCounter and lexeme.ent().name() != loopCounter.name()):
-                                    ok = False
-                    
-                    # Track if condition uses loop counter
-                    if count == 1 and loopCounter and lexeme.ent() and lexeme.ent().name() == loopCounter.name():
-                        conditionUsesCounter = True
-                    
-                    # Check for violations in first clause (init)
+                                ok = False
+                    # Check for violations in first clause
                     if count == 0:
                         if lexeme.ent() and not loopCounter:
                             loopCounter = lexeme.ent()
                             if openBrace and closeBrace:
-                                refs = lexeme.ent().refs('Modifyby, Setby, Assignby')
+                                refs == lexeme.ent().refs('Modifyby')
                                 for ref in refs:
-                                    if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, openBrace):
+                                    if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, vLex):
                                         ok = False
+                            
+
 
                     lexeme = lexeme.next(True, True)
+
+
+
 
                 if not ok:
                     check.violation(file, file, vLex.line_begin(), vLex.column_begin(), ERR1)
@@ -212,14 +193,11 @@ def check(check, file):
 
 
 
-
-
 # Returns true if still before the given closing parenthesis
 # and after the begin if given
 def checkBounds(line, column, close, begin=None):
     if not close:
         return False
-    
     if line > close.line_begin():
         return False
     if line == close.line_begin() and column >= close.column_begin():
@@ -231,34 +209,3 @@ def checkBounds(line, column, close, begin=None):
             return False
     return True
 
-def findCloseBrace(openBrace):
-    if openBrace.text() == '{':
-        return Modules.findClose(openBrace)
-    
-    lexeme = openBrace
-    while lexeme:
-        text = lexeme.text()
-        
-        # Handle paired delimiters
-        if text in ['(', '{', '[']:
-            lexeme = Modules.findClose(lexeme)
-        # Handle control structures that take statements
-        elif text in ['for', 'while', 'if', 'switch']:
-            lexeme = lexeme.next(True, True)  # Skip to condition
-            if lexeme and lexeme.text() == '(':
-                lexeme = Modules.findClose(lexeme)  # Skip condition
-                lexeme = lexeme.next(True, True)  # Move to body
-                continue
-        elif text == 'else':
-            lexeme = lexeme.next(True, True)
-            continue
-        elif text == 'do':
-            lexeme = lexeme.next(True, True)
-            continue
-        # Found end of statement
-        elif text == ';':
-            return lexeme
-        
-        lexeme = lexeme.next(True, True)
-    
-    return None

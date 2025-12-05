@@ -41,7 +41,7 @@ struct S
 };
 void F4(S *p) noexcept(false)
 {
-    p->TaskStartFn(p++); // UndCC_FalseNeg
+    p->TaskStartFn(p++); // UndCC_FalseNeg(Lin,Mac)
 }
 
 // 4) Function calls
@@ -85,7 +85,7 @@ void F7(std::stack<std::int32_t> &s)
 void F8(std::int32_t &x) noexcept(false)
 {
     std::int32_t y = 4;
-    x = y = y++; // UndCC_FalseNeg It is undefined whether the final value of y is 4 or 5
+    x = y = y++; // UndCC_FalseNeg(Lin,Mac) It is undefined whether the final value of y is 4 or 5
 }
 // 6) Accessing a volatile
 // The volatile type qualifier is provided in C++ to denote objects whose value
