@@ -1,0 +1,207 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-26
+
+
+import re
+
+from understand import Ent, Lexeme
+from Modules import findOpen
+
+
+ERR1 = 'Misuse of EOF macro'
+
+BAD_LEFT = {'++', '--', '+', '-', '!', '~', ')', '*', '/', '%', '<<', '>>', '<=>', '<', '<=', '>', '>=', '==', '!='}
+BAD_RIGHT = {'++', '--', '*', '/', '%', '+', '-', '<<', '>>', '<=>', '<', '<=', '>', '>=', '==', '!='}
+COMPARE = {'==', '!='}
+
+
+def ids():
+    return ('MISRA23_22.7', 'CPP_L042')
+
+
+def name(id):
+    return {
+        'MISRA23_22.7': '''Published Standards/MISRA C 2023/\
+22.7 EOF Macro Misuse''',
+        'CPP_L042': '''All Checks/Language Specific/C and C++/CATEGORY/\
+EOF Macro Misuse''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_22.7': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_L042': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>The macro <code>EOF</code> shall only be compared with the unmodified return
+value from any Standard Library function capable of returning <code>EOF</code>.</p>
+
+<p><b>Amplification</b></p>
+
+<p>The value returned by any of these functions shall not be subject to any type conversion if it is later
+compared with the macro <code>EOF</code>. <i>Note</i>: indirect type conversions, such as those resulting from pointer
+type conversions, are included within the scope of this rule.</p>
+
+<p><b>Rationale</b></p>
+
+<p>An <code>EOF</code> return value from these functions is used to indicate that a stream is either at end-of-file or
+that a read or write error has occurred. The <code>EOF</code> value may become indistinguishable from a valid
+character code if the value returned is converted to another type. In such cases, testing the
+converted value against <code>EOF</code> will not reliably identify if the end of the file has been reached or if an
+error has occurred.</p>
+
+<p>If these conditions are to be identified by comparison with <code>EOF</code>, the comparison shall be made
+before any conversion of the value occurs. Alternatively, the Standard Library functions <i>feof</i> and
+<i>ferror</i> may be used to directly check the status of the stream, either before or after the conversion
+takes place.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+void f1 ( void )
+{
+  char ch;
+
+  ch = ( char ) getchar ();
+
+  /*
+   * The following test is non-compliant. It will not be reliable as the
+   * return value is cast to a narrower type before checking for EOF.
+   */
+  if ( EOF != ( int32_t ) ch )
+  {
+  }
+}\
+</code></pre>
+
+<p>The following compliant example shows how <i>feof()</i> can be used to check for <code>EOF</code> when the return
+value from <i>getchar()</i> has been subjected to type conversion:</p>
+
+<pre><code language="C++">\
+void f2 ( void )
+{
+  char ch;
+
+  ch = ( char ) getchar ();
+
+  if ( !feof ( stdin ) )
+  {
+  }
+}
+
+void f3 ( void )
+{
+  int32_t i_ch;
+
+  i_ch = getchar ();
+
+  /*
+   * The following test is compliant. It will be reliable as the
+   * unconverted return value is used when checking for EOF.
+   */
+  if ( EOF != i_ch )
+  {
+    char ch;
+
+    ch = ( char ) i_ch;
+  }
+}\
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+
+    for ref in file.filerefs('Use', 'Macro'):
+        ent = ref.ent()
+
+        if ent.name() != 'EOF':
+            continue
+
+        if not lexer:
+            lexer = file.lexer()
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex:
+            continue
+
+        # Look at the surrounding lexemes
+        l = lex.previous(True, True)
+        r = lex.next(True, True)
+        if l and r:
+            lt = l.text()
+            rt = r.text()
+            if lt in COMPARE and rt not in BAD_RIGHT and good_compare(l.previous(True, True), True):
+                continue
+            if rt in COMPARE and lt not in BAD_LEFT and good_compare(r.next(True, True), False):
+                continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+
+def good_compare(lex: Lexeme | None, left: bool) -> bool:
+    if not lex:
+        return False
+
+    ent = lex.ent()
+
+    # Compared with an object
+    if ent and ent.kind().check('Object'):
+        # Fail if it doesn't have the range of an int
+        t = ent.freetext('UnderlyingType')
+        t = re.sub(r'\b(const|restrict|volatile) ', '', t)
+        if t not in {'int', 'long', 'long long'}:
+            return False
+        # Succeed if it's assigned by a standard function that can return EOF
+        for ref in ent.refs('Assign Value'):
+            if good_function(ref.ent()):
+                return True
+        return False
+
+    # Direct comparison
+    if left and lex.text() == ')':
+        lex = findOpen(lex)
+        if not lex:
+            return False
+        lex = lex.previous(True, True)
+        ent = lex.ent()
+    if ent and good_function(ent) and lex.ref().kind().check('Callby'):
+        return True
+
+    return False
+
+
+# Whether it's a standard function that can return EOF
+def good_function(ent: Ent) -> bool:
+    if not ent.kind().check('Function'):
+        return False
+    return ent.longname() in {'fgetc', 'getc', 'getchar'}

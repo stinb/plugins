@@ -1,0 +1,164 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2025-11-26
+
+
+import re
+
+from understand import Ref
+
+
+ERR1 = '%1 accessed without an appropriate standard library function'
+
+FUNCTIONS = {'cnd_broadcast', 'cnd_destroy', 'cnd_init', 'cnd_signal', 'cnd_timedwait', 'cnd_wait', 'mtx_destroy', 'mtx_init', 'mtx_lock', 'mtx_timedlock', 'mtx_trylock', 'mtx_unlock', 'thrd_create', 'thrd_detach', 'thrd_equal', 'thrd_join', 'tss_create', 'tss_delete', 'tss_get', 'tss_set'}
+
+TYPES = {
+    'cnd_t': 'Condition variable',
+    'mtx_t': 'Mutex object',
+    'thrd_t': 'Thread object',
+    'tss_t': 'Thread-specific storage pointer',
+}
+
+
+def ids():
+    return ('MISRA23_22.12', 'CPP_L043')
+
+
+def name(id):
+    return {
+        'MISRA23_22.12': '''Published Standards/MISRA C 2023/\
+22.12 Thread Data Misuse''',
+        'CPP_L043': '''All Checks/Language Specific/C and C++/Libraries/\
+Thread Data Misuse''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_22.12': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+        ],
+        'CPP_L043': [
+            'Libraries',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Thread objects, thread synchronization objects, and thread-specific
+storage pointers shall only be accessed by the appropriate Standard
+Library functions.</p>
+
+<p><b>Amplification</b></p>
+
+<p>Thread objects shall exclusively be accessed via the Standard Library functions <i>thrd_create()</i>,
+<i>thrd_detach()</i>, <i>thrd_join()</i>, and <i>thrd_equal()</i>.</p>
+
+<p>Mutex objects shall exclusively be accessed via the Standard Library functions <i>mtx_destroy()</i>, <i>mtx_init()</i>,
+<i>mtx_lock()</i>, <i>mtx_trylock()</i>, <i>mtx_timedlock()</i>, <i>mtx_unlock()</i>, <i>cnd_wait()</i>, and <i>cnd_timedwait()</i>.</p>
+
+<p>Condition variables shall exclusively be accessed via the Standard Library functions <i>cnd_broadcast()</i>,
+<i>cnd_destroy()</i>, <i>cnd_init()</i>, <i>cnd_signal()</i>, <i>cnd_wait()</i>, and <i>cnd_timedwait()</i>.</p>
+
+<p>Thread-specific storage pointers shall exclusively be accessed by the Standard Library functions
+<i>tss_create()</i>, <i>tss_delete()</i>, <i>tss_get()</i>, and <i>tss_set()</i>.</p>
+
+<p><b>Rationale</b></p>
+
+<p>Thread objects and thread synchronization objects are expected to be unique for the corresponding
+thread and synchronization resources.</p>
+
+<p>Thread-specific storage pointers are identified by unique keys. Any direct manipulation (copy,
+assignment, etc.) may result in undefined behaviour. The <i>tss_delete()</i>, <i>tss_get()</i> and <i>tss_set()</i> functions
+shall only be called with a value for key that was returned by a call to <i>tss_create()</i>, otherwise the
+behaviour is undefined.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+mtx_t Ra;
+mtx_t Rb;
+thrd_t id1;
+thrd_t id2;
+tss_t key;
+
+
+int32_t t1( void *ignore )
+{
+  mtx_lock( &Ra );
+  int32_t val;
+  if ( id1 == id2 )                  /* Non-compliant - use thrd_equal() */
+  {
+    Rb = Ra;                         /* Non-compliant */
+    memcpy(&Rb, &Ra, sizeof(mtx_t)); /* Non-compliant */
+  }
+
+  if ( thrd_equal( id1, id2 ) )      /* Compliant */
+  {
+    ...
+  }
+  key++;                             /* Non-compliant - explicit manipulation of
+                                                        TSS pointer */
+  tss_set( key, &val );              /* Undefined, value of key not returned by
+                                                        tss_create() */
+}
+
+
+void main( void )
+{
+  mtx_init   ( &Ra, mtx_plain );
+  mtx_init   ( &Rb, mtx_plain );
+  tss_create ( &key, NULL     );
+  thrd_create( &id1, t1, NULL );
+  thrd_create( &id2, t1, NULL );
+  ...
+}
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 11.5, Rule 22.20</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    to_check: dict[str, list[Ref]] = dict()
+
+    for ref in file.filerefs('Assign, Set', 'Object, Parameter'):
+        ent = ref.ent()
+
+        t = ent.freetext('UnderlyingType')
+        t = re.sub(r'\b(const|restrict|volatile) ', '', t)
+        t = TYPES.get(t)
+        if t == None:
+            continue
+
+        scope = ref.scope()
+        if scope.kind().check('Parameter'):
+            fn = scope.parent()
+            if fn and fn.library() == 'standard' and fn.kind().check('Function'):
+                if fn.longname() in FUNCTIONS:
+                    continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, t)

@@ -1,0 +1,154 @@
+ERR1 = "Non-recursive mutexes shall not be recursively locked"
+
+
+def ids():
+    return ('MISRA23_22.18')
+
+
+def name(id):
+    return {
+        'MISRA23_22.18': """Published Standards/MISRA C 2023/22.18 \
+Non-recursive mutexes shall not be recursively locked""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_22.18': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_22.18': """
+<p><b>Amplification</b></p>
+<p>A non-recursive mutex shall only be locked by a thread if it has not already been locked by that
+before.</p>
+
+<p><b>Rationale</b></p>
+<p>It is undefined behaviour if a non-recursive mutex is recursively locked by the calling thread. If the
+thread also attempts to unlock the mutex twice, the second call to mtx_unlock() will also result in
+undefined behaviour, since the mutex then will already be unlocked.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">mtx_t Ra;
+mtx_t Rb;
+
+int32_t t1( void *ignore ) /* Thread 1 */
+{
+mtx_lock ( &Rb ); /* Compliant */
+mtx_lock ( &Rb ); /* Compliant - Rb is recursive */
+mtx_unlock( &Rb ); /* Rb still locked */
+mtx_unlock( &Rb ); /* Rb gets unlocked */
+mtx_lock ( &Ra ); /* Compliant */
+mtx_lock ( &Ra ); /* Non-compliant - undefined behaviour, deadlock possible */
+mtx_unlock( &Ra ); /* If reachable (i.e. no deadlock), Ra gets unlocked */
+mtx_unlock( &Ra ); /* Undefined behaviour if reachable */
+return 0;
+}
+
+thrd_t id1;
+thrd_t id2;
+
+int32_t main(void)
+{
+mtx_init ( &Ra, mtx_plain );
+mtx_init ( &Rb, mtx_recursive );
+thrd_create( &id1, t1, NULL );
+...
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 4.13, Rule 22.1, Rule 22.17</p>
+
+<p><b>Developer's Note:</b></p>
+<p>This check only covers cases where the mutex is locked within the same function.</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return False
+
+
+def test_global():
+    return True
+
+
+def get_mtx(ref, nonrec_mtxs, init=False):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    on_param = 0
+
+    while lex:
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+
+                break
+        elif (on_param == 1) and lex.ent() and is_mutex(lex.ent()):
+            if not init:
+                return lex.ent()
+
+            nonrec_mtxs.append(lex.ent().id())
+        elif ((on_param == 1) and (lex.text() == "mtx_recursive")
+              and (lex.token() == "Identifier") and init):
+            nonrec_mtxs.pop()
+
+        lex = lex.next(True, True)
+
+    return None
+
+
+def is_mutex(obj_ent):
+    utype = str(obj_ent.freetext("UnderlyingType"))
+
+    if "mtx_t" in utype:
+        return True
+
+    return False
+
+
+def check(check):
+    db = check.db()
+    files = db.ents("code file, header file")
+    nonrec_mtxs = []
+
+    for file in files:
+        for func_ref in file.filerefs("Call", "Function"):
+            if func_ref.ent().name() == "mtx_init":
+                get_mtx(func_ref, nonrec_mtxs, True)
+
+        for func_ref in file.filerefs("Define", "Function"):
+            if "mtx_lock" not in func_ref.ent().contents():
+                continue
+
+            locked_mtxs = []
+
+            for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda x: x.line()):
+                if call_ref.ent().name() == "mtx_lock":
+                    mtx = get_mtx(call_ref, nonrec_mtxs, False)
+
+                    if mtx and mtx.id() not in locked_mtxs:
+                        locked_mtxs.append(mtx.id())
+                    elif mtx and mtx.id() in nonrec_mtxs:
+                        check.violation(mtx, call_ref.file(),
+                                        call_ref.line(), call_ref.column(), ERR1)
+
+                elif call_ref.ent().name() == "mtx_unlock":
+                    mtx = get_mtx(call_ref, nonrec_mtxs, False)
+
+                    if mtx and mtx.id() in locked_mtxs:
+                        locked_mtxs.remove(mtx.id())

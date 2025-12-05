@@ -1,0 +1,181 @@
+import re
+
+
+ERR1 = "Thread object might still be accessed by other threads"
+DESTROY_FUNCS = ["mtx_destroy", "tss_delete", "cnd_destroy"]
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_22.15')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_22.15': """Published Standards/MISRA C 2023/22.15 \
+Thread synchronization objects and thread-specific storage pointers \
+shall not be destroyed until after all threads accessing them have terminated"""
+    }[id]
+
+
+# The short description of the check
+def tags(id):
+    return {
+        'MISRA23_22.15': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Threads',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_22.15': """
+<p><b>Rationale</b></p>
+<p>The Standard Library function mtx_destroy(mtx) releases all resources used by the mutex pointed to
+by mtx. Destroying a mutex which is still locked by some thread results in undefined behaviour, as
+the C Standard expects no threads to be blocked by a mutex when it is destroyed.</p>
+<p>The Standard Library function tss_delete(key) releases all resources used by the thread-specific
+storage identified by key. Calling the tss_delete(), tss_get() or tss_set() functions after the thread
+commenced executing destructors results in undefined behaviour.</p>
+<p>Calling the Standard Library function cnd_destroy(), on a condition variable on which a thread is
+currently waiting, results in undefined behaviour.</p>
+<p>These problems are avoided by only destroying synchronization resources and deleting thread-
+specific storage after all threads accessing them have terminated (or not at all).</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">mtx_t Ra;
+mtx_t Rb;
+tss_t key1;
+tss_t key2;
+thrd_t id1;
+thrd_t id2;
+
+int32_t t1( void *ignore ) /* Thread T1 entry */
+{
+/*
+** locks/unlocks Ra, Rb
+** accesses thread-specific storage pointed to by key1, key2
+*/
+tss_delete( key1 ); /* Non-compliant - might still be accessed from T2 */
+}
+
+int32_t t2( void *ignore ) /* Thread T2 entry */
+{
+/*
+** locks/unlocks Ra, Rb
+** accesses thread-specific storage pointed to by key1, key2
+*/
+mtx_destroy( &Rb ); /* Non-compliant - T1 might still access Rb */
+}
+
+void main( void )
+{
+mtx_init ( &Ra, mtx_plain );
+mtx_init ( &Rb, mtx_plain );
+tss_create ( &key1, NULL );
+tss_create ( &key2, NULL );
+thrd_create( &id1, t1, NULL );
+thrd_create( &id2, t2, NULL );
+spendSomeTime();
+tss_delete ( key2 ); /* Non-compliant - might still be accessed by t1, t2 */
+thrd_join ( id1, NULL );
+thrd_join ( id2, NULL );
+mtx_destroy( &Ra ); /* Compliant */
+tss_delete ( key1 ); /* Compliant */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 22.1</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def get_thrd_func(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    on_param = 0
+
+    while lex:
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+                break
+        elif (on_param == 1) and lex.ent() and lex.ent().kind().check("Function"):
+            return lex.ent()
+
+        lex = lex.next(True, True)
+
+    return None
+
+
+def get_thrd_obj(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    on_param = 0
+
+    while lex:
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+                break
+        elif (on_param == 1) and lex.ent() and is_thrd_obj(lex.ent()):
+            return lex.ent()
+
+        lex = lex.next(True, True)
+
+    return None
+
+
+def is_thrd_obj(obj_ent):
+    utype = str(obj_ent.freetext("UnderlyingType"))
+
+    if re.search("mtx_t|tss_t|cnd_t|unsigned int", utype):
+        return True
+
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        running_thrd = 0
+
+        for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda x: x.line()):
+            if call_ref.ent().name() == "thrd_create":
+                thrd_func = get_thrd_func(call_ref)
+                running_thrd += 1
+
+                if not thrd_func:
+                    continue
+
+                for ref in thrd_func.refs("Call", "Function"):
+                    if ref.ent().name() in DESTROY_FUNCS:
+                        check.violation(get_thrd_obj(ref), ref.file(),
+                                        ref.line(), ref.column(), ERR1)
+            elif call_ref.ent().name() == "thrd_join":
+                running_thrd -= 1
+            elif call_ref.ent().name() in DESTROY_FUNCS and running_thrd:
+                check.violation(get_thrd_obj(call_ref), call_ref.file(),
+                                call_ref.line(), call_ref.column(), ERR1)
