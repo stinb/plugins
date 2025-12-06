@@ -129,6 +129,15 @@ def check(check, file):
             closeBrace = None
             # Find the three clauses of for loop
             if lexeme and lexeme.text() == '(':
+                # Skip for exception
+                tempLex = lexeme.next(True, True)
+                if tempLex and tempLex.text() == ';':
+                    tempLex = tempLex.next(True, True)
+                    if tempLex and tempLex.text() == ';':
+                        tempLex = tempLex.next(True, True)
+                        if tempLex and tempLex.text() == ')':
+                            lexeme = tempLex
+                            continue
                 close = Modules.findClose(lexeme)
                 if close:
                     # Find the opening and closing curly braces
@@ -139,8 +148,13 @@ def check(check, file):
                 ok = True
                 equals = False
                 loopCounter = None
+                loopCounterFound = False
                 # Go through clauses
                 while ok and lexeme and close and checkBounds(lexeme.line_begin(), lexeme.column_begin(), close):
+                    # Check if loopCounter in 2nd and 3rd clause
+                    if loopCounter and count > 0 and lexeme.ent():
+                        if lexeme.ent().id() == loopCounter.id():
+                            loopCounterFound = True
                     if lexeme.text() == ',':
                         ok = False
                     # Check side effects
@@ -148,24 +162,30 @@ def check(check, file):
                         ok = False
                     # Keep track of which clause
                     elif lexeme.text() == ';':
+                        # Checks for violations where the loop counter wasn't found in the 2nd or 3rd clause
+                        if count > 0 and loopCounter and not loopCounterFound:
+                            ok = False
                         count += 1
+                        loopCounterFound = False
                         lexeme = lexeme.next(True, True)
                         if lexeme and (lexeme.text() == ';') or (count == 2 and not checkBounds(lexeme.line_begin(), lexeme.column_begin(), close)):
                             ok = False
                         continue
+                    # Check for violations in the 2nd and 3rd clauses
                     elif count > 0 and loopCounter and lexeme.ent() and lexeme.ent().name() != loopCounter.name():
                         if openBrace and closeBrace:
-                            refs == lexeme.ent().refs('Modifyby')
+                            refs = lexeme.ent().refs('Modifyby, Assignby, Setby')
                             for ref in refs:
-                                if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, openBrace):
+                                if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, vLex):
                                     ok = False
                     
+                    # Check for set violations in the first 2 clauses
                     elif lexeme.text() == '=' and count < 2:
                         if equals:
                             ok = False
                         equals = True
                     elif lexeme.ref() and count < 2:
-                        refs = lexeme.ent().refs('Modifyby')
+                        refs = lexeme.ent().refs('Modifyby, Assignby, Setby')
                         for ref in refs:
                             if ref.line() == lexeme.line_begin() and ref.column() == lexeme.column_begin():
                                 ok = False
@@ -174,9 +194,24 @@ def check(check, file):
                         if lexeme.ent() and not loopCounter:
                             loopCounter = lexeme.ent()
                             if openBrace and closeBrace:
-                                refs == lexeme.ent().refs('Modifyby')
+                                refs = lexeme.ent().refs('Modifyby, Assignby, Setby')
                                 for ref in refs:
                                     if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, vLex):
+                                        if checkBounds(ref.line(), ref.column(), openBrace):
+                                            tempLex = lexer.lexeme(ref.line(), ref.column())
+                                            clauseCount = 0
+                                            while tempLex and checkBounds(vLex.line_begin(), vLex.column_begin(), tempLex):
+                                                if tempLex.text() == ';':
+                                                    clauseCount += 1
+                                                elif tempLex.text() == ')':
+                                                    tempLex = Modules.findOpen(tempLex)
+                                                    continue
+                                                tempLex = tempLex.previous(True, True)
+
+                                            if (clauseCount > 1 and str(ref.kind()) == 'Modify') or (clauseCount < 1 and str(ref.kind()) == 'Set'):
+                                                ok = True
+                                                continue
+
                                         ok = False
                             
 

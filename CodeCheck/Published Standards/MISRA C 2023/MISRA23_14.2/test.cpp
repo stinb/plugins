@@ -25,6 +25,7 @@ int main() {
   for (int i = 0, j = 0; i < 10; i++, j++) { } /* UndCC_Violation: iteration clause modifies both i and j */
   for (int i = 0; i < 10; i++, flag = get_status()) { } /* UndCC_Violation: function call with side effects in iteration clause */
   for (int i = 0; i < 10; sum += i, i++) { } /* UndCC_Violation: iteration clause modifies sum (unrelated to loop control) */
+  for (;;) {} // UndCC_Valid
 }
 int get_status() {
   return 1;
