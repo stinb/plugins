@@ -1,0 +1,360 @@
+import und_lib.kind_util as kind_util
+import understand
+
+def name():
+  return "Data Sequence Diagram"
+
+def description():
+  return '''<p>Show the relationships between data in a function</p>
+
+  <p>Wondering what "impact" an object has? The
+  <a href="und://plugin/graph/Inverse%20Variable%20Tracker-Custom">Inverse Variable
+  Tracker</a> graph is a great view of all the places a variable is used in
+  an assignment. But it doesn't catch things like:</p>
+
+  <pre><code language="C++">if (variable1) variable2 = ...;</code></pre>
+
+  <p>The <a href="und://plugin/graph/Input%20Output%20Diagram-Custom">
+  Inpout Output Diagram</a> does show conditionals but isn't very detailed</p>
+
+  <p>This graph hijacks the "UML Sequence Diagram" layout to show data
+  interactions within a function. Uses, Sets, and Modifications of data show
+  up as activation boxes along the data's lifeline, colored by reference kind.
+  </p>
+
+  <pre><code language="C++">
+  unsigned int in_global;
+  unsigned int out_global;
+  unsigned int in_out_global;
+  int inOutDemo(
+    int in,
+    int *in_out_1,
+    int &in_out_2,
+    int* out_1,
+    int & out_2)
+  {
+    // direct assignments
+    *out_1 = *in_out_1;
+    out_2 = in_out_2;
+    out_global = in_out_global;
+
+    // Things that are both inputs and outputs
+    *in_out_1 = in;
+    in_out_2 = in;
+    in_out_global = in_global;
+
+    // Conditional influencing return value
+    if (in > in_global) {
+      int local = in * 2;
+      return local;
+    }
+
+    // Returns work like assignments
+    return in_out_global + in_out_2;
+  }
+  </code></pre>
+
+  <br>
+  <img src=".doc/dataSequenceDiagram.png"/>
+
+  <br>
+  <p>Note that because the "UML Sequence Diagram" layout was written specifically
+  for the UML Sequence Diagram and was not intended to be used in other contexts,
+  there are some limitations. The assignment edges man not be visible in the
+  Understand GUI in builds before 1242. Assignment edges may be misaligned
+  when there is nesting, and are not clear when multiple variables are part of
+  the expression. Also, the layout doesn't support changing shapes, so the
+  objects along the top are colored to indicate parameters, globals, and locals,
+  rather than using the more standard rounded rectangle, oval, and rectangle
+  shapes.</p>
+    '''
+
+def tags():
+  return [
+    'Target: Functions',
+    'Language: C',
+    'Language: C++',
+  ]
+
+def test_entity(ent):
+  return (ent.kind().check(kind_util.FUNCTION_KIND_STR) and # is a function
+          len(ent.refs("use, set, modify, assign")) and # manipulates data
+           ent.control_flow_graph()) # has control flow
+
+def init(graph, arch):
+  # Options
+  graph.options().checkbox("Show Types", "Show Types", True)
+
+  # Legend
+  graph.legend().define("param", "rectangle", "Parameter/Return", "#90c4e4", "", 0,0)
+  graph.legend().define("local", "rectangle", "Local", "#569f38", "", 1,0)
+  graph.legend().define("global", "rectangle", "Global", "#e45721", "", 2,0)
+
+  graph.legend().define("useAct", "rectangle", "Use", "#90c4e4", "", 0,1)
+  graph.legend().define("setAct", "rectangle", "Set", "#569f38", "", 1,1)
+  graph.legend().define("modifyAct", "rectangle", "Modify", "#e45721", "", 2,1)
+
+  graph.legend().define("useDerefAct", "rectangle", "Deref Use", "#90c4e4", "#90c4e4", 0,2)
+  graph.legend().define("setDerefAct", "rectangle", "Deref Set", "#569f38", "#569f38", 1,2)
+  graph.legend().define("modifyDerefAct", "rectangle", "Deref Modify", "#e45721", "#e45721", 2,2)
+
+
+def draw(graph, ent):
+  # Set graph defaults
+  graph.set("layout", "umlseq")
+  graph.default('color', '#90c4e4', 'node')
+  graph.default('color', '#4e8cb9', 'edge')
+
+  # Data
+  row = 0
+  columnNumber = dict() # entity -> column number
+  columnNode = dict() # column number -> last node in column
+  columnNesting = dict() # column number -> current nesting
+  clusterStack = [ graph ]
+  controlFlowNodeStack = list()
+
+  # Functions
+  def columnOf(colEnt):
+    if colEnt in columnNumber:
+      return columnNumber[colEnt]
+
+    colNum = len(columnNumber)
+    columnNumber[colEnt] = colNum
+
+    columnNesting[colNum] = 0
+
+    name = colEnt.name()
+    if colEnt == ent:
+      name = "return"
+    if colEnt.type() and graph.options().lookup("Show Types"):
+      name += "\n" + colEnt.type()
+
+    node = graph.node(name, colEnt)
+    node.set("uml", "object") # Attribute required by layout
+    node.set("row", "0") # Attribute required by layout
+    node.set("col", str(colNum)) # Attribute required by layout
+
+    if colEnt != ent and not colEnt.kind().check("parameter"):
+      if colEnt.kind().check("global"):
+        node.set("color", "#e45721")
+      else:
+        node.set("color", "#569f38")
+    columnNode[colNum] = node
+
+    return colNum
+
+  def lifeline(col, node):
+    if columnNesting[col] != 0:
+      return
+
+    lifelineEdge = graph.edge(columnNode[col], node)
+    lifelineEdge.set("uml", "lifeline") # Attribute required by layout
+    lifelineEdge.set("style", "dashed") # Optional attribute
+    columnNode[col] = node # update last node
+
+  def activation(col):
+    actNode = clusterStack[-1].node()
+    actNode.set("uml", "activation") # Attribute required by layout
+    actNode.set("row", str(row)) # Attribute required by layout
+    actNode.set("col", str(col)) # Attribute required by layout
+    actNode.set("nesting", str(columnNesting[col])) # Attribute required by layout for activation nodes
+
+    lifeline(col, actNode)
+    columnNesting[col] += 1
+
+    return actNode
+
+  # Populate initial columns based on function signature
+
+  # Column for return value, if used
+  if ent.type() and ent.type() != "void":
+    columnOf(ent)
+
+  # Columns for parameters
+  for ref in ent.refs("define,declare","c parameter", True):
+    columnOf(ref.ent())
+
+  # Add Activation Boxes
+
+  # Find all the relevant references
+  refs = ent.refs("use ~cast,set,modify")
+
+  beginref = ent.ref("begin")
+  endref = ent.ref("end")
+  defref = ent.ref("definein")
+  if not beginref:
+    beginref = defref
+  if defref and endref:
+    for ref in defref.file().filerefs("assignby"):
+      if refInRange(beginref, ref, endref) and ref.scope() != ent:
+        refs.append(ref)
+
+  refs.sort(key=lambda ref: (ref.line(), ref.column(), ref.kind().check("assignby")))
+
+  # Use control flow nodes to have boundaries in the activation boxes
+  cgraph = ent.control_flow_graph()
+  for cfnode in cgraph.nodes():
+    activations = []
+
+    # Check for beginning of clusters / sections
+    if cfnode.kind() in CONTROL_FLOW_KINDS and cfnode.end_node():
+      # New combined fragment cluster
+      cluster = clusterStack[-1].cluster()
+      if cfnode.kind() in CONTROL_FLOW_ALT:
+        cluster.set("label", "alt")
+      else:
+        cluster.set("label", "loop")
+      cluster.set("uml", "combinedfragment") # Attribute required by layout
+      row += 1
+      cluster.set("row", str(row)) # Attribute required by layout
+      cluster.set("col", "0") # Attribute required by layout
+
+      depth = int((len(clusterStack) - 1) / 2)
+      color = CLUSTER_COLORS[depth % len(CLUSTER_COLORS)]
+      cluster.set("color", color) # optional
+      cluster.set("fontcolor", color) # optional
+
+      clusterStack.append(cluster)
+
+      section = clusterStack[-1].cluster();
+      section.set("uml", "section") # Attribute required by layout
+      section.set("row", str(row)) # Attribute required by layout
+      section.set("col", "0") # Attribute required by layout
+      section.set("label", "")
+      clusterStack.append(section) # new section
+
+      controlFlowNodeStack.append(cfnode)
+    elif (controlFlowNodeStack and
+          controlFlowNodeStack[-1].end_node() != cfnode and
+          cfnode in controlFlowNodeStack[-1].children()):
+      # New section within current combined fragment
+      del clusterStack[-1] # end previous section
+      row += 1
+      section = clusterStack[-1].cluster();
+      section.set("uml", "section") # Attribute required by layout
+      section.set("row", str(row)) # Attribute required by layout
+      section.set("col", "0") # Attribute required by layout
+      section.set("label", controlFlowNodeStack[-1].child_label(cfnode))
+      clusterStack.append(section) # new section
+
+    # Add activation boxes
+
+    # Return nodes need to create an activation box if function has return value
+    if cfnode.kind() == "return" and ent in columnNumber:
+      row += 1
+      col = columnOf(ent)
+      actNode = activation(col)
+      actNode.sync(defref.file(), cfnode.line_begin(), cfnode.column_begin())
+      actNode.set("color", "#569f38") # Color as a set
+      activations.append( (col, actNode) )
+
+    # References create activation boxes
+    while refs and refBeforeCF(refs[0], cfnode):
+      ref = refs.pop(0)
+      if ref.kind().check("assignby"):
+        # Don't create an activation for assignments. Instead, create a
+        # message edge between the current activation boxes of the two variables.
+        # Sorting should ensure the assign comes after the use, but make sure
+        # the assignment is between things that already have activation boxes
+        if ref.ent() in columnNumber and ref.scope() in columnNumber:
+          col = columnOf(ref.ent())
+          fromCol = columnOf(ref.scope())
+          if fromCol != col:
+            messageEdge = graph.edge(columnNode[fromCol], columnNode[col])
+            messageEdge.sync(ref)
+            messageEdge.set("uml", "message")
+      else:
+        col = columnOf(ref.ent())
+        if not activations or columnNesting[col] > 0:
+          row = row + 1
+        actNode = activation(col)
+        actNode.sync(ref)
+
+        # Color activation by reference kind
+        color = "#90c4e4"
+        if ref.kind().check("set"):
+          color = "#569f38"
+        elif ref.kind().check("modify"):
+          color ="#e45721"
+        actNode.set("color", color)
+        if ref.kind().check("deref"):
+          actNode.set("fillcolor", color)
+
+        activations.append( (col, actNode) )
+
+    # Finish the activation boxes for this control flow node
+    if activations:
+      row = row + 1
+    for col, actNode in reversed(activations):
+      endAct = graph.edge(actNode, actNode)
+      endAct.set("visible", "false")
+      endAct.set("row", str(row)) # Attribute required by layout
+      endAct.set("uml", "return") # Attribute required by layout
+
+      columnNesting[col] -= 1
+      if columnNesting[col] > 0:
+        row = row + 1
+
+    # Check for end of cluster
+    if cfnode.kind() in CONTROL_FLOW_KINDS and controlFlowNodeStack and controlFlowNodeStack[-1].end_node() == cfnode:
+      # End the current cluster
+      row += 1
+      del controlFlowNodeStack[-1]
+      del clusterStack[-1] # delete section
+      del clusterStack[-1] # delete combined fragment
+
+  # To complete the graph, draw lifelines down to the bottom of the graph
+  # This requires making an invisible node to connect the life line edges to.
+  end = graph.node()
+  end.set("uml", "spacer")  # Attribute required by layout
+  end.set("width", "0")     # Attribute required by layout
+  end.set("height", "10")   # Attribute required by layout
+  row += 1
+  end.set("row", str(row)) # Attribute required by layout
+  end.set("col", "0") # Attribute required by layout
+  for i in range(len(columnNode)):
+    lifeline(i, end)
+
+def refBeforeCF(ref, cfnode):
+  """
+  Range check for reference and control flow node.
+  """
+  if not cfnode.line_begin() or not cfnode.column_begin():
+    return cfnode.kind() == "end"
+  return before(ref.line(), ref.column(), cfnode.line_end(), cfnode.column_end())
+
+def refInRange(startRef, ref, endRef):
+  """
+  Range check for ref in the bounds given by the startRef and endRef
+  """
+  if not startRef or not endRef:
+    return True
+  return (before(startRef.line(), startRef.column(), ref.line(), ref.column()) and
+          before(ref.line(), ref.column(), endRef.line(), endRef.column()))
+
+def before(line, col, beforeLine, beforeCol):
+  """
+  Generic range check
+  """
+  return line < beforeLine or (line == beforeLine and col <= beforeCol)
+
+CLUSTER_COLORS = ["#afd870", "#fcad56", "#569f38", "#e45721"]
+CONTROL_FLOW_ALT= [ "if", "elsif", "switch" ]
+CONTROL_FLOW_KINDS=[
+  "do-while",
+  "end-do-while",
+  "if",
+  "elsif",
+  "else",
+  "end-if",
+  "while-for",
+  "while",
+  "for",
+  "end-loop",
+  "switch",
+  "switch-case",
+  "switch-default",
+  "end-switch"
+]
+
+
