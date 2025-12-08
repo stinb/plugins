@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <cstdint>
 void fn ( void )
 {
   int32_t a;
