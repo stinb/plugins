@@ -1,8 +1,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#if defined(__unix__) || defined(__APPLE__)
 #include <unistd.h>
 #include <sys/socket.h>
+#else
+// Declarations for Windows compatibility
+typedef long ssize_t;
+ssize_t read(int fd, void *buf, size_t count);
+ssize_t recv(int sockfd, void *buf, size_t len, int flags);
+#endif
 
 char dst[128];
 int fd;
