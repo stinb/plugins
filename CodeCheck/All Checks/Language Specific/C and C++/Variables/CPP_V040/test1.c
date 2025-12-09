@@ -1,6 +1,6 @@
 // Custom
 
-
+#ifdef _WIN32 // C11 threading not supported on Mac or Linux
 #include <threads.h>
 
 
@@ -45,3 +45,4 @@ void wait_b_mistake_2()
   cnd_wait(&b.condition, &c.mutex); // UndCC_Violation(Win)
   mtx_unlock(&b.mutex);
 }
+#endif

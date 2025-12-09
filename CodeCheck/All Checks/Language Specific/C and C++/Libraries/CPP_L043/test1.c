@@ -1,9 +1,9 @@
 // Custom
 
-
+#ifdef _WIN32 // C11 threading not supported on Mac or Linux
 #include <stdint.h>
 #include <string.h>
-#include <threads.h> // C11 threads not supported on Mac/Linux
+#include <threads.h>
 
 
 cnd_t condition_a;
@@ -67,3 +67,4 @@ void storages()
   tss_get(storage_a);
   tss_set(storage_a, 0);
 }
+#endif

@@ -1,4 +1,5 @@
-#include <threads.h> // C11 threads not supported by Mac/Linux
+#ifdef _WIN32 // C11 threading not supported on Mac or Linux
+#include <threads.h>
 #include <stdint.h>
 
 typedef int bool_t;
@@ -22,3 +23,4 @@ int32_t t1(void *ignore) /* Thread 1 */
 
     return 0;
 }
+#endif

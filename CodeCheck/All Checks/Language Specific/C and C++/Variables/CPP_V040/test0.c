@@ -1,6 +1,6 @@
 // MISRA C 2023
 
-
+#ifdef _WIN32 // C11 threading not supported on Mac or Linux
 #include <stdint.h>
 #include <threads.h>
 
@@ -34,3 +34,4 @@ int32_t t3(void* ignore)
                                  ... unclear whether t1 or t2 resumes */
  return 0;
 }
+#endif

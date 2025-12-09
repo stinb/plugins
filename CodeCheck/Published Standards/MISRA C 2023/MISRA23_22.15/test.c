@@ -1,3 +1,4 @@
+//#ifdef _WIN32 // C11 threading not supported on Mac or Linux
 #include <stdatomic.h>
 #include <threads.h>
 
@@ -46,3 +47,4 @@ void main(void)
     mtx_destroy(&Ra); /* UndCC_Valid */
     tss_delete(key1); /* UndCC_Valid */
 }
+//#endif

@@ -1,3 +1,4 @@
+#ifdef _WIN32 // C11 threading not supported on Mac or Linux
 #include <threads.h>
 #include <stdint.h>
 
@@ -26,3 +27,4 @@ int32_t main(void)
     mtx_init(&Rb, mtx_recursive);
     thrd_create(&id1, t1, NULL);
 }
+#endif
