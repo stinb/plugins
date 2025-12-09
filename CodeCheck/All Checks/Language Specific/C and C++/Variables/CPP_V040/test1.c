@@ -34,7 +34,7 @@ void wait_a()
 void wait_b_mistake_1()
 {
   mtx_lock(&b.mutex);
-  cnd_wait(&b.condition, &b.mutex); // UndCC_Violation
+  cnd_wait(&b.condition, &b.mutex); // UndCC_Violation(Win)
   mtx_unlock(&b.mutex);
 }
 
@@ -42,6 +42,6 @@ void wait_b_mistake_1()
 void wait_b_mistake_2()
 {
   mtx_lock(&b.mutex);
-  cnd_wait(&b.condition, &c.mutex); // UndCC_Violation
+  cnd_wait(&b.condition, &c.mutex); // UndCC_Violation(Win)
   mtx_unlock(&b.mutex);
 }

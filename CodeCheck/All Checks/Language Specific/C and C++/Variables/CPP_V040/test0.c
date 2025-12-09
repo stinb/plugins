@@ -13,7 +13,7 @@ cnd_t Cnd;
 int32_t t1(void *ignore )
 {
   mtx_lock  ( &Ra       );
-  cnd_wait  ( &Cnd, &Ra );    /* UndCC_Violation - t2 uses Cnd with Rb */
+  cnd_wait  ( &Cnd, &Ra );    /* UndCC_Violation(Win) - t2 uses Cnd with Rb */
   mtx_unlock( &Ra       );
   return 0;
 }
@@ -22,7 +22,7 @@ int32_t t1(void *ignore )
 int32_t t2(void *ignore )
 {
  mtx_lock  ( &Rb       );
- cnd_wait  ( &Cnd, &Rb );     /* UndCC_Violation - t1 uses Cnd with Ra */
+ cnd_wait  ( &Cnd, &Rb );     /* UndCC_Violation(Win) - t1 uses Cnd with Ra */
  mtx_unlock( &Rb       );
  return 0;
 }
