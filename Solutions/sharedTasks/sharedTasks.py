@@ -2,6 +2,7 @@
 
 
 import functools
+import re
 
 import understand
 from understand import Arch, Db, Ent, Ref
@@ -598,3 +599,10 @@ def findInterruptDisabledRefs(
         checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
     return interruptDisabledRefs
+
+def checkIsFunctionPointer(ent: Ent) -> bool:
+    if not ent.kind().check('Parameter, Object'):
+        return False
+    t = ent.freetext('UnderlyingType')
+    t = re.sub(r'\b(const|restrict|volatile)\s*', '', t)
+    return bool(re.search(r'\(\*+\)\(', t))

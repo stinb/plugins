@@ -1,0 +1,278 @@
+import sharedTasks
+
+def name():
+  return "Shared Tasks Graph"
+
+def description():
+  return '''List the nodes and edges that appear in the Shared Tasks Graph
+
+    <p>Architectures are used to tag the root functions defining the call trees.
+    This report runs on such architectures to list the nodes and edges
+    that appear in the <a href="und://plugin/graph/Shared%20Tasks-By%20Function">
+    Shared Tasks Graph</a></p>
+
+    <p>To aid users who must track information about the graph, the report
+    defines an annotation scheme. Annotations are used because they are
+    persistent, shared, and easily accessible from the API. It's also possible
+    to create them from the API for more automated processes, and they
+    remember the author and date.</p>
+
+    <p>To annotate a node, annotate the corresponding entity and begin the
+    annotation with "#SharedTaskNode". The rest of the annotation, after the
+    tag, will be shown in the table. Multiple annotations are seperated with
+    ';', just like multiple kinds. Note that newlines don't display well inside
+    Interactive Report tables, so it's recommended to avoid those.</p>
+
+    <p>Similarly, to annotate the edge `a` to `b`, annotate the entity `a`
+    with an annotation the begins with "#SharedTaskEdgeTo b_unique_name" where
+    b_unique_name can be found by running the interactive report "API Info"
+    on `b` and looking for the unique name field near the bottom. The remainder
+    of the annotation will appear in the table</p>
+
+    <br>
+    <b>Example:</b><br>
+    <img src=".doc/shared_tasks_graph_report.png">
+
+        <h2>Architecture Structure</h2>
+
+    <p>Working with multiple call trees means working with multiple root
+    functions. To pass multiple entities to a plugin, the entities must be
+    grouped together in an architecture. A simple architecture can have the
+    format:</p>
+
+    <ul><li>Name of root architecture can be anything
+      <ul><li>Any name containing the word tasks (case insensitive)
+        <ul>
+          <li>function1()</li>
+          <li>function2()</li>
+        </ul></li>
+      </ul></li>
+    </ul>
+
+    <p>The shared tasks plugins also support additional fields for the tasks.
+    These fields are displayed on the graph under the task name, and in the
+    table as columns. Currently supported fields are 'core' and 'priority'.
+    A field can be used instead of an architecture name containing the word
+    tasks.</p>
+
+    <ul><li>Name of root architecture can be anything
+      <ul><li>Any name containing the the word core or priority (case insensitive)
+        <ul><li>Field value like 1
+          <ul><li>function1()</li></ul>
+        <li>Another field value like 2
+          <ul><li>function2()</li></ul>
+        </li></ul>
+      </li></ul>
+    </li></ul>
+
+    <p>Finally, the architecture can be used to identify functions that enable
+    and disable interrupts. References protected by these functions
+    (preceded by a call to the disable function and followed by a call to the
+    enable function) are identified by the plugins. The naming pattern interrupt
+    control is (ommitting the tasks): </p>
+
+    <ul><li>Name of root architecture can be anything
+      <ul><li>name containing the word interrupt or the word control (case insensitive)
+        <ul><li>any name here. This layer allows multiple pairs of interrupt functions
+          <ul><li>enable
+            <ul><li>enableFunction()</li></ul>
+          <li>disable
+            <ul><li>disableFunction()</li></ul>
+          </li></ul>
+        </li></ul>
+      </li></ul>
+    </li></ul>
+    '''
+
+def tags():
+  return [
+    'Solution: Shared Tasks',
+    'Target: Architectures',
+    'Language: Any',
+    'Concurrency'
+  ]
+
+def test_architecture(arch) -> bool:
+  return True
+
+
+def init(report):
+  for option in sharedTasks.COMMON_OPTIONS:
+    # Checkbox
+    if option.choices == sharedTasks.OPTION_BOOL_CHOICES:
+      report.options().checkbox(option.key, option.name, option.default == sharedTasks.OPTION_BOOL_TRUE)
+    # Choice
+    elif option.choices:
+      report.options().choice(option.key, option.name, option.choices, option.default)
+    # Text
+    else:
+      report.options().text(option.key, option.name, option.default)
+
+
+def generate(report, target):
+  # Options
+  options = dict() # type: dict[str, str | bool]
+  for option in sharedTasks.COMMON_OPTIONS:
+    value = report.options().lookup(option.key)
+    if option.choices == sharedTasks.OPTION_DEPTH_CHOICES and value != 'All':
+      value = int(value)
+    options[option.key] = value
+
+  edgeInfo, tasks, incoming, interruptDisabledRefs = sharedTasks.buildEdgeInfo(report.db(), target, options)[0:4]
+
+  # Create a filter table for the nodes
+  report.heading(2)
+  report.print("Nodes")
+  report.heading()
+  report.print('To track a node, add an annotation starting with "#SharedTaskNode" to the entity.')
+  report.table("""
+    [{
+       "name" : "Node",
+       "filtertype": "string"
+     },{
+       "name" : "Kind",
+       "filtertype": "string"
+     },{
+       "name" : "Annotations",
+       "filtertype": "string"
+     }]
+  """)
+
+  # Scan the provided graph, printing out the nodes now and storing the edges
+  # for later
+  nodes = dict()
+  edges = []
+  for edgeObj in edgeInfo.values():
+    # head node
+    scope = edgeObj['scope']
+    if scope not in nodes:
+      nodes[scope] = reportNode(report, scope, options, tasks, edgeObj)
+
+    # Tail node
+    ent = edgeObj['ent']
+    if ent not in nodes:
+      nodes[ent] = reportNode(report, ent, options, tasks, edgeObj)
+
+    # Store Edge
+    edges.append(edgeRow(scope, ent, interruptDisabledRefs, edgeObj))
+
+  report.table() # End the nodes table
+
+  # Create a filter table for the edges
+  report.heading(2)
+  report.print("Edges")
+  report.heading()
+  report.print(('To track an edge from `a` to `b`, annotate `a` with '
+               '"#SharedTaskEdgeTo b_unique_name ..." where b_unique_name '
+               'is the unique name field for `b` found from the "API Info '
+               'interative report.'))
+  report.table("""
+    [{
+       "name" : "Tail Node",
+       "filtertype": "string"
+     },{
+       "name" : "Head Node",
+       "filtertype": "string"
+     },{
+       "name" : "Kind",
+       "filtertype": "string"
+     },{
+       "name" : "Annotations",
+       "filtertype": "string"
+     }]
+  """)
+
+  for edge in edges:
+    reportEdge(report, edge, nodes)
+
+  report.table() # end edges table
+
+def reportNode(report, ent, options, tasks, edgeObj):
+  # Node table cell
+  report.tablecell()
+  report.entity(ent)
+  name = sharedTasks.getLongName(ent, options)
+  report.print(name)
+  report.entity()
+
+  # Kinds table cell
+  report.tablecell()
+  kinds = []
+
+  # Add task fields as part of kind
+  if ent in tasks:
+    kinds.append("Task")
+    for field in sharedTasks.TASK_FIELDS:
+        if field in tasks[ent]:
+            kinds.append(field.capitalize() + '=' + tasks[ent][field])
+
+  # Check kinds that determine styling
+  if ent.kind().check(sharedTasks.OBJ_ENT_KINDS):
+    if edgeObj['shared']:
+      kinds.append("Shared Global Object")
+    else:
+      kinds.append("Global Object")
+  elif sharedTasks.checkIsFunctionPointer(ent):
+    kinds.append("Function Pointer")
+  elif sharedTasks.checkIsCallable(ent) and edgeObj['root']:
+    kinds.append("Root")
+
+  if kinds:
+    report.print(";".join(kinds))
+
+  # Annotations table cell
+  report.tablecell()
+  atns = []
+  for atn in ent.annotations():
+    if atn.text().startswith("#SharedTaskNode"):
+      atns.append(atn.text()[len("#SharedTaskNode"):])
+
+  if atns:
+    report.print(';'.join(atns))
+
+  return name # for edges later
+
+
+def edgeRow(scope, ent, interruptDisabledRefs, edgeObj):
+  kindnames = list(edgeObj['kindnames'])
+  kindnames.sort()
+
+  if sharedTasks.refStr(edgeObj['ref']) in interruptDisabledRefs:
+    kindnames.append("Interrupt Protected")
+  elif edgeObj['filtered']:
+    kindnames.append("Filtered")
+
+  atns = []
+  for atn in scope.annotations():
+    parts = atn.text().split()
+    if len(parts) > 2 and parts[0] == "#SharedTaskEdgeTo" and parts[1] == ent.uniquename():
+      atns.append(" ".join(parts[2:]))
+
+  return [scope, ent, kindnames, atns]
+
+def reportEdge(report, edge, nodes):
+  scope, ent, kindnames, atns = edge
+
+  # tail node cell
+  report.tablecell()
+  report.entity(scope)
+  report.print(nodes[scope])
+  report.entity()
+
+  # head node cell
+  report.tablecell()
+  report.entity(ent)
+  report.print(nodes[ent])
+  report.entity()
+
+  # Kind cell
+  report.tablecell()
+  if kindnames:
+    report.print(';'.join(kindnames))
+
+  # Annotations cell
+  report.tablecell()
+  if atns:
+    report.print(';'.join(atns))
+
+
