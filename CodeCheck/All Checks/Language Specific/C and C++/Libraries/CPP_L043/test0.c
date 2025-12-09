@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <string.h>
-#include <threads.h>
+#include <threads.h> // C11 threads not supported on Mac/Linux
 
 
 mtx_t Ra;
@@ -19,8 +19,8 @@ int32_t t1( void *ignore )
   int32_t val;
   /* if ( id1 == id2 ) */            /* Error - use thrd_equal() */
   {
-    Rb = Ra;                         /* UndCC_Violation */
-    memcpy(&Rb, &Ra, sizeof(mtx_t)); /* UndCC_Violation */
+    Rb = Ra;                         /* UndCC_Violation(Win) */
+    memcpy(&Rb, &Ra, sizeof(mtx_t)); /* UndCC_Violation(Win) */
   }
 
   if ( thrd_equal( id1, id2 ) )      /* UndCC_Valid */

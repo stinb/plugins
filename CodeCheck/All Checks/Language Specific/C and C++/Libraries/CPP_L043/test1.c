@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <string.h>
-#include <threads.h>
+#include <threads.h> // C11 threads not supported on Mac/Linux
 
 
 cnd_t condition_a;
@@ -18,10 +18,10 @@ tss_t storage_b;
 
 void arrays()
 {
-  cnd_t conditions[] = {condition_a, condition_b}; // UndCC_Violation
-  mtx_t mutexes[] = {mutex_a, mutex_b};            // UndCC_Violation
-  thrd_t threads[] = {thread_a, thread_b};         // UndCC_Violation
-  tss_t storages[] = {storage_a, storage_b};       // UndCC_Violation
+  cnd_t conditions[] = {condition_a, condition_b}; // UndCC_Violation(Win)
+  mtx_t mutexes[] = {mutex_a, mutex_b};            // UndCC_Violation(Win)
+  thrd_t threads[] = {thread_a, thread_b};         // UndCC_Violation(Win)
+  tss_t storages[] = {storage_a, storage_b};       // UndCC_Violation(Win)
 }
 
 
