@@ -1,0 +1,258 @@
+ERR1 = "The numeric value of an unscoped enumeration with no fixed underlying type shall not be used"
+ERR2 = "Cases are not all enumerators of %1"
+
+INVALID_OPS = [
+    "+", "-", "*", "/", "%", "++", "--",
+    "&", "|", "^", "~",
+    "<<", ">>",
+    "!", "&&", "||",
+    "+=", "-=", "*=", "/=", "%=",
+    "&=", "|=", "^=", "<<=", ">>="
+]
+
+NARROW_INT_TYPES = [
+    "signed char",
+    "unsigned char",
+    "char",
+    "short",
+    "unsigned short",
+    "bool"
+]
+
+VALID_OPS = ["==", "!=", "<", ">", "<=", ">="]
+
+
+def ids():
+    return ('MISRA23_10.2.3')
+
+
+def name(id):
+    return {
+        'MISRA23_10.2.3': """Published Standards/MISRA C++ 2023/10.2.3 \
+The numeric value of an unscoped enumeration with no fixed underlying type shall not be used""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_10.2.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Enumerations',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_10.2.3': """
+<p><b>Amplification</b></p>
+<p>In an evaluated context, expressions of unscoped enumeration type without a fixed underlying type
+shall not be used:</p>
+<p>● As operands to an arithmetic, bitwise, shift, logical, or compound assignment operator;</p>
+<p>● As operands to relational and equality operators, unless both operands have the same
+enumeration type;</p>
+<p>● As the source of an assignment or a static_cast, unless the target has the same enumeration
+type or is an integer type large enough to accept all the values of the narrowest possible
+underlying type;</p>
+<p>● As the condition of a switch, unless all case constants are enumerators of the same
+enumeration.</p>
+<p>Additionally, a static_cast expression shall only have an unscoped enumeration target type if that
+enumeration type has a fixed underlying type.</p>
+
+<p><b>Rationale</b></p>
+<p>The underlying type of an unscoped enumeration that does not have a fixed underlying type is
+implementation-defined, so any implicit conversion could yield surprising results.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">enum E { e1a, e1b };
+enum Other { e2a };
+
+void g( int32_t i );
+
+void f( E e )
+{
+    E e2 = e; // Compliant - assignment to the same type
+    int32_t i1 = e; // Compliant - assignment to a large enough integer
+    e == e1a; // Compliant
+    e < e1b; // Compliant
+    e == e2a; // Non-compliant - second operand of a different type
+    e + 1; // Non-compliant - addition
+    g( e ); // Compliant - assignment to large enough integer
+
+    switch( e ) // Non-compliant - cases are not all enumerators of E
+    {
+        case e1b: return; // e1b is an enumerator of E
+        case e2a: return; // e2a is not an enumerator of E
+    }
+
+    auto s = sizeof( e + 1 ); // Unevaluated context - rule does not apply
+    E e3 = static_cast< E >( 0 ); // Non-compliant
+
+    auto a1 = "QWERTY";
+    a1[ e1a ]; // Compliant - index operator
+    *( a1 + e1a ); // Non-compliant
+    std::string a2 { a1 };
+    a2[ e1a ]; // Compliant - assignment to a large enough integer (size_t)
+}</code></pre>
+
+<p><b>Developer's Note:</b></p>
+<p>This check automatically flags the use of enum as operands to arithmetic, 
+bitwise, shift, logical, or compound assignment operators.
+<p>It also flags assignments of enumerators to objects with narrow integer types (int16_t and smaller).</p>
+</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_unscoped(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(
+        ref.line(), ref.column())
+
+    if (lex and
+            (lex.previous(True, True).text() == "class"
+             or lex.next(True, True).text() == ":")):
+        return False
+
+    return True
+
+
+def is_invalid_op(lex, enum):
+    if lex and lex.next(True, True).text() in VALID_OPS:
+        lex = lex.next(True, True).next(True, True)
+
+        while lex and lex.next().text() in ["::", ".", "->"]:
+            lex = lex.next().next()
+
+        if lex and lex.ent():
+            utype = str(lex.ent().freetext("UnderlyingType"))
+
+            if (utype != enum.name()) and (utype != enum.longname()):
+                return True
+    elif lex and lex.previous(True, True).text() in VALID_OPS:
+        lex = lex.previous(True, True).previous(True, True)
+
+        if lex and lex.ent():
+            utype = str(lex.ent().freetext("UnderlyingType"))
+
+            if (utype != enum.name()) and (utype != enum.longname()):
+                return True
+    elif (lex and
+          (lex.next(True, True).text() in INVALID_OPS
+           or lex.previous(True, True).text() in INVALID_OPS)):
+        return True
+
+    return False
+
+
+def is_static_cast(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+    lex = lex.previous(True, True)
+
+    if lex and (lex.text() != "<"):
+        return False
+
+    lex = lex.previous(True, True)
+
+    if lex and (lex.text() == "static_cast"):
+        return True
+
+    return False
+
+
+def is_invalid_switch(lex, enum, enumerators):
+    if lex.previous(True, True).text() != "(":
+        return False
+
+    lex = lex.previous(True, True)
+
+    if lex.previous(True, True).text() == "switch":
+        on_switch = 0
+        on_case = False
+
+        while lex:
+            if lex.text() == "{":
+                on_switch += 1
+            elif lex.text() == "}":
+                on_switch -= 1
+
+                if not on_switch:
+                    break
+            elif (on_switch == 1) and (lex.text() == "case") and (lex.token() == "Keyword"):
+                on_case = True
+            elif on_case:
+                if lex.next().text() in ["::", ".", "->"]:
+                    lex = lex.next().next()
+                    continue
+                elif lex.text() in enumerators:
+                    pass
+                else:
+                    utype = str(lex.ent().freetext("UnderlyingType")
+                                ) if lex.ent() else ""
+
+                    if (utype != enum.name()) and (utype != enum.longname()):
+                        return True
+
+                on_case = False
+
+            lex = lex.next(True, True)
+
+    return False
+
+
+def check(check, file):
+    for enum_ref in file.filerefs("Define", "Enum Type"):
+        enum_ent = enum_ref.ent()
+        enumerators = []
+
+        if not is_unscoped(enum_ref):
+            continue
+
+        for enumerator_ref in enum_ref.ent().refs("Define", "Enumerator"):
+            enumerators.append(enumerator_ref.ent().name())
+
+            for use_ref in enumerator_ref.ent().refs("Useby"):
+                lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+
+                if is_invalid_op(lex, enum_ent):
+                    check.violation(use_ref.scope(), use_ref.file(),
+                                    use_ref.line(), use_ref.column(), ERR1)
+
+        for typed_ref in enum_ref.ent().refs("Typedby"):
+            for use_ref in typed_ref.ent().refs("Useby"):
+                lex = use_ref.file().lexer().lexeme(use_ref.line(), use_ref.column())
+
+                if is_invalid_op(lex, enum_ent):
+                    check.violation(use_ref.scope(), use_ref.file(),
+                                    use_ref.line(), use_ref.column(), ERR1)
+                elif is_invalid_switch(lex, enum_ent, enumerators):
+                    check.violation(use_ref.scope(), use_ref.file(),
+                                    use_ref.line(), use_ref.column(), ERR2, enum_ent.name())
+
+            for ass_ref in typed_ref.ent().refs("Assignby Value ~Indirect"):
+                utype = str(ass_ref.ent().freetext("UnderlyingType"))
+
+                if utype == enum_ent.name() or utype == enum_ent.longname():
+                    pass
+                elif utype in NARROW_INT_TYPES:
+                    check.violation(ass_ref.scope(), ass_ref.file(),
+                                    ass_ref.line(), ass_ref.column(), ERR1)
+
+        for cast_ref in enum_ref.ent().refs("Cast Useby"):
+            if is_static_cast(cast_ref):
+                check.violation(cast_ref.scope(), cast_ref.file(),
+                                cast_ref.line(), cast_ref.column(), ERR1)
