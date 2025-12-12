@@ -1,0 +1,380 @@
+# Interactive Report for Shared Tasks Graphs AI
+
+import understand
+from understand import Ent
+
+from sharedTasks import *
+
+
+def name():
+    return 'Shared Tasks Graphs AI'
+
+
+def description():
+    return '''The shared tasks plugins find global objects accessed from multiple call trees.
+
+    <p>Architectures are used to tag the root functions definng the call trees.
+    This interactive report displays nodes and edges from the shared tasks graph in
+    separate tables. Nodes show entity names, kinds (including task fields, function
+    pointer status, and shared global object status), and annotations. Edges show
+    source and destination nodes, edge kinds (including interrupt protected and
+    filtered status), and annotations. You can add custom annotations to entities
+    that will appear in the tables.</p>
+
+    <br>
+    <b>Example:</b><br>
+    <img src="sharedTasks.png">
+
+    <h2>Architecture Structure</h2>
+
+    <p>Working with multiple call trees means working with multiple root
+    functions. To pass multiple entities to a plugin, the entities must be
+    grouped together in an architecture. A simple architecture can have the
+    format:</p>
+
+    <ul><li>Name of root architecture can be anything
+      <ul><li>Any name containing the word tasks (case insensitive)
+        <ul>
+          <li>function1()</li>
+          <li>function2()</li>
+        </ul></li>
+      </ul></li>
+    </ul>
+
+    <p>The shared tasks plugins also support additional fields for the tasks.
+    These fields are displayed on the graph under the task name, and in the
+    table as columns. Currently supported fields are 'core' and 'priority'.
+    A field can be used instead of an architecture name containing the word
+    tasks.</p>
+
+    <ul><li>Name of root architecture can be anything
+      <ul><li>Any name containing the the word core or priority (case insensitive)
+        <ul><li>Field value like 1
+          <ul><li>function1()</li></ul>
+        <li>Another field value like 2
+          <ul><li>function2()</li></ul>
+        </li></ul>
+      </li></ul>
+    </li></ul>
+
+    <p>Finally, the architecture can be used to identify functions that enable
+    and disable interrupts. References protected by these functions
+    (preceded by a call to the disable function and followed by a call to the
+    enable function) are identified by the plugins. The naming pattern interrupt
+    control is (ommitting the tasks): </p>
+
+    <ul><li>Name of root architecture can be anything
+      <ul><li>name containing the word interrupt or the word control (case insensitive)
+        <ul><li>any name here. This layer allows multiple pairs of interrupt functions
+          <ul><li>enable
+            <ul><li>enableFunction()</li></ul>
+          <li>disable
+            <ul><li>disableFunction()</li></ul>
+          </li></ul>
+        </li></ul>
+      </li></ul>
+    </li></ul>
+
+
+    <p>More documentation is available in the <a href=
+    "https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/README.md">
+    README &#8599;</a> file in the repository. See also the
+    <a href="und://plugins/Solutions/sharedTasks/.doc/manager_sharedtasks.md?filter=Solution%3A%22Shared%20Tasks%22">
+    Shared Tasks</a> solution, the
+    <a href="und://plugin/ireport/Shared%20Tasks%20CSV">interactive report</a>
+    and the related graph plugin for
+    <a href="und://plugin/graph/Shared%20Tasks-By%20Object">objects</a>.
+    Also related are <a href="und://plugins?filter=Tags%3A%22Concurrency%22">
+    concurrency</a> plugins. </p>
+   '''
+
+
+def tags():
+    return [
+        'Solution: Shared Tasks',
+        'Target: Architectures',
+        'Language: Any',
+        'Concurrency'
+    ]
+
+
+def test_architecture(arch):
+    return True
+
+
+def init(report, target):
+    """
+    Optional method, define options that can be changed by the user
+    """
+    # Define the same options as the graph plugin
+    for option in COMMON_OPTIONS:
+        if option.choices == OPTION_BOOL_CHOICES:
+            default = option.default == OPTION_BOOL_TRUE
+            report.options().checkbox(option.name, option.name, default)
+        else:
+            report.options().choice(option.name, option.name, option.choices, option.default)
+
+
+def getNodeName(ent: Ent, options: dict[str, str | bool], tasks: dict) -> str:
+    # Don't include task fields in the name
+    return getLongName(ent, options)
+
+
+def getNodeKind(ent: Ent, tasks: dict, edgeInfo: dict, incoming: dict) -> str:
+    """Get node kind including task fields, function pointer, and shared global object status"""
+    kind = ent.kind().longname()
+
+    modifiers = []
+
+    # Add task fields to the kind
+    if ent in tasks:
+        taskFields = []
+        for field in TASK_FIELDS:
+            if field in tasks[ent]:
+                taskFields.append(f"{field.capitalize()}: {tasks[ent][field]}")
+        if taskFields:
+            modifiers.extend(taskFields)
+
+    # Add function pointer status
+    if checkIsFunctionPointer(ent):
+        modifiers.append("Function Pointer")
+
+    # Add shared global object status
+    if ent.kind().check(OBJ_ENT_KINDS):
+        isShared = False
+        if ent in incoming:
+            for edgeKey in incoming[ent]:
+                if edgeKey in edgeInfo:
+                    edgeObj = edgeInfo[edgeKey]
+                    if edgeObj.get('shared', False):
+                        isShared = True
+                        break
+        if isShared:
+            modifiers.append("Shared Global Object")
+
+    if modifiers:
+        kind += " (" + ", ".join(modifiers) + ")"
+
+    return kind
+
+
+def getNodeAnnotations(ent: Ent, tasks: dict, edgeInfo: dict, incoming: dict) -> str:
+    """Get annotations for a node from ent.annotations()"""
+    annotationTexts = []
+
+    # Get annotations from the entity
+    for annotation in ent.annotations():
+        text = annotation.text()
+        if text.startswith("#SharedTaskNode"):
+            # Remove the "#SharedTaskNode" prefix
+            annotationText = text[len("#SharedTaskNode"):].strip()
+            if annotationText:
+                annotationTexts.append(annotationText)
+
+    return "; ".join(annotationTexts) if annotationTexts else ""
+
+
+def getEdgeKind(edgeObj: dict, interruptDisabledRefs: set[str]) -> str:
+    """Get edge kind including interrupt disabled or filtered status"""
+    # Get edge kind names
+    kindnames = list(edgeObj['kindnames'])
+    kindnames.sort()
+    edgeKind = '/'.join(kindnames)
+
+    # Add interrupt disabled or filtered status
+    ref = edgeObj.get('ref')
+    if ref and refStr(ref) in interruptDisabledRefs:
+        edgeKind += " [Interrupt Protected]"
+
+    if edgeObj.get('filtered', False):
+        edgeKind += " [Filtered Out]"
+
+    return edgeKind
+
+
+def getEdgeAnnotations(sourceEnt: Ent, destEnt: Ent) -> str:
+    """Get annotations for an edge from source entity's annotations"""
+    annotationTexts = []
+
+    # Get the destination entity's uniquename
+    destUniquename = destEnt.uniquename()
+
+    # Filter source entity's annotations that start with "#SharedTaskEdgeTo uniquename"
+    prefix = f"#SharedTaskEdgeTo {destUniquename}"
+    for annotation in sourceEnt.annotations():
+        text = annotation.text()
+        if text.startswith(prefix):
+            # Remove the prefix
+            annotationText = text[len(prefix):].strip()
+            if annotationText:
+                annotationTexts.append(annotationText)
+
+    return "; ".join(annotationTexts) if annotationTexts else ""
+
+
+def generate(report, target, pageId):
+    """
+    Required, generate the report
+    """
+    # Get a dictionary that maps an option key to the value
+    options = dict() # type: dict[str, str | bool]
+    for commonOption in COMMON_OPTIONS:
+        value = report.options().lookup(commonOption.name)
+        if commonOption.choices == OPTION_BOOL_CHOICES:
+            # Handle both string and boolean values from checkbox
+            if value == OPTION_BOOL_TRUE or value == True or value == 'True':
+                value = True
+            elif value == OPTION_BOOL_FALSE or value == False or value == 'False':
+                value = False
+        elif commonOption.choices == OPTION_DEPTH_CHOICES and value != 'All':
+            value = int(value)
+        options[commonOption.key] = value
+
+    # Generate the same data as the graph plugin
+    edgeInfo, tasks, incoming, interruptDisabledRefs = buildEdgeInfo(report.db(), target, options)[0:4]
+
+    # Collect all unique nodes from edgeInfo
+    nodes = dict() # { ent: { name, kind, annotations } }
+    for edgeObj in edgeInfo.values():
+        # Add scope node
+        scope = edgeObj['scope']
+        if scope not in nodes:
+            nodes[scope] = {
+                'ent': scope,
+                'name': getNodeName(scope, options, tasks),
+                'kind': getNodeKind(scope, tasks, edgeInfo, incoming),
+                'annotations': getNodeAnnotations(scope, tasks, edgeInfo, incoming)
+            }
+
+        # Add entity node
+        ent = edgeObj['ent']
+        if ent not in nodes:
+            nodes[ent] = {
+                'ent': ent,
+                'name': getNodeName(ent, options, tasks),
+                'kind': getNodeKind(ent, tasks, edgeInfo, incoming),
+                'annotations': getNodeAnnotations(ent, tasks, edgeInfo, incoming)
+            }
+
+    # Display Nodes Table
+    report.heading(2)
+    report.print("Nodes")
+    report.heading()
+
+    report.print("To add an annotation for a node, right-click on the entity in Understand and select ")
+    report.bold()
+    report.print("Annotate")
+    report.nobold()
+    report.print(". In the annotation text, start with ")
+    report.bold()
+    report.print("#SharedTaskNode")
+    report.nobold()
+    report.print(" followed by your annotation text. For example: ")
+    report.bold()
+    report.print("#SharedTaskNode This is a critical function")
+    report.nobold()
+    report.print("\n\n")
+
+    report.table("""
+    [{
+      "name" : "Node Name",
+      "filtertype": "string",
+      "sort": "ascending"
+     },{
+      "name" : "Node Kind",
+      "filtertype": "string"
+     },{
+      "name" : "Annotations",
+      "filtertype": "string"
+    }]""")
+
+    # Sort nodes by name for display
+    sortedNodes = sorted(nodes.values(), key=lambda n: n['name'])
+    for node in sortedNodes:
+        report.tablecell()
+        report.entity(node['ent'])
+        report.print(node['name'])
+        report.entity()
+
+        report.tablecell()
+        report.print(node['kind'])
+
+        report.tablecell()
+        report.print(node['annotations'])
+
+    report.table()
+
+    # Display Edges Table
+    report.heading(2)
+    report.print("Edges")
+    report.heading()
+
+    report.print("To add an annotation for an edge, right-click on the ")
+    report.bold()
+    report.print("source entity")
+    report.nobold()
+    report.print(" in Understand and select ")
+    report.bold()
+    report.print("Annotate")
+    report.nobold()
+    report.print(". In the annotation text, start with ")
+    report.bold()
+    report.print("#SharedTaskEdgeTo ")
+    report.nobold()
+    report.print("followed by the destination entity's uniquename, then your annotation text. ")
+    report.print("For example: ")
+    report.bold()
+    report.print("#SharedTaskEdgeTo MyNamespace::MyClass::myFunction This edge needs review")
+    report.nobold()
+    report.print("\n\n")
+
+    report.table("""
+    [{
+      "name" : "Source Node Name",
+      "filtertype": "string",
+      "sort": "ascending"
+     },{
+      "name" : "Destination Node Name",
+      "filtertype": "string"
+     },{
+      "name" : "Edge Kind",
+      "filtertype": "string"
+     },{
+      "name" : "Annotations",
+      "filtertype": "string"
+    }]""")
+
+    # Sort edges by source name for display
+    sortedEdges = sorted(edgeInfo.items(), key=lambda e: getNodeName(e[1]['scope'], options, tasks))
+    for edgeKey, edgeObj in sortedEdges:
+        scope = edgeObj['scope']
+        ent = edgeObj['ent']
+
+        # Get source and destination names
+        sourceName = getNodeName(scope, options, tasks)
+        destName = getNodeName(ent, options, tasks)
+
+        # Get edge kind including interrupt disabled or filtered status
+        edgeKind = getEdgeKind(edgeObj, interruptDisabledRefs)
+
+        # Get annotations from source entity filtered by destination uniquename
+        annotations = getEdgeAnnotations(scope, ent)
+
+        report.tablecell()
+        report.entity(scope)
+        report.print(sourceName)
+        report.entity()
+
+        report.tablecell()
+        report.entity(ent)
+        report.print(destName)
+        report.entity()
+
+        report.tablecell()
+        report.print(edgeKind)
+
+        report.tablecell()
+        report.print(annotations)
+
+    report.table()
+

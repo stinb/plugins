@@ -3,7 +3,7 @@
 #ifdef _WIN32 // C11 threading not supported on Mac or Linux
 #include <stdint.h>
 #include <string.h>
-#include <threads.h>
+#include <threads.h> // C11 threads not supported on Mac/Linux
 
 
 mtx_t Ra;
