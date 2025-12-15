@@ -88,7 +88,10 @@ def test_language(language):
 def check(check, file):
     # List of types to check
     types = r'int|short|long|float|double'
+    # Composite operators
+    compositeOps = ['+', '-', '*', '/', '%', '&', '|', '^', '<<', '>>', '~']
     lexer = None
+    
     # Go through each object ref
     refs = file.filerefs("Define", "Object")
     for ref in refs:
@@ -102,6 +105,7 @@ def check(check, file):
         size0 = re.sub(r'[^\d]', '', size0)
         if size0 == '':
             continue
+        
         # Go through each set
         setRefs = ref.ent().refs('Setby')
         for setRef in setRefs:
@@ -118,38 +122,41 @@ def check(check, file):
 
             if lexeme and lexeme.text() == '=':
                 ok = True
+                hasCompositeOp = False
+                hasCast = False
                 while lexeme and not re.match(r';|{|}', lexeme.text()):
-                    # Find C style casts and skip if found
-                    if re.search(types, lexeme.text()) and re.search(r'\d', lexeme.text()):
+                    # Check for composite operators
+                    if lexeme.text() in compositeOps:
+                        hasCompositeOp = True
+                    # Find C style casts
+                    elif re.search(types, lexeme.text()) and re.search(r'\d', lexeme.text()):
                         if lexeme.ent() and lexeme.ent().kind().check('Typedef Type') or lexeme.token() == 'Identifier':
                             size1 = re.sub(r'\[\d*\]', '', lexeme.text())
                             size1 = re.sub(r'[^\d]', '', size1)
-                            if size1 == '':
-                                break
-                            if size1 < size0:
-                                ok = False
-                                break
-                            else:
-                                break
+                            if size1 != '' and size1 >= size0:
+                                # Cast to same or larger size - no violation
+                                hasCast = True
                     # Find ents that have a smaller size than the defined ref
                     elif lexeme.ent() and re.search(types, str(lexeme.ent().type())):
                         size1 = re.sub(r'\[\d*\]', '', str(lexeme.ent().type()))
                         size1 = re.sub(r'[^\d]', '', size1)
-                        if size1 == '':
-                            break
-                        if size1 < size0:
+                        if size1 != '' and size1 < size0:
                             ok = False
-                            break
+                            # Don't break - keep looking for operators
 
                     lexeme = lexeme.next(True, True)
 
-                if not ok:
+                # Only flag if we found a composite operator AND no appropriate cast
+                if not ok and hasCompositeOp and not hasCast:
                     check.violation(setRef.scope(), setRef.file(), setRef.line(), setRef.column(), ERR1)
                     continue
 
     refs = file.filerefs("Define", "Function")
     for ref in refs:
         parameters = ref.ent().parameters()
+        # Skip unresolved functions (no parameters known)
+        if not parameters or parameters.strip() == '':
+            continue
         if not re.search(types, parameters):
             continue
 
@@ -164,7 +171,6 @@ def check(check, file):
                     return
                 lexer = file.lexer()
 
-            ok = True
             lexeme = lexer.lexeme(callRef.line(), callRef.column())
             while lexeme and not re.search(r'\(|;', lexeme.text()):
                 lexeme = lexeme.next(True, True)
@@ -173,56 +179,70 @@ def check(check, file):
                 close = Modules.findClose(lexeme)
                 lexeme = lexeme.next(True, True)
                 count = 0
-                parameter = parameters[count]
-                # Grab size of type and skip if not found
-                size0 = re.sub(r'\[\d*\]', '', parameter)
-                size0 = re.sub(r'[^\d]', '', size0)
+                
                 while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                    if count >= len(parameters):
+                        break
+                        
+                    parameter = parameters[count]
+                    # Extract only the first type token from the parameter
+                    paramType = parameter.strip().split()[0] if parameter.strip() else ''
+                    size0 = re.sub(r'[^\d]', '', paramType)
+                    
                     if size0 == '':
-                        pass
-                    elif lexeme.text() == ',':
-                        count += 1
-                        if count < len(parameters):
-                            parameter = parameters[count]
-                            # Filter size out of type and skip if not found
-                            size0 = re.sub(r'\[\d*\]', '', parameter)
-                            size0 = re.sub(r'\s.*', '', size0)
-                            size0 = re.sub(r'[^\d]', '', size0)
-                    elif lexeme.text() == '(':
-                        nextLex = lexeme.next(True, True)
-                        # Check for C style casts
-                        if nextLex and re.search(types, nextLex.text()) and re.search(r'\d', nextLex.text()):
-                            if nextLex.ent() and nextLex.ent().kind().check('Typedef Type') or nextLex.token() == 'Identifier':
-                                size1 = re.sub(r'\[\d*\]', '', nextLex.text())
-                                size1 = re.sub(r'[^\d]', '', size1)
-                                if size1 != '' and size1 < size0:
-                                    ok = False
-                                    break
-
-
-                        lexeme = Modules.findClose(lexeme)
-                        if lexeme:
-                            lexeme = lexeme.next(True, True)
-                        while lexeme and not re.match(r'\)|;|,', lexeme.text()):
+                        # Skip this argument
+                        depth = 0
+                        while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
                             if lexeme.text() == '(':
-                                lexeme = Modules.findClose(lexeme)
-                            if lexeme:
-                                lexeme = lexeme.next(True)
-
+                                depth += 1
+                            elif lexeme.text() == ')':
+                                if depth == 0:
+                                    break
+                                depth -= 1
+                            elif lexeme.text() == ',' and depth == 0:
+                                break
+                            lexeme = lexeme.next(True, True)
+                        if lexeme and lexeme.text() == ',':
+                            lexeme = lexeme.next(True, True)
+                            count += 1
                         continue
-                    # Find ents that have a smaller size than the parameter expects
-                    elif lexeme.ent() and re.search(types, str(lexeme.ent().type())):
-                        size1 = re.sub(r'\[\d*\]', '', str(lexeme.ent().type()))
-                        size1 = re.sub(r'[^\d]', '', size1)
-                        if size1 == '':
+                    
+                    # Process this argument
+                    ok = True
+                    hasCompositeOp = False
+                    hasCast = False
+                    
+                    while lexeme and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
+                        if lexeme.text() == ',':
                             break
-                        if size1 < size0:
-                            ok = False
-                            break
-                    lexeme = lexeme.next(True, True)
-
-                if not ok:
-                    check.violation(callRef.scope(), callRef.file(), callRef.line(), callRef.column(), ERR1)
-                    continue
-
-
+                        elif lexeme.text() in compositeOps:
+                            hasCompositeOp = True
+                        elif lexeme.text() == '(':
+                            nextLex = lexeme.next(True, True)
+                            # Check for C style casts
+                            if nextLex and re.search(types, nextLex.text()) and re.search(r'\d', nextLex.text()):
+                                if nextLex.ent() and nextLex.ent().kind().check('Typedef Type') or nextLex.token() == 'Identifier':
+                                    size1 = re.sub(r'[^\d]', '', nextLex.text())
+                                    if size1 != '' and size1 >= size0:
+                                        hasCast = True
+                            # Skip past the cast
+                            lexeme = Modules.findClose(lexeme)
+                            if lexeme:
+                                lexeme = lexeme.next(True, True)
+                            continue
+                        # Find ents that have a smaller size than the parameter expects
+                        elif lexeme.ent() and re.search(types, str(lexeme.ent().type())):
+                            size1 = re.sub(r'\[\d*\]', '', str(lexeme.ent().type()))
+                            size1 = re.sub(r'[^\d]', '', size1)
+                            if size1 != '' and size1 < size0:
+                                ok = False
+                        
+                        lexeme = lexeme.next(True, True)
+                    
+                    # Only flag if we found a composite operator AND no appropriate cast
+                    if not ok and hasCompositeOp and not hasCast:
+                        check.violation(callRef.scope(), callRef.file(), callRef.line(), callRef.column(), ERR1)
+                    
+                    if lexeme and lexeme.text() == ',':
+                        lexeme = lexeme.next(True, True)
+                        count += 1
