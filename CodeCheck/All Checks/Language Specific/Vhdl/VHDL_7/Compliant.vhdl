@@ -1,7 +1,7 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 
-entity multiple_drivers_example is
+entity sequential_example is
     Port (
         clk           : in  STD_LOGIC;
         reset         : in  STD_LOGIC;
@@ -10,10 +10,10 @@ entity multiple_drivers_example is
         Get_ready     : out STD_LOGIC;
         Marwen        : out STD_LOGIC
     );
-end multiple_drivers_example;
+end sequential_example;
 
-architecture Behavioral of multiple_drivers_example is
-    signal Get_ready_internal : STD_LOGIC := '0'; -- UndCC_Valid, initializations in signal declarations are not the same as assignments
+architecture Behavioral of sequential_example is
+    signal Get_ready_internal : STD_LOGIC := '0';
     signal Marwen_internal    : STD_LOGIC := '0';
 begin
     
@@ -21,31 +21,23 @@ begin
     Get_ready <= Get_ready_internal;
     Marwen    <= Marwen_internal;
     
-    -- FIRST DRIVER for Marwen_internal
+    -- Sequential process with synchronous reset
     Process (clk) begin
         If rising_edge(clk) then
             If reset = '0' then
                 Get_ready_internal <= '1';
-                Marwen_internal    <= '1';  -- Driver 1
+                Marwen_internal    <= '1';
             Else
                 If (someOtherStuff = '1') then
                     Get_ready_internal <= '1';
                 Elsif (someMoreStuff = '1') then
+                    Marwen_internal    <= '1';  -- UndCC_Valid, Marwen_internal only assigned within this one sequential process
                     Get_ready_internal <= '0';
                 Else
                     Get_ready_internal <= '0';
                 End if;
             End if;
-        End if;
-    End process;
-    
-    -- SECOND DRIVER for Marwen_internal
-    Process (clk) begin
-        If rising_edge(clk) then
-            If (someMoreStuff = '1') then
-                Marwen_internal <= '0';  -- UndCC_Violation, two separate processes assign to Marwen_internal
-            End if;
-        End if;
+        End if; -- rising edge
     End process;
 
 end Behavioral;

@@ -32,36 +32,25 @@ def detailed_description():
 
 <p><b>Description</b></p>
 <p>
-Identifying multiple drivers in VHDL code is essential to maintain the 
-clarity, correctness, and reliability of your digital designs. It is an 
-integral part of good design practices and contributes to the successful 
-simulation, synthesis, and debugging of digital circuits.
+Identifying multiple drivers across different processes or concurrent statements 
+in VHDL code is essential to maintain the clarity, correctness, and reliability 
+of your digital designs. It is an integral part of good design practices and 
+contributes to the successful simulation, synthesis, and debugging of digital circuits.
 </p>
 
 <p><b>Noncompliant Code Example</b></p>
 <pre><code language="VHDL">\
-entity MultipleAssignment is
-    Port ( clk : in STD_LOGIC;
-           rst : in STD_LOGIC;
-           data_in : in STD_LOGIC;
-           data_out : out STD_LOGIC);
-end MultipleAssignment;
+Process (clk) begin
+    if rising_edge(clk) then
+        Marwen <= '1';
+    end if;
+end process;
 
-architecture Behavioral of MultipleAssignment is
-    signal my_signal : STD_LOGIC;
-begin
-    process(clk, rst)
-    begin
-        if rst = '1' then
-            my_signal &lt;= '0';  -- First assignment
-        elsif rising_edge(clk) then
-            my_signal &lt;= data_in;  -- Second assignment
-            my_signal &lt;= not my_signal;  -- Third assignment
-        end if;
-    end process;
-
-    data_out &lt;= my_signal;
-end Behavioral;
+Process (clk) begin  -- Different process
+    if rising_edge(clk) then
+        Marwen <= '0';  -- Second driver - violation
+    end if;
+end process;
 </code></pre>
 
 '''
@@ -77,40 +66,119 @@ def test_language(language):
     return language == 'VHDL'
 
 def check(check, file):
+    # Dictionary to track where each signal is driven
+    signal_drivers = {}
+
     if file.lexer():
         lexer = file.lexer()
     else:
         return
 
+    # First pass: identify all processes and their line ranges
+    processes = []
+    process_id = 0
     lexeme = lexer.first()
-
     while lexeme:
-        # find process starting point
-        assignment_count = 0
-        if lexeme.text() == "process" and lexeme.token() == "Keyword" and not (lexeme.previous(True,True).text() == "end" and lexeme.previous(True,True).token() == "Keyword"):
-            proc_ent = lexeme.ent()
-            proc_start = lexeme.line_begin()
-            temp_lex = lexeme
-
-            while temp_lex:
-                if temp_lex.text() == "process" and temp_lex.token() == "Keyword" and temp_lex.previous(True,True).text() == "end" and temp_lex.previous(True,True).token() == "Keyword":
-                    proc_end = temp_lex.line_begin()
-                    proc_range = range(proc_start, proc_end, 1)
-
-                    # process beginning and end found, now check each signal's refs for multiple assignments in this sequential process block
-                    for sig_ref in file.filerefs("Define, Declare", "Signal", True):
-                        sig_ent = sig_ref.ent()
-                        for sig_set_ref in sig_ent.refs("Vhdl Setby"):
-                            sig_set_ref_line = sig_set_ref.line()
-
-                            if sig_set_ref_line in proc_range:
-                                assignment_count += 1
-
-
-                temp_lex = temp_lex.next(True,True)
-
-        if assignment_count > 1:
-            check.violation(sig_ent, file, sig_set_ref.line(), sig_set_ref.column(), "Duplicate assignments of signal '%1' within same sequential block of process '%2'", sig_ent, proc_ent)
-            break
-
+        if lexeme.text().lower() == "process":
+            prev = lexeme.previous(True, True)
+            is_end_process = prev and prev.text().lower() == "end"
+            
+            if not is_end_process:
+                proc_ent = lexeme.ent()
+                proc_start = lexeme.line_begin()
+                
+                temp_lex = lexeme.next(True, True)
+                depth = 1
+                while temp_lex and depth > 0:
+                    if temp_lex.text().lower() == "process":
+                        prev_tok = temp_lex.previous(True, True)
+                        if prev_tok and prev_tok.text().lower() == "end":
+                            depth -= 1
+                            if depth == 0:
+                                proc_end = temp_lex.line_begin()
+                                processes.append({
+                                    'id': process_id,
+                                    'entity': proc_ent,
+                                    'start': proc_start,
+                                    'end': proc_end,
+                                    'range': range(proc_start, proc_end + 1)
+                                })
+                                process_id += 1
+                                break
+                        else:
+                            depth += 1
+                    temp_lex = temp_lex.next(True, True)
         lexeme = lexeme.next(True, True)
+
+    # Second pass: track drivers by unique process ID or concurrent location
+    for sig_ref in file.filerefs("Define, Declare", "Signal", True):
+        sig_ent = sig_ref.ent()
+        
+        if sig_ent.kind().check("Signal"):
+            # Get the declaration line for this signal to exclude it
+            decl_ref = sig_ent.ref("Declarein")
+            decl_line = decl_ref.line() if decl_ref else -1
+            
+            assignments = sig_ent.refs("Vhdl Setby")
+            
+            # Track which processes drive this signal using unique process IDs
+            driving_process_ids = set()
+            driving_process_info = {}
+            has_concurrent_driver = False
+            concurrent_driver_info = None
+            
+            for sig_set_ref in assignments:
+                sig_line = sig_set_ref.line()
+                sig_col = sig_set_ref.column()
+                
+                # Skip if this is the declaration line (initialization, not a driver)
+                if sig_line == decl_line:
+                    continue
+                
+                # Find which process (if any) contains this assignment
+                found_process = None
+                for proc in processes:
+                    if sig_line in proc['range']:
+                        found_process = proc
+                        break
+                
+                if found_process:
+                    proc_id = found_process['id']
+                    driving_process_ids.add(proc_id)
+                    if proc_id not in driving_process_info:
+                        driving_process_info[proc_id] = (sig_line, sig_col, found_process)
+                else:
+                    has_concurrent_driver = True
+                    if not concurrent_driver_info:
+                        concurrent_driver_info = (sig_line, sig_col)
+            
+            num_process_drivers = len(driving_process_ids)
+            
+            # Violation 1: Multiple different processes drive this signal
+            if num_process_drivers > 1:
+                sorted_proc_ids = sorted(driving_process_ids)
+                second_proc_id = sorted_proc_ids[1]
+                second_line, second_col, second_proc = driving_process_info[second_proc_id]
+                
+                proc_names = []
+                for proc_id in sorted_proc_ids:
+                    proc = driving_process_info[proc_id][2]
+                    if proc['entity'] and proc['entity'].name():
+                        proc_names.append(proc['entity'].name())
+                    else:
+                        proc_names.append(f"process at line {proc['start']}")
+                
+                check.violation(sig_ent, file, second_line, second_col,
+                               "Multiple drivers: signal '%1' is assigned in multiple processes (%2)",
+                               sig_ent.name(), ", ".join(proc_names))
+            
+            # Violation 2: Both process(es) and concurrent statement(s)
+            elif num_process_drivers > 0 and has_concurrent_driver:
+                first_proc_id = list(driving_process_ids)[0]
+                first_proc = driving_process_info[first_proc_id][2]
+                
+                proc_name = first_proc['entity'].name() if first_proc['entity'] and first_proc['entity'].name() else f"process at line {first_proc['start']}"
+                
+                check.violation(sig_ent, file, concurrent_driver_info[0], concurrent_driver_info[1],
+                               "Multiple drivers: signal '%1' is assigned in both process '%2' and concurrent statement",
+                               sig_ent.name(), proc_name)
