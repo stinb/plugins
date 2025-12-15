@@ -9,7 +9,7 @@ import sys
 
 #Verify Python version
 
-requiredPythonVersionNums = (3, 12) # (major, minor)
+requiredPythonVersionNums = (3, 14) # (major, minor)
 requiredPythonVersionString = f"{requiredPythonVersionNums[0]}.{requiredPythonVersionNums[1]}"
 actualPythonVersionString = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
 if (sys.version_info >= requiredPythonVersionNums):
