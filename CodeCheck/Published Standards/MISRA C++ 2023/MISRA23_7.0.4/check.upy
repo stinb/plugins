@@ -1,0 +1,401 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 12-16-2025
+
+ERR1 = "Operand of bit complement operator shall be unsigned"
+ERR2 = "Left operand of shift operator shall be unsigned"
+ERR3 = "Operands of bitwise operators shall be unsigned"
+
+SHIFT_OPS = {'<<', '>>'}
+BINARY_BITWISE_OPS = {'&', '|', '^'}
+SHIFT_COMPOUND = {'<<=', '>>='}
+BITWISE_COMPOUND = {'&=', '|=', '^='}
+COMPLEMENT_OP = '~'
+ALL_OPS = SHIFT_OPS | BINARY_BITWISE_OPS | SHIFT_COMPOUND | BITWISE_COMPOUND
+
+
+def ids():
+    return ('MISRA23_7.0.4', 'CPP_T068')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_7.0.4': 'Published Standards/MISRA C++ 2023/' + """\
+7.0.4 The operands of bitwise operators and shift operators shall be \
+appropriate""",
+        'CPP_T068':
+            'All Checks/Language Specific/C and C++/Types/' + """\
+The operands of bitwise operators and shift operators shall be appropriate""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_7.0.4': [
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Types',
+        ],
+        'CPP_T068': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>The following shall be of an unsigned type:</p>
+<ul>
+<li>Both operands of the binary bitwise operators;</li>
+<li>The left operand of the shift operators;</li>
+<li>The operand of the bit complement operator.</li>
+</ul>
+<p>The right operand of the shift operators, shall be:</p>
+<ul>
+<li>Either a non-constant expression with an unsigned type; or</li>
+<li>A constant expression with a value between 0 and sizeof( T ) * CHAR_BIT - 1
+(inclusive), where T is the type of the left operand (before integral
+promotion).</li>
+<p>The requirements of this rule for binary bitwise operators also apply to the
+corresponding compound assignment forms.</p>
+</ul>
+<ul>
+<li></li>
+</ul>
+<p><b>Rationale</b></p>
+<p>Bit-oriented operations may be applied to operands of signed and unsigned
+type. However, the result is only guaranteed to be defined when the sign bit is
+not affected.</p>
+<p>Unlike most other binary operations, the operands to the shift operators do
+not undergo the usual arithmetic conversions. Both operands are still subject to
+integral promotion, with the resulting type being the promoted type of the left
+operand. Explicitly casting the left-hand operand of the shift operator to the
+intended width allows the reader to reason about the code’s correctness without
+having to consider integral promotion.</p>
+<p>The following behaviours may occur if operands to a shift operator have a
+signed type:</p>
+<ul>
+<li>Shifting by a negative value results in undefined behaviour;</li>
+<li>A left-shift of a signed left operand can result in undefined behaviour,
+even when the value is positive;</li>
+<li>Right-shifting a negative value results in an implementation-defined value.</li>
+</ul>
+<p>Additionally, undefined behaviour occurs when a shift operator has a right
+operand with a value that is greater than or equal to the size in bits of the
+promoted type of the left operand.</p>
+<p><b>Exception</b></p>
+<p>The left operand of a shift operator is permitted to be a non-negative
+constant expression of a signed type T (before integral promotion) when:</p>
+<ul>
+<li>T uses two’s complement representation; and</li>
+<li>The right operand is also a constant expression with a value between 0 and
+sizeof( T ) * CHAR_BIT - 1 (inclusive); and</li>
+<li>No set bit is shifted into or beyond the most significant bit, which is used
+as the sign bit.</li>
+</ul>
+<p><b>Example</b></p>
+<p>The following examples assume int uses 32-bit two’s complement
+representation.</p>
+<pre><code language="C++">1u << u8; // Compliant
+1u << 31; // Compliant
+1_u8 << 2; // Compliant - but violates other rules
+u8 << 2; // Compliant - but violates other rules
+s32 << 2; // Non-compliant - left operand is signed
+1 << u8; // Non-compliant - left operand is signed
+(u8 + u16) << 2; // Non-compliant - result of + is signed
+static_cast < uint16_t > (u8 + u16) << 2; // Compliant
+1LL << 31; // Compliant by exception
+1 << 30; // Compliant by exception
+2 << 30; // Non-compliant - exception does not
+// apply as set bit is shifted too far
+u32a | u32b; // Compliant
+s32a | s32b; // Non-compliant - signed operands
+~u32; // Compliant
+~u8; // Compliant - but violates other rules
+~s32; // Non-compliant - signed operand
+</code></pre>
+<p><b>See also</b></p>
+<p>Rule 7.0.5</p>
+"""
+    return {
+        'MISRA23_7.0.4': desc,
+        'CPP_T068': desc,
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        if lexeme.token() == "Operator":
+            op = lexeme.text()
+
+            # check bit complement operator (~)
+            if op == COMPLEMENT_OP:
+                operand_lex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+                if operand_lex and operand_lex.ent():
+                    if is_signed_type(operand_lex.ent()):
+                        check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
+
+            # check binary operators and compound assignments
+            elif op in ALL_OPS:
+                lho_lex = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+                rho_lex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+                # check shift operators (<< >> <<= >>=)
+                if op in SHIFT_OPS or op in SHIFT_COMPOUND:
+                    # check left operand if variable
+                    if lho_lex and lho_lex.ent():
+                        if is_signed_type(lho_lex.ent()):
+                            # allow exception for signed constants (e.g., 1 << 30)
+                            if not check_shift_exception(lho_lex, rho_lex, file):
+                                check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR2)
+                    # check left operand if literal
+                    elif lho_lex and lho_lex.token() in ["Number", "Literal"]:
+                        if not is_unsigned_literal(lho_lex.text()):
+                            if not check_shift_exception(lho_lex, rho_lex, file):
+                                check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR2)
+                    # check left operand if parenthesized expression
+                    elif lho_lex and lho_lex.text() == ')':
+                        # detect integral promotion: (uint8_t + uint16_t) promotes to int
+                        if contains_promoted_unsigned_types(lho_lex, file):
+                            check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR2)
+
+                # check binary bitwise operators (& | ^ &= |= ^=)
+                elif op in BINARY_BITWISE_OPS or op in BITWISE_COMPOUND:
+                    # check left operand
+                    if lho_lex and lho_lex.ent():
+                        if is_signed_type(lho_lex.ent()):
+                            check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR3)
+                    elif lho_lex and lho_lex.token() in ["Number", "Literal"]:
+                        if not is_unsigned_literal(lho_lex.text()):
+                            check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR3)
+
+                    # check right operand (binary only, not compound)
+                    if op in BINARY_BITWISE_OPS:
+                        if rho_lex and rho_lex.ent():
+                            if is_signed_type(rho_lex.ent()):
+                                check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR3)
+                        elif rho_lex and rho_lex.token() in ["Number", "Literal"]:
+                            if not is_unsigned_literal(rho_lex.text()):
+                                check.violation(None, file, lexeme.line_begin(), lexeme.column_begin(), ERR3)
+
+        lexeme = lexeme.next()
+
+
+def is_signed_type(ent):
+    """Check if an entity has a signed type"""
+    if not ent:
+        return False
+
+    # get type information
+    ent_type = str(ent.type()).lower() if ent.type() else ""
+    underlying_type = str(ent.freetext("UnderlyingType")).lower() if ent.freetext("UnderlyingType") else ""
+    type_str = ent_type + " " + underlying_type
+
+    # check for unsigned
+    if any(u in type_str for u in ['unsigned', 'uint']):
+        return False
+
+    # check for signed
+    if any(s in type_str for s in ['int8_t', 'int16_t', 'int32_t', 'int64_t', 'signed']):
+        return True
+
+    # plain int is signed
+    if 'int' in ent_type and 'unsigned' not in type_str and 'uint' not in type_str:
+        return True
+
+    return False
+
+
+def is_unsigned_literal(text):
+    """Check if a literal has unsigned suffix (u, U, ul, UL, etc.)"""
+    if not text:
+        return False
+
+    if 'u' in text.lower():
+        return True
+
+    return False
+
+
+def safe_parse_int(text):
+    """Parse integer literal in hex/binary/octal/decimal. Returns (success, value) tuple."""
+    if not text or not isinstance(text, str):
+        return (False, 0)
+
+    clean_text = text.rstrip('LlUu')
+    if not clean_text:
+        return (False, 0)
+
+    # check hexadecimal
+    if clean_text.startswith('0x') or clean_text.startswith('0X'):
+        hex_part = clean_text[2:]
+        if not hex_part or not all(c in '0123456789abcdefABCDEF' for c in hex_part):
+            return (False, 0)
+        return (True, int(clean_text, 16))
+    # check binary
+    elif clean_text.startswith('0b') or clean_text.startswith('0B'):
+        bin_part = clean_text[2:]
+        if not bin_part or not all(c in '01' for c in bin_part):
+            return (False, 0)
+        return (True, int(clean_text, 2))
+    # check octal
+    elif clean_text.startswith('0') and len(clean_text) > 1 and clean_text[1].isdigit():
+        if not all(c in '01234567' for c in clean_text):
+            return (False, 0)
+        return (True, int(clean_text, 8))
+    # check decimal
+    else:
+        if clean_text.startswith('-'):
+            if len(clean_text) > 1 and clean_text[1:].isdigit():
+                return (True, int(clean_text))
+            else:
+                return (False, 0)
+        elif clean_text.isdigit():
+            return (True, int(clean_text))
+        else:
+            return (False, 0)
+
+
+def contains_promoted_unsigned_types(closing_paren_lex, file):
+    """
+    Detect if parenthesized expression has small unsigned types (uint8_t, uint16_t)
+    in arithmetic operations that promote to signed int. Returns False if cast to unsigned.
+    """
+    if not closing_paren_lex or closing_paren_lex.text() != ')':
+        return False
+
+    check_lex = closing_paren_lex.previous(ignore_whitespace=True, ignore_comments=True)
+    scan_back = closing_paren_lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+    # look backwards for casts that make result unsigned
+    while scan_back:
+        # stop at statement/expression boundaries
+        if scan_back.text() in ['=', ';', '{', '}', ',']:
+            break
+
+        # check for C++ style cast: static_cast<uint16_t>(...)
+        if scan_back.text() in ['static_cast', 'reinterpret_cast', 'const_cast', 'dynamic_cast']:
+            cast_lex = scan_back.next(ignore_whitespace=True, ignore_comments=True)
+            if cast_lex and cast_lex.text() == '<':
+                type_lex = cast_lex.next(ignore_whitespace=True, ignore_comments=True)
+                if type_lex:
+                    type_text = type_lex.text().lower()
+                    if 'uint' in type_text or 'unsigned' in type_text:
+                        return False
+
+        # check for C-style cast: (unsigned int)(...)
+        if scan_back.text() == '(' and scan_back != closing_paren_lex:
+            type_lex = scan_back.next(ignore_whitespace=True, ignore_comments=True)
+            if type_lex and type_lex.token() in ['Keyword', 'Identifier']:
+                type_text = type_lex.text().lower()
+                if 'uint' in type_text or 'unsigned' in type_text:
+                    return False
+
+        scan_back = scan_back.previous(ignore_whitespace=True, ignore_comments=True)
+
+    # find matching opening parenthesis
+    depth = 1
+    lexeme = closing_paren_lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+    while lexeme and depth > 0:
+        if lexeme.text() == ')':
+            depth += 1
+        elif lexeme.text() == '(':
+            depth -= 1
+            if depth == 0:
+                break
+        lexeme = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+
+    if not lexeme or depth != 0:
+        return False
+
+    # scan expression for arithmetic ops and small unsigned types
+    has_arithmetic_op = False
+    has_small_unsigned = False
+    scan_lex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+
+    while scan_lex and scan_lex.line_begin() <= closing_paren_lex.line_begin():
+        if scan_lex.column_begin() >= closing_paren_lex.column_begin():
+            break
+
+        # check for arithmetic operators
+        if scan_lex.token() == "Operator" and scan_lex.text() in ['+', '-', '*', '/', '%']:
+            has_arithmetic_op = True
+
+        # check for small unsigned types
+        if scan_lex.ent():
+            ent_type = str(scan_lex.ent().type()).lower() if scan_lex.ent().type() else ""
+            underlying = str(scan_lex.ent().freetext("UnderlyingType")).lower() if scan_lex.ent().freetext("UnderlyingType") else ""
+            type_str = ent_type + " " + underlying
+
+            if any(t in type_str for t in ['uint8_t', 'uint16_t', 'unsigned char', 'unsigned short']):
+                has_small_unsigned = True
+
+        scan_lex = scan_lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return has_arithmetic_op and has_small_unsigned
+
+
+def check_shift_exception(lho_lex, rho_lex, file):
+    """
+    Check if signed constant shift qualifies for exception (e.g., 1 << 30, 1LL << 31).
+    Allowed when: both operands constant, non-negative, no bit reaches sign position.
+    """
+    # check left operand is numeric literal
+    if not lho_lex or lho_lex.token() not in ["Number", "Literal"]:
+        return False
+
+    lho_text = lho_lex.text()
+
+    # unsigned literals don't need exception
+    if 'u' in lho_text.lower() or 'U' in lho_text:
+        return False
+
+    # determine type size from suffix
+    if 'LL' in lho_text or 'll' in lho_text:
+        type_bits = 64
+    elif 'L' in lho_text or 'l' in lho_text:
+        type_bits = 64
+    else:
+        type_bits = 32
+
+    # parse left operand value
+    success, lho_value = safe_parse_int(lho_text)
+    if not success or lho_value < 0:
+        return False
+
+    # check right operand is numeric literal
+    if not rho_lex or rho_lex.token() not in ["Number", "Literal"]:
+        return False
+
+    # parse right operand value
+    success, rho_value = safe_parse_int(rho_lex.text())
+    if not success or rho_value < 0 or rho_value >= type_bits:
+        return False
+
+    # shifting zero is always safe
+    if lho_value == 0:
+        return True
+
+    # check if bit reaches sign position
+    if lho_value > 0:
+        msb_pos = lho_value.bit_length() - 1
+        if msb_pos + rho_value >= type_bits - 1:
+            return False
+
+    return True
