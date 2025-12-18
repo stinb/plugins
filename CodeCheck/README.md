@@ -57,13 +57,13 @@ This is what it will look look like in Python:
 ```
 4. The last step is to verify that the python syntax is correct. The easiest way to do this is to open a command line and run the appropriate python application that ships with Understand: 
 ```
- upython -c "path/to/mysample.upy"
+ upython -m py_compile "path/to/mysample.upy"
 ```
 If the CodeCheck tab is open in Understand close it and reopen it, and your new check should appear and be ready to test.
 
 Congratulations! You wrote your first Codecheck script. The next step is to become more familiar with Understand's Perl and Python API's.
 
-Browsing the Codecheck scripts that are shipped with Understand can also be very beneficial. They can be found in conf/plugin/Scitools/Codecheck/.
+Browsing the Codecheck scripts that are shipped with Understand can also be very beneficial. They can be found in path2Understand/plugins/Codecheck/.
 
 If you have questions, just shoot us an email at support@scitools.com or visit https://support.scitools.com/.
 
