@@ -145,9 +145,10 @@ def targetAuthorCounts(plugin, target):
     sum = len(commits)
   else:
     authorList = listFromLog(plugin.db(), target, "%an")
-    for author in authorList:
-      authors[author] = authors.get(author,0) + 1
-    sum = len(authorList)
+    if authorList:
+      for author in authorList:
+        authors[author] = authors.get(author,0) + 1
+      sum = len(authorList)
   return authors, sum
 
 def cache_vals(cacheKey, und_cache, file):
@@ -179,7 +180,9 @@ def targetGitValues(plugin, target, cacheKey, logKey):
       return listFromLog(plugin.db(), target, logKey)
     lists = []
     for key in logKey:
-      lists.append(listFromLog(plugin.db(), target, key))
+      sublist = listFromLog(plugin.db(), target, key)
+      if sublist:
+        lists.append()
     return tuple(zip(*lists))
 
 def kindstringHasGit(plugin, entkindstr):
