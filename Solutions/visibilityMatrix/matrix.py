@@ -145,6 +145,9 @@ class DepMatrix:
       if file not in indices:
         connectRecursive(file)
 
+    if not components:
+      return components
+
     components.sort(key=len)
     self.values["core_size"] = len(components[-1])
     if self.size() > 0:
