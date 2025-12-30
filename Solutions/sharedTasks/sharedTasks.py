@@ -360,7 +360,7 @@ def getEdgeInfo(
     # Function calls
     refKinds = getFnRefKinds(options)
 
-    for call in fun.refs(refKinds, '~Unknown ~Unresolved', True):
+    for call in fun.refs(refKinds, '~Unknown', True):
         if options[REFERENCE] == 'All':
             scope = call.scope()
             ent = call.ent()

@@ -84,9 +84,9 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
     referenceString = "Reference(M=Modify/S=Set/U=Use)"
     if options[FUNCTION_POINTER] == 'On':
         referenceString = "Reference(M=Modify/S=Set/U=Use/C=Call)"
-    header = 'Global Object, Shared, Protected, Function, ' + referenceString + ', File, Task'
+    header = 'Global Object,Shared,Protected,Function,' + referenceString + ',File,Task'
     if headerFields:
-      header += ', ' + ', '.join(field.capitalize() for field in headerFields)
+      header += ',' + ','.join(field.capitalize() for field in headerFields)
     header += '\n'
 
     if report:
@@ -144,21 +144,21 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
                 # Make the clickable row for interactive report
                 if report:
                     printEnt(report, obj, options)
-                    report.print(f', {shared}, {protected}, ')
+                    report.print(f',{shared},{protected},')
                     printEnt(report, function, options)
-                    report.print(f', {reference}, ')
+                    report.print(f',{reference},')
                     printFile(report, file)
-                    report.print(', ')
+                    report.print(',')
                     printEnt(report, task, options)
                     if entFields:
-                      report.print(', ' + ', '.join(entFields))
+                      report.print(',' + ','.join(entFields))
                     report.print('\n')
 
                 # Make the row for the file
                 if lines:
-                    line = f'{objectName}, {shared}, {protected}, {functionName}, {reference}, {relname}, {taskName}'
+                    line = f'{objectName},{shared},{protected},{functionName},{reference},{relname},{taskName}'
                     if entFields:
-                      line += ', ' +  ', '.join(entFields)
+                      line += ',' +  ','.join(entFields)
                     line += '\n'
                     lines.append(line)
 
@@ -282,7 +282,7 @@ def parseArguments() -> dict[str, str | bool]:
             continue
         # Fail if there's no previous argument key
         elif not argKey:
-            printHelpAndExit('key', arg)
+            printHelpAndExit('-db or -arch', arg)
 
         # Get the option information
         option: Option = optionDict[argKey]
