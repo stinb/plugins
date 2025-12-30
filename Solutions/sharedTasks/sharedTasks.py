@@ -211,7 +211,11 @@ def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -
     memberObjects = not options or MEMBER_OBJECTS not in options \
         or options[MEMBER_OBJECTS] != 'Off'
 
-    for otherFunction in [function] + function.ents('Instanceof'):
+    functions = [function]
+    if not options or not options[FUNCTION_INSTANCES]:
+         functions += function.ents('Instanceof')
+
+    for otherFunction in functions:
         # Global objects
         refKinds = OBJ_REF_KINDS
         if options and options[FUNCTION_POINTER] == 'On':
