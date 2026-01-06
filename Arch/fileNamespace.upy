@@ -1,0 +1,66 @@
+
+def name():
+  return "File Namespace"
+
+def description():
+  return '''Group each file by the namespace containing the most definitions.
+
+  <p>The goal is to assign the file to the most useful namespace which is assumed 
+  to be the one that contains the most definitions since most lines of code would 
+  always use the outermost namespace and the most deeply nested might not contain 
+  very much (like an anonymous namespace).</p>
+  
+  <p>For example, this file would be mapped to the "Outer/Inner2" architecture 
+  because Inner2 defines the most entities.</p>
+
+  <pre><code language="c++">
+  namespace Outer {
+    void f0() {}
+    namespace Inner1 {
+      void f1() {}
+      namespace Deepest {
+        void f2() {}
+      }
+    }
+    namespace Inner2 {
+      void f3() {}
+      void f4() {}
+      void f5() {}
+    }
+  }
+  </code></pre>
+'''
+
+def tags():
+  return [
+    'Language: C++',
+  ]
+
+def build(arch, db):
+  for file in db.files():
+    # Count the definitions in each namespace. 
+    namespace_counts = {}
+    namespace_stack = []
+    # Sort references by line and column to process them in order
+    refs = sorted(file.filerefs("begin,end,define"), key=lambda r: (r.line(), r.column()))
+    for ref in refs:
+      if ref.ent().kind().check("namespace"):
+        if ref.kind().check("begin"):
+          namespace_stack.append(ref.ent())
+        elif ref.kind().check("end"):
+          namespace_stack.pop()
+      elif ref.kind().check("define"):
+        if namespace_stack:
+          namespace_counts[namespace_stack[-1]] = namespace_counts.get(namespace_stack[-1], 0) + 1
+        else:
+          namespace_counts[None] = namespace_counts.get(None, 0) + 1
+
+    # Map the file to the namespace, or "None" if no namespace was found.
+    max_namespace = None
+    if namespace_counts:
+      max_namespace = max(namespace_counts, key=namespace_counts.get)
+    namespace_name = "None"
+    if max_namespace:
+      namespace_name = max_namespace.longname().replace("::", "/")
+    arch.map(file, namespace_name)
+  
