@@ -1,0 +1,579 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 12-30-2025
+
+ERR1 = "Integral promotion changed signedness of operand"
+ERR2 = "Usual arithmetic conversion changed signedness of operand"
+ERR3 = "Usual arithmetic conversion changed type category of operand"
+
+BINARY_OPS = {'+', '-', '*', '/', '%', '<', '>', '<=', '>=', '==', '!=', '&', '|', '^'}
+COMPOUND_OPS = {'+=', '-=', '*=', '/=', '%=', '&=', '|=', '^='}
+UNARY_OPS = {'~'}  # Unary bitwise NOT
+AMBIGUOUS_OPS = {'-', '+'}  # Can be either unary or binary
+SHIFT_OPS = {'<<', '>>', '<<=', '>>='}
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_7.0.5', 'CPP_T069')
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_7.0.5': 'Published Standards/MISRA C++ 2023/' + """\
+7.0.5 Integral promotion and the usual arithmetic conversions shall not \
+change the signedness or the type category of an operand""",
+        'CPP_T069': 'All Checks/Language Specific/C and C++/Types/' + """\
+Integral promotion and the usual arithmetic conversions shall not change \
+the signedness or the type category of an operand""",
+    }[id]
+
+
+
+def tags(id):
+    return {
+        'MISRA23_7.0.5': [
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Types',
+        ],
+        'CPP_T069': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+    }.get(id)
+
+# The long description of the check
+def detailed_description(id):
+    desc = """\
+<p><b>Amplification</b></p>
+<p>This rule applies to all expressions (including sub-expressions) of numeric type. It also applies within
+preprocessing directives, with the provision that expressions used in #if and
+#elif preprocessor directives always have the type intmax_t or uintmax_t.</p>
+<p>For the usual arithmetic conversions, only the final type of an operand is
+considered. For example, in the expression u32 + u8, u8 is first converted to
+signed int through integral promotion before being converted to uint32_t; it is
+the final type of uint32_t that is considered by this rule.</p>
+<p>This rule does not apply to the integral promotion of the operand to the
+increment or decrement operators.</p>
+<p><b>Rationale</b></p>
+<p>Integral promotion and the usual arithmetic conversions are usually
+value-preserving conversions, and it may therefore appear that they are always
+safe. However, the signedness of the converted type may, possibly surprisingly,
+not be the same as the signedness of the operand. For example, when an unsigned
+type is converted to a signed type, an operation may overflow and trigger
+undefined behaviour instead of wrapping.</p>
+<p>The increment and decrement operators convert their results to the type of
+their operand. This may be a lossy, narrowing conversion, but the usefulness of
+these operators outweighs this risk.</p>
+<p><b>Exception</b></p>
+<ol>
+<li>A compile-time constant with signed integral type that has a non-negative
+value may be converted to an unsigned type through the usual arithmetic
+conversions.</li>
+<li>A compile-time constant with integral type may be converted to a floating
+type.</li>
+</ol>
+<p><b>Example</b></p>
+<pre><code language="C++">u8a + u8b                // Non-compliant - u8a and u8b → signed int
+u8a += u8b               // Non-compliant - same as u8a + u8b
+static_cast&lt;uint32_t&gt;(u8a) + u8b  // Compliant - u8b → unsigned int
+u8a += static_cast&lt;uint32_t&gt;(u8b) // Compliant - u8a → unsigned int
+s32 * s8                 // Compliant - s8 → signed int
+u32 / u8                 // Compliant - u8 → unsigned int
+s32 > u32                // Non-compliant - s32 → unsigned int
+u32a - 1                 // Compliant by exception #1
+b ? u8a : u8b            // Compliant - no conversion
+b ? u8a : u16a           // Non-compliant - u8a → signed int and u16a → signed int
+array[u8]                // Rule does not apply - no conversion of u8
+u8++                     // Rule does not apply
+f32 += u32               // Non-compliant - u32 → floating
+f32 += 1                 // Compliant by exception #2
+f32 += 0x100'0001        // Compliant by exception #2 - precision lost
+~u8                      // Non-compliant - u8 → signed int
+~u32                     // Compliant
+-u8                      // Non-compliant - u8 → signed int
+u8 << 2                  // Non-compliant - u8 → signed int
+constexpr int32_t fn(int32_t i) { return i * i; }
+u8 + fn(10)              // Compliant by exception #1
+f32 + fn(10)             // Compliant by exception #2
+</code></pre>
+"""
+    return {
+        'MISRA23_7.0.5': desc,
+        'CPP_T069': desc,
+    }[id]
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+def test_language(language):
+    return language == 'C++'
+
+# checks if an operator is being used as unary (no left operand)
+def is_unary_operator(operator_lex):
+    """Determine if operator is unary by checking for valid left operand"""
+    if not operator_lex:
+        return False
+
+    prevLex = operator_lex.previous(ignore_whitespace=True, ignore_comments=True)
+    if not prevLex:
+        return True  # Start of expression
+
+    prev_text = prevLex.text()
+    prev_token = prevLex.token()
+
+    # Unary if preceded by another operator or opening delimiter
+    if prev_text in ['(', '[', '{', '=', ',', ';', '?', ':',
+                     '+', '-', '*', '/', '%', '<', '>', '!',
+                     '&', '|', '^', '~', '<<', '>>',
+                     '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=',
+                     '<<=', '>>=', '==', '!=', '<=', '>=', '&&', '||']:
+        return True
+
+    # Unary if preceded by keyword
+    if prev_token == "Keyword":
+        return True
+
+    # Binary if preceded by identifier, literal, or closing delimiter
+    if prevLex.ent() or prev_token in ["Number", "Literal"] or prev_text in [')', ']', '}']:
+        return False
+
+    return True  # Default to unary if unsure
+
+
+# main check function - iterates through lexemes and checks operators
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    lexeme = lexer.first()
+
+    while lexeme:
+        if lexeme.token() == "Operator":
+            op = lexeme.text()
+
+            # skip increment/decrement
+            if op in ['++', '--']:
+                lexeme = lexeme.next()
+                continue
+
+            # skip array subscript
+            if op == '[':
+                lexeme = lexeme.next()
+                continue
+
+            # handle ambiguous operators (can be unary or binary)
+            if op in AMBIGUOUS_OPS:
+                if is_unary_operator(lexeme):
+                    # treat as unary (integral promotion only)
+                    check_unary(check, file, lexeme, op)
+                else:
+                    # treat as binary (UAC applies)
+                    check_binary_uac(check, file, lexeme, op)
+
+            # handle binary operators with UAC
+            elif op in BINARY_OPS:
+                check_binary_uac(check, file, lexeme, op)
+
+            # handle compound assignments
+            elif op in COMPOUND_OPS:
+                check_binary_uac(check, file, lexeme, op)
+
+            # handle ternary operator
+            elif op == '?':
+                check_ternary(check, file, lexeme)
+
+            # handle unary operators (integral promotion only)
+            elif op in UNARY_OPS:
+                check_unary(check, file, lexeme, op)
+
+            # handle shift operators (integral promotion only)
+            elif op in SHIFT_OPS:
+                check_shift(check, file, lexeme, op)
+
+        lexeme = lexeme.next()
+
+
+# checks binary operators and compound assignments for UAC violations
+def check_binary_uac(check, file, operator_lex, op):
+    prevLex, leftEnt = get_left_operand(operator_lex)
+    nextLex, rightEnt = get_right_operand(operator_lex)
+
+    if not prevLex or not nextLex:
+        return
+
+    # get original types (before any conversion)
+    leftOriginal = get_original_type(prevLex, leftEnt)
+    rightOriginal = get_original_type(nextLex, rightEnt)
+
+    # compute promoted types (after integral promotion)
+    leftPromoted = compute_promoted_type(prevLex, leftEnt)
+    rightPromoted = compute_promoted_type(nextLex, rightEnt)
+
+    # if either promoted type is completely unknown, skip checks to avoid false positives
+    # we can't reliably determine UAC results without knowing both operand types
+    if (leftPromoted['signed'] is None and leftPromoted['category'] is None) or \
+       (rightPromoted['signed'] is None and rightPromoted['category'] is None):
+        return
+
+    # apply usual arithmetic conversions to get final types
+    leftFinal, rightFinal = compute_uac(leftPromoted, rightPromoted)
+
+    # check violations by comparing original to final
+    check_conversion(check, file, operator_lex, prevLex, leftEnt,
+                    leftOriginal, leftFinal)
+    check_conversion(check, file, operator_lex, nextLex, rightEnt,
+                    rightOriginal, rightFinal)
+
+
+# checks shift operators for integral promotion violations (left operand only)
+def check_shift(check, file, operator_lex, op):
+    prevLex, leftEnt = get_left_operand(operator_lex)
+
+    if prevLex and leftEnt:
+        info = get_type_info(leftEnt)
+        if info['is_small_unsigned'] and not is_nonnegative_constant(prevLex, leftEnt):
+            check.violation(leftEnt, file, operator_lex.line_begin(),
+                          operator_lex.column_begin(), ERR1)
+
+
+# checks unary operators for integral promotion violations
+def check_unary(check, file, operator_lex, op):
+    nextLex, rightEnt = get_right_operand(operator_lex)
+
+    if nextLex and rightEnt:
+        info = get_type_info(rightEnt)
+        if info['is_small_unsigned'] and not is_nonnegative_constant(nextLex, rightEnt):
+            check.violation(rightEnt, file, operator_lex.line_begin(),
+                          operator_lex.column_begin(), ERR1)
+
+
+# checks ternary operator for UAC violations between true and false expressions
+def check_ternary(check, file, question_lex):
+    # scan forward to find matching : and collect operands
+    depth = 0
+    scanLex = question_lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    true_operands = []
+    false_operands = []
+    in_true_expr = True
+
+    while scanLex:
+        # track depth for nested structures
+        if scanLex.text() in ['(', '{', '[']:
+            depth += 1
+        elif scanLex.text() in [')', '}', ']']:
+            depth -= 1
+
+        # skip nested ternary
+        elif scanLex.text() == '?' and depth == 0:
+            return
+
+        # found matching : at depth 0
+        elif scanLex.text() == ':' and depth == 0:
+            in_true_expr = False
+            scanLex = scanLex.next(ignore_whitespace=True, ignore_comments=True)
+            continue
+
+        # statement terminator
+        elif scanLex.text() in [';', ',', ')'] and depth == 0:
+            break
+
+        # collect operand entities or literals
+        if scanLex.ent() or scanLex.token() in ["Number", "Literal"]:
+            if in_true_expr:
+                true_operands.append((scanLex, scanLex.ent()))
+            else:
+                false_operands.append((scanLex, scanLex.ent()))
+
+        scanLex = scanLex.next(ignore_whitespace=True, ignore_comments=True)
+
+    # check UAC between true and false expressions
+    if true_operands and false_operands:
+        true_lex, true_ent = true_operands[-1]
+        false_lex, false_ent = false_operands[-1]
+
+        # get original types
+        true_original = get_original_type(true_lex, true_ent)
+        false_original = get_original_type(false_lex, false_ent)
+
+        # compute promoted types
+        true_promoted = compute_promoted_type(true_lex, true_ent)
+        false_promoted = compute_promoted_type(false_lex, false_ent)
+
+        # apply UAC to get final types
+        true_final, false_final = compute_uac(true_promoted, false_promoted)
+
+        # check violations
+        check_conversion(check, file, question_lex, true_lex, true_ent,
+                        true_original, true_final)
+        check_conversion(check, file, question_lex, false_lex, false_ent,
+                        false_original, false_final)
+
+
+# returns the left operand lexeme and entity for a binary operator
+def get_left_operand(operator_lex):
+    if not operator_lex:
+        return (None, None)
+
+    prevLex = operator_lex.previous(ignore_whitespace=True, ignore_comments=True)
+    if not prevLex:
+        return (None, None)
+
+    # check if operand is closing paren (parenthesized expression or function call)
+    if prevLex.text() == ')':
+        # scan backward to determine if this is a function call or parenthesized expression
+        scanLex = prevLex.previous(ignore_whitespace=True, ignore_comments=True)
+        depth = 1
+        assigned_var = None
+        opening_paren_lex = None
+
+        while scanLex and depth > 0:
+            if scanLex.text() == ')':
+                depth += 1
+            elif scanLex.text() == '(':
+                depth -= 1
+                if depth == 0:
+                    opening_paren_lex = scanLex
+                    break
+            # look for assignment operator at depth 1 (immediate level)
+            elif scanLex.text() == '=' and depth == 1:
+                # check if this is assignment (not ==, !=, <=, >=, etc.)
+                nextCheck = scanLex.next(ignore_whitespace=True, ignore_comments=True)
+                prevCheck = scanLex.previous(ignore_whitespace=True, ignore_comments=True)
+                if (nextCheck and nextCheck.text() != '=' and
+                    prevCheck and prevCheck.text() not in ['!', '<', '>', '=']):
+                    # found assignment, get the variable being assigned to
+                    varLex = scanLex.previous(ignore_whitespace=True, ignore_comments=True)
+                    if varLex and varLex.ent():
+                        assigned_var = varLex.ent()
+                        break
+            scanLex = scanLex.previous(ignore_whitespace=True, ignore_comments=True)
+
+        # if we found an assignment, use the assigned variable's type
+        if assigned_var:
+            return (prevLex, assigned_var)
+
+        # check if this is a function call by looking before the opening paren
+        if opening_paren_lex:
+            funcLex = opening_paren_lex.previous(ignore_whitespace=True, ignore_comments=True)
+            if funcLex and funcLex.ent():
+                func_ent = funcLex.ent()
+                # check if this is a function entity
+                if func_ent.kind().check('function'):
+                    return (prevLex, func_ent)
+
+        # otherwise, can't determine type
+        return (prevLex, None)
+
+    # check if operand is an identifier/entity
+    if prevLex.ent():
+        return (prevLex, prevLex.ent())
+
+    # check if operand is a literal
+    if prevLex.token() in ["Number", "Literal"]:
+        return (prevLex, None)
+
+    return (None, None)
+
+
+# returns the right operand lexeme and entity for a binary/unary operator
+def get_right_operand(operator_lex):
+    if not operator_lex:
+        return (None, None)
+
+    nextLex = operator_lex.next(ignore_whitespace=True, ignore_comments=True)
+    if not nextLex:
+        return (None, None)
+
+    # check if operand is an identifier/entity
+    if nextLex.ent():
+        # handle member access chains (obj.field, obj->field)
+        tempLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+        while tempLex and tempLex.text() in ['.', '->', '::']:
+            tempLex = tempLex.next(ignore_whitespace=True, ignore_comments=True)
+            if tempLex and tempLex.ent():
+                nextLex = tempLex
+                tempLex = tempLex.next(ignore_whitespace=True, ignore_comments=True)
+            else:
+                break
+
+        return (nextLex, nextLex.ent())
+
+    # check if operand is a literal
+    if nextLex.token() in ["Number", "Literal"]:
+        return (nextLex, None)
+
+    # check if operand is opening paren (parenthesized expression)
+    if nextLex.text() == '(':
+        # find matching closing paren
+        depth = 1
+        scanLex = nextLex.next(ignore_whitespace=True, ignore_comments=True)
+        while scanLex and depth > 0:
+            if scanLex.text() == '(':
+                depth += 1
+            elif scanLex.text() == ')':
+                depth -= 1
+                if depth == 0:
+                    return (scanLex, None)
+            scanLex = scanLex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return (None, None)
+
+
+# returns the original type of an operand before any conversions
+def get_original_type(operand_lex, operand_ent):
+    # handle literals
+    if not operand_ent and operand_lex and operand_lex.token() in ["Number", "Literal"]:
+        is_unsigned = 'u' in operand_lex.text().lower()
+        return {'signed': not is_unsigned, 'category': 'integral',
+                'type': 'unsigned literal' if is_unsigned else 'signed literal'}
+
+    # handle entities
+    if operand_ent:
+        info = get_type_info(operand_ent)
+        if info['is_floating']:
+            return {'signed': None, 'category': 'floating',
+                    'type': str(operand_ent.type()) if operand_ent.type() else 'float'}
+
+        return {'signed': info['is_signed'] if info['is_signed'] is not None else (not info['is_unsigned']),
+                'category': 'integral',
+                'type': str(operand_ent.type()) if operand_ent.type() else 'unknown'}
+
+    return {'signed': None, 'category': None, 'type': 'unknown'}
+
+
+# computes the type after integral promotion
+def compute_promoted_type(operand_lex, operand_ent):
+    # handle literals
+    if not operand_ent and operand_lex and operand_lex.token() in ["Number", "Literal"]:
+        is_unsigned = 'u' in operand_lex.text().lower()
+        return {'signed': not is_unsigned, 'category': 'integral',
+                'type': 'unsigned int' if is_unsigned else 'int'}
+
+    # handle entities
+    if operand_ent:
+        info = get_type_info(operand_ent)
+
+        # floating types don't undergo integral promotion
+        if info['is_floating']:
+            return {'signed': None, 'category': 'floating',
+                    'type': str(operand_ent.type()) if operand_ent.type() else 'float'}
+
+        # small unsigned types promote to signed int
+        if info['is_small_unsigned']:
+            return {'signed': True, 'category': 'integral', 'type': 'int'}
+
+        # other types remain unchanged
+        category = 'floating' if info['is_floating'] else 'integral'
+        return {'signed': info['is_signed'] if info['is_signed'] is not None else (not info['is_unsigned']),
+                'category': category,
+                'type': str(operand_ent.type()) if operand_ent.type() else 'unknown'}
+
+    return {'signed': None, 'category': None, 'type': 'unknown'}
+
+
+# applies usual arithmetic conversions to two promoted types
+def compute_uac(left_promoted, right_promoted):
+    # if either is floating, both become floating type
+    if left_promoted['category'] == 'floating' or right_promoted['category'] == 'floating':
+        if left_promoted['category'] == 'floating':
+            return (left_promoted, {'signed': None, 'category': 'floating', 'type': left_promoted['type']})
+        else:
+            return ({'signed': None, 'category': 'floating', 'type': right_promoted['type']}, right_promoted)
+
+    # both are integral - if signedness differs, unsigned wins
+    if left_promoted['signed'] != right_promoted['signed']:
+        return (
+            {'signed': False, 'category': 'integral', 'type': 'unsigned int'},
+            {'signed': False, 'category': 'integral', 'type': 'unsigned int'}
+        )
+
+    # same signedness - no conversion needed
+    return (left_promoted, right_promoted)
+
+
+# checks if conversion violates signedness or type category rules
+def check_conversion(check, file, operator_lex, operand_lex, operand_ent,
+                    before_type, after_type):
+    # skip check if we can't determine type (e.g., complex parenthesized expressions)
+    # this prevents false positives when type analysis is uncertain
+    if (before_type['signed'] is None and before_type['category'] is None) or \
+       (after_type['signed'] is None and after_type['category'] is None):
+        return
+
+    # check signedness change
+    if before_type['signed'] is not None and after_type['signed'] is not None:
+        if before_type['signed'] != after_type['signed']:
+            if not is_nonnegative_constant(operand_lex, operand_ent):
+                check.violation(operand_ent, file, operator_lex.line_begin(),
+                              operator_lex.column_begin(), ERR2)
+
+    # check type category change
+    if before_type['category'] is not None and after_type['category'] is not None:
+        if before_type['category'] != after_type['category']:
+            if not is_constant_integral_value(operand_lex, operand_ent):
+                check.violation(operand_ent, file, operator_lex.line_begin(),
+                              operator_lex.column_begin(), ERR3)
+
+
+# returns type information for an entity
+def get_type_info(ent):
+    if not ent:
+        return {'type_str': '', 'is_signed': None, 'is_unsigned': False,
+                'is_floating': False, 'is_small_unsigned': False}
+
+    ent_type = str(ent.type()).lower() if ent.type() else ""
+    underlying_type = str(ent.freetext("UnderlyingType")).lower() if ent.freetext("UnderlyingType") else ""
+    type_str = ent_type + " " + underlying_type
+
+    is_unsigned = any(u in type_str for u in ['unsigned', 'uint'])
+    is_floating = any(f in type_str for f in ['float', 'double'])
+    is_small_unsigned = any(t in type_str for t in ['uint8_t', 'uint16_t', 'unsigned char', 'unsigned short'])
+
+    is_signed = None
+    if is_unsigned:
+        is_signed = False
+    elif any(s in type_str for s in ['int8_t', 'int16_t', 'int32_t', 'int64_t', 'signed']):
+        is_signed = True
+    elif 'int' in ent_type and 'unsigned' not in type_str and 'uint' not in type_str:
+        is_signed = True
+
+    return {
+        'type_str': type_str,
+        'is_signed': is_signed,
+        'is_unsigned': is_unsigned,
+        'is_floating': is_floating,
+        'is_small_unsigned': is_small_unsigned
+    }
+
+
+# parses integer literal and checks if non-negative (for exception #1)
+def is_nonnegative_constant(operand_lex, operand_ent):
+    if not operand_lex or operand_lex.token() not in ["Number", "Literal"]:
+        return False
+
+    text = operand_lex.text().rstrip('LlUu')
+    if not text:
+        return False
+
+    try:
+        if text.startswith('0x') or text.startswith('0X'):
+            return int(text, 16) >= 0
+        elif text.startswith('0b') or text.startswith('0B'):
+            return int(text, 2) >= 0
+        elif text.startswith('0') and len(text) > 1 and text[1].isdigit():
+            return int(text, 8) >= 0
+        else:
+            return int(text) >= 0
+    except:
+        return False
+
+
+# checks if operand is a constant integral value (for exception #2)
+def is_constant_integral_value(operand_lex, operand_ent):
+    return operand_lex and operand_lex.token() in ["Number", "Literal"]
