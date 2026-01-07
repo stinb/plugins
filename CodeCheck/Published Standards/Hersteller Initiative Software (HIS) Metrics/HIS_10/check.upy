@@ -1,0 +1,101 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2025-01-07
+
+
+ERR_MULTIPLE = 'Multiple exit points from the function'
+ERR_NO_EXIT = 'No exit point in the function'
+ERR_NOT_END = 'Exit point not at the end of the function'
+
+
+def ids():
+    return ('HIS_10', 'AC_HIS_10')
+
+
+def name(id):
+    return {
+        'HIS_10': '''Published Standards/Hersteller Initiative Software (HIS) Metrics/10. Number of return points (RETURN)''',
+        'AC_HIS_10': '''All Checks/Number of return points (RETURN)''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'HIS_10': [
+            'Language: C',
+            'Language: C++',
+            'Standard: Hersteller Initiative Software (HIS) Metrics',
+            'Control Flow',
+        ],
+        'AC_HIS_10': [
+            'Language: C',
+            'Language: C++',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Number of return points (RETURN)</p>
+
+<p><b>Description</b></p>
+
+<p>This metric measures the complexity and maintainability of a function.</p>
+
+<p><b>Developer's Notes</b></p>
+
+<p>
+If this check is being used on a file with tempate functions, Delayed Template Parsing must be disabled.
+To do this go to Project &gt; Configure Project &gt; C++ &gt; Compiler &gt; ensure Delayed Template Parsing is unchecked.
+</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('ignore', 'Ignore constructors and destructors', False)
+
+
+def check(check, file):
+    ignore_ctor_dtor = check.options().lookup('ignore')
+
+    for ref in file.filerefs('Define', 'Function'):
+        ent = ref.ent()
+
+        if ignore_ctor_dtor:
+            parent = ent.parent()
+            if parent:
+                parent_name = parent.name()
+                fn_name = ent.name()
+                if fn_name == parent_name or '~' + fn_name == parent_name:
+                    continue
+
+        # Analyze the control flow graph, other than the last which is always 'end'
+        count = 0
+        at_end = False
+        nodes = ent.control_flow_graph().nodes()[:-1]
+        for i, node in enumerate(nodes):
+            if any(str in node.kind() for str in ('return', 'goto', 'exit')):
+                count += 1
+                at_end = i == len(nodes) - 1
+
+        if count > 1:
+            check.violation(ent, file, ref.line(), ref.column(), ERR_MULTIPLE)
+        elif count == 0 and ent.freetext('UnderlyingType') != 'void':
+            check.violation(ent, file, ref.line(), ref.column(), ERR_NO_EXIT)
+        elif count == 1 and not at_end:
+            check.violation(ent, file, ref.line(), ref.column(), ERR_NOT_END)
