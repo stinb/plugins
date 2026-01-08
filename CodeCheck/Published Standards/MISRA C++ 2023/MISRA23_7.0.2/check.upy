@@ -1,0 +1,422 @@
+ERR1 = "There shall be no conversion to type bool"
+BOOL_OPS = ["<", ">", "<=", ">=", "==", "!=", "!", "&&", "||", "true", "false"]
+BOOL = ["true", "false"]
+BOOL_TYPES = ["bool", "_Bool"]
+
+
+def ids():
+    return ('MISRA23_7.0.2')
+
+
+def name(id):
+    return {
+        'MISRA23_7.0.2': """Published Standards/MISRA C++ 2023/7.0.2 \
+There shall be no conversion to type bool""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_7.0.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_7.0.2': """
+<p><b>Rationale</b></p>
+<p>Conversion from a fundamental type (see [basic.fundamental]) to bool depends on the interpretation
+of a non-zero value as true (see [conv.bool]). However, this interpretation may not be appropriate
+for APIs, such as POSIX, that do not use Boolean return values.</p>
+<p>Contextual conversion to bool occurs when an operand of fundamental type is used as:</p>
+<p>● An operand to a logical operator; or</p>
+<p>● The first operand of the conditional operator; or</p>
+<p>● The condition of an if-statement or iteration-statement.</p>
+<p>The result of such a conversion may not be what the developer intended (for example, when an
+assignment is accidentally used as the condition to an if-statement). Therefore, wherever a contextual
+conversion to bool may occur, the corresponding expression shall have type bool (e.g. as a result of
+an explicit test).</p>
+<p>In addition, fundamental types, unscoped enumeration types, and pointers will be implicitly converted
+on assignment to bool. The result of such implicit conversions may not be what the developer
+intended.</p>
+
+<p><b>Exception</b></p>
+<p>1. A static_cast to bool is permitted for a class type having an explicit operator bool.</p>
+<p>2. Contextual conversion to bool is permitted from a pointer, or from a class type having an
+explicit operator bool.</p>
+<p>3. A bit-field of size 1 can be converted to bool — this is a common idiom used when accessing
+hardware registers and there is no risk of confusion.</p>
+<p>4. In a while, a condition of the form type-specifier-seq declarator is not required to have type bool
+as alternative mechanisms for achieving the same effect generally require the scope of objects
+to be wider than necessary. Note that a similar exception is not needed for the if statement, as
+the if (
+init-statementopt condition ) syntax was introduced in C++17.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">if ( ( u8a &lt; u8b ) && ( u8c &lt; u8d ) ) // Compliant
+if ( ( u8a &lt; u8b ) && ( u8c + u8d ) ) // Non-compliant
+
+if ( true && ( u8c &lt; u8d ) ) // Compliant
+if ( 1 && ( u8c &lt; u8d ) ) // Non-compliant
+if ( u8a && ( u8c &lt; u8d ) ) // Non-compliant
+
+if ( !0 ) // Non-compliant
+if ( !false ) // Compliant
+
+s32a = s16a ? s32b : s32c; // Non-compliant
+s32a = b1 ? s32b : s32c; // Compliant
+s32a = ( s16a &lt; 5 ) ? s32b : s32c; // Compliant
+
+int32_t fn();
+bool fb();
+
+while ( int32_t i1 = fn() ) // Compliant by exception #4
+if ( int32_t i2 = fn() ) // Non-compliant
+if ( int32_t i3 = fn() ; i3 != 0) // Compliant version of the above line
+
+while ( std::cin ) // Compliant by exception #2 - std::istream
+                // has explicit operator bool
+
+for ( int32_t x = 10; x; --x ) // Non-compliant
+
+extern int32_t * getptr();
+
+if ( getptr() ) // Compliant by exception #2 - contextual
+            // conversion from pointer to bool
+
+bool b2 = getptr(); // Non-compliant
+bool b3 = getptr() != nullptr; // Compliant
+
+if ( bool b4 = fb() ) // Compliant
+if ( int32_t i = fn(); i != 0 ) // Compliant
+if ( int32_t i = fn(); i ) // Non-compliant - condition has type of 'i'
+if ( int32_t i = fn() ) // Non-compliant
+if ( u8 ) // Non-compliant</code></pre>
+
+<p>The following example illustrates contextual conversion to bool with a user-defined class type:</p>
+<pre><code language="C++">class C
+{
+    int32_t x;
+public:
+    explicit operator bool() const { return x &lt; 0; }
+};
+void foo( C c )
+{
+    bool b1 = static_cast&lt; bool &gt;( 4 ); // Non-compliant
+    bool b2 = static_cast&lt; bool &gt;( c ); // Compliant by exception #1
+    if ( c ) // Compliant by exception #2 - contextual
+    { // conversion from 'C' to bool
+    }
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 7.0.1, Rule 7.11.3, Rule 8.2.4</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_cast_valid(lex):
+    on_bracket = 0
+
+    while lex:
+        if lex.text() == "(":
+            on_bracket += 1
+        elif lex.text() == ")":
+            on_bracket -= 1
+
+            if not on_bracket:
+                break
+        elif (on_bracket == 1) and lex.ent() and ent_converted_bool(lex.ent()):
+            return True
+
+        lex = lex.next(True, True)
+
+    return False
+
+
+def get_open_bracket(lex):
+    on_bracket = 1
+
+    while on_bracket:
+        lex = lex.previous(True, True)
+
+        if lex.text() == ")":
+            on_bracket += 1
+        elif lex.text() == "(":
+            on_bracket -= 1
+
+    return lex
+
+
+def ent_converted_bool(ent):
+    ent, _ = get_ent_type(ent)
+
+    if ent and ent.kind().check("Type"):
+        for func_ref in ent.refs("Define", "Member Function"):
+            if func_ref.ent().name() == "operator bool":
+                return True
+
+    return False
+
+
+def ent_is_bool(ent, inc_ptr=True):
+    utype = str(ent.freetext("UnderlyingType"))
+    utype = utype.replace("const", "")
+    utype = utype.replace("volatile", "")
+    utype = utype.strip(" ")
+
+    bfield = str(ent.freetext("Bitfield"))
+
+    if utype in BOOL_TYPES or (inc_ptr and utype.endswith("*")) or bfield == "1":
+        return True
+
+    return False
+
+
+def rop_is_bool(lex):
+    lex = lex.previous(True, True)
+
+    if lex.text() == ")":
+        brack_lex = lex
+        brack_lex = get_open_bracket(brack_lex)
+
+        if brack_lex.previous().ent() and brack_lex.previous().ent().kind().check("Function"):
+            lex = brack_lex
+
+    while lex.token() not in ["Whitespace", "Newline", "Indent"]:
+        if (lex.ent() and ent_is_bool(lex.ent())
+                or lex.text() in BOOL_OPS):
+            return True
+
+        lex = lex.previous()
+
+    if lex.previous(True, True).text() in BOOL_OPS:
+        return True
+
+    return False
+
+
+def lop_is_bool(lex):
+    lex = lex.next(True, True)
+
+    while lex.token() not in ["Whitespace", "Newline", "Indent"]:
+        if (lex.ent() and ent_is_bool(lex.ent())
+                or lex.text() in BOOL_OPS):
+            return True
+
+        lex = lex.next()
+
+    if lex.next(True, True).text() in BOOL_OPS:
+        return True
+
+    return False
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() in ["&&", "||"]:
+            flag_lex = lex
+
+            if not (rop_is_bool(lex) and lop_is_bool(lex)):
+                check.violation(None, file, flag_lex.line_begin(),
+                                flag_lex.column_begin(), ERR1)
+        elif lex.text() == "!":
+            flag_lex = lex
+            lex = lex.next()
+
+            if lex.text() == "(":
+                lex = lex.next()
+
+            while lex.next().text() in [".", "->", "::"]:
+                lex = lex.next().next()
+
+            if (lex.ent() and ent_is_bool(lex.ent())
+                    or lex.text() in BOOL):
+                lex = lex.next(True, True)
+                continue
+
+            check.violation(None, file, flag_lex.line_begin(),
+                            flag_lex.column_begin(), ERR1)
+        elif lex.text() == "?":
+            flag_lex = lex
+
+            if not rop_is_bool(lex):
+                check.violation(None, file, flag_lex.line_begin(),
+                                flag_lex.column_begin(), ERR1)
+        elif lex.text() in ["if", "while"] and lex.next(True, True).text() == "(":
+            flag_lex = lex
+            compliant = False
+            on_assignment = False
+            on_bracket = 0
+            on_while = True if lex.text() == "while" else False
+            ents = []
+
+            while lex:
+                if lex.text() == "(":
+                    on_bracket += 1
+                elif lex.text() == ")":
+                    on_bracket -= 1
+
+                    if not on_bracket:
+                        break
+                elif (on_bracket == 1) and lex.text() in BOOL_OPS:
+                    compliant = True
+                    break
+                elif (on_bracket == 1) and on_while and lex.text() == "=":
+                    compliant = True
+                    break
+                elif (on_bracket == 1) and not on_assignment and lex.ent() and (lex.token() in ["Identifier", "Keyword"]):
+                    ents.append(lex.ent())
+                elif on_bracket == 1 and lex.text() == "=":
+                    on_assignment = True
+
+                lex = lex.next(True, True)
+
+            if compliant:
+                continue
+
+            for ent in ents:
+                if ent_is_bool(ent) or ent_converted_bool(ent):
+                    compliant = True
+
+            if not compliant:
+                check.violation(None, file, flag_lex.line_begin(),
+                                flag_lex.column_begin(), ERR1)
+        elif lex.text() == "static_cast" and lex.next(True, True).text() == "<":
+            flag_lex = lex
+            on_bracket = 0
+            is_bool = False
+
+            while lex:
+                if lex.text() == "<":
+                    on_bracket += 1
+                elif lex.text() == ">":
+                    on_bracket -= 1
+
+                    if not on_bracket:
+                        break
+                elif lex.text() == "bool":
+                    is_bool = True
+                    break
+
+                lex = lex.next(True, True)
+
+            if not is_bool:
+                continue
+
+            if not is_cast_valid(lex):
+                check.violation(None, file, flag_lex.line_begin(),
+                                flag_lex.column_begin(), ERR1)
+        elif lex.text() == "for" and lex.next(True, True).text() == "(":
+            flag_lex = lex
+            on_bracket = 0
+            on_condition = False
+            compliant = False
+
+            while lex:
+                if lex.text() == "(":
+                    on_bracket += 1
+                elif lex.text() == ")":
+                    on_bracket -= 1
+
+                    if not on_bracket:
+                        break
+                elif on_bracket == 1 and lex.text() == ":":
+                    # for range, not included
+                    compliant = True
+                    break
+                elif on_bracket == 1 and lex.text() == ";":
+                    flag_lex = lex
+                    on_condition = True
+                elif on_condition and lex.text() in BOOL_OPS:
+                    compliant = True
+                    break
+                elif on_condition and on_bracket == 1 and lex.text() == ";":
+                    break
+
+                lex = lex.next(True, True)
+
+            if not compliant:
+                check.violation(None, file, flag_lex.line_begin(),
+                                flag_lex.column_begin(), ERR1)
+
+        lex = lex.next(True, True)
+
+    for obj_ref in file.filerefs("Define", "Object"):
+        if not ent_is_bool(obj_ref.ent()):
+            continue
+
+        for ass_ref in obj_ref.ent().refs("Assign Value"):
+            if ass_ref.ent().name() == "operator bool" or ent_is_bool(ass_ref.ent(), False):
+                continue
+
+            lex = ass_ref.file().lexer().lexeme(ass_ref.line(), ass_ref.column())
+            compliant = False
+            on_bracket = 0
+
+            if lex.previous(True, True).text() in BOOL_OPS:
+                continue
+
+            while lex.previous().text() in [".", "->", "::"]:
+                lex = lex.previous().previous()
+
+            if lex.previous(True, True).text() in BOOL_OPS:
+                continue
+
+            while lex and lex.text() != ";":
+                if lex.text() in BOOL_OPS:
+                    compliant = True
+                    break
+                elif lex.text() == "(":
+                    on_bracket += 1
+                elif lex.text() == ")":
+                    on_bracket -= 1
+
+                    if on_bracket < 0:
+                        lex = get_open_bracket(lex)
+
+                        if lex.previous(True, True).text() in ["if", "for"]:
+                            # skip, handled by conditions above
+                            compliant = True
+                        break
+
+                lex = lex.next(True, True)
+
+            if not compliant:
+                check.violation(obj_ref.ent(), ass_ref.file(),
+                                ass_ref.line(), ass_ref.column(), ERR1)
