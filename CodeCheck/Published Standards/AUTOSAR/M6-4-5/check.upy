@@ -2,6 +2,7 @@
 # Written by Jordan Colbeth
 # 10-12-2021
 # Fix 12-31-2025: Loop handling in switch case analysis
+# Fix 01-08-2026: Nested switch statement handling
 
 import re
 
@@ -372,23 +373,78 @@ def check(check, file):
                     visited = {}
                     # Add path_stack to track current path for loop detection
                     path_stack = set()
+                    # Track the initial switch node to identify nested switches
+                    initial_switch = node
                     # Run the testing function on this switch node
-                    ok, line, column = testCase(check, funcRef, file, line, column, node, child, visited, lexer, False, path_stack)
+                    ok, line, column = testCase(check, funcRef, file, line, column, node, child, visited, lexer, False, path_stack, initial_switch)
                     if not ok:
                         check.violation(funcRef.ent(), file, int(line or 0), int(column or 0), ERR1)
 
 
 
+# Helper function to skip over nested switch entirely
+def skipNestedSwitch(node, visited, path_stack, initial_switch):
+    # When we encounter a nested switch, we need to traverse through it
+    # to find its end-switch node and continue from there.
+    # Returns the end-switch node of the nested switch.
+    # Track depth to handle multiple levels of nesting.
+    depth = 1
+    to_visit = [node]
+    seen = set()
+    
+    while to_visit and depth > 0:
+        current = to_visit.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        
+        kind = current.kind()
+        
+        # Found another nested switch-case or switch-default, increase depth
+        if kind in ("switch-case", "switch-default") and current != node:
+            depth += 1
+        # Found end-switch, decrease depth
+        elif kind == "end-switch":
+            depth -= 1
+            if depth == 0:
+                # This is the end-switch of our nested switch
+                # Return its children to continue checking from there
+                return current.children()
+        
+        # Add children to continue traversal
+        for child in current.children():
+            if child not in seen:
+                to_visit.append(child)
+    
+    return []
+
+
 # This function walks the switch case statements to ensure they end in a break or throw command
 # Added path_stack parameter to track nodes in current traversal path
-def testCase(check, funcRef, file, line, column, node, child, visited, lexer, passive, path_stack):
+# Added initial_switch parameter to identify nested switches
+def testCase(check, funcRef, file, line, column, node, child, visited, lexer, passive, path_stack, initial_switch):
     parent = node
     node = child
     kind = node.kind()
     canReturn = (check.option().lookup("returnAllowed") == OPT1RETURN)
 
+    # If we encounter a nested switch-case or switch-default (not the one we're currently checking)
+    if kind in ("switch-case", "switch-default") and node != initial_switch:
+        # Skip over the entire nested switch structure
+        continuation_nodes = skipNestedSwitch(node, visited, path_stack, initial_switch)
+        
+        # Check if any continuation path after nested switch has valid termination
+        found_valid_termination = False
+        for cont_node in continuation_nodes:
+            ok, line, column = testCase(check, funcRef, file, line, column, node, cont_node, visited, lexer, passive, path_stack, initial_switch)
+            if ok:
+                found_valid_termination = True
+        
+        return found_valid_termination, line, column
+
     if kind == "break":
         return True, line, column
+    
     if kind == "passive":
         passive = True
         if not lexer:
@@ -399,14 +455,13 @@ def testCase(check, funcRef, file, line, column, node, child, visited, lexer, pa
         if lexeme and lexeme.text().lower() == 'throw':
             return True, line, column
 
-
     if (canReturn == True and kind == "return"):
         return True, line, column
 
     if (kind in ("switch-case", "switch-default", "end-switch")):
         if passive:
             return False, line, column
-            passive = False
+        passive = False
         if kind != 'end-switch':
             line = node.line_begin()
             column = node.column_begin()
@@ -414,15 +469,12 @@ def testCase(check, funcRef, file, line, column, node, child, visited, lexer, pa
     # Tracking distinguishes between:
     # 1. Nodes already visited in ANY path (visited dict) - prevents infinite loops
     # 2. Nodes in the CURRENT path (path_stack set) - detects loop back-edges
-    # If we encounter a node that's in our current path, it's a back-edge (loop),
-    # which should NOT be considered a valid termination path
     if node in path_stack:
         # This is a back-edge (loop) - not a valid exit path
         return False, line, column
 
     if node in visited:
         # Already explored this node from another path
-        # Return the cached result
         return visited[node]
 
     # Add current node to path_stack before exploring child nodes
@@ -433,11 +485,10 @@ def testCase(check, funcRef, file, line, column, node, child, visited, lexer, pa
 
     if children:
         for child in children:
-            # Pass path_stack through recursive calls
-            ok, line, column = testCase(check, funcRef, file, line, column, node, child, visited, lexer, passive, path_stack)
+            # Pass initial_switch through recursive calls
+            ok, line, column = testCase(check, funcRef, file, line, column, node, child, visited, lexer, passive, path_stack, initial_switch)
             if ok:
                 found_valid_termination = True
-                # Don't break early - continue checking all paths (ensures we detect when ALL paths don't terminate)
 
     # Remove current node from path_stack after exploring
     path_stack.remove(node)
