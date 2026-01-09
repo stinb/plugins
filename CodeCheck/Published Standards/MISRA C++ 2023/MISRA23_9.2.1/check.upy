@@ -1,0 +1,165 @@
+ERR1 = "An explicit type conversion shall not be an expression statement"
+
+
+def ids():
+    return ('MISRA23_9.2.1')
+
+
+def name(id):
+    return {
+        'MISRA23_9.2.1': """Published Standards/MISRA C++ 2023/9.2.1 \
+An explicit type conversion shall not be an expression statement""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_9.2.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_9.2.1': """
+<p><b>Amplification</b></p>
+<p>This rule only applies to explicit type conversions that use functional notation.</p>
+
+<p><b>Rationale</b></p>
+<p>An explicit type conversion that uses functional notation is composed of a type name followed by
+parentheses or braces. It creates a temporary object that is discarded at the end of the statement.
+This notation can appear to be very similar to the declaration of a variable, except that it does not
+contain a variable name.</p>
+<p>If the intent was to declare a variable for scope-based resource management (e.g. std::lock_guard),
+the destruction side effects which were expected to occur at the end of the containing block will instead
+occur immediately (e.g. the lock is prematurely released).</p>
+
+<p><b>Example</b></p>
+<p>In the following example, the redundant parentheses surrounding b_mutex violate Rule 6.0.1.</p>
+<pre><code language="C++">void f1()
+{
+    std::unique_lock< std::mutex > a_mutex; // Declaration, rule does not apply
+    std::unique_lock< std::mutex > ( b_mutex ); // Declaration, rule does not apply
+}
+
+void f2()
+{
+    std::scoped_lock { a_mutex }; // Non-compliant
+    // - locks and unlocks here
+    // Unprotected
+}
+
+void f3()
+{
+    std::scoped_lock ( a_mutex, other_mutex ); // Non-compliant
+    // - locks and unlocks here
+    // Unprotected
+}
+
+void f4()
+{
+    f( std::unique_lock { a_mutex } ); // Compliant - type conversion is
+    // not an expression statement
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 6.0.1</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_valid_statement(line_tokens):
+    if "Whitespace" in line_tokens:
+        return False
+
+    return True
+
+
+def is_lex_valid(lex):
+    if (lex.token() == "Identifier"
+            and lex.next(True, True) and lex.next(True, True).text() in "({"
+            and lex.previous(True, True) and lex.previous(True, True).text() not in ["=", ".", "->"]):
+        return True
+
+    return False
+
+
+def is_ent_invalid(ent):
+    if ent.kind().check("Function, Macro, Namespace, FunctionTemplate"):
+        return True
+
+    return False
+
+
+def is_ref_invalid(ref):
+    if ref.kind().check("Define, Definein, Declare, Declarein, Derive, Deriveby, Call, Callby"):
+        return True
+
+    return False
+
+
+def is_newline(lex):
+    if ((lex.token() == "Newline" or lex.text() == ";")
+            and lex.previous(True, True)
+            and lex.previous(True, True).token() not in ["Operator", "Identifier", "Keyword"]):
+        return True
+
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+    line_tokens = []
+
+    while lex:
+        if is_valid_statement(line_tokens) and is_lex_valid(lex):
+            if ((lex.ent() and is_ent_invalid(lex.ent()))
+                    or (lex.ref() and is_ref_invalid(lex.ref()))):
+                lex = lex.next()
+                continue
+
+            open_bracket = lex.next(True, True).text()
+            close_bracket = ")" if open_bracket == "(" else "}"
+            flag_lex = lex
+            on_bracket = 0
+
+            while lex:
+                if lex.text() == open_bracket:
+                    on_bracket += 1
+                elif lex.text() == close_bracket:
+                    on_bracket -= 1
+
+                    if not on_bracket:
+                        break
+
+                lex = lex.next(True, True)
+
+            if lex.next(True, True) and lex.next(True, True).text() == ";":
+                check.violation(flag_lex.ent(), file,
+                                flag_lex.line_begin(), flag_lex.column_begin(), ERR1)
+        elif is_newline(lex):
+            line_tokens.clear()
+            lex = lex.next(True, True)
+            continue
+        else:
+            line_tokens.append(lex.token())
+
+        lex = lex.next()
