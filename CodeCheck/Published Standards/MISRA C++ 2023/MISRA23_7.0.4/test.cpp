@@ -14,7 +14,7 @@ void foo()
     // Shift operators - left operand
     auto r1 = 1u << u8;     // UndCC_Valid
     auto r2 = 1u << 31;     // UndCC_Valid
-    auto r3 = 1_u8 << 2;    // UndCC_Valid - but violates other rules
+    auto r3 = uint8_t(1) << 2;    // UndCC_Valid - but violates other rules
     auto r4 = u8 << 2;      // UndCC_Valid - but violates other rules
     auto r5 = s32 << 2;     // UndCC_Violation - left operand is signed
     auto r6 = 1 << u8;      // UndCC_Violation - left operand is signed
