@@ -1,0 +1,229 @@
+ERR1 = "C-style cast shall not be used"
+ERR2 = "Functional notation cast shall not be used"
+
+
+FUND_TYPES = ["bool", "short", "int", "long", "float", "double",
+              "char", "wchar_t", "char8_t" "char16_t", "char32_t"]
+STD_LIB_WITH_CTOR = ["std::string", "std::runtime_error", "std::out_of_range", "std::string_view",
+                     "std::chrono::seconds", "std::chrono::minutes", "std::chrono::hours", "std::thread", "Json::Value"]
+
+
+def ids():
+    return ('MISRA23_8.2.2')
+
+
+def name(id):
+    return {
+        'MISRA23_8.2.2': """Published Standards/MISRA C++ 2023/8.2.2 \
+C-style casts and functional notation casts shall not be used""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_8.2.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_8.2.2': """
+<p><b>Amplification</b></p>
+<p>This rule does not apply to functional notation casts that use curly braces or that result in a constructor
+call.</p>
+
+<p><b>Rationale</b></p>
+<p>C-style casts and functional notation casts raise several concerns:</p>
+<p>1. They permit almost any type to be converted to almost any other type without checks;</p>
+<p>2. They give no indication why the conversion is taking place;</p>
+<p>3. Their syntax is more difficult to recognize.</p>
+<p>These concerns can be addressed with the use of const_cast, dynamic_cast, static_cast and
+reinterpret_cast, which:</p>
+<p>1. Enforce constraints on the types involved;</p>
+<p>2. Give a better indication of the cast's intent;</p>
+<p>3. Are easy to identify.</p>
+
+<p><b>Exception</b></p>
+<p>A C-style cast to void is permitted, as this allows the intentional discarding of a value to be made
+explicit — for instance, the return value of a non-void function call (see Rule 0.1.2).</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">int32_t g();
+
+void f1()
+{
+    ( void ) g(); // Compliant by exception
+}</code></pre>
+
+<p>In the following example (which violates Rule 8.2.3), the C-style casts from a1 to the non-const pointer
+a2 is more permissive than necessary. If the type of a1 is not A, then the C-style cast to a2 will compile,
+resulting in undefined behaviour. The equivalent const_cast to a3 will not compile if the type of a1
+is changed.</p>
+<pre><code language="C++">struct A
+{
+    A( char c);
+};
+
+struct B {};
+void f1a( A x )
+{
+    auto const & a1 = x;
+    A * a2 = ( A * )&a1; // Non-compliant
+    A * a3 = const_cast&lt; A * &gt;( &a1 );
+}
+
+void f1b( B x )
+{
+    auto const & a1 = x;
+    A * a2 = ( A * )&a1; // Non-compliant
+    A * a3 = const_cast&lt; A * &gt;( &a1 ); // Ill-formed
+}
+
+void f2( int32_t x )
+{
+    auto i = A( 'c' ); // Rule does not apply - constructor is called
+    auto j = int8_t { 42 }; // Rule does not apply - use of curly braces
+    auto k = int8_t ( x ); // Non-compliant - does not construct an object
+} // of class type</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 0.1.2, Rule 8.2.3</p>
+
+<p><b>Developer's Note:</b></p>
+<p>This check may falsely flag types whose constructor cannot be retrieved, especially from the standard library.</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_ref_invalid(ref):
+    if ref.kind().check("Call, Callby"):
+        return True
+
+    return False
+
+
+def is_not_param(lex):
+    while lex.text() != "(":
+        if lex.text() == ",":
+            return False
+
+        lex = lex.previous(True, True)
+
+    lex = lex.previous(True, True)
+
+    if lex.ent() and lex.ent().kind().check("Function"):
+        return False
+
+    return True
+
+
+def is_cast(lex):
+    lex = lex.next(True, True)
+
+    if lex and lex.text() == "(":
+        lex = lex.next(True, True)
+
+    if lex and (lex.ent() or lex.token() in ["String", "Literal"]):
+        return True
+
+    return False
+
+
+def has_ctor(ent):
+    type_ent, _ = get_ent_type(ent)
+
+    if type_ent:
+        for func_ref in type_ent.refs("Define, Declare", "Member Function"):
+            if func_ref.ent().name() == ent.name():
+                return True
+
+    return False
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    lexer = file.lexer(True, 8, False, False)
+    lex = lexer.first()
+
+    while lex:
+        if (lex.text() in FUND_TYPES or
+            (lex.ent() and lex.ent().longname() not in STD_LIB_WITH_CTOR
+                and lex.ent().kind().check("Type")
+                and not has_ctor(lex.ent()))):
+            if lex.ref() and is_ref_invalid(lex.ref()):
+                lex = lex.next(True, True)
+                continue
+
+            next_lex = lex
+
+            if next_lex.next(True, True).text() in "*&":
+                next_lex.next(True, True)
+
+            next_lex = next_lex.next(True, True)
+
+            if next_lex.text() == "(":
+                check.violation(lex.ent(), file, lex.line_begin(),
+                                lex.column_begin(), ERR2)
+
+        # C-style cast lex
+        elif lex.text() == ")" and is_not_param(lex) and is_cast(lex):
+            prev_lex = lex
+
+            if prev_lex.previous(True, True).text() in "*&":
+                prev_lex = prev_lex.previous(True, True)
+
+            prev_lex = prev_lex.previous(True, True)
+
+            if prev_lex.text() in FUND_TYPES:
+                check.violation(
+                    prev_lex.ent(), file, prev_lex.line_begin(), prev_lex.column_begin(), ERR1)
+
+        lex = lex.next(True, True)
+
+    # C-style cast ref
+    for cast_ref in file.filerefs("Cast Useby"):
+        lex = lexer.lexeme(cast_ref.line(), cast_ref.column())
+
+        if (lex.text() != cast_ref.scope().name()
+                or cast_ref.ent().longname() in STD_LIB_WITH_CTOR):
+            continue
+
+        if lex.next(True, True).text() in "*&":
+            lex = lex.next(True, True)
+
+        lex = lex.next(True, True)
+
+        if lex.text() == ")":
+            check.violation(cast_ref.scope(), file,
+                            cast_ref.line(), cast_ref.column(), ERR1)
