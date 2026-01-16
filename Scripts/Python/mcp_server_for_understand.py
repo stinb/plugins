@@ -224,7 +224,7 @@ def lookup(
     name: Annotated[str, Field(description="The name or regex pattern to search for.")],
     kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string (e.g., 'Function', 'File').")] = None,
 ) -> List[dict]:
-    """Look up entities by name in the Understand database."""
+    """Look up entities by name in the Understand database. Use this tool to get entity IDs. The returned entities include an 'id' field that can be used with any tool that requires an ent_id parameter."""
     if db is None:
         raise RuntimeError("Database is not open")
     
@@ -235,7 +235,7 @@ def lookup(
 def lookup_uniquename(
     uniquename: Annotated[str, Field(description="The unique name of the entity.")],
 ) -> Optional[dict]:
-    """Look up an entity by its unique name."""
+    """Look up an entity by its unique name. The unique name is a persistent identifier (more persistent than ent_id) that can be used to find the same entity again in a changed version of the source code. It is not human-readable."""
     if db is None:
         raise RuntimeError("Database is not open")
     
@@ -287,7 +287,7 @@ def db_metric(
     metric: Annotated[Union[str, List[str]], Field(description="A metric name, or a list of metric names.")],
     metric_format: Annotated[Literal["auto", "raw", "string"], Field(description="Output format.")] = "auto",
 ):
-    """Get metric value(s) for the database."""
+    """Get metric value(s) for the database. If you need project level metrics, use this tool. Do not use this tool to get function, variable, class, or file metrics; use ent_metric for those."""
     if db is None:
         raise RuntimeError("Database is not open")
     return db.metric(metric, metric_format)
@@ -633,7 +633,7 @@ def ent_metric(
     metric: Annotated[Union[str, List[str]], Field(description="A metric name, or a list of metric names.")],
     metric_format: Annotated[Literal["auto", "raw", "string"], Field(description="Output format.")] = "auto",
 ):
-    """Get metric value(s) for an entity."""
+    """Get metric value(s) for an entity. Use this tool to get function metrics, variable metrics, class metrics, or file metrics."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
@@ -907,7 +907,7 @@ def lexer_lexemes(
 def lexer_lines(
     ent_id: Annotated[int, Field(description="The entity ID (must be a file entity).", ge=1)],
 ) -> int:
-    """Get the number of lines in the lexer."""
+    """Get the number of lines in the lexer for a file entity. Returns the number of lines of file as an integer."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
