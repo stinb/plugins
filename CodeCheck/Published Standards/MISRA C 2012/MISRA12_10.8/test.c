@@ -17,6 +17,12 @@ int main() {
   ( uint16_t ) s32a; /* UndCC_Valid - s32a is not composite */
   ( uint32_t ) ( u16a + u16b ); /* UndCC_Violation - cast to wider
 * essential type */
+
+  // Pointer casts should not be checked
+  #define DCI_TX_TRIG3_RAM_ADR (0x8000U + 0x48)
+  const uint8_t * dci_tx_trig3_adr = (const uint8_t * )(DCI_TX_TRIG3_RAM_ADR); // UndCC_Valid
+  const uint8_t * dci_tx_trig3_adr2 = (const uint8_t * )DCI_TX_TRIG3_RAM_ADR; // UndCC_Valid
+
   return 0;
 }
 
