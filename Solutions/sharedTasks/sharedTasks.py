@@ -1,21 +1,68 @@
 # Library for all shared tasks plugins and scripts
 
 
+import dataclasses
 import functools
 import re
+from dataclasses import dataclass
+from enum import Enum
 
 import understand
 from understand import Arch, Db, Ent, Ref
 
 
+class DictResult(Enum):
+    NotInDict = 0
+    NotInDb = 1
+
+
+# Make calls to the database, but with a cache
+class DbCache:
+    def __init__(self):
+        self.entEntsCache: dict[str, list[Ent]] = dict()
+        self.entRefCache: dict[str, Ref | DictResult] = dict()
+
+    # Call ent.ents
+    def entEnts(self, ent: Ent, refKind: str | None = None, entKind: str | None = None) -> list[Ent]:
+        key: str = f'{ent.id()} "{refKind}" "{entKind}"'
+        value: list[Ent] | None = self.entEntsCache.get(key)
+        if value == None:
+            value = ent.ents(refKind, entKind)
+            self.entEntsCache[key] = value
+            return value
+        return value
+
+    # Call ent.ref
+    def entRef(self, ent: Ent, refKind: str | None = None, entKind: str | None = None) -> Ref | None:
+        key: str = f'{ent.id()} "{refKind}" "{entKind}"'
+        value: Ref | DictResult = self.entRefCache.get(key, DictResult.NotInDict)
+        if value == DictResult.NotInDict:
+            value = ent.ref(refKind, entKind)
+            if value == None:
+                self.entRefCache[key] = DictResult.NotInDb
+                return None
+            self.entRefCache[key] = value
+            return value
+        elif value == DictResult.NotInDb:
+            return None
+        return value
+
+
+@dataclass
+class InventoryItem:
+    name: str
+    unit_price: float
+    quantity_on_hand: int = 0
+
+
+@dataclass
 class Option:
-    def __init__(self, key: str, name: str, choices: list[str], default: str):
-        # Used in the CLI and in these scripts
-        self.key = key
-        # Used in graph options
-        self.name = name
-        self.choices = choices
-        self.default = default
+    # Used in the CLI and in these scripts
+    key: str
+    # Used in graph options
+    name: str
+    choices: list[str]
+    default: str
 
 
 # Ref kinds and ent kinds
@@ -74,9 +121,17 @@ def checkIsCallable(ent: Ent) -> bool:
 
 
 def refComparator(a: Ref, b: Ref) -> int:
-    if a.line() < b.line() or a.line() == b.line() and a.column() < b.column():
+    aLine = a.line()
+    bLine = b.line()
+    if aLine < bLine:
         return -1
-    if a.line() > b.line() or a.line() == b.line() and a.column() > b.column():
+    if aLine > bLine:
+        return 1
+    aColumn = a.column()
+    bColumn = b.column()
+    if aColumn < bColumn:
+        return -1
+    if aColumn > bColumn:
         return 1
     return 0
 refComparator = functools.cmp_to_key(refComparator)
@@ -142,6 +197,7 @@ def getFnRefKinds(options: dict[str, str | bool] | None = None) -> str:
 
 
 def getFnOrObjRefs(
+        cache: DbCache,
         function: Ent,
         enableDisableFunctions: dict,
         options: dict[str, str | bool] | None = None) -> list[Ref]:
@@ -149,7 +205,7 @@ def getFnOrObjRefs(
     refKinds = getFnRefKinds(options)
 
     refs = function.refs(refKinds)
-    refs += globalObjRefs(function, options)
+    refs += globalObjRefs(cache, function, options)
     for ref in function.refs('Use', 'Macro'):
         if ref.ent() in enableDisableFunctions:
             refs.append(ref)
@@ -166,12 +222,12 @@ def entHasMembers(ent: Ent) -> bool:
 
 # Recursively see if this entity is a (unique instance of a) member object of a
 # global object
-def isMemberOfGlobal(ent: Ent) -> bool:
-    return isGeneralMemberOfGlobal(ent) or isUniqueMemberOfGlobal(ent)
+def isMemberOfGlobal(cache: DbCache, ent: Ent) -> bool:
+    return isGeneralMemberOfGlobal(cache, ent) or isUniqueMemberOfGlobal(cache, ent)
 
 
 # Recursively see if this entity is a member object of a global object
-def isGeneralMemberOfGlobal(ent: Ent) -> bool:
+def isGeneralMemberOfGlobal(cache: DbCache, ent: Ent) -> bool:
     parent = ent.parent()
     if not parent:
         return False
@@ -179,7 +235,7 @@ def isGeneralMemberOfGlobal(ent: Ent) -> bool:
     parentKind = parent.kind()
     if parentKind.check('Global Object'):
         return True
-    elif parentKind.check('Member Object') and isMemberOfGlobal(parent):
+    elif parentKind.check('Member Object') and isMemberOfGlobal(cache, parent):
         return True
 
     return False
@@ -187,22 +243,22 @@ def isGeneralMemberOfGlobal(ent: Ent) -> bool:
 
 # Recursively see if this entity is a unique instance of a member object of a
 # global object
-def isUniqueMemberOfGlobal(ent: Ent) -> bool:
+def isUniqueMemberOfGlobal(cache: DbCache, ent: Ent) -> bool:
     parentType = ent.parent()
     if not parentType:
         return False
 
-    if parentType.ref('Typedby', 'Object'):
+    if cache.entRef(parentType, 'Typedby', 'Object'):
         return True
 
-    for parentInstance in parentType.ents('Typedby', 'Member Object'):
-        if isMemberOfGlobal(parentInstance):
+    for parentInstance in cache.entEnts(parentType, 'Typedby', 'Member Object'):
+        if isMemberOfGlobal(cache, parentInstance):
             return True
 
     return False
 
 
-def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -> list[Ref]:
+def globalObjRefs(cache: DbCache, function: Ent, options: dict[str, str | bool] | None = None) -> list[Ref]:
     result = []
 
     # Get options
@@ -228,7 +284,7 @@ def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -
         # Members of global objects
         if memberObjects:
             for ref in otherFunction.refs(refKinds, 'Member Object'):
-                if not isMemberOfGlobal(ref.ent()):
+                if not isMemberOfGlobal(cache, ref.ent()):
                     continue
                 result.append(ref)
 
@@ -237,6 +293,7 @@ def globalObjRefs(function: Ent, options: dict[str, str | bool] | None = None) -
 
 
 def checkControlledFunction(
+        cache: DbCache,
         outerFunction: Ent,
         enableDisableFunctions: dict,
         controlledFunctions: set[Ent],
@@ -249,14 +306,14 @@ def checkControlledFunction(
     controlledFunctions.add(outerFunction)
 
     # Function call or global object modify/set/use
-    for ref in getFnOrObjRefs(outerFunction, enableDisableFunctions, options):
+    for ref in getFnOrObjRefs(cache, outerFunction, enableDisableFunctions, options):
         ent = ref.ent()
 
         # Recurse for each function called, ignoring enable/disable functions
         if ent.kind().check('Function'):
             if ent not in enableDisableFunctions and ent not in controlledFunctions:
                 interruptDisabledRefs.add(refStr(ref))
-                checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
+                checkControlledFunction(cache, ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
         # Global object ref
         elif ent.kind().check(OBJ_ENT_KINDS):
@@ -264,6 +321,7 @@ def checkControlledFunction(
 
 
 def checkFunctionForInterruptControl(
+        cache: DbCache,
         outerFunction: Ent,
         enableDisableFunctions: dict,
         controlledFunctions: set[Ent],
@@ -274,7 +332,7 @@ def checkFunctionForInterruptControl(
     interruptDisabledFunctions = set() # { ent, ...  }
 
     # Function call or global object modify/set/use
-    for ref in getFnOrObjRefs(outerFunction, enableDisableFunctions, options):
+    for ref in getFnOrObjRefs(cache, outerFunction, enableDisableFunctions, options):
         ent = ref.ent()
 
         # Add/remove the disable outerFunction
@@ -290,7 +348,7 @@ def checkFunctionForInterruptControl(
         # ignoring enable/disable functions
         elif ent.kind().check('Function') and len(interruptDisabledFunctions) and ent not in controlledFunctions:
             interruptDisabledRefs.add(refStr(ref))
-            checkControlledFunction(ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
+            checkControlledFunction(cache, ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
         # Global object ref with interrupt disabled
         elif not ent.kind().check('Function') and len(interruptDisabledFunctions):
@@ -298,6 +356,7 @@ def checkFunctionForInterruptControl(
 
 
 def getEdgeInfo(
+        cache: DbCache,
         visited: set[str],
         tasks: dict,
         incoming: dict,
@@ -320,7 +379,7 @@ def getEdgeInfo(
         return
 
     # References to global objects
-    for ref in globalObjRefs(fun, options):
+    for ref in globalObjRefs(cache, fun, options):
         scope = root if options[REFERENCE] == 'Simple' else fun
         ent = ref.ent()
 
@@ -396,10 +455,10 @@ def getEdgeInfo(
 
             # Add assignby ref to edge
             for assby_ref in call.ent().refs("Assignby Functionptr"):
-                getEdgeInfo(visited, tasks, incoming, outgoing,
+                getEdgeInfo(cache, visited, tasks, incoming, outgoing,
                             edgeInfo, root, assby_ref.ent(), options, depth + 1)
 
-        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options, depth + 1)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options, depth + 1)
 
 
 def filterIncomingEdges(
@@ -511,6 +570,7 @@ def buildEdgeInfo(
         options: dict[str, str | bool]) -> (dict, dict, set[str], set[str], set[str]):
 
     # Setup data for getEdgeInfo
+    cache: DbCache = DbCache()
     visited = set()   # { funKey, ... }
     incoming = dict() # { ent: set, ... }
     outgoing = dict() # { ent: set, ... }
@@ -527,7 +587,7 @@ def buildEdgeInfo(
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
-        getEdgeInfo(visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options, 0)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options, 0)
 
     # See which edges are filtered out
     if options[FILTER_MODIFY_SET_ONLY] or options[FILTER_USE_ONLY]:
@@ -536,7 +596,7 @@ def buildEdgeInfo(
             if ent.kind().check(OBJ_ENT_KINDS):
                 filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
 
-    interruptDisabledRefs = findInterruptDisabledRefs(db, enableDisableFunctions, options)
+    interruptDisabledRefs = findInterruptDisabledRefs(db, cache, enableDisableFunctions, options)
 
     # Decide whether the nodes are shared
     sharedObjects: dict[Ent, bool] = dict()
@@ -589,6 +649,7 @@ def buildEdgeInfo(
 
 def findInterruptDisabledRefs(
         db: Db,
+        cache: DbCache,
         enableDisableFunctions: dict,
         options: dict[str, str | bool] | None = None) -> set[str]:
 
@@ -600,9 +661,10 @@ def findInterruptDisabledRefs(
     for fun in db.ents():
         if not checkIsCallable(fun):
             continue
-        checkFunctionForInterruptControl(fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
+        checkFunctionForInterruptControl(cache, fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
 
     return interruptDisabledRefs
+
 
 def checkIsFunctionPointer(ent: Ent) -> bool:
     if not ent.kind().check('Parameter, Object'):
