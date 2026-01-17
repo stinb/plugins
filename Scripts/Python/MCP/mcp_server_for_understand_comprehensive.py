@@ -2,7 +2,8 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass, asdict
-from typing import List, Optional, Union
+from typing import Annotated, List, Literal, Optional, Union
+from pydantic import Field
 
 # Add DLL directory if specified in environment variable (for Windows)
 if "UNDERSTAND_DLL_DIR" in os.environ:
@@ -213,44 +214,28 @@ def cfnode_to_cfnode(node: understand.CFNode, node_list: List[understand.CFNode]
         end_node=end_node_id
     )
 
-@mcp.tool(
-    name = "understand_version",
-    description = understand.version.__doc__)
-
+@mcp.tool(name="understand_version")
 def understand_version() -> str:
+    """Return the Understand API version."""
     return understand.version()
 
-@mcp.tool(
-    name = "lookup",
-    description = """
-    Look up entities by name in the Understand database.
-        Arguments:
-            name: The name to search for (can be a string or regex pattern).
-            kindstring: Optional entity kind filter string (e.g., "Function", "File").
-        Returns:
-            A list of Entity objects matching the name.
-    """)
-
-def lookup(name: str, kindstring: Optional[str] = None) -> List[dict]:
-    """Look up entities by name."""
+@mcp.tool(name="lookup")
+def lookup(
+    name: Annotated[str, Field(description="The name or regex pattern to search for.")],
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string (e.g., 'Function', 'File').")] = None,
+) -> List[dict]:
+    """Look up entities by name in the Understand database. Use this tool to get entity IDs. The returned entities include an 'id' field that can be used with any tool that requires an ent_id parameter."""
     if db is None:
         raise RuntimeError("Database is not open")
     
     entities = db.lookup(name, kindstring)
     return [asdict(ent_to_entity(ent)) for ent in entities]
 
-@mcp.tool(
-    name = "lookup_uniquename",
-    description = """
-    Look up an entity by its unique name in the Understand database.
-        Arguments:
-            uniquename: The unique name of the entity.
-        Returns:
-            An Entity object if found, or None if not found.
-    """)
-
-def lookup_uniquename(uniquename: str) -> Optional[dict]:
-    """Look up an entity by unique name."""
+@mcp.tool(name="lookup_uniquename")
+def lookup_uniquename(
+    uniquename: Annotated[str, Field(description="The unique name of the entity.")],
+) -> Optional[dict]:
+    """Look up an entity by its unique name. The unique name is a persistent identifier (more persistent than ent_id) that can be used to find the same entity again in a changed version of the source code. It is not human-readable."""
     if db is None:
         raise RuntimeError("Database is not open")
     
@@ -259,35 +244,21 @@ def lookup_uniquename(uniquename: str) -> Optional[dict]:
         return None
     return asdict(ent_to_entity(ent))
 
-@mcp.tool(
-    name = "ents",
-    description = """
-    Get entities from the Understand database, optionally filtered by kind.
-        Arguments:
-            kindstring: Optional entity kind filter string (e.g., "Function", "File", "Class").
-        Returns:
-            A list of Entity objects matching the filter, or all entities if no filter is specified.
-    """)
-
-def ents(kindstring: Optional[str] = None) -> List[dict]:
-    """Get entities from the database."""
+@mcp.tool(name="ents")
+def ents(
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string (e.g., 'Function', 'File', 'Class').")] = None,
+) -> List[dict]:
+    """Get entities from the database, optionally filtered by kind."""
     if db is None:
         raise RuntimeError("Database is not open")
     
     entities = db.ents(kindstring)
     return [asdict(ent_to_entity(ent)) for ent in entities]
 
-@mcp.tool(
-    name = "db_ent_from_id",
-    description = """
-    Get an entity by its ID.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            An Entity object, or None if not found.
-    """)
-
-def db_ent_from_id(ent_id: int) -> Optional[dict]:
+@mcp.tool(name="db_ent_from_id")
+def db_ent_from_id(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> Optional[dict]:
     """Get an entity by its ID."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -296,16 +267,7 @@ def db_ent_from_id(ent_id: int) -> Optional[dict]:
         return None
     return asdict(ent_to_entity(ent))
 
-@mcp.tool(
-    name = "db_files",
-    description = """
-    Get all file entities in the database.
-        Arguments:
-            None
-        Returns:
-            A list of Entity objects representing file entities.
-    """)
-
+@mcp.tool(name="db_files")
 def db_files() -> List[dict]:
     """Get all file entities in the database."""
     if db is None:
@@ -313,73 +275,38 @@ def db_files() -> List[dict]:
     files = db.files()
     return [asdict(ent_to_entity(ent)) for ent in files]
 
-@mcp.tool(
-    name = "db_language",
-    description = """
-    Get the project languages.
-        Arguments:
-            None
-        Returns:
-            A tuple of language strings enabled in the project.
-    """)
-
-def db_language() -> tuple:
+@mcp.tool(name="db_language")
+def db_language() -> List[str]:
     """Get the project languages."""
     if db is None:
         raise RuntimeError("Database is not open")
-    return db.language()
+    return list(db.language())
 
-@mcp.tool(
-    name = "db_metric",
-    description = """
-    Get metric value(s) for the database.
-        Arguments:
-            metric: A metric name, or a list of metric names.
-            metric_format: Optional format string ("auto", "raw", or "string", default "auto").
-        Returns:
-            A dictionary of metric values if metric is a list, or a single metric value if metric is a string.
-    """)
-
-def db_metric(metric: Union[str, List[str]], metric_format: Optional[str] = None):
-    """Get metric value(s) for the database."""
+@mcp.tool(name="db_metric")
+def db_metric(
+    metric: Annotated[Union[str, List[str]], Field(description="A metric name, or a list of metric names.")],
+    metric_format: Annotated[Literal["auto", "raw", "string"], Field(description="Output format.")] = "auto",
+):
+    """Get metric value(s) for the database. If you need project level metrics, use this tool. Do not use this tool to get function, variable, class, or file metrics; use ent_metric for those."""
     if db is None:
         raise RuntimeError("Database is not open")
-    if metric_format is None:
-        return db.metric(metric)
-    else:
-        return db.metric(metric, metric_format)
+    return db.metric(metric, metric_format)
 
-@mcp.tool(
-    name = "db_name",
-    description = """
-    Get the filename of the database.
-        Arguments:
-            None
-        Returns:
-            The filename of the database as a string.
-    """)
-
+@mcp.tool(name="db_name")
 def db_name() -> str:
     """Get the filename of the database."""
     if db is None:
         raise RuntimeError("Database is not open")
     return db.name()
 
-@mcp.tool(
-    name = "ent_comments",
-    description = """
-    Get comments associated with an entity.
-        Arguments:
-            ent_id: The entity ID.
-            style: Optional comment location ("before" or "after").
-            raw: Optional boolean to preserve original formatting (default False).
-            refkindstring: Optional reference kind string.
-        Returns:
-            Comments as a string or list of strings if raw=True.
-    """)
-
-def ent_comments(ent_id: int, style: Optional[str] = None, raw: Optional[bool] = None, refkindstring: Optional[str] = None):
-    """Get comments for an entity."""
+@mcp.tool(name="ent_comments")
+def ent_comments(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    style: Annotated[Literal["before", "after"], Field(description="Comment location.")] = "before",
+    raw: Annotated[bool, Field(description="Preserve original formatting.")] = False,
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind string.")] = None,
+):
+    """Get comments associated with an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
@@ -387,18 +314,11 @@ def ent_comments(ent_id: int, style: Optional[str] = None, raw: Optional[bool] =
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.comments(style, raw, refkindstring)
 
-@mcp.tool(
-    name = "ent_contents",
-    description = """
-    Get the contents of an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The entity's contents as a string.
-    """)
-
-def ent_contents(ent_id: int) -> str:
-    """Get contents for an entity."""
+@mcp.tool(name="ent_contents")
+def ent_contents(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
+    """Get the contents of an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
@@ -406,20 +326,13 @@ def ent_contents(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.contents()
 
-@mcp.tool(
-    name = "ent_ents",
-    description = """
-    Get entities that reference or are referenced by an entity.
-        Arguments:
-            ent_id: The entity ID.
-            refkindstring: Optional reference kind filter string. If not provided, all references are returned.
-            entkindstring: Optional entity kind filter string.
-        Returns:
-            A list of Entity objects.
-    """)
-
-def ent_ents(ent_id: int, refkindstring: Optional[str] = None, entkindstring: Optional[str] = None) -> List[dict]:
-    """Get referenced entities for an entity."""
+@mcp.tool(name="ent_ents")
+def ent_ents(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string.")] = None,
+    entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string.")] = None,
+) -> List[dict]:
+    """Get entities that reference or are referenced by an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
@@ -433,17 +346,10 @@ def ent_ents(ent_id: int, refkindstring: Optional[str] = None, entkindstring: Op
         entities = ent.ents(refkindstring, entkindstring)
     return [asdict(ent_to_entity(e)) for e in entities]
 
-@mcp.tool(
-    name = "ent_file_type",
-    description = """
-    Get the file type of an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The file type as a string.
-    """)
-
-def ent_file_type(ent_id: int) -> str:
+@mcp.tool(name="ent_file_type")
+def ent_file_type(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get file type for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -452,18 +358,11 @@ def ent_file_type(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.file_type()
 
-@mcp.tool(
-    name = "ent_freetext",
-    description = """
-    Get extra parser information for an entity.
-        Arguments:
-            ent_id: The entity ID.
-            option: The type of information to retrieve (e.g., "AllowExceptions", "Inline", "Noexcept").
-        Returns:
-            The value stored by the parser (string or bool).
-    """)
-
-def ent_freetext(ent_id: int, option: str):
+@mcp.tool(name="ent_freetext")
+def ent_freetext(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    option: Annotated[str, Field(description="Type of information (e.g., 'AllowExceptions', 'Inline').")],
+):
     """Get freetext for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -472,18 +371,11 @@ def ent_freetext(ent_id: int, option: str):
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.freetext(option)
 
-@mcp.tool(
-    name = "ent_ib",
-    description = """
-    Get Info Browser information for an entity.
-        Arguments:
-            ent_id: The entity ID.
-            options: Optional formatting options string.
-        Returns:
-            A list of strings containing Info Browser information.
-    """)
-
-def ent_ib(ent_id: int, options: Optional[str] = None) -> List[str]:
+@mcp.tool(name="ent_ib")
+def ent_ib(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    options: Annotated[Optional[str], Field(description="Formatting options.")] = None,
+) -> List[str]:
     """Get Info Browser information for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -492,17 +384,10 @@ def ent_ib(ent_id: int, options: Optional[str] = None) -> List[str]:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.ib(options)
 
-@mcp.tool(
-    name = "ent_kindname",
-    description = """
-    Get the simple kind name for an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The simple kind name as a string.
-    """)
-
-def ent_kindname(ent_id: int) -> str:
+@mcp.tool(name="ent_kindname")
+def ent_kindname(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get kindname for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -511,17 +396,10 @@ def ent_kindname(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.kindname()
 
-@mcp.tool(
-    name = "ent_language",
-    description = """
-    Get the language of an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The language as a string.
-    """)
-
-def ent_language(ent_id: int) -> str:
+@mcp.tool(name="ent_language")
+def ent_language(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get language for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -530,17 +408,10 @@ def ent_language(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.language()
 
-@mcp.tool(
-    name = "ent_library",
-    description = """
-    Get the library an entity belongs to.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The library name as a string (empty string if not in a library).
-    """)
-
-def ent_library(ent_id: int) -> str:
+@mcp.tool(name="ent_library")
+def ent_library(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get library for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -549,17 +420,10 @@ def ent_library(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.library()
 
-@mcp.tool(
-    name = "ent_longname",
-    description = """
-    Get the long name of an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The long name as a string.
-    """)
-
-def ent_longname(ent_id: int) -> str:
+@mcp.tool(name="ent_longname")
+def ent_longname(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get longname for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -568,18 +432,11 @@ def ent_longname(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.longname()
 
-@mcp.tool(
-    name = "ent_name",
-    description = """
-    Get the short name of an entity.
-        Arguments:
-            ent_id: The entity ID.
-            template_args: Optional boolean to include template instantiation arguments (default False).
-        Returns:
-            The short name as a string.
-    """)
-
-def ent_name(ent_id: int, template_args: Optional[bool] = None) -> str:
+@mcp.tool(name="ent_name")
+def ent_name(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    template_args: Annotated[bool, Field(description="Include template instantiation arguments.")] = False,
+) -> str:
     """Get name for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -588,18 +445,11 @@ def ent_name(ent_id: int, template_args: Optional[bool] = None) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.name(template_args)
 
-@mcp.tool(
-    name = "ent_parameters",
-    description = """
-    Get the parameters for an entity.
-        Arguments:
-            ent_id: The entity ID.
-            shownames: Optional boolean to include parameter names (default True).
-        Returns:
-            Parameters as a string, or None if not available.
-    """)
-
-def ent_parameters(ent_id: int, shownames: Optional[bool] = None) -> Optional[str]:
+@mcp.tool(name="ent_parameters")
+def ent_parameters(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    shownames: Annotated[bool, Field(description="Include parameter names.")] = True,
+) -> Optional[str]:
     """Get parameters for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -608,17 +458,10 @@ def ent_parameters(ent_id: int, shownames: Optional[bool] = None) -> Optional[st
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.parameters(shownames)
 
-@mcp.tool(
-    name = "ent_parent",
-    description = """
-    Get the parent entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The parent Entity object, or None if no parent exists.
-    """)
-
-def ent_parent(ent_id: int) -> Optional[dict]:
+@mcp.tool(name="ent_parent")
+def ent_parent(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> Optional[dict]:
     """Get parent for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -630,17 +473,10 @@ def ent_parent(ent_id: int) -> Optional[dict]:
         return None
     return asdict(ent_to_entity(parent))
 
-@mcp.tool(
-    name = "ent_parsetime",
-    description = """
-    Get the last parse time for a file entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The parse time as Unix/Posix timestamp (0 if not a parse file).
-    """)
-
-def ent_parsetime(ent_id: int) -> int:
+@mcp.tool(name="ent_parsetime")
+def ent_parsetime(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> int:
     """Get parsetime for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -649,17 +485,10 @@ def ent_parsetime(ent_id: int) -> int:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.parsetime()
 
-@mcp.tool(
-    name = "ent_relname",
-    description = """
-    Get the relative name of a file entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The relative name as a string, or None for non-file entities.
-    """)
-
-def ent_relname(ent_id: int) -> Optional[str]:
+@mcp.tool(name="ent_relname")
+def ent_relname(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> Optional[str]:
     """Get relname for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -668,18 +497,11 @@ def ent_relname(ent_id: int) -> Optional[str]:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.relname()
 
-@mcp.tool(
-    name = "ent_simplename",
-    description = """
-    Get the simple name of an entity (deprecated, equivalent to name).
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The simple name as a string.
-    """)
-
-def ent_simplename(ent_id: int) -> str:
-    """Get simplename for an entity."""
+@mcp.tool(name="ent_simplename")
+def ent_simplename(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
+    """Get the simple name of an entity (deprecated)."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
@@ -687,17 +509,10 @@ def ent_simplename(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.simplename()
 
-@mcp.tool(
-    name = "ent_type",
-    description = """
-    Get the type string of an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The type as a string.
-    """)
-
-def ent_type(ent_id: int) -> str:
+@mcp.tool(name="ent_type")
+def ent_type(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get type for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -706,17 +521,10 @@ def ent_type(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.type()
 
-@mcp.tool(
-    name = "ent_uniquename",
-    description = """
-    Get the unique name of an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The unique name as a string.
-    """)
-
-def ent_uniquename(ent_id: int) -> str:
+@mcp.tool(name="ent_uniquename")
+def ent_uniquename(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get uniquename for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -725,17 +533,10 @@ def ent_uniquename(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.uniquename()
 
-@mcp.tool(
-    name = "ent_value",
-    description = """
-    Get the value associated with an entity (for enumerators, initialized variables, macros).
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            The value as a string.
-    """)
-
-def ent_value(ent_id: int) -> str:
+@mcp.tool(name="ent_value")
+def ent_value(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> str:
     """Get value for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -744,17 +545,10 @@ def ent_value(ent_id: int) -> str:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.value()
 
-@mcp.tool(
-    name = "ent_violations",
-    description = """
-    Get violations for a file entity.
-        Arguments:
-            ent_id: The entity ID (must be a file entity).
-        Returns:
-            A list of Violation objects, or None for non-file entities.
-    """)
-
-def ent_violations(ent_id: int) -> Optional[List[dict]]:
+@mcp.tool(name="ent_violations")
+def ent_violations(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a file entity).", ge=1)],
+) -> Optional[List[dict]]:
     """Get violations for a file entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -766,16 +560,7 @@ def ent_violations(ent_id: int) -> Optional[List[dict]]:
         return None
     return [asdict(violation_to_violation(viol)) for viol in violations]
 
-@mcp.tool(
-    name = "db_violations",
-    description = """
-    Get all violations in the database.
-        Arguments:
-            None
-        Returns:
-            A list of Violation objects for all violations in the database.
-    """)
-
+@mcp.tool(name="db_violations")
 def db_violations() -> List[dict]:
     """Get all violations in the database."""
     if db is None:
@@ -783,17 +568,10 @@ def db_violations() -> List[dict]:
     violations = db.violations()
     return [asdict(violation_to_violation(viol)) for viol in violations]
 
-@mcp.tool(
-    name = "ent_annotations",
-    description = """
-    Get annotations for an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            A list of Atn objects associated with the entity.
-    """)
-
-def ent_annotations(ent_id: int) -> List[dict]:
+@mcp.tool(name="ent_annotations")
+def ent_annotations(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> List[dict]:
     """Get annotations for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -803,16 +581,7 @@ def ent_annotations(ent_id: int) -> List[dict]:
     annotations = ent.annotations()
     return [asdict(atn_to_atn(atn)) for atn in annotations]
 
-@mcp.tool(
-    name = "db_annotations",
-    description = """
-    Get all annotations in the database.
-        Arguments:
-            None
-        Returns:
-            A list of Atn objects for all annotations in the database.
-    """)
-
+@mcp.tool(name="db_annotations")
 def db_annotations() -> List[dict]:
     """Get all annotations in the database."""
     if db is None:
@@ -820,46 +589,24 @@ def db_annotations() -> List[dict]:
     annotations = db.annotations()
     return [asdict(atn_to_atn(atn)) for atn in annotations]
 
-@mcp.tool(
-    name = "metric_list",
-    description = """
-    List available metrics using understand.Metric.list.
-        Arguments:
-            kindstring: Optional entity kind filter string.
-            filter_enabled: Optional boolean to filter to only enabled metrics (default True).
-        Returns:
-            A list of Metric objects.
-    """)
-
-def metric_list(kindstring: Optional[str] = None, filter_enabled: Optional[bool] = None) -> List[dict]:
+@mcp.tool(name="metric_list")
+def metric_list(
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string.")] = None,
+    filter_enabled: Annotated[bool, Field(description="Filter to only enabled metrics.")] = True,
+) -> List[dict]:
     """List available metrics."""
     if db is None:
         raise RuntimeError("Database is not open")
     
     # Handle different parameter combinations for understand.Metric.list
     if kindstring is None:
-        if filter_enabled is None:
-            metric_ids = understand.Metric.list(db=db)
-        else:
-            metric_ids = understand.Metric.list(db=db, filter=filter_enabled)
+        metric_ids = understand.Metric.list(db=db, filter=filter_enabled)
     else:
-        if filter_enabled is None:
-            metric_ids = understand.Metric.list(kindstring, db=db)
-        else:
-            metric_ids = understand.Metric.list(kindstring, db=db, filter=filter_enabled)
+        metric_ids = understand.Metric.list(kindstring, db=db, filter=filter_enabled)
     
     return [asdict(metric_id_to_metric(metric_id)) for metric_id in metric_ids]
 
-@mcp.tool(
-    name = "db_metrics",
-    description = """
-    Get project level metrics from the database.
-        Arguments:
-            None
-        Returns:
-            A list of Metric objects for project level metrics.
-    """)
-
+@mcp.tool(name="db_metrics")
 def db_metrics() -> List[dict]:
     """Get project level metrics from the database."""
     if db is None:
@@ -867,17 +614,10 @@ def db_metrics() -> List[dict]:
     metric_ids = db.metrics()
     return [asdict(metric_id_to_metric(metric_id)) for metric_id in metric_ids]
 
-@mcp.tool(
-    name = "ent_metrics",
-    description = """
-    Get metrics defined for an entity.
-        Arguments:
-            ent_id: The entity ID.
-        Returns:
-            A list of Metric objects for metrics defined for the entity.
-    """)
-
-def ent_metrics(ent_id: int) -> List[dict]:
+@mcp.tool(name="ent_metrics")
+def ent_metrics(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+) -> List[dict]:
     """Get metrics for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -887,42 +627,25 @@ def ent_metrics(ent_id: int) -> List[dict]:
     metric_ids = ent.metrics()
     return [asdict(metric_id_to_metric(metric_id)) for metric_id in metric_ids]
 
-@mcp.tool(
-    name = "ent_metric",
-    description = """
-    Get metric value(s) for an entity.
-        Arguments:
-            ent_id: The entity ID.
-            metric: A metric name, or a list of metric names.
-            metric_format: Optional format string ("auto", "raw", or "string", default "auto").
-        Returns:
-            A dictionary of metric values if metric is a list, or a single metric value if metric is a string.
-    """)
-
-def ent_metric(ent_id: int, metric: Union[str, List[str]], metric_format: Optional[str] = None):
-    """Get metric value(s) for an entity."""
+@mcp.tool(name="ent_metric")
+def ent_metric(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    metric: Annotated[Union[str, List[str]], Field(description="A metric name, or a list of metric names.")],
+    metric_format: Annotated[Literal["auto", "raw", "string"], Field(description="Output format.")] = "auto",
+):
+    """Get metric value(s) for an entity. Use this tool to get function metrics, variable metrics, class metrics, or file metrics."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
-    if metric_format is None:
-        return ent.metric(metric)
-    else:
-        return ent.metric(metric, metric_format)
+    return ent.metric(metric, metric_format)
 
-@mcp.tool(
-    name = "ent_kind_check",
-    description = """
-    Check if an entity's kind matches a filter string.
-        Arguments:
-            ent_id: The entity ID.
-            kindstring: A kind filter string to match against.
-        Returns:
-            True if the entity's kind matches the filter string, False otherwise.
-    """)
-
-def ent_kind_check(ent_id: int, kindstring: str) -> bool:
+@mcp.tool(name="ent_kind_check")
+def ent_kind_check(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    kindstring: Annotated[str, Field(description="A kind filter string to match against.")],
+) -> bool:
     """Check if an entity's kind matches a filter string."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -931,17 +654,10 @@ def ent_kind_check(ent_id: int, kindstring: str) -> bool:
         raise ValueError(f"Entity with id {ent_id} not found")
     return ent.kind().check(kindstring)
 
-@mcp.tool(
-    name = "ent_depends",
-    description = """
-    Get dependencies for a class or file entity.
-        Arguments:
-            ent_id: The entity ID (must be a class or file entity).
-        Returns:
-            A list of Dependency objects representing entities this entity depends on.
-    """)
-
-def ent_depends(ent_id: int) -> List[dict]:
+@mcp.tool(name="ent_depends")
+def ent_depends(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a class or file entity).", ge=1)],
+) -> List[dict]:
     """Get dependencies for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -955,17 +671,10 @@ def ent_depends(ent_id: int) -> List[dict]:
         dependencies.append(Dependency(ent_id=dep_ent.id(), refs=ref_list))
     return [asdict(dep) for dep in dependencies]
 
-@mcp.tool(
-    name = "ent_dependsby",
-    description = """
-    Get entities that depend on this class or file entity.
-        Arguments:
-            ent_id: The entity ID (must be a class or file entity).
-        Returns:
-            A list of Dependency objects representing entities that depend on this entity.
-    """)
-
-def ent_dependsby(ent_id: int) -> List[dict]:
+@mcp.tool(name="ent_dependsby")
+def ent_dependsby(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a class or file entity).", ge=1)],
+) -> List[dict]:
     """Get entities that depend on this entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -979,16 +688,7 @@ def ent_dependsby(ent_id: int) -> List[dict]:
         dependencies.append(Dependency(ent_id=dep_ent.id(), refs=ref_list))
     return [asdict(dep) for dep in dependencies]
 
-@mcp.tool(
-    name = "db_root_archs",
-    description = """
-    Get root architectures for the database.
-        Arguments:
-            None
-        Returns:
-            A list of architecture longnames (strings).
-    """)
-
+@mcp.tool(name="db_root_archs")
 def db_root_archs() -> List[str]:
     """Get root architectures for the database."""
     if db is None:
@@ -996,41 +696,24 @@ def db_root_archs() -> List[str]:
     archs = db.root_archs()
     return [arch.longname() for arch in archs]
 
-@mcp.tool(
-    name = "db_archs",
-    description = """
-    Get architectures that contain an entity.
-        Arguments:
-            ent_id: The entity ID.
-            implicit: Optional boolean to return architectures that contain any of the entity's parents (default False).
-        Returns:
-            A list of architecture longnames (strings).
-    """)
-
-def db_archs(ent_id: int, implicit: Optional[bool] = None) -> List[str]:
+@mcp.tool(name="db_archs")
+def db_archs(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    implicit: Annotated[bool, Field(description="Return architectures that contain any of the entity's parents.")] = False,
+) -> List[str]:
     """Get architectures that contain an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
-    if implicit is None:
-        archs = db.archs(ent)
-    else:
-        archs = db.archs(ent, implicit)
+    archs = db.archs(ent, implicit)
     return [arch.longname() for arch in archs]
 
-@mcp.tool(
-    name = "arch_children",
-    description = """
-    Get children of an architecture.
-        Arguments:
-            arch_longname: The long name of the architecture.
-        Returns:
-            A list of child architecture longnames (strings).
-    """)
-
-def arch_children(arch_longname: str) -> List[str]:
+@mcp.tool(name="arch_children")
+def arch_children(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+) -> List[str]:
     """Get children of an architecture."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1040,19 +723,12 @@ def arch_children(arch_longname: str) -> List[str]:
     children = arch.children()
     return [child.longname() for child in children]
 
-@mcp.tool(
-    name = "arch_contains",
-    description = """
-    Check if an architecture contains an entity.
-        Arguments:
-            arch_longname: The long name of the architecture.
-            ent_id: The entity ID.
-            recursive: Optional boolean to search child architectures as well (default False).
-        Returns:
-            True if the entity is contained in the architecture, False otherwise.
-    """)
-
-def arch_contains(arch_longname: str, ent_id: int, recursive: Optional[bool] = None) -> bool:
+@mcp.tool(name="arch_contains")
+def arch_contains(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    recursive: Annotated[bool, Field(description="Search child architectures as well.")] = False,
+) -> bool:
     """Check if an architecture contains an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1062,10 +738,7 @@ def arch_contains(arch_longname: str, ent_id: int, recursive: Optional[bool] = N
     ent = db.ent_from_id(ent_id)
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
-    if recursive is None:
-        return arch.contains(ent)
-    else:
-        return arch.contains(ent, recursive)
+    return arch.contains(ent, recursive)
 
 @mcp.tool(
     name = "arch_ents",
@@ -1085,47 +758,27 @@ def arch_ents(arch_longname: str, recursive: Optional[bool] = None) -> List[dict
     arch = db.lookup_arch(arch_longname)
     if arch is None:
         raise ValueError(f"Architecture with longname '{arch_longname}' not found")
-    if recursive is None:
-        entities = arch.ents()
-    else:
-        entities = arch.ents(recursive)
+    entities = arch.ents(recursive)
     return [asdict(ent_to_entity(ent)) for ent in entities]
 
-@mcp.tool(
-    name = "arch_metric",
-    description = """
-    Get metric value(s) for an architecture.
-        Arguments:
-            arch_longname: The long name of the architecture.
-            metric: A metric name, or a list of metric names.
-            metric_format: Optional format string ("auto", "raw", or "string", default "auto").
-        Returns:
-            A dictionary of metric values if metric is a list, or a single metric value if metric is a string.
-    """)
-
-def arch_metric(arch_longname: str, metric: Union[str, List[str]], metric_format: Optional[str] = None):
+@mcp.tool(name="arch_metric")
+def arch_metric(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+    metric: Annotated[Union[str, List[str]], Field(description="A metric name, or a list of metric names.")],
+    metric_format: Annotated[Literal["auto", "raw", "string"], Field(description="Output format.")] = "auto",
+):
     """Get metric value(s) for an architecture."""
     if db is None:
         raise RuntimeError("Database is not open")
     arch = db.lookup_arch(arch_longname)
     if arch is None:
         raise ValueError(f"Architecture with longname '{arch_longname}' not found")
-    if metric_format is None:
-        return arch.metric(metric)
-    else:
-        return arch.metric(metric, metric_format)
+    return arch.metric(metric, metric_format)
 
-@mcp.tool(
-    name = "arch_metrics",
-    description = """
-    Get metric names defined for an architecture.
-        Arguments:
-            arch_longname: The long name of the architecture.
-        Returns:
-            A list of Metric objects.
-    """)
-
-def arch_metrics(arch_longname: str) -> List[dict]:
+@mcp.tool(name="arch_metrics")
+def arch_metrics(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+) -> List[dict]:
     """Get metric names for an architecture."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1135,17 +788,10 @@ def arch_metrics(arch_longname: str) -> List[dict]:
     metric_ids = arch.metrics()
     return [asdict(metric_id_to_metric(metric_id)) for metric_id in metric_ids]
 
-@mcp.tool(
-    name = "arch_name",
-    description = """
-    Get the short name of an architecture.
-        Arguments:
-            arch_longname: The long name of the architecture.
-        Returns:
-            The short name of the architecture as a string.
-    """)
-
-def arch_name(arch_longname: str) -> str:
+@mcp.tool(name="arch_name")
+def arch_name(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+) -> str:
     """Get the short name of an architecture."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1154,17 +800,10 @@ def arch_name(arch_longname: str) -> str:
         raise ValueError(f"Architecture with longname '{arch_longname}' not found")
     return arch.name()
 
-@mcp.tool(
-    name = "arch_parent",
-    description = """
-    Get the parent of an architecture.
-        Arguments:
-            arch_longname: The long name of the architecture.
-        Returns:
-            The parent architecture longname as a string, or None if it is a root architecture.
-    """)
-
-def arch_parent(arch_longname: str) -> Optional[str]:
+@mcp.tool(name="arch_parent")
+def arch_parent(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+) -> Optional[str]:
     """Get the parent of an architecture."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1176,19 +815,12 @@ def arch_parent(arch_longname: str) -> Optional[str]:
         return None
     return parent.longname()
 
-@mcp.tool(
-    name = "arch_depends",
-    description = """
-    Get dependencies of an architecture.
-        Arguments:
-            arch_longname: The long name of the architecture.
-            recursive: Optional boolean to include child architecture dependencies (default True).
-            group: Optional boolean to group the returned keys into as few keys as possible (default False).
-        Returns:
-            A list of ArchDependency objects representing architectures this architecture depends on.
-    """)
-
-def arch_depends(arch_longname: str, recursive: Optional[bool] = None, group: Optional[bool] = None) -> List[dict]:
+@mcp.tool(name="arch_depends")
+def arch_depends(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+    recursive: Annotated[bool, Field(description="Include child architecture dependencies.")] = True,
+    group: Annotated[bool, Field(description="Group the returned keys.")] = False,
+) -> List[dict]:
     """Get dependencies of an architecture."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1196,38 +828,19 @@ def arch_depends(arch_longname: str, recursive: Optional[bool] = None, group: Op
     if arch is None:
         raise ValueError(f"Architecture with longname '{arch_longname}' not found")
     
-    # Call depends() with appropriate arguments based on optional parameters
-    # Both parameters are optional with defaults (recursive=True, group=False)
-    # If only group is provided, we need to pass recursive with its default (True) first
-    if recursive is not None and group is not None:
-        dependencies_dict = arch.depends(recursive=recursive, group=group)
-    elif recursive is not None:
-        dependencies_dict = arch.depends(recursive=recursive)
-    elif group is not None:
-        # Pass recursive=True (default) first, then group
-        dependencies_dict = arch.depends(recursive=True, group=group)
-    else:
-        dependencies_dict = arch.depends()
-    
+    dependencies_dict = arch.depends(recursive=recursive, group=group)
     dependencies = []
     for dep_arch, refs in dependencies_dict.items():
         ref_list = [ref_to_ref(ref) for ref in refs]
         dependencies.append(ArchDependency(arch_longname=dep_arch.longname(), refs=ref_list))
     return [asdict(dep) for dep in dependencies]
 
-@mcp.tool(
-    name = "arch_dependsby",
-    description = """
-    Get architectures that depend on this architecture.
-        Arguments:
-            arch_longname: The long name of the architecture.
-            recursive: Optional boolean to include child architecture dependencies (default True).
-            group: Optional boolean to group the returned keys into as few keys as possible (default False).
-        Returns:
-            A list of ArchDependency objects representing architectures that depend on this architecture.
-    """)
-
-def arch_dependsby(arch_longname: str, recursive: Optional[bool] = None, group: Optional[bool] = None) -> List[dict]:
+@mcp.tool(name="arch_dependsby")
+def arch_dependsby(
+    arch_longname: Annotated[str, Field(description="The long name of the architecture.")],
+    recursive: Annotated[bool, Field(description="Include child architecture dependencies.")] = True,
+    group: Annotated[bool, Field(description="Group the returned keys.")] = False,
+) -> List[dict]:
     """Get architectures that depend on this architecture."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1235,38 +848,19 @@ def arch_dependsby(arch_longname: str, recursive: Optional[bool] = None, group: 
     if arch is None:
         raise ValueError(f"Architecture with longname '{arch_longname}' not found")
     
-    # Call dependsby() with appropriate arguments based on optional parameters
-    # Both parameters are optional with defaults (recursive=True, group=False)
-    # If only group is provided, we need to pass recursive with its default (True) first
-    if recursive is not None and group is not None:
-        dependencies_dict = arch.dependsby(recursive=recursive, group=group)
-    elif recursive is not None:
-        dependencies_dict = arch.dependsby(recursive=recursive)
-    elif group is not None:
-        # Pass recursive=True (default) first, then group
-        dependencies_dict = arch.dependsby(recursive=True, group=group)
-    else:
-        dependencies_dict = arch.dependsby()
-    
+    dependencies_dict = arch.dependsby(recursive=recursive, group=group)
     dependencies = []
     for dep_arch, refs in dependencies_dict.items():
         ref_list = [ref_to_ref(ref) for ref in refs]
         dependencies.append(ArchDependency(arch_longname=dep_arch.longname(), refs=ref_list))
     return [asdict(dep) for dep in dependencies]
 
-@mcp.tool(
-    name = "lexer_lexeme",
-    description = """
-    Get the lexeme at a specific line and column for an entity.
-        Arguments:
-            ent_id: The entity ID (must be a file entity).
-            line: The line number (1-based).
-            column: The column number (1-based).
-        Returns:
-            A Lexeme object at the specified location.
-    """)
-
-def lexer_lexeme(ent_id: int, line: int, column: int) -> dict:
+@mcp.tool(name="lexer_lexeme")
+def lexer_lexeme(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a file entity).", ge=1)],
+    line: Annotated[int, Field(description="The line number (1-based).", ge=1)],
+    column: Annotated[int, Field(description="The column number (1-based).", ge=1)],
+) -> dict:
     """Get the lexeme at a specific line and column."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1282,19 +876,12 @@ def lexer_lexeme(ent_id: int, line: int, column: int) -> dict:
         raise ValueError(f"No lexeme found at line {line}, column {column}")
     return asdict(lexeme_to_lexeme(lexeme))
 
-@mcp.tool(
-    name = "lexer_lexemes",
-    description = """
-    Get a list of lexemes for an entity.
-        Arguments:
-            ent_id: The entity ID (must be a file entity).
-            start_line: Optional start line number (1-based).
-            end_line: Optional end line number (1-based).
-        Returns:
-            A list of Lexeme objects.
-    """)
-
-def lexer_lexemes(ent_id: int, start_line: Optional[int] = None, end_line: Optional[int] = None) -> List[dict]:
+@mcp.tool(name="lexer_lexemes")
+def lexer_lexemes(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a file entity).", ge=1)],
+    start_line: Annotated[Optional[int], Field(description="Optional start line number (1-based).", ge=1)] = None,
+    end_line: Annotated[Optional[int], Field(description="Optional end line number (1-based).", ge=1)] = None,
+) -> List[dict]:
     """Get a list of lexemes for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1316,18 +903,11 @@ def lexer_lexemes(ent_id: int, start_line: Optional[int] = None, end_line: Optio
     
     return [asdict(lexeme_to_lexeme(lex)) for lex in lexemes]
 
-@mcp.tool(
-    name = "lexer_lines",
-    description = """
-    Get the number of lines in the lexer for an entity.
-        Arguments:
-            ent_id: The entity ID (must be a file entity).
-        Returns:
-            The number of lines as an integer.
-    """)
-
-def lexer_lines(ent_id: int) -> int:
-    """Get the number of lines in the lexer."""
+@mcp.tool(name="lexer_lines")
+def lexer_lines(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a file entity).", ge=1)],
+) -> int:
+    """Get the number of lines in the lexer for a file entity. Returns the number of lines of file as an integer."""
     if db is None:
         raise RuntimeError("Database is not open")
     ent = db.ent_from_id(ent_id)
@@ -1339,17 +919,10 @@ def lexer_lines(ent_id: int) -> int:
         raise ValueError(f"Entity with id {ent_id} does not have a lexer")
     return lexer.lines()
 
-@mcp.tool(
-    name = "ent_control_flow_graph",
-    description = """
-    Get the control flow graph for an entity.
-        Arguments:
-            ent_id: The entity ID (must be a function or method entity).
-        Returns:
-            A list of CFNode objects representing the control flow graph nodes.
-    """)
-
-def ent_control_flow_graph(ent_id: int) -> List[dict]:
+@mcp.tool(name="ent_control_flow_graph")
+def ent_control_flow_graph(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a function or method entity).", ge=1)],
+) -> List[dict]:
     """Get the control flow graph for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1363,17 +936,10 @@ def ent_control_flow_graph(ent_id: int) -> List[dict]:
     # Convert each node to CFNode dataclass, passing the node list for ID lookup
     return [asdict(cfnode_to_cfnode(node, nodes)) for node in nodes]
 
-@mcp.tool(
-    name = "kind_list_entity",
-    description = """
-    Get a list of entity kinds that match a filter.
-        Arguments:
-            entkind: Optional entity kind filter string. If not provided, all entity kinds are returned.
-        Returns:
-            A list of kind longnames (strings) that match the filter.
-    """)
-
-def kind_list_entity(entkind: Optional[str] = None) -> List[str]:
+@mcp.tool(name="kind_list_entity")
+def kind_list_entity(
+    entkind: Annotated[Optional[str], Field(description="Optional entity kind filter string.")] = None,
+) -> List[str]:
     """Get a list of entity kinds that match a filter."""
     if entkind is None:
         kinds = understand.Kind.list_entity()
@@ -1381,17 +947,10 @@ def kind_list_entity(entkind: Optional[str] = None) -> List[str]:
         kinds = understand.Kind.list_entity(entkind)
     return [kind.longname() for kind in kinds]
 
-@mcp.tool(
-    name = "kind_list_reference",
-    description = """
-    Get a list of reference kinds that match a filter.
-        Arguments:
-            refkind: Optional reference kind filter string. If not provided, all reference kinds are returned.
-        Returns:
-            A list of kind longnames (strings) that match the filter.
-    """)
-
-def kind_list_reference(refkind: Optional[str] = None) -> List[str]:
+@mcp.tool(name="kind_list_reference")
+def kind_list_reference(
+    refkind: Annotated[Optional[str], Field(description="Optional reference kind filter string.")] = None,
+) -> List[str]:
     """Get a list of reference kinds that match a filter."""
     if refkind is None:
         kinds = understand.Kind.list_reference()
@@ -1399,20 +958,13 @@ def kind_list_reference(refkind: Optional[str] = None) -> List[str]:
         kinds = understand.Kind.list_reference(refkind)
     return [kind.longname() for kind in kinds]
 
-@mcp.tool(
-    name = "ent_refs",
-    description = """
-    Get references for an entity.
-        Arguments:
-            ent_id: The entity ID.
-            refkindstring: Optional reference kind filter string.
-            entkindstring: Optional entity kind filter string.
-            unique: Optional boolean to return only the first matching reference to each unique entity (default False).
-        Returns:
-            A list of Ref objects.
-    """)
-
-def ent_refs(ent_id: int, refkindstring: Optional[str] = None, entkindstring: Optional[str] = None, unique: Optional[bool] = None) -> List[dict]:
+@mcp.tool(name="ent_refs")
+def ent_refs(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string.")] = None,
+    entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string.")] = None,
+    unique: Annotated[bool, Field(description="Return only the first matching reference to each unique entity.")] = False,
+) -> List[dict]:
     """Get references for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1424,26 +976,17 @@ def ent_refs(ent_id: int, refkindstring: Optional[str] = None, entkindstring: Op
         refs = ent.refs()
     elif entkindstring is None:
         refs = ent.refs(refkindstring)
-    elif unique is None:
-        refs = ent.refs(refkindstring, entkindstring)
     else:
         refs = ent.refs(refkindstring, entkindstring, unique)
     
     return [asdict(ref_to_ref(ref)) for ref in refs]
 
-@mcp.tool(
-    name = "ent_ref",
-    description = """
-    Get the first reference for an entity (same as refs()[:1]).
-        Arguments:
-            ent_id: The entity ID.
-            refkindstring: Optional reference kind filter string.
-            entkindstring: Optional entity kind filter string.
-        Returns:
-            A Ref object, or None if no reference is found.
-    """)
-
-def ent_ref(ent_id: int, refkindstring: Optional[str] = None, entkindstring: Optional[str] = None) -> Optional[dict]:
+@mcp.tool(name="ent_ref")
+def ent_ref(
+    ent_id: Annotated[int, Field(description="The entity ID.", ge=1)],
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string.")] = None,
+    entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string.")] = None,
+) -> Optional[dict]:
     """Get the first reference for an entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1462,20 +1005,13 @@ def ent_ref(ent_id: int, refkindstring: Optional[str] = None, entkindstring: Opt
         return None
     return asdict(ref_to_ref(ref))
 
-@mcp.tool(
-    name = "ent_filerefs",
-    description = """
-    Get file references for a file entity.
-        Arguments:
-            ent_id: The entity ID (must be a file entity).
-            refkindstring: Optional reference kind filter string.
-            entkindstring: Optional entity kind filter string.
-            unique: Optional boolean to return only the first matching reference to each unique entity (default False).
-        Returns:
-            A list of Ref objects. Returns empty list for non-file entities.
-    """)
-
-def ent_filerefs(ent_id: int, refkindstring: Optional[str] = None, entkindstring: Optional[str] = None, unique: Optional[bool] = None) -> List[dict]:
+@mcp.tool(name="ent_filerefs")
+def ent_filerefs(
+    ent_id: Annotated[int, Field(description="The entity ID (must be a file entity).", ge=1)],
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string.")] = None,
+    entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string.")] = None,
+    unique: Annotated[bool, Field(description="Return only the first matching reference to each unique entity.")] = False,
+) -> List[dict]:
     """Get file references for a file entity."""
     if db is None:
         raise RuntimeError("Database is not open")
@@ -1487,7 +1023,7 @@ def ent_filerefs(ent_id: int, refkindstring: Optional[str] = None, entkindstring
         refs = ent.filerefs()
     elif entkindstring is None:
         refs = ent.filerefs(refkindstring)
-    elif unique is None:
+    elif unique is False: # default
         refs = ent.filerefs(refkindstring, entkindstring)
     else:
         refs = ent.filerefs(refkindstring, entkindstring, unique)
