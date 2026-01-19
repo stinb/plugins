@@ -1,4 +1,6 @@
 import argparse
+import base64
+import json
 import os
 import sys
 from typing import Annotated, List, Literal, Optional, Union
@@ -23,12 +25,43 @@ def require_db() -> understand.Db:
         raise RuntimeError("Database is not open")
     return db
 
+def encode_cursor(offset: int) -> str:
+    """Encode pagination offset as a cursor string."""
+    return base64.b64encode(json.dumps({"offset": offset}).encode()).decode()
+
+def decode_cursor(cursor: str) -> int:
+    """Decode a cursor string to get the offset. Returns 0 if invalid."""
+    try:
+        data = json.loads(base64.b64decode(cursor).decode())
+        return data.get("offset", 0)
+    except:
+        return 0
+
+def paginate_results(items: list, max_results: int, cursor: Optional[str]) -> tuple:
+    """
+    Apply pagination to a list of items.
+    Returns: (paginated_items, total_count, truncated, next_cursor_or_none)
+    """
+    offset = decode_cursor(cursor) if cursor else 0
+    total_count = len(items)
+
+    # Slice from offset
+    paginated = items[offset:offset + max_results]
+
+    # Check if there are more results
+    next_offset = offset + len(paginated)
+    truncated = next_offset < total_count
+    next_cursor = encode_cursor(next_offset) if truncated else None
+
+    return paginated, total_count, truncated, next_cursor
+
 @mcp.tool(name="lookup_entity_id")
 def lookup_entity_id(
     name: Annotated[str, Field(description="The name or regex pattern to search for in the Understand database.")],
     kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to narrow the search (e.g., 'Function', 'File', 'Class').")] = None,
     max_results: Annotated[int, Field(description="Maximum number of results to return. Default is 10 to keep responses concise.", ge=1, le=50)] = 10,
-) -> List[dict]:
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+) -> dict:
     """
     Find entities by name (starting point for most workflows).
 
@@ -43,24 +76,32 @@ def lookup_entity_id(
     5. Optionally: get_entity_references_summary(ent_id) → explore usage
 
     The name parameter supports regex patterns for flexible searching.
+    Supports pagination: use next_cursor from response to get more results.
     """
     entities = require_db().lookup(name, kindstring)
     if not entities:
-        return []
+        return {"entities": [], "total_count": 0, "truncated": False}
 
-    # Limit results to avoid overwhelming the context window
-    limited_entities = entities[:max_results]
+    # Apply pagination
+    paginated, total_count, truncated, next_cursor = paginate_results(entities, max_results, cursor)
 
     # Return minimal but useful information: ID, name, and kind
     results = []
-    for ent in limited_entities:
+    for ent in paginated:
         results.append({
             "id": ent.id(),
             "name": ent.name(),
             "kind": ent.kind().name(),
         })
 
-    return results
+    response = {
+        "entities": results,
+        "total_count": total_count,
+        "truncated": truncated,
+    }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="get_entity_details")
 def get_entity_details(
@@ -260,13 +301,13 @@ def get_entity_references_summary(
         "reference_kinds": {
             kind: count for kind, count in sorted_kinds
         },
-        "note": "Use get_entity_references with a specific refkindstring to fetch detailed references for any reference kind of interest. Reference kinds are sorted by count (most common first).",
     }
 
 @mcp.tool(name="get_entity_references_by_file")
 def get_entity_references_by_file(
     ent_id: Annotated[int, Field(description="The entity ID to get references grouped by file for.", ge=1)],
     refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string to filter references before grouping by file. Note: This filters based on how the entity references things, not how things reference the entity. For example, filtering by 'Type' on a class will show files where the class has Type references, not files that use the class as a type.")] = None,
+    compact: Annotated[bool, Field(description="If True (default), returns only file_id and count. If False, includes file path.")] = True,
 ) -> dict:
     """
     Get references grouped by file location (shows which files use this entity).
@@ -306,12 +347,13 @@ def get_entity_references_by_file(
         if file_ent:
             file_id = file_ent.id()
             if file_id not in file_refs:
-                file_path = file_ent.relname() if file_ent.relname() else file_ent.longname()
                 file_refs[file_id] = {
                     "file_id": file_id,
-                    "file": file_path,
                     "count": 0,
                 }
+                if not compact:
+                    file_path = file_ent.relname() if file_ent.relname() else file_ent.longname()
+                    file_refs[file_id]["file"] = file_path
             file_refs[file_id]["count"] += 1
 
     # Sort by count (descending)
@@ -321,7 +363,6 @@ def get_entity_references_by_file(
         "total_files": len(sorted_files),
         "total_references": len(all_refs),
         "files": sorted_files,
-        "note": "Use get_entity_references with file_id parameter to fetch detailed references for a specific file.",
     }
 
 @mcp.tool(name="get_entity_references")
@@ -331,7 +372,8 @@ def get_entity_references(
     entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to filter by the kind of entity being referenced (e.g., 'Function', 'Variable', 'Class'). Can be used alone without refkindstring.")] = None,
     file_id: Annotated[Optional[Union[int, str]], Field(description="Optional file entity ID to filter references to only those occurring in a specific file.")] = None,
     unique: Annotated[bool, Field(description="If True, return only the first matching reference to each unique entity. Useful to avoid duplicates when the same entity is referenced multiple times. Can be used alone without other filters.")] = False,
-    max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 20 to keep responses concise.", ge=1, le=200)] = 20,
+    max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 10 to keep responses concise.", ge=1, le=200)] = 10,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Get detailed reference information for an entity with flexible filtering.
@@ -351,6 +393,7 @@ def get_entity_references(
     - unique: Get only first reference per unique entity (reduces duplicates)
 
     Each reference includes file_id so you can directly call get_entity_source without lookups.
+    Supports pagination: use next_cursor from response to get more results.
     """
     # Coerce file_id to correct type (handle string inputs from LLMs)
     if file_id is not None:
@@ -367,15 +410,12 @@ def get_entity_references(
     if file_id is not None:
         refs = [ref for ref in refs if ref.file() and ref.file().id() == file_id]
 
-    total_count = len(refs)
-
-    # Limit results
-    limited_refs = refs[:max_results]
-    truncated = total_count > max_results
+    # Apply pagination
+    paginated_refs, total_count, truncated, next_cursor = paginate_results(refs, max_results, cursor)
 
     # Build concise reference summaries
     references = []
-    for ref in limited_refs:
+    for ref in paginated_refs:
         ref_ent = ref.ent()
         file_ent = ref.file()
 
@@ -401,18 +441,22 @@ def get_entity_references(
 
         references.append(ref_info)
 
-    return {
+    response = {
         "references": references,
         "total_count": total_count,
-        "returned_count": len(references),
         "truncated": truncated,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="list_metrics_summary")
 def list_metrics_summary(
     kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to list only metrics applicable to specific entity kinds (e.g., 'Function', 'File', 'Class').")] = None,
     include_disabled: Annotated[bool, Field(description="If True, returns all known metrics (enabled and disabled). If False (default), returns only enabled metrics. Note: metric values can be calculated even if metrics are disabled, but enabling controls visibility in the UI.")] = False,
-    max_results: Annotated[int, Field(description="Maximum number of metrics to return. Default is 100 to keep responses concise. Use get_metric_details for specific metrics when descriptions are needed.", ge=1, le=500)] = 100,
+    max_results: Annotated[int, Field(description="Maximum number of metrics to return. Default is 20 to keep responses concise. Use get_metric_details for specific metrics when descriptions are needed.", ge=1, le=500)] = 20,
+    compact: Annotated[bool, Field(description="If True (default), returns only metric IDs. If False, includes metric names.")] = True,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     List available metrics without descriptions (efficient metric discovery).
@@ -445,47 +489,37 @@ def list_metrics_summary(
 
     # Get list of available metrics (filter=True returns only enabled, filter=False returns all)
     if kindstring is None:
-        metric_ids = understand.Metric.list(db=database, filter=not include_disabled)
+        all_metric_ids = understand.Metric.list(db=database, filter=not include_disabled)
     else:
-        metric_ids = understand.Metric.list(kindstring, db=database, filter=not include_disabled)
+        all_metric_ids = understand.Metric.list(kindstring, db=database, filter=not include_disabled)
 
-    total_count = len(metric_ids)
+    # Apply pagination
+    paginated_ids, total_count, truncated, next_cursor = paginate_results(list(all_metric_ids), max_results, cursor)
 
-    # Limit results
-    limited_ids = metric_ids[:max_results]
-    truncated = total_count > max_results
-
-    # Build summary with just IDs and names (no descriptions)
-    metrics = []
-    for metric_id in limited_ids:
-        try:
-            metric_name = understand.Metric.name(metric_id)
-            metrics.append({
-                "id": metric_id,
-                "name": metric_name,
-            })
-        except:
-            # Skip metrics that can't be retrieved
-            continue
-
-    note = "Use get_metric_details with specific metric IDs to retrieve full descriptions when needed."
-    if include_disabled:
-        note += " This list includes disabled metrics. Metric values can still be calculated even if disabled."
+    # Build summary (compact = IDs only, non-compact = IDs and names)
+    if compact:
+        metrics = paginated_ids
     else:
-        note += " If a metric you need isn't listed, try include_disabled=True or recommend the user enable it."
+        metrics = []
+        for metric_id in paginated_ids:
+            try:
+                metric_name = understand.Metric.name(metric_id)
+                metrics.append({
+                    "id": metric_id,
+                    "name": metric_name,
+                })
+            except:
+                # Skip metrics that can't be retrieved
+                continue
 
-    return {
+    response = {
         "metrics": metrics,
         "total_count": total_count,
-        "returned_count": len(metrics),
         "truncated": truncated,
-        "enabled_only": not include_disabled,
-        "note": note,
-        "documentation": {
-            "built_in_metrics": "https://docs.scitools.com/metrics/dist/index.html",
-            "custom_metrics": "https://support.scitools.com/support/solutions/articles/70000656986-creating-custom-metrics",
-        },
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="get_metric_details")
 def get_metric_details(
@@ -532,7 +566,6 @@ def get_metric_details(
             results.append({
                 "id": metric_id,
                 "error": f"Metric not found: {str(e)}",
-                "note": "This metric may be disabled. Metric values can still be calculated even if disabled, but consider recommending the user enable it for better visibility.",
             })
 
     return results
@@ -541,6 +574,7 @@ def get_metric_details(
 def get_entity_metrics(
     ent_id: Annotated[int, Field(description="The entity ID to get metrics for.", ge=1)],
     metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available metrics for the entity. Note: metric values can be calculated even if the metric is disabled (not visible in UI).", default=[])] = [],
+    compact: Annotated[bool, Field(description="If True (default), returns {metric_id: value}. If False, returns {metric_id: {name, value}}.")] = True,
 ) -> dict:
     """
     Get metric values for an entity (efficient metric retrieval).
@@ -580,55 +614,58 @@ def get_entity_metrics(
         available_metric_ids = ent.metrics()
         metric_values = ent.metric(available_metric_ids)
 
-        # Build results with names
+        # Build results
         for metric_id in available_metric_ids:
-            try:
-                metric_name = understand.Metric.name(metric_id)
-                value = metric_values.get(metric_id)
-                results[metric_id] = {
-                    "name": metric_name,
-                    "value": value,
-                }
-            except:
-                # Include value even if name can't be retrieved
-                value = metric_values.get(metric_id)
-                results[metric_id] = {
-                    "value": value,
-                }
+            value = metric_values.get(metric_id)
+            if compact:
+                results[metric_id] = value
+            else:
+                try:
+                    metric_name = understand.Metric.name(metric_id)
+                    results[metric_id] = {
+                        "name": metric_name,
+                        "value": value,
+                    }
+                except:
+                    results[metric_id] = {
+                        "value": value,
+                    }
     else:
         # Get specific metrics - metric() returns dict for lists
         if len(metric_ids) == 1:
             # Single metric - returns value directly
             try:
                 metric_value = ent.metric(metric_ids[0])
-                metric_name = understand.Metric.name(metric_ids[0])
-                results[metric_ids[0]] = {
-                    "name": metric_name,
-                    "value": metric_value,
-                }
+                if compact:
+                    results[metric_ids[0]] = metric_value
+                else:
+                    metric_name = understand.Metric.name(metric_ids[0])
+                    results[metric_ids[0]] = {
+                        "name": metric_name,
+                        "value": metric_value,
+                    }
             except Exception as e:
-                results[metric_ids[0]] = {
-                    "error": f"Failed to get metric: {str(e)}",
-                }
+                results[metric_ids[0]] = {"error": f"Failed to get metric: {str(e)}"}
         else:
             # Multiple metrics - returns dict
             metric_values = ent.metric(metric_ids)
 
-            # Build results with names
+            # Build results
             for metric_id in metric_ids:
-                try:
-                    metric_name = understand.Metric.name(metric_id)
-                    value = metric_values.get(metric_id)
-                    results[metric_id] = {
-                        "name": metric_name,
-                        "value": value,
-                    }
-                except:
-                    # Include value even if name can't be retrieved
-                    value = metric_values.get(metric_id)
-                    results[metric_id] = {
-                        "value": value,
-                    }
+                value = metric_values.get(metric_id)
+                if compact:
+                    results[metric_id] = value
+                else:
+                    try:
+                        metric_name = understand.Metric.name(metric_id)
+                        results[metric_id] = {
+                            "name": metric_name,
+                            "value": value,
+                        }
+                    except:
+                        results[metric_id] = {
+                            "value": value,
+                        }
 
     return {
         "metrics": results,
@@ -681,7 +718,8 @@ def find_entities_by_metric(
     min_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional minimum metric value. Entities with metric values >= min_value will be returned.")] = None,
     max_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional maximum metric value. Entities with metric values <= max_value will be returned.")] = None,
     order_by: Annotated[Literal["asc", "desc"], Field(description="Sort order: 'desc' for highest values first, 'asc' for lowest values first.")] = "desc",
-    max_results: Annotated[int, Field(description="Maximum number of results to return. Default is 20 to keep responses concise.", ge=1, le=200)] = 20,
+    max_results: Annotated[int, Field(description="Maximum number of results to return. Default is 10 to keep responses concise.", ge=1, le=200)] = 10,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Find entities filtered and sorted by metric values (e.g., find high complexity functions).
@@ -741,17 +779,19 @@ def find_entities_by_metric(
     reverse = (order_by == "desc")
     entity_metrics.sort(key=lambda x: x["metric_value"], reverse=reverse)
 
-    # Limit results
-    limited = entity_metrics[:max_results]
+    # Apply pagination
+    paginated, total_count, truncated, next_cursor = paginate_results(entity_metrics, max_results, cursor)
 
-    return {
-        "entities": limited,
-        "total_found": len(entity_metrics),
-        "returned_count": len(limited),
-        "truncated": len(entity_metrics) > max_results,
+    response = {
+        "entities": paginated,
+        "total_found": total_count,
+        "truncated": truncated,
         "metric_id": metric_id,
         "sort_order": order_by,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="get_project_violations_summary")
 def get_project_violations_summary() -> dict:
@@ -793,11 +833,6 @@ def get_project_violations_summary() -> dict:
     # Sort by count (descending)
     sorted_checks = sorted(check_id_counts.items(), key=lambda x: x[1], reverse=True)
 
-    # Check if only basic violations exist
-    only_basic_checks = len(check_ids) <= 2 and all(
-        check_id in ("UND_ERROR", "UND_WARNING") for check_id in check_ids
-    )
-
     return {
         "total_violations": total_count,
         "unique_check_ids": len(check_ids),
@@ -807,8 +842,6 @@ def get_project_violations_summary() -> dict:
         "check_ids_list": [
             {"check_id": check_id, "count": count} for check_id, count in sorted_checks
         ],
-        "note": "Use get_project_violations with a specific check_id to fetch detailed violations for that check type." if total_count > 0 else None,
-        "suggestion": "No violations found or only basic UND_ERROR/UND_WARNING violations. Consider running CodeCheck with coding standards enabled or importing violations from other tools via SARIF format. See documentation links in tool description." if (total_count == 0 or only_basic_checks) else None,
     }
 
 @mcp.tool(name="get_project_violations")
@@ -816,7 +849,8 @@ def get_project_violations(
     check_id: Annotated[Optional[str], Field(description="Optional violation check ID to filter by specific rule/check (e.g., 'MISRA_C_2012_8.4', 'UND_WARNING', 'CERT_C_2012_STR31_C'). Use get_project_violations_summary to see available check IDs.")] = None,
     file_path: Annotated[Optional[str], Field(description="Optional file path filter. Can be absolute path, relative path, or filename. Matches if the violation's file path contains this string. Note: violations store absolute file paths, and violations can exist outside of project files.")] = None,
     include_entity_info: Annotated[bool, Field(description="If True, resolves entity information for violations that have entity uniquenames. This adds minimal latency (~0.07ms per lookup, ~7ms for 100 violations) and is useful for violations like 'function too long' where you need the function entity ID. Default is False. Not all violations have entity information (some are for code regions rather than specific entities).")] = False,
-    max_results: Annotated[int, Field(description="Maximum number of violations to return. Default is 50 to keep responses concise.", ge=1, le=500)] = 50,
+    max_results: Annotated[int, Field(description="Maximum number of violations to return. Default is 20 to keep responses concise.", ge=1, le=500)] = 20,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Get detailed violations for the project with location information.
@@ -861,14 +895,12 @@ def get_project_violations(
             if v.file() and file_path in v.file()
         ]
 
-    total_count = len(filtered_violations)
-
-    # Limit results
-    limited_violations = filtered_violations[:max_results]
+    # Apply pagination
+    paginated_violations, total_count, truncated, next_cursor = paginate_results(filtered_violations, max_results, cursor)
 
     # Build violation summaries
     violations = []
-    for viol in limited_violations:
+    for viol in paginated_violations:
         violation_info = {
             "check_id": viol.check_id(),
             "file": viol.file(),
@@ -895,12 +927,14 @@ def get_project_violations(
 
         violations.append(violation_info)
 
-    return {
+    response = {
         "violations": violations,
         "total_count": total_count,
-        "returned_count": len(violations),
-        "truncated": total_count > max_results,
+        "truncated": truncated,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="get_project_metrics")
 def get_project_metrics(
@@ -964,7 +998,9 @@ def get_project_metrics(
 @mcp.tool(name="list_entities_by_kind")
 def list_entities_by_kind(
     kindstring: Annotated[str, Field(description="Entity kind filter string (e.g., 'Function', 'File', 'Class', 'Method').")],
-    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 50 to keep responses concise.", ge=1, le=500)] = 50,
+    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20 to keep responses concise.", ge=1, le=500)] = 20,
+    compact: Annotated[bool, Field(description="If True (default), returns id, name, kind only. If False, includes longname.")] = True,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     List all entities of a specific kind in the project.
@@ -983,33 +1019,37 @@ def list_entities_by_kind(
     3. get_entity_details(ent_id) → get details about specific functions
 
     Returns minimal info (id, name, kind) to keep response concise. Use get_entity_details for more info.
+    Supports pagination: use next_cursor from response to get more results.
     """
     database = require_db()
 
     # Get entities of specified kind
     entities = database.ents(kindstring)
-    total_count = len(entities)
 
-    # Limit results
-    limited_entities = entities[:max_results]
+    # Apply pagination
+    paginated_entities, total_count, truncated, next_cursor = paginate_results(entities, max_results, cursor)
 
-    # Build concise entity summaries
+    # Build entity summaries
     results = []
-    for ent in limited_entities:
-        results.append({
+    for ent in paginated_entities:
+        entry = {
             "id": ent.id(),
             "name": ent.name(),
             "kind": ent.kind().name(),
-            "longname": ent.longname(),
-        })
+        }
+        if not compact:
+            entry["longname"] = ent.longname()
+        results.append(entry)
 
-    return {
+    response = {
         "entities": results,
         "total_count": total_count,
-        "returned_count": len(results),
-        "truncated": total_count > max_results,
+        "truncated": truncated,
         "kind": kindstring,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="list_architectures_summary")
 def list_architectures_summary() -> dict:
@@ -1164,14 +1204,14 @@ def get_architectures_for_entity(
     return {
         "architectures": architectures,
         "count": len(architectures),
-        "note": "The longname contains the full path and can be parsed to get the architecture name and parent. Architectures can represent groups, folders, or metadata (e.g., Calendar = modification date, Git Author = author name).",
     }
 
 @mcp.tool(name="get_entities_in_architecture")
 def get_entities_in_architecture(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get entities from. Use list_architectures_summary to discover root architecture names.")],
     kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class') to filter entities by kind.")] = None,
-    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 50.", ge=1, le=500)] = 50,
+    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20.", ge=1, le=500)] = 20,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Get entities/files within an architecture (non-recursive, only direct members).
@@ -1189,6 +1229,8 @@ def get_entities_in_architecture(
     2. get_architecture_children(arch_name) → navigate to specific folder
     3. get_entities_in_architecture(arch_name) → see files in that folder
     4. Optionally filter by kind: kindstring="File" to see only files
+
+    Supports pagination: use next_cursor from response to get more results.
     """
     database = require_db()
 
@@ -1202,12 +1244,11 @@ def get_entities_in_architecture(
     if kindstring:
         entities = [ent for ent in entities if ent.kind().check(kindstring)]
 
-    total_count = len(entities)
-    limited_entities = entities[:max_results]
-    truncated = total_count > max_results
+    # Apply pagination
+    paginated_entities, total_count, truncated, next_cursor = paginate_results(entities, max_results, cursor)
 
     results = []
-    for ent in limited_entities:
+    for ent in paginated_entities:
         results.append({
             "id": ent.id(),
             "name": ent.name(),
@@ -1215,17 +1256,20 @@ def get_entities_in_architecture(
             "longname": ent.longname(),
         })
 
-    return {
+    response = {
         "entities": results,
         "total_count": total_count,
-        "returned_count": len(results),
         "truncated": truncated,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="get_architecture_children")
 def get_architecture_children(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get children for. Use list_architectures_summary to discover root architecture names.")],
-    max_results: Annotated[int, Field(description="Maximum number of child architectures to return. Default is 100.", ge=1, le=500)] = 100,
+    max_results: Annotated[int, Field(description="Maximum number of child architectures to return. Default is 30.", ge=1, le=500)] = 30,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Get child architectures of a parent architecture (navigate hierarchy).
@@ -1243,6 +1287,8 @@ def get_architecture_children(
     2. get_architecture_children(arch_name="Directory Structure") → get child names like ["src", "tests"]
     3. get_architecture_details(arch_name="Directory Structure/src") → details for "src" child
     4. get_entities_in_architecture(arch_name="Directory Structure/src") → files in that folder
+
+    Supports pagination: use next_cursor from response to get more results.
     """
     database = require_db()
 
@@ -1251,16 +1297,20 @@ def get_architecture_children(
         return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
 
     children = arch.children()
-    total_count = len(children)
-    limited_children = children[:max_results]
-    child_names = [child.name() for child in limited_children]
 
-    return {
+    # Apply pagination
+    paginated_children, total_count, truncated, next_cursor = paginate_results(children, max_results, cursor)
+    child_names = [child.name() for child in paginated_children]
+
+    response = {
         "children": child_names,
         "count": len(child_names),
         "total_count": total_count,
-        "truncated": total_count > max_results,
+        "truncated": truncated,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="get_architecture_metrics")
 def get_architecture_metrics(
@@ -1361,6 +1411,7 @@ def get_architecture_dependencies(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get dependencies for. Use list_architectures_summary to discover root architecture names.")],
     forward: Annotated[bool, Field(description="If True, returns what this architecture depends on (outgoing). If False, returns what depends on this architecture (incoming). Default is True.")] = True,
     max_results: Annotated[int, Field(description="Maximum number of dependent architectures to return. Default is 50.", ge=1, le=200)] = 50,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Get architectures that have dependencies with this architecture (layer 1 of 3).
@@ -1382,6 +1433,8 @@ def get_architecture_dependencies(
     1. get_architecture_dependencies(arch_name) → list of dependent architectures with counts
     2. get_architecture_dependency_summary(arch_name, other_arch) → breakdown by reference kind
     3. get_architecture_dependency_references(arch_name, other_arch, ref_kindstring) → actual refs
+
+    Supports pagination: use next_cursor from response to get more results.
     """
     database = require_db()
 
@@ -1404,16 +1457,17 @@ def get_architecture_dependencies(
     # Sort by reference count (most dependencies first)
     dependencies.sort(key=lambda x: x["reference_count"], reverse=True)
 
-    total_count = len(dependencies)
-    limited_deps = dependencies[:max_results]
-    truncated = total_count > max_results
+    # Apply pagination
+    paginated_deps, total_count, truncated, next_cursor = paginate_results(dependencies, max_results, cursor)
 
-    return {
-        "dependencies": limited_deps,
+    response = {
+        "dependencies": paginated_deps,
         "total_count": total_count,
-        "returned_count": len(limited_deps),
         "truncated": truncated,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 @mcp.tool(name="get_architecture_dependency_summary")
 def get_architecture_dependency_summary(
@@ -1478,6 +1532,7 @@ def get_architecture_dependency_references(
     forward: Annotated[bool, Field(description="If True, shows references from arch_name to other_arch_name. If False, shows references from other_arch_name to arch_name. Default is True.")] = True,
     ref_kindstring: Annotated[Optional[str], Field(description="Optional reference kind filter. Use values from get_architecture_dependency_summary output (e.g., 'Use', 'Set', 'Init', 'Call', 'Include'). If not provided, returns all reference kinds.")] = None,
     max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 50.", ge=1, le=200)] = 50,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Get the actual references between two architectures (layer 3 of 3).
@@ -1494,6 +1549,7 @@ def get_architecture_dependency_references(
 
     Note: Only references where the source and target entities belong to different architectures
     are included. The reference kinds available depend on what cross-architecture references exist.
+    Supports pagination: use next_cursor from response to get more results.
     """
     database = require_db()
 
@@ -1516,12 +1572,11 @@ def get_architecture_dependency_references(
     if ref_kindstring:
         refs = [ref for ref in refs if ref.kind().check(ref_kindstring)]
 
-    total_count = len(refs)
-    limited_refs = refs[:max_results]
-    truncated = total_count > max_results
+    # Apply pagination
+    paginated_refs, total_count, truncated, next_cursor = paginate_results(refs, max_results, cursor)
 
     results = []
-    for ref in limited_refs:
+    for ref in paginated_refs:
         ent = ref.ent()
         scope = ref.scope()
         file = ref.file()
@@ -1536,12 +1591,14 @@ def get_architecture_dependency_references(
             "line": ref.line(),
         })
 
-    return {
+    response = {
         "references": results,
         "total_count": total_count,
-        "returned_count": len(results),
         "truncated": truncated,
     }
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MCP server for Understand database')
