@@ -130,8 +130,8 @@ def get_entity_details(
 @mcp.tool(name="get_entity_source")
 def get_entity_source(
     ent_id: Annotated[int, Field(description="The entity ID to get source code for.", ge=1)],
-    start_line: Annotated[Optional[Union[int, str]], Field(description="Optional start line number (1-based). If specified, only returns code from this line onwards.")] = None,
-    end_line: Annotated[Optional[Union[int, str]], Field(description="Optional end line number (1-based). If specified with start_line, returns only the specified line range.")] = None,
+    start_line: Annotated[Optional[Union[int, str]], Field(description="Optional start line number (1-based, relative to the entity's content). Line 1 is the first line of the entity. If specified, only returns code from this line onwards. Accepts numeric or string values.")] = None,
+    end_line: Annotated[Optional[Union[int, str]], Field(description="Optional end line number (1-based, relative to the entity's content). If specified with start_line, returns only the specified line range. Accepts numeric or string values.")] = None,
     max_length: Annotated[int, Field(description="Maximum length of source code to return in characters. Default is 5000 to avoid filling the context window. Response will be truncated if longer.", ge=100, le=50000)] = 5000,
 ) -> dict:
     """
@@ -266,7 +266,7 @@ def get_entity_references_summary(
 @mcp.tool(name="get_entity_references_by_file")
 def get_entity_references_by_file(
     ent_id: Annotated[int, Field(description="The entity ID to get references grouped by file for.", ge=1)],
-    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string to filter references before grouping by file.")] = None,
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string to filter references before grouping by file. Note: This filters based on how the entity references things, not how things reference the entity. For example, filtering by 'Type' on a class will show files where the class has Type references, not files that use the class as a type.")] = None,
 ) -> dict:
     """
     Get references grouped by file location (shows which files use this entity).
@@ -285,6 +285,12 @@ def get_entity_references_by_file(
     4. get_entity_source(file_id=...) → read the file if needed
 
     Files are sorted by reference count (most references first) to help prioritize exploration.
+
+    Note on refkindstring: The filter applies to how the entity references other things (forward direction),
+    not how other things reference the entity. If you get unexpected results (e.g., 0 files when filtering
+    by a kind shown in get_entity_references_summary), try using get_entity_references with the same filter
+    to understand what's being matched. For reverse lookups (who references this entity), use
+    get_entity_references with refkindstring like 'useby', 'callby', etc.
     """
     ent = require_db().ent_from_id(ent_id)
     if ent is None:
@@ -321,7 +327,7 @@ def get_entity_references_by_file(
 @mcp.tool(name="get_entity_references")
 def get_entity_references(
     ent_id: Annotated[int, Field(description="The entity ID to get references for.", ge=1)],
-    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string. Use forward kinds (e.g., 'call', 'definein', 'use', 'setby') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated.")] = None,
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string. Use forward kinds (e.g., 'call', 'definein', 'use', 'set') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated.")] = None,
     entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to filter by the kind of entity being referenced (e.g., 'Function', 'Variable', 'Class'). Can be used alone without refkindstring.")] = None,
     file_id: Annotated[Optional[Union[int, str]], Field(description="Optional file entity ID to filter references to only those occurring in a specific file.")] = None,
     unique: Annotated[bool, Field(description="If True, return only the first matching reference to each unique entity. Useful to avoid duplicates when the same entity is referenced multiple times. Can be used alone without other filters.")] = False,
@@ -809,7 +815,7 @@ def get_project_violations_summary() -> dict:
 def get_project_violations(
     check_id: Annotated[Optional[str], Field(description="Optional violation check ID to filter by specific rule/check (e.g., 'MISRA_C_2012_8.4', 'UND_WARNING', 'CERT_C_2012_STR31_C'). Use get_project_violations_summary to see available check IDs.")] = None,
     file_path: Annotated[Optional[str], Field(description="Optional file path filter. Can be absolute path, relative path, or filename. Matches if the violation's file path contains this string. Note: violations store absolute file paths, and violations can exist outside of project files.")] = None,
-    include_entity_info: Annotated[bool, Field(description="If True, resolves entity information for violations that have entity uniquenames. This is expensive but useful for violations like 'function too long' where you need the function entity ID. Default is False to avoid performance issues. Not all violations have entity information (some are for code regions rather than specific entities).")] = False,
+    include_entity_info: Annotated[bool, Field(description="If True, resolves entity information for violations that have entity uniquenames. This adds minimal latency (~0.07ms per lookup, ~7ms for 100 violations) and is useful for violations like 'function too long' where you need the function entity ID. Default is False. Not all violations have entity information (some are for code regions rather than specific entities).")] = False,
     max_results: Annotated[int, Field(description="Maximum number of violations to return. Default is 50 to keep responses concise.", ge=1, le=500)] = 50,
 ) -> dict:
     """
@@ -898,7 +904,7 @@ def get_project_violations(
 
 @mcp.tool(name="get_project_metrics")
 def get_project_metrics(
-    metric_ids: Annotated[List[str], Field(description="List of specific metric IDs. Pass an empty list [] to return all available project-level metrics.", default=[])] = [],
+    metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available project-level metrics.")] = [],
 ) -> dict:
     """
     Get project-level metrics (metrics that apply to the entire project, not individual entities).
@@ -916,6 +922,10 @@ def get_project_metrics(
     3. Use results to understand project characteristics before drilling into specific entities
     """
     database = require_db()
+
+    # Handle None or empty list - both mean "get all metrics"
+    if metric_ids is None:
+        metric_ids = []
 
     if not metric_ids:
         # Get all available project-level metrics (empty list = all metrics)
@@ -999,6 +1009,538 @@ def list_entities_by_kind(
         "returned_count": len(results),
         "truncated": total_count > max_results,
         "kind": kindstring,
+    }
+
+@mcp.tool(name="list_architectures_summary")
+def list_architectures_summary() -> dict:
+    """
+    List root architectures in the project.
+
+    Returns: list of root architecture names. Most projects have only 1-3 root architectures.
+
+    All projects with at least one file will have a "Directory Structure" architecture showing
+    the folder structure. Additional architectures may be created manually or via plugins.
+
+    Common architectures:
+    - "Directory Structure" - built-in folder hierarchy (always present)
+    - Custom architectures - created by users or plugins (e.g., functional decomposition, git metadata)
+
+    Workflow:
+    1. list_architectures_summary() → discover available architectures
+    2. get_architecture_details(arch_name) → get hierarchy and entity information
+    3. get_entities_in_architecture(arch_name) → explore files/entities in an architecture
+    """
+    database = require_db()
+
+    root_archs = database.root_archs()
+    architecture_names = [arch.name() for arch in root_archs]
+
+    return {
+        "architectures": architecture_names,
+        "count": len(architecture_names),
+    }
+
+@mcp.tool(name="directory_to_architecture")
+def directory_to_architecture(
+    directory_path: Annotated[str, Field(description="Full path to a directory to convert to an architecture longname.")],
+) -> dict:
+    """
+    Convert a directory path to its corresponding architecture longname in the Directory Structure.
+
+    Returns: the architecture longname if the directory exists in the project, or an error if not found.
+
+    Use this to quickly look up the architecture for a specific folder path without navigating
+    the architecture tree manually.
+
+    Example:
+    - directory_to_architecture("/project/src/utils") → {"arch_longname": "Directory Structure/src/utils"}
+
+    After getting the longname, use get_architecture_details or get_entities_in_architecture to explore.
+    """
+    database = require_db()
+
+    # Convert to relative path within the project
+    relative_path = database.relative_file_name(directory_path)
+    if not relative_path:
+        return {"error": f"Directory '{directory_path}' is not within the project."}
+
+    # Construct the architecture longname
+    arch_longname = f"Directory Structure/{relative_path}"
+
+    # Verify the architecture exists
+    arch = database.lookup_arch(arch_longname)
+    if arch is None:
+        return {"error": f"No architecture found for directory '{directory_path}'. The directory may not exist or may not contain any analyzed files."}
+
+    return {"arch_longname": arch_longname}
+
+@mcp.tool(name="get_architecture_details")
+def get_architecture_details(
+    arch_name: Annotated[str, Field(description="Longname of the architecture to get details for. Use list_architectures_summary to discover root architecture names.")],
+) -> dict:
+    """
+    Get detailed information about a specific architecture including entity counts by kind.
+
+    Returns: architecture details including longname, children count, total entity count,
+    and entity_counts_by_kind (breakdown of entities by their kind, e.g., File, Class, Function).
+
+    Use this to understand the structure and contents of an architecture:
+    - See how many child architectures exist
+    - Understand entity/file counts broken down by kind
+
+    Workflow:
+    1. list_architectures_summary() → discover architectures
+    2. get_architecture_details(arch_name) → understand structure and entity breakdown
+    3. get_architecture_children(arch_name) → explore hierarchy
+    4. get_entities_in_architecture(arch_name) → get contents
+
+    Note: The longname format is "parent/child" or just "name" for root architectures.
+    """
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    children = arch.children()
+    entities = arch.ents(False)
+
+    # Count entities by kind
+    entity_counts_by_kind = {}
+    for ent in entities:
+        kind_name = ent.kindname()
+        entity_counts_by_kind[kind_name] = entity_counts_by_kind.get(kind_name, 0) + 1
+
+    # Sort by count descending
+    sorted_counts = dict(sorted(entity_counts_by_kind.items(), key=lambda x: -x[1]))
+
+    return {
+        "longname": arch.longname(),
+        "child_count": len(children),
+        "entity_count": len(entities),
+        "entity_counts_by_kind": sorted_counts,
+        "is_root": arch.parent() is None,
+    }
+
+@mcp.tool(name="get_architectures_for_entity")
+def get_architectures_for_entity(
+    ent_id: Annotated[int, Field(description="The entity ID to find architectures for.", ge=1)],
+    implicit: Annotated[bool, Field(description="If True, also returns architectures that contain any of the entity's parents. Default is False.",)] = False,
+) -> dict:
+    """
+    Find all architectures containing an entity (reverse lookup for metadata/tagging).
+
+    Returns: list of architectures that contain this entity.
+
+    Use this for reverse lookup to discover metadata about an entity:
+    - Find modification date: look for Calendar architecture containing the file
+    - Find git author: look for Git Author architecture containing the file
+    - Find functional group: find which functional decomposition architecture contains the file
+    - Understand folder structure: see which Directory Structure nodes contain the file
+
+    This is a key tool for using architectures as a tagging/metadata system. For example:
+    - Calendar architecture groups files by modification date → find date by finding which Calendar node contains the file
+    - Git Author architecture groups files by author → find author by finding which Git Author node contains the file
+
+    Workflow:
+    1. lookup_entity_id(name="main.c") → find file entity
+    2. get_architectures_for_entity(ent_id) → find all architectures (including metadata architectures)
+    3. Filter results to find relevant architecture (e.g., Calendar for date, Git Author for author)
+    """
+    database = require_db()
+
+    ent = database.ent_from_id(ent_id)
+    if ent is None:
+        raise ValueError(f"Entity with id {ent_id} not found")
+
+    archs = database.archs(ent, implicit)
+
+    architectures = []
+    for arch in archs:
+        architectures.append({
+            "longname": arch.longname(),
+        })
+
+    return {
+        "architectures": architectures,
+        "count": len(architectures),
+        "note": "The longname contains the full path and can be parsed to get the architecture name and parent. Architectures can represent groups, folders, or metadata (e.g., Calendar = modification date, Git Author = author name).",
+    }
+
+@mcp.tool(name="get_entities_in_architecture")
+def get_entities_in_architecture(
+    arch_name: Annotated[str, Field(description="Longname of the architecture to get entities from. Use list_architectures_summary to discover root architecture names.")],
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class') to filter entities by kind.")] = None,
+    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 50.", ge=1, le=500)] = 50,
+) -> dict:
+    """
+    Get entities/files within an architecture (non-recursive, only direct members).
+
+    Returns: list of entities with id, name, kind, and longname.
+
+    Use this to explore what files or entities belong to an architecture:
+    - See which files are in a specific folder (Directory Structure)
+    - Find entities in a functional group
+    - List files modified on a specific date (Calendar architecture)
+    - Find files authored by a specific person (Git Author architecture)
+
+    Workflow:
+    1. list_architectures_summary() → discover architectures
+    2. get_architecture_children(arch_name) → navigate to specific folder
+    3. get_entities_in_architecture(arch_name) → see files in that folder
+    4. Optionally filter by kind: kindstring="File" to see only files
+    """
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    entities = arch.ents(False)
+
+    # Filter by kind if specified
+    if kindstring:
+        entities = [ent for ent in entities if ent.kind().check(kindstring)]
+
+    total_count = len(entities)
+    limited_entities = entities[:max_results]
+    truncated = total_count > max_results
+
+    results = []
+    for ent in limited_entities:
+        results.append({
+            "id": ent.id(),
+            "name": ent.name(),
+            "kind": ent.kind().name(),
+            "longname": ent.longname(),
+        })
+
+    return {
+        "entities": results,
+        "total_count": total_count,
+        "returned_count": len(results),
+        "truncated": truncated,
+    }
+
+@mcp.tool(name="get_architecture_children")
+def get_architecture_children(
+    arch_name: Annotated[str, Field(description="Longname of the architecture to get children for. Use list_architectures_summary to discover root architecture names.")],
+    max_results: Annotated[int, Field(description="Maximum number of child architectures to return. Default is 100.", ge=1, le=500)] = 100,
+) -> dict:
+    """
+    Get child architectures of a parent architecture (navigate hierarchy).
+
+    Returns: list of child architecture names. To get details on a child, construct its
+    longname as "{parent_longname}/{child_name}" and pass it to get_architecture_details.
+
+    Use this to navigate the hierarchical structure of architectures:
+    - Navigate Directory Structure folders (e.g., "Directory Structure" → children like "src", "tests")
+    - Explore functional decomposition hierarchies
+    - Browse Calendar or Git Author architecture hierarchies
+
+    Workflow:
+    1. get_architecture_details(arch_name="Directory Structure") → see it has children
+    2. get_architecture_children(arch_name="Directory Structure") → get child names like ["src", "tests"]
+    3. get_architecture_details(arch_name="Directory Structure/src") → details for "src" child
+    4. get_entities_in_architecture(arch_name="Directory Structure/src") → files in that folder
+    """
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    children = arch.children()
+    total_count = len(children)
+    limited_children = children[:max_results]
+    child_names = [child.name() for child in limited_children]
+
+    return {
+        "children": child_names,
+        "count": len(child_names),
+        "total_count": total_count,
+        "truncated": total_count > max_results,
+    }
+
+@mcp.tool(name="get_architecture_metrics")
+def get_architecture_metrics(
+    arch_name: Annotated[str, Field(description="Longname of the architecture to get metrics for. Use list_architectures_summary to discover root architecture names.")],
+    metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available metrics for the architecture.", default=[])] = [],
+) -> dict:
+    """
+    Get metric values for an architecture (aggregate metrics for all entities in the architecture).
+
+    Returns: dictionary mapping metric IDs to values (with metric names for context).
+
+    Discovering architecture metrics:
+    - Use list_metrics_summary() with no kindstring to see all metrics (built-in and plugin).
+    - Built-in metrics: Any metric that applies to the project also applies to architectures.
+    - Common architecture metrics include: CountLine, CountLineCode, CountStmt, SumCyclomatic,
+      MaxCyclomatic, AvgCyclomatic, CountFile, CountClass, CountFunction, RatioCommentToCode.
+    - Architecture-specific plugin metrics:
+      - CountArchEnts, CountArchEntsRecursive - entity counts
+      - ArchCurDepth, ArchMaxChildDepth, CountArchChildren - hierarchy info
+      - GitCohesion - git cohesion metric (architecture-only, requires git)
+    - Git metrics (if git is configured, also valid for files):
+      - GitCommits, GitAuthors, GitOwnership, GitMajorContributors, GitMinorContributors
+      - GitDaysSinceCreated, GitDaysSinceLastModified
+
+    Common use cases:
+    - "What's the total lines of code in the src folder?" → Get CountLine for Directory Structure/src
+    - "What's the complexity of module X?" → Get SumCyclomatic or AvgCyclomatic
+    - "Which folder has the most files?" → Compare CountFile across architectures
+
+    Note: Metrics that don't apply to an architecture return null (e.g., entity-specific metrics
+    like Cyclomatic for a folder). Some metrics may need to be enabled in Project Configuration/Metrics.
+    """
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    results = {}
+
+    if not metric_ids:
+        # Get all available metrics (empty list = all metrics)
+        available_metric_ids = arch.metrics()
+        metric_values = arch.metric(available_metric_ids)
+
+        for metric_id in available_metric_ids:
+            try:
+                metric_name = understand.Metric.name(metric_id)
+                value = metric_values.get(metric_id)
+                results[metric_id] = {
+                    "name": metric_name,
+                    "value": value,
+                }
+            except:
+                value = metric_values.get(metric_id)
+                results[metric_id] = {
+                    "value": value,
+                }
+    else:
+        # Get specific metrics
+        if len(metric_ids) == 1:
+            try:
+                metric_value = arch.metric(metric_ids[0])
+                metric_name = understand.Metric.name(metric_ids[0])
+                results[metric_ids[0]] = {
+                    "name": metric_name,
+                    "value": metric_value,
+                }
+            except Exception as e:
+                results[metric_ids[0]] = {
+                    "error": f"Failed to get metric: {str(e)}",
+                }
+        else:
+            metric_values = arch.metric(metric_ids)
+
+            for metric_id in metric_ids:
+                try:
+                    metric_name = understand.Metric.name(metric_id)
+                    value = metric_values.get(metric_id)
+                    results[metric_id] = {
+                        "name": metric_name,
+                        "value": value,
+                    }
+                except:
+                    value = metric_values.get(metric_id)
+                    results[metric_id] = {
+                        "value": value,
+                    }
+
+    return {
+        "metrics": results,
+        "count": len(results),
+        "architecture": arch.longname(),
+    }
+
+@mcp.tool(name="get_architecture_dependencies")
+def get_architecture_dependencies(
+    arch_name: Annotated[str, Field(description="Longname of the architecture to get dependencies for. Use list_architectures_summary to discover root architecture names.")],
+    forward: Annotated[bool, Field(description="If True, returns what this architecture depends on (outgoing). If False, returns what depends on this architecture (incoming). Default is True.")] = True,
+    max_results: Annotated[int, Field(description="Maximum number of dependent architectures to return. Default is 50.", ge=1, le=200)] = 50,
+) -> dict:
+    """
+    Get architectures that have dependencies with this architecture (layer 1 of 3).
+
+    Returns: list of {arch_longname, reference_count} sorted by reference_count descending.
+
+    Use forward=True to find what this architecture depends on (outgoing dependencies).
+    Use forward=False to find what depends on this architecture (incoming dependencies).
+
+    Note: Dependencies are scoped within a root architecture. For example, "Directory Structure/src"
+    may depend on "Directory Structure/util", but will never report dependencies to architectures
+    in different roots like "Git Author/Bob". To analyze dependencies, use architectures from the
+    same root (typically "Directory Structure" for folder-based analysis).
+
+    The reference_count indicates the strength of the dependency - use this to prioritize
+    which relationships to explore further.
+
+    Workflow:
+    1. get_architecture_dependencies(arch_name) → list of dependent architectures with counts
+    2. get_architecture_dependency_summary(arch_name, other_arch) → breakdown by reference kind
+    3. get_architecture_dependency_references(arch_name, other_arch, ref_kindstring) → actual refs
+    """
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    if forward:
+        dependencies_dict = arch.depends()
+    else:
+        dependencies_dict = arch.dependsby()
+
+    dependencies = []
+    for dep_arch, refs in dependencies_dict.items():
+        dependencies.append({
+            "arch_longname": dep_arch.longname(),
+            "reference_count": len(refs),
+        })
+
+    # Sort by reference count (most dependencies first)
+    dependencies.sort(key=lambda x: x["reference_count"], reverse=True)
+
+    total_count = len(dependencies)
+    limited_deps = dependencies[:max_results]
+    truncated = total_count > max_results
+
+    return {
+        "dependencies": limited_deps,
+        "total_count": total_count,
+        "returned_count": len(limited_deps),
+        "truncated": truncated,
+    }
+
+@mcp.tool(name="get_architecture_dependency_summary")
+def get_architecture_dependency_summary(
+    arch_name: Annotated[str, Field(description="Longname of the source architecture.")],
+    other_arch_name: Annotated[str, Field(description="Longname of the target architecture to get dependency details for.")],
+    forward: Annotated[bool, Field(description="If True, shows references from arch_name to other_arch_name. If False, shows references from other_arch_name to arch_name. Default is True.")] = True,
+) -> dict:
+    """
+    Get a summary of dependencies between two architectures, broken down by reference kind (layer 2 of 3).
+
+    Returns: reference counts grouped by kind (e.g., {"Call": 100, "Use": 50, "Include": 25}).
+
+    Use this after get_architecture_dependencies to understand the nature of the relationship
+    between two architectures before drilling down to specific references.
+
+    Workflow:
+    1. get_architecture_dependencies(arch_name) → find "other_arch" has 500 references
+    2. get_architecture_dependency_summary(arch_name, other_arch) → see it's 300 Calls, 200 Uses
+    3. get_architecture_dependency_references(arch_name, other_arch, "Call") → get Call references
+    """
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found."}
+
+    other_arch = database.lookup_arch(other_arch_name)
+    if other_arch is None:
+        return {"error": f"Architecture '{other_arch_name}' not found."}
+
+    if forward:
+        dependencies_dict = arch.depends()
+    else:
+        dependencies_dict = arch.dependsby()
+
+    refs = dependencies_dict.get(other_arch, [])
+
+    if not refs:
+        return {
+            "ref_counts_by_kind": {},
+            "total_count": 0,
+        }
+
+    # Count references by kind
+    ref_counts_by_kind = {}
+    for ref in refs:
+        kind_name = ref.kind().name()
+        ref_counts_by_kind[kind_name] = ref_counts_by_kind.get(kind_name, 0) + 1
+
+    # Sort by count descending
+    sorted_counts = dict(sorted(ref_counts_by_kind.items(), key=lambda x: -x[1]))
+
+    return {
+        "ref_counts_by_kind": sorted_counts,
+        "total_count": len(refs),
+    }
+
+@mcp.tool(name="get_architecture_dependency_references")
+def get_architecture_dependency_references(
+    arch_name: Annotated[str, Field(description="Longname of the source architecture.")],
+    other_arch_name: Annotated[str, Field(description="Longname of the target architecture.")],
+    forward: Annotated[bool, Field(description="If True, shows references from arch_name to other_arch_name. If False, shows references from other_arch_name to arch_name. Default is True.")] = True,
+    ref_kindstring: Annotated[Optional[str], Field(description="Optional reference kind filter. Use values from get_architecture_dependency_summary output (e.g., 'Use', 'Set', 'Init', 'Call', 'Include'). If not provided, returns all reference kinds.")] = None,
+    max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 50.", ge=1, le=200)] = 50,
+) -> dict:
+    """
+    Get the actual references between two architectures (layer 3 of 3).
+
+    Returns: list of references with from_entity, to_entity, kind, file, and line information.
+
+    Use this after get_architecture_dependency_summary to see the specific references
+    of a particular kind between two architectures.
+
+    Workflow:
+    1. get_architecture_dependencies(arch_name) → find dependent architectures
+    2. get_architecture_dependency_summary(arch_name, other_arch) → see reference kinds and counts
+    3. get_architecture_dependency_references(arch_name, other_arch, ref_kindstring="Use") → get specific references
+
+    Note: Only references where the source and target entities belong to different architectures
+    are included. The reference kinds available depend on what cross-architecture references exist.
+    """
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found."}
+
+    other_arch = database.lookup_arch(other_arch_name)
+    if other_arch is None:
+        return {"error": f"Architecture '{other_arch_name}' not found."}
+
+    if forward:
+        dependencies_dict = arch.depends()
+    else:
+        dependencies_dict = arch.dependsby()
+
+    refs = dependencies_dict.get(other_arch, [])
+
+    # Filter by kind if specified
+    if ref_kindstring:
+        refs = [ref for ref in refs if ref.kind().check(ref_kindstring)]
+
+    total_count = len(refs)
+    limited_refs = refs[:max_results]
+    truncated = total_count > max_results
+
+    results = []
+    for ref in limited_refs:
+        ent = ref.ent()
+        scope = ref.scope()
+        file = ref.file()
+
+        results.append({
+            "from_entity_id": scope.id() if scope else None,
+            "from_entity_name": scope.longname() if scope else None,
+            "to_entity_id": ent.id() if ent else None,
+            "to_entity_name": ent.longname() if ent else None,
+            "kind": ref.kind().name(),
+            "file": file.longname() if file else None,
+            "line": ref.line(),
+        })
+
+    return {
+        "references": results,
+        "total_count": total_count,
+        "returned_count": len(results),
+        "truncated": truncated,
     }
 
 if __name__ == '__main__':
