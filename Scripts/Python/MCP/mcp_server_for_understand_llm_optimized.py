@@ -1,7 +1,7 @@
 import argparse
 import os
 import sys
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, List, Literal, Optional, Union
 from pydantic import Field
 
 # Add DLL directory if specified in environment variable (for Windows)
@@ -130,8 +130,8 @@ def get_entity_details(
 @mcp.tool(name="get_entity_source")
 def get_entity_source(
     ent_id: Annotated[int, Field(description="The entity ID to get source code for.", ge=1)],
-    start_line: Annotated[Optional[int], Field(description="Optional start line number (1-based). If specified, only returns code from this line onwards.", ge=1)] = None,
-    end_line: Annotated[Optional[int], Field(description="Optional end line number (1-based). If specified with start_line, returns only the specified line range.", ge=1)] = None,
+    start_line: Annotated[Optional[Union[int, str]], Field(description="Optional start line number (1-based). If specified, only returns code from this line onwards.")] = None,
+    end_line: Annotated[Optional[Union[int, str]], Field(description="Optional end line number (1-based). If specified with start_line, returns only the specified line range.")] = None,
     max_length: Annotated[int, Field(description="Maximum length of source code to return in characters. Default is 5000 to avoid filling the context window. Response will be truncated if longer.", ge=100, le=50000)] = 5000,
 ) -> dict:
     """
@@ -156,6 +156,12 @@ def get_entity_source(
 
     Tip: Use start_line and end_line parameters to get only the code section you need.
     """
+    # Coerce parameters to correct types (handle string inputs from LLMs)
+    if start_line is not None:
+        start_line = int(start_line)
+    if end_line is not None:
+        end_line = int(end_line)
+
     ent = require_db().ent_from_id(ent_id)
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
@@ -317,7 +323,7 @@ def get_entity_references(
     ent_id: Annotated[int, Field(description="The entity ID to get references for.", ge=1)],
     refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string. Use forward kinds (e.g., 'call', 'definein', 'use', 'setby') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated.")] = None,
     entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to filter by the kind of entity being referenced (e.g., 'Function', 'Variable', 'Class'). Can be used alone without refkindstring.")] = None,
-    file_id: Annotated[Optional[int], Field(description="Optional file entity ID to filter references to only those occurring in a specific file.", ge=1)] = None,
+    file_id: Annotated[Optional[Union[int, str]], Field(description="Optional file entity ID to filter references to only those occurring in a specific file.")] = None,
     unique: Annotated[bool, Field(description="If True, return only the first matching reference to each unique entity. Useful to avoid duplicates when the same entity is referenced multiple times. Can be used alone without other filters.")] = False,
     max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 20 to keep responses concise.", ge=1, le=200)] = 20,
 ) -> dict:
@@ -340,6 +346,10 @@ def get_entity_references(
 
     Each reference includes file_id so you can directly call get_entity_source without lookups.
     """
+    # Coerce file_id to correct type (handle string inputs from LLMs)
+    if file_id is not None:
+        file_id = int(file_id)
+
     ent = require_db().ent_from_id(ent_id)
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
@@ -524,7 +534,7 @@ def get_metric_details(
 @mcp.tool(name="get_entity_metrics")
 def get_entity_metrics(
     ent_id: Annotated[int, Field(description="The entity ID to get metrics for.", ge=1)],
-    metric_ids: Annotated[Optional[List[str]], Field(description="Optional list of specific metric IDs to retrieve. If not provided, returns all available metrics for the entity. Note: metric values can be calculated even if the metric is disabled (not visible in UI).")] = None,
+    metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available metrics for the entity. Note: metric values can be calculated even if the metric is disabled (not visible in UI).", default=[])] = [],
 ) -> dict:
     """
     Get metric values for an entity (efficient metric retrieval).
@@ -558,13 +568,13 @@ def get_entity_metrics(
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
 
-    if metric_ids is None:
-        # Get all available metrics for this entity
+    results = {}
+    if not metric_ids:
+        # Get all available metrics for this entity (empty list = all metrics)
         available_metric_ids = ent.metrics()
         metric_values = ent.metric(available_metric_ids)
 
         # Build results with names
-        results = {}
         for metric_id in available_metric_ids:
             try:
                 metric_name = understand.Metric.name(metric_id)
@@ -662,8 +672,8 @@ def get_project_overview() -> dict:
 def find_entities_by_metric(
     metric_id: Annotated[str, Field(description="The metric ID to filter by (e.g., 'Cyclomatic', 'CountLine', 'MaxNesting').")],
     kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class').")] = None,
-    min_value: Annotated[Optional[float], Field(description="Optional minimum metric value. Entities with metric values >= min_value will be returned.")] = None,
-    max_value: Annotated[Optional[float], Field(description="Optional maximum metric value. Entities with metric values <= max_value will be returned.")] = None,
+    min_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional minimum metric value. Entities with metric values >= min_value will be returned.")] = None,
+    max_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional maximum metric value. Entities with metric values <= max_value will be returned.")] = None,
     order_by: Annotated[Literal["asc", "desc"], Field(description="Sort order: 'desc' for highest values first, 'asc' for lowest values first.")] = "desc",
     max_results: Annotated[int, Field(description="Maximum number of results to return. Default is 20 to keep responses concise.", ge=1, le=200)] = 20,
 ) -> dict:
@@ -682,6 +692,12 @@ def find_entities_by_metric(
     2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", order_by="desc") → find top entities
     3. get_entity_details(ent_id) → get details about specific entities
     """
+    # Coerce parameters to correct types (handle string inputs from LLMs)
+    if min_value is not None:
+        min_value = float(min_value)
+    if max_value is not None:
+        max_value = float(max_value)
+
     database = require_db()
 
     # Get entities of specified kind
@@ -882,7 +898,7 @@ def get_project_violations(
 
 @mcp.tool(name="get_project_metrics")
 def get_project_metrics(
-    metric_ids: Annotated[Optional[List[str]], Field(description="Optional list of specific metric IDs. If not provided, returns all available project-level metrics.")] = None,
+    metric_ids: Annotated[List[str], Field(description="List of specific metric IDs. Pass an empty list [] to return all available project-level metrics.", default=[])] = [],
 ) -> dict:
     """
     Get project-level metrics (metrics that apply to the entire project, not individual entities).
@@ -901,8 +917,8 @@ def get_project_metrics(
     """
     database = require_db()
 
-    if metric_ids is None:
-        # Get all available project-level metrics
+    if not metric_ids:
+        # Get all available project-level metrics (empty list = all metrics)
         available_metric_ids = database.metrics()
         metric_values = database.metric(available_metric_ids)
     else:
