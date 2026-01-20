@@ -4,7 +4,7 @@ This directory contains MCP (Model Context Protocol) servers that provide access
 
 ## Setup Instructions
 
-For detailed setup instructions, see the [official documentation](https://scitools.freshdesk.com/support/solutions/articles/70000680031).
+For detailed setup instructions, see the [official documentation](https://scitools.freshdesk.com/support/solutions/articles/70000680031). The [directions](https://scitools.freshdesk.com/support/solutions/articles/70000582855-api-tutorial-1-getting-started-with-the-python-api) for setting up a custom python installation with the Understand API may also be useful because the `upython` executable shipped with Understand does not include FastMCP. 
 
 ### Quick Setup
 
@@ -26,7 +26,7 @@ For detailed setup instructions, see the [official documentation](https://scitoo
          "command": "/path/to/python",
          "args": [
            "/path/to/mcp_server_for_understand_comprehensive.py",
-           "project.und"
+           "path/to/project.und"
          ],
          "env": {
            "PYTHONPATH": "/path/to/Understand/bin/macosx/Python"
@@ -42,13 +42,13 @@ This directory contains two MCP servers:
 
 ### `mcp_server_for_understand_comprehensive.py`
 
-- **59 tools** providing direct access to Understand API methods
+- Tools provide direct access to Understand API methods
 - Low-level, comprehensive API coverage
 - Best for: Full control, exploring all API features, working with architectures/lexemes/control flow graphs
 
 ### `mcp_server_for_understand_llm_optimized.py`
 
-- **6 tools** designed for efficient LLM interaction
+- Tools designed for efficient LLM interaction
 - Higher-level, task-oriented abstractions with built-in result limiting
 - Best for: LLM use cases, smaller context windows, common workflows (finding entities, getting source, analyzing references)
 
