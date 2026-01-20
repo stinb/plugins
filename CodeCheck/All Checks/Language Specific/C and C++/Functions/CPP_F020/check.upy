@@ -1,0 +1,113 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-01-20
+
+
+import re
+
+
+ERR1 = 'Parameter identifiers do not match'
+
+
+def ids():
+    return ('MISRA04_16.4', 'CPP_F020')
+
+
+def name(id):
+    return {
+        'MISRA04_16.4': '''Published Standards/MISRA-C 2004/\
+16.4 Inconsistent Parameter Names''',
+        'CPP_F020': '''All Checks/Language Specific/C and C++/Functions/\
+Inconsistent Parameter Names''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA04_16.4': [
+            'Functions',
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2004',
+            'Category: Required',
+        ],
+        'CPP_F020': [
+            'Functions',
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>The identifiers used in the declaration and definition of a function shall be identical.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for ref in file.filerefs('Declare, Define', '~Implicit Parameter', True):
+        ent = ref.ent()
+        name = ent.name()
+
+        refs = ent.refs('Declarein, Definein')
+
+        # Go through all declarations/definitions and see if it's consistent
+        consistent_names = True
+        for ref in refs:
+            line = ref.line()
+            column = ref.column()
+            file = ref.file()
+
+            # Get the lexeme at the reference or assume it's correct
+            lexer = file.lexer()
+            lex = lexer.lexeme(line, column)
+            if not lex:
+                continue
+
+            text = lex.text()
+            if text == name:
+                # Skip the typical case
+                if ent.type() != name:
+                    continue
+                # Skip the horrible case for when the parameter type is the parameter name
+                if lex.ent() == ent:
+                    continue
+            # Skip unnamed parameters
+            elif text in (',', '=', ')') and name == '[unnamed]':
+                continue
+            else:
+                token = lex.token()
+                # Skip declarations in #include strings
+                if token == 'String':
+                    continue
+                # Skip declarations and definitions in macros
+                elif token == 'Identifier':
+                    lex_ent = lex.ent()
+                    if lex_ent and lex_ent.kind().check('Macro'):
+                        continue
+
+            consistent_names = False
+            break
+
+        if consistent_names:
+            continue
+
+        for ref in refs:
+            check.violation(ent, ref.file(), ref.line(), ref.column(), ERR1)
