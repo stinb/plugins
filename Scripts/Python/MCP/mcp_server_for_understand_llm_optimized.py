@@ -25,6 +25,21 @@ def require_db() -> understand.Db:
         raise RuntimeError("Database is not open")
     return db
 
+def get_filterable_kind_name(ent) -> str:
+    """
+    Get an entity kind name that works correctly as a filter string.
+
+    Uses the short name (kind().name()) if it matches via check(), otherwise
+    falls back to the longname which always works. This handles edge cases
+    where the short name doesn't match due to naming inconsistencies in the
+    Understand API (e.g., "Template Parameter" vs "TemplateParameter").
+    """
+    kind = ent.kind()
+    short_name = kind.name()
+    if kind.check(short_name):
+        return short_name
+    return kind.longname()
+
 def encode_cursor(offset: int) -> str:
     """Encode pagination offset as a cursor string."""
     return base64.b64encode(json.dumps({"offset": offset}).encode()).decode()
@@ -77,6 +92,13 @@ def lookup_entity_id(
 
     The name parameter supports regex patterns for flexible searching.
     Supports pagination: use next_cursor from response to get more results.
+
+    Kind filter syntax (applies to all kindstring/refkindstring parameters):
+    - OR (comma): "function,class" matches functions OR classes
+    - AND (space): "public function" matches public functions
+    - NOT (tilde): "function ~unresolved" matches defined functions only
+    - Precedence: OR binds tighter than AND, so "function,method ~unresolved" matches
+      (all functions) OR (methods that are not unresolved)
     """
     entities = require_db().lookup(name, kindstring)
     if not entities:
@@ -256,7 +278,12 @@ def get_entity_references_summary(
     Get overview of all references to/from an entity (callers, callees, usage, etc.).
 
     Returns: total reference count, unique entities/files involved, and counts grouped by
-    reference kind (e.g., 'call', 'callby', 'use', 'useby').
+    reference kind longname (e.g., 'C Call', 'C Callby', 'C Use', 'C Useby').
+
+    The reference_kinds field uses longnames (language-qualified kind names) which can be
+    used directly as filter strings in get_entity_references. For example, if the summary
+    shows "C Call": 10, you can filter with refkindstring="C Call" to get exactly those
+    references.
 
     Use this FIRST when exploring entity relationships to:
     - Discover what types of references exist (calls, uses, sets, etc.)
@@ -265,7 +292,7 @@ def get_entity_references_summary(
 
     Workflow:
     1. get_entity_references_summary(ent_id) → see what's available
-    2. get_entity_references(ent_id, refkindstring="callby") → get specific reference type
+    2. get_entity_references(ent_id, refkindstring="C Callby") → get specific reference type
     3. Or: get_entity_references_by_file(ent_id) → see which files are involved
     """
     ent = require_db().ent_from_id(ent_id)
@@ -276,13 +303,14 @@ def get_entity_references_summary(
     all_refs = ent.refs()
     total_count = len(all_refs)
 
-    # Group by reference kind
+    # Group by reference kind (use longname for reference kinds to ensure
+    # the returned strings work correctly with check() filtering)
     ref_kind_counts = {}
     unique_entities = set()
     unique_files = set()
 
     for ref in all_refs:
-        ref_kind = ref.kind().name()
+        ref_kind = ref.kind().longname()
         ref_kind_counts[ref_kind] = ref_kind_counts.get(ref_kind, 0) + 1
 
         # Track unique entities and files
@@ -379,15 +407,19 @@ def get_entity_references(
     Get detailed reference information for an entity with flexible filtering.
 
     Returns: list of references with referenced entity info, location (file_id, file path, line, column),
-    and reference kind. Includes total_count and truncated flag.
+    and reference kind (longname). Includes total_count and truncated flag.
 
-    Use this AFTER get_entity_references_summary to fetch specific reference types:
-    - Forward references: refkindstring="call" (what this calls), "use" (what this uses)
-    - Reverse references: refkindstring="callby" (callers), "useby" (users)
+    Use this AFTER get_entity_references_summary to fetch specific reference types.
+    The refkindstring filter uses token matching, so you can use:
+    - Language-specific kinds from summary: refkindstring="C Call" (exact match from summary)
+    - Generic kinds: refkindstring="call" (matches all call types across languages)
+    - Forward references: refkindstring="call", "use", "set"
+    - Reverse references: refkindstring="callby", "useby", "setby"
     - Multiple kinds: refkindstring="call,callby" (comma-separated)
+    - Exclusions: refkindstring="call ~inactive" (exclude inactive/conditional calls)
 
     Filtering options:
-    - refkindstring: Filter by reference type (forward or reverse)
+    - refkindstring: Filter by reference type (use values from get_entity_references_summary for precision)
     - entkindstring: Filter by entity kind (e.g., only references to Functions)
     - file_id: Filter to specific file (use from get_entity_references_by_file)
     - unique: Get only first reference per unique entity (reduces duplicates)
@@ -436,7 +468,7 @@ def get_entity_references(
                 "line": ref.line(),
                 "column": ref.column(),
             },
-            "reference_kind": ref.kind().name(),
+            "reference_kind": ref.kind().longname(),
         }
 
         references.append(ref_info)
@@ -697,10 +729,11 @@ def get_project_overview() -> dict:
     files = database.files()
     all_entities = database.ents()
 
-    # Count by common kinds
+    # Count by common kinds (use filterable kind names to ensure
+    # the returned strings work correctly with kindstring filters)
     kind_counts = {}
     for ent in all_entities:
-        kind = ent.kind().name()
+        kind = get_filterable_kind_name(ent)
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
 
     return {
@@ -1020,6 +1053,8 @@ def list_entities_by_kind(
 
     Returns minimal info (id, name, kind) to keep response concise. Use get_entity_details for more info.
     Supports pagination: use next_cursor from response to get more results.
+
+    Filter examples: "function ~unresolved" (defined functions only), "file ~header" (source files only).
     """
     database = require_db()
 
@@ -1145,10 +1180,11 @@ def get_architecture_details(
     children = arch.children()
     entities = arch.ents(False)
 
-    # Count entities by kind
+    # Count entities by kind (use filterable kind names to ensure
+    # the returned strings work correctly with kindstring filters)
     entity_counts_by_kind = {}
     for ent in entities:
-        kind_name = ent.kindname()
+        kind_name = get_filterable_kind_name(ent)
         entity_counts_by_kind[kind_name] = entity_counts_by_kind.get(kind_name, 0) + 1
 
     # Sort by count descending
@@ -1478,15 +1514,20 @@ def get_architecture_dependency_summary(
     """
     Get a summary of dependencies between two architectures, broken down by reference kind (layer 2 of 3).
 
-    Returns: reference counts grouped by kind (e.g., {"Call": 100, "Use": 50, "Include": 25}).
+    Returns: reference counts grouped by kind longname (e.g., {"C Call": 100, "C Use": 50, "C Include": 25}).
+
+    The ref_counts_by_kind field uses longnames (language-qualified kind names) which can be
+    used directly as filter strings in get_architecture_dependency_references. For example,
+    if the summary shows "C Call": 100, you can filter with ref_kindstring="C Call" to get
+    exactly those references.
 
     Use this after get_architecture_dependencies to understand the nature of the relationship
     between two architectures before drilling down to specific references.
 
     Workflow:
     1. get_architecture_dependencies(arch_name) → find "other_arch" has 500 references
-    2. get_architecture_dependency_summary(arch_name, other_arch) → see it's 300 Calls, 200 Uses
-    3. get_architecture_dependency_references(arch_name, other_arch, "Call") → get Call references
+    2. get_architecture_dependency_summary(arch_name, other_arch) → see it's 300 "C Call", 200 "C Use"
+    3. get_architecture_dependency_references(arch_name, other_arch, "C Call") → get Call references
     """
     database = require_db()
 
@@ -1511,10 +1552,11 @@ def get_architecture_dependency_summary(
             "total_count": 0,
         }
 
-    # Count references by kind
+    # Count references by kind (use longname for reference kinds to ensure
+    # the returned strings work correctly with check() filtering)
     ref_counts_by_kind = {}
     for ref in refs:
-        kind_name = ref.kind().name()
+        kind_name = ref.kind().longname()
         ref_counts_by_kind[kind_name] = ref_counts_by_kind.get(kind_name, 0) + 1
 
     # Sort by count descending
@@ -1530,22 +1572,23 @@ def get_architecture_dependency_references(
     arch_name: Annotated[str, Field(description="Longname of the source architecture.")],
     other_arch_name: Annotated[str, Field(description="Longname of the target architecture.")],
     forward: Annotated[bool, Field(description="If True, shows references from arch_name to other_arch_name. If False, shows references from other_arch_name to arch_name. Default is True.")] = True,
-    ref_kindstring: Annotated[Optional[str], Field(description="Optional reference kind filter. Use values from get_architecture_dependency_summary output (e.g., 'Use', 'Set', 'Init', 'Call', 'Include'). If not provided, returns all reference kinds.")] = None,
+    ref_kindstring: Annotated[Optional[str], Field(description="Optional reference kind filter. Use values from get_architecture_dependency_summary output (e.g., 'C Use', 'C Set', 'C Call', 'C Include'). Generic filters like 'Call' also work but may match multiple language-specific kinds. If not provided, returns all reference kinds.")] = None,
     max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 50.", ge=1, le=200)] = 50,
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
     Get the actual references between two architectures (layer 3 of 3).
 
-    Returns: list of references with from_entity, to_entity, kind, file, and line information.
+    Returns: list of references with from_entity, to_entity, kind (longname), file, and line information.
 
     Use this after get_architecture_dependency_summary to see the specific references
-    of a particular kind between two architectures.
+    of a particular kind between two architectures. Use the exact kind strings from the
+    summary output (e.g., "C Call", "C Use") for precise filtering.
 
     Workflow:
     1. get_architecture_dependencies(arch_name) → find dependent architectures
     2. get_architecture_dependency_summary(arch_name, other_arch) → see reference kinds and counts
-    3. get_architecture_dependency_references(arch_name, other_arch, ref_kindstring="Use") → get specific references
+    3. get_architecture_dependency_references(arch_name, other_arch, ref_kindstring="C Use") → get specific references
 
     Note: Only references where the source and target entities belong to different architectures
     are included. The reference kinds available depend on what cross-architecture references exist.
@@ -1586,7 +1629,7 @@ def get_architecture_dependency_references(
             "from_entity_name": scope.longname() if scope else None,
             "to_entity_id": ent.id() if ent else None,
             "to_entity_name": ent.longname() if ent else None,
-            "kind": ref.kind().name(),
+            "kind": ref.kind().longname(),
             "file": file.longname() if file else None,
             "line": ref.line(),
         })
