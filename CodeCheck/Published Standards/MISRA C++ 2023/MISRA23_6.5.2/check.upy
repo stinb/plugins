@@ -72,22 +72,45 @@ def test_language(language):
     return language == 'C++'
 
 
+def is_external(ref, file):
+    for def_ref in ref.ent().refs("Definein, Declarein, Friendby"):
+        if def_ref.file().id() != file.id():
+            return True
+
+    return False
+
+
+def is_const(ent):
+    utype = str(ent.freetext("UnderlyingType"))
+    add_kind = str(ent.freetext("AdditionalKinds"))
+
+    return "const" in utype or "Constexpr" in add_kind
+
+
+def is_extern(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+    while lex and (lex.line_begin() == ref.line()):
+        if (lex.text() == "extern") and (lex.token() == "Keyword"):
+            return True
+
+        lex = lex.previous(True, True)
+
+    return False
+
+
+def is_macro(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+    return lex.text() != ref.ent().name() or ref.ent().freetext("DefinedInMacro")
+
+
 def check(check, file):
-    for ref in file.filerefs("Define, Declare", "~Namespace ~Macro ~Template ~Type ~Local ~Member"):
-        declared_extern = False
-
-        lex = file.lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
-
-        while lex and (lex.line_begin() == ref.line()):
-            if (lex.text() == "extern") and (lex.token() == "Keyword"):
-                declared_extern = True
-                break
-
-            lex = lex.previous(True, True)
-
+    for ref in file.filerefs("Define, Declare", "Static ~Namespace ~Macro ~Template ~Type ~Local ~Member"):
         if ((ref.ent().parent() and (ref.ent().parent().id() != file.id()))
-            or "const" in str(ref.ent().type())
-            or declared_extern
+            or is_macro(ref)
+            or is_const(ref.ent())
+            or is_extern(ref)
             or is_external(ref, file)
                 or (ref.ent().kind().check("Function") and ref.ent().name() == "main")):
             continue
@@ -96,28 +119,10 @@ def check(check, file):
 
     for namespace_ref in file.filerefs("Define, Declare", "Unnamed Namespace"):
         for ref in namespace_ref.ent().refs("Define, Declare", "~Macro ~Template ~Type ~Local ~Member"):
-            if is_external(ref, file) or "const" in str(ref.ent().type()):
+            if is_external(ref, file) or is_const(ref.ent()) or is_macro(ref):
                 continue
 
-            if ref.ent().kind().check("Static"):
+            if ref.ent().kind().check("Static") or is_extern(ref):
                 check.violation(ref.ent(), file, ref.line(),
                                 ref.column(), ERR1)
                 continue
-
-            lex = file.lexer(lookup_ents=False).lexeme(
-                ref.line(), ref.column())
-
-            while lex and (lex.line_begin() == ref.line()):
-                if (lex.text() == "extern") and (lex.token() == "Keyword"):
-                    check.violation(ref.ent(), file, ref.line(),
-                                    ref.column(), ERR1)
-
-                lex = lex.previous(True, True)
-
-
-def is_external(ref, file):
-    for def_ref in ref.ent().refs("Definein, Declarein, Friendby"):
-        if def_ref.file().id() != file.id():
-            return True
-
-    return False

@@ -1,6 +1,6 @@
 #include <cstdint>
 
-void f1(); // UndCC_Violation
+static void f1(); // UndCC_Violation
 
 namespace
 {
