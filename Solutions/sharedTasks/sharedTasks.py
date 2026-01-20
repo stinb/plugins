@@ -101,7 +101,7 @@ COMMON_OPTIONS = (
     Option(DEPTH, 'Depth', OPTION_DEPTH_CHOICES, 'All'),
     Option(FILTER_MODIFY_SET_ONLY, 'Filter out modify/set only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FILTER_USE_ONLY, 'Filter out use only', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
-    Option(FUNCTION_INSTANCES, 'Function instances', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
+    Option(FUNCTION_INSTANCES, 'Instance references', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(FUNCTION_POINTER, 'Function pointers', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(MEMBER_FUNCTIONS, 'Member functions', ['Longer name', 'Long name', 'Name'], 'Long name'),
     Option(MEMBER_OBJECT_PARENTS, 'Member object parents', OPTION_BOOL_CHOICES, OPTION_BOOL_TRUE),
