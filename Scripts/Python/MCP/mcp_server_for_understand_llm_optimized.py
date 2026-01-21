@@ -755,18 +755,19 @@ def find_entities_by_metric(
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
-    Find entities filtered and sorted by metric values (e.g., find high complexity functions).
+    Find entities in the entire project filtered and sorted by metric values.
 
     Returns: list of entities with their metric values, sorted by the metric.
 
-    Use this to answer questions like:
-    - "What are the key functions?" → Use metric_id="Cyclomatic", order_by="desc" for most complex
-    - "What are the largest files?" → Use metric_id="CountLine", kindstring="File"
-    - "What are the security risks?" → Use metric_id="CountInput" for functions with many inputs
+    Use this for project-wide queries like:
+    - "What are the key functions in the project?" → metric_id="Cyclomatic", order_by="desc"
+    - "What are the largest files?" → metric_id="CountLine", kindstring="File"
+
+    For scoped queries like "key functions in src/", use find_entities_in_architecture_scope instead.
 
     Workflow:
     1. list_metrics_summary(kindstring="Function") → discover relevant metrics
-    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", order_by="desc") → find top entities
+    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function") → find top entities
     3. get_entity_details(ent_id) → get details about specific entities
     """
     # Coerce parameters to correct types (handle string inputs from LLMs)
@@ -1036,20 +1037,22 @@ def list_entities_by_kind(
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
-    List all entities of a specific kind in the project.
+    List all entities of a specific kind in the entire project.
 
-    Returns: list of entities with id, name, kind, and basic info. Useful for getting
-    all functions, all classes, all files, etc.
+    Returns: list of entities with id, name, kind, and basic info.
 
-    Use this to:
+    Use this for project-wide listing:
     - Get all functions in the project
     - Get all classes to understand project structure
     - Get all files for file-level analysis
 
-    Workflow for "key functions" question:
+    For scoped queries like "functions in src/", use find_entities_in_architecture_scope instead.
+    For finding entities by metric values (e.g., "most complex functions"), use find_entities_by_metric instead.
+
+    Workflow:
     1. list_entities_by_kind(kindstring="Function") → get all functions
-    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", order_by="desc") → find most complex
-    3. get_entity_details(ent_id) → get details about specific functions
+    2. get_entity_details(ent_id) → get details about specific entities
+    3. get_entity_source(ent_id) → read source code
 
     Returns minimal info (id, name, kind) to keep response concise. Use get_entity_details for more info.
     Supports pagination: use next_cursor from response to get more results.
@@ -1157,17 +1160,25 @@ def get_architecture_details(
     Get detailed information about a specific architecture including entity counts by kind.
 
     Returns: architecture details including longname, children count, total entity count,
-    and entity_counts_by_kind (breakdown of entities by their kind, e.g., File, Class, Function).
+    and entity_counts_by_kind (breakdown of direct members by kind, e.g., File, Class, Function).
+
+    Note: entity_counts_by_kind shows only direct members. For Directory Structure, this means
+    files only (not functions inside those files). To find nested entities like functions within
+    a folder, use find_entities_in_architecture_scope.
 
     Use this to understand the structure and contents of an architecture:
     - See how many child architectures exist
-    - Understand entity/file counts broken down by kind
+    - Understand what types of entities are directly assigned
 
-    Workflow:
-    1. list_architectures_summary() → discover architectures
-    2. get_architecture_details(arch_name) → understand structure and entity breakdown
-    3. get_architecture_children(arch_name) → explore hierarchy
-    4. get_entities_in_architecture(arch_name) → get contents
+    Workflow for exploring architecture hierarchy:
+    1. list_architectures_summary() → discover root architectures
+    2. get_architecture_details(arch_name) → see child count and entity breakdown
+    3. get_architecture_children(arch_name) → navigate deeper into hierarchy
+    4. get_entities_in_architecture(arch_name) → get direct members
+
+    Workflow for "key functions in src/":
+    1. get_architecture_details("Directory Structure/src") → see it contains files
+    2. find_entities_in_architecture_scope("Directory Structure/src", kindstring="Function", metric_id="Cyclomatic") → find functions
 
     Note: The longname format is "parent/child" or just "name" for root architectures.
     """
@@ -1250,21 +1261,27 @@ def get_entities_in_architecture(
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
-    Get entities/files within an architecture (non-recursive, only direct members).
+    Get direct members of an architecture (no expansion of containers).
 
     Returns: list of entities with id, name, kind, and longname.
 
-    Use this to explore what files or entities belong to an architecture:
-    - See which files are in a specific folder (Directory Structure)
-    - Find entities in a functional group
-    - List files modified on a specific date (Calendar architecture)
-    - Find files authored by a specific person (Git Author architecture)
+    Returns only entities directly assigned to the architecture:
+    - Directory Structure architectures contain files (not the functions inside them)
+    - User-created architectures contain whatever entities the user assigned
 
-    Workflow:
-    1. list_architectures_summary() → discover architectures
+    Use this to see what's directly in an architecture:
+    - List files in a folder (Directory Structure)
+    - See entities in a user-created grouping (e.g., "Security Critical" architecture)
+    - Find files by metadata (Calendar, Git Author architectures)
+
+    For finding nested entities like "functions in a folder", use find_entities_in_architecture_scope
+    instead, which expands files/classes to find contained entities.
+
+    Workflow for exploring architectures:
+    1. list_architectures_summary() → discover root architectures
     2. get_architecture_children(arch_name) → navigate to specific folder
-    3. get_entities_in_architecture(arch_name) → see files in that folder
-    4. Optionally filter by kind: kindstring="File" to see only files
+    3. get_entities_in_architecture(arch_name) → see files/entities in that folder
+    4. get_entity_details(ent_id) or get_entity_source(ent_id) → examine specific entities
 
     Supports pagination: use next_cursor from response to get more results.
     """
@@ -1300,6 +1317,157 @@ def get_entities_in_architecture(
     if next_cursor:
         response["next_cursor"] = next_cursor
     return response
+
+@mcp.tool(name="find_entities_in_architecture_scope")
+def find_entities_in_architecture_scope(
+    arch_name: Annotated[str, Field(description="Longname of the architecture to search within.")],
+    kindstring: Annotated[str, Field(description="Entity kind to find (e.g., 'Function', 'Class', 'Method'). Required.")],
+    metric_id: Annotated[Optional[str], Field(description="Optional metric ID to sort/filter by (e.g., 'Cyclomatic', 'CountLine').")] = None,
+    min_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional minimum metric value filter.")] = None,
+    max_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional maximum metric value filter.")] = None,
+    order_by: Annotated[Optional[Literal["asc", "desc"]], Field(description="Sort order when metric_id is provided: 'desc' for highest first, 'asc' for lowest first.")] = None,
+    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20.", ge=1, le=500)] = 20,
+    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+) -> dict:
+    """
+    Find entities within an architecture's logical scope, expanding containers as needed.
+
+    Unlike get_entities_in_architecture (which returns direct members only), this tool
+    finds entities that are *logically within* an architecture by expanding container
+    entities (files, classes, packages) to find nested entities (functions, methods).
+
+    Use this to answer questions like:
+    - "What are the most complex functions in the src folder?" → metric_id="Cyclomatic", order_by="desc"
+    - "What classes are in the utils directory?" → kindstring="Class"
+    - "Find the largest methods in this module" → kindstring="Method", metric_id="CountLine"
+
+    For architectures that directly contain the target kind (e.g., a user-created
+    "Key Functions" architecture), this behaves like get_entities_in_architecture.
+
+    Workflow:
+    1. get_architecture_details(arch_name) → see what's in the architecture
+    2. find_entities_in_architecture_scope(arch_name, kindstring="Function", metric_id="Cyclomatic") → find key functions
+    3. get_entity_details(ent_id) → get details about specific entities
+    """
+    # Coerce parameters to correct types (handle string inputs from LLMs)
+    if min_value is not None:
+        min_value = float(min_value)
+    if max_value is not None:
+        max_value = float(max_value)
+
+    database = require_db()
+
+    arch = database.lookup_arch(arch_name)
+    if arch is None:
+        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    # Get direct entities from architecture
+    direct_entities = arch.ents(False)
+
+    # Collect entities matching the kindstring, expanding containers as needed
+    matching_entities = set()
+    files_to_expand = set()
+    classes_to_expand = set()
+    packages_to_expand = set()
+
+    for ent in direct_entities:
+        if ent.kind().check(kindstring):
+            # Direct match
+            matching_entities.add(ent)
+        elif ent.kind().check("file ~unresolved ~unknown"):
+            files_to_expand.add(ent)
+        elif ent.kind().check("python package ~unknown"):
+            packages_to_expand.add(ent)
+        elif ent.kind().check("class ~unresolved, struct ~unresolved"):
+            classes_to_expand.add(ent)
+
+    # Expand Python packages to get their files
+    for pkg in packages_to_expand:
+        for ref in pkg.refs("python contain", "file ~unknown ~unresolved", True):
+            file_ent = ref.ent()
+            if file_ent.kind().check(kindstring):
+                matching_entities.add(file_ent)
+            else:
+                files_to_expand.add(file_ent)
+
+    # Expand files to find nested entities
+    for file_ent in files_to_expand:
+        for ref in file_ent.filerefs("define, declare", kindstring, True):
+            matching_entities.add(ref.ent())
+
+    # Expand classes to find nested entities (methods, nested classes)
+    for class_ent in classes_to_expand:
+        for ref in class_ent.refs("define, declare", kindstring, True):
+            matching_entities.add(ref.ent())
+
+    # Convert to list for processing
+    entities_list = list(matching_entities)
+
+    # If metric_id is provided, get metric values and sort/filter
+    if metric_id:
+        entity_metrics = []
+        for ent in entities_list:
+            try:
+                value = ent.metric(metric_id)
+                if value is not None:
+                    # Apply min/max filters
+                    if min_value is not None and value < min_value:
+                        continue
+                    if max_value is not None and value > max_value:
+                        continue
+                    entity_metrics.append((ent, value))
+            except:
+                continue
+
+        # Sort by metric value if order_by is specified
+        if order_by:
+            reverse = (order_by == "desc")
+            entity_metrics.sort(key=lambda x: x[1], reverse=reverse)
+
+        # Apply pagination
+        paginated, total_count, truncated, next_cursor = paginate_results(entity_metrics, max_results, cursor)
+
+        # Build results with metric values
+        results = []
+        for ent, value in paginated:
+            results.append({
+                "id": ent.id(),
+                "name": ent.name(),
+                "kind": ent.kind().name(),
+                "longname": ent.longname(),
+                "metric_value": value,
+            })
+
+        response = {
+            "entities": results,
+            "total_count": total_count,
+            "truncated": truncated,
+            "metric_id": metric_id,
+        }
+    else:
+        # No metric - just return entities
+        # Apply pagination
+        paginated, total_count, truncated, next_cursor = paginate_results(entities_list, max_results, cursor)
+
+        results = []
+        for ent in paginated:
+            results.append({
+                "id": ent.id(),
+                "name": ent.name(),
+                "kind": ent.kind().name(),
+                "longname": ent.longname(),
+            })
+
+        response = {
+            "entities": results,
+            "total_count": total_count,
+            "truncated": truncated,
+        }
+
+    if next_cursor:
+        response["next_cursor"] = next_cursor
+    return response
+
 
 @mcp.tool(name="get_architecture_children")
 def get_architecture_children(
