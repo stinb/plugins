@@ -260,6 +260,17 @@ def get_entity_source(
     if len(source_code) > max_length:
         source_code = source_code[:max_length]
         truncated = True
+        # Calculate actual end line after truncation
+        # Count complete lines only (number of newlines = complete lines when truncated mid-line)
+        complete_line_count = source_code.count('\n')
+        if complete_line_count > 0:
+            # Truncate to last complete line for clean continuation
+            last_newline = source_code.rfind('\n')
+            source_code = source_code[:last_newline]
+            actual_end_line = actual_start_line + complete_line_count - 1
+        else:
+            # Truncated within the first line - keep partial, report line 0 to signal re-fetch needed
+            actual_end_line = actual_start_line - 1
 
     return {
         "source": source_code,
@@ -267,7 +278,6 @@ def get_entity_source(
         "start_line": actual_start_line,
         "end_line": actual_end_line,
         "total_lines": total_lines,
-        "length": len(source_code),
     }
 
 @mcp.tool(name="get_entity_references_summary")
