@@ -1,0 +1,230 @@
+ERR1 = "All direct, non-static data members of a class should be initialized before the class object is accessible"
+
+
+def ids():
+    return ('MISRA23_15.1.4')
+
+
+def name(id):
+    return {
+        'MISRA23_15.1.4': """Published Standards/MISRA C++ 2023/15.1.4 \
+All direct, non-static data members of a class should be initialized before the class object is accessible""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_15.1.4': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Constructors',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_15.1.4': """
+<p><b>Amplification</b></p>
+<p>A class object is considered accessible:</p>
+<p>● At the top of the compound-statement that forms the constructor body;</p>
+<p>● For an aggregate, as soon as the object is created.</p>
+<p>A data member is initialized at the top of a constructor body if:</p>
+<p>● The constructor is a delegating constructor; or</p>
+<p>● The data member has a default member initializer; or</p>
+<p>● The data member appears in the constructor's member initialization list; or</p>
+<p>● The data member's type has a constructor.</p>
+<p>A data member of an aggregate is initialized if:</p>
+<p>● The data member has a default member initializer; or</p>
+<p>● The object's declaration has an initializer; or</p>
+<p>● The data member's type has a constructor.</p>
+<p>For the purposes of this rule, an implicitly or explicitly defaulted constructor is treated as if its
+synthesized body was user-written.</p>
+
+<p><b>Rationale</b></p>
+<p>A constructor should completely initialize its object. Explicit initialization reduces the risk of an invalid
+state existing after successful construction. Note — the initialization of base classes is covered by
+Rule 15.1.2.</p>
+<p>Each non-static data member should be initialized, preferably using a default member initializer, or
+else within a constructor member initialization list.</p>
+<p>Assigning to the variable in the constructor body is not sufficient, as requiring members to be initialized
+at the top of the constructor allows compliance checking for this rule to be made decidable.</p>
+<p>Note: compliance with this rule means that constructors will often have an empty body.</p>
+<p>For an aggregate, non-static data members can be initialized either by using default member
+initialization or aggregate initialization when declaring an object.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class PersonClass
+{
+public:
+    PersonClass( string const & name, int32_t age ) :
+    name { name }, age { age } // Compliant
+    {}
+    explicit PersonClass( int32_t age ) :
+    age { age } // Compliant - name is default constructed,
+    {} // and income initialized to 1000
+    explicit PersonClass( string const & name ) :
+    name { name } // Non-compliant - age not initialized
+    {
+    age = 18;
+    }
+    PersonClass() = default; // Non-compliant - age not initialized
+private:
+    string name;
+    int32_t age;
+    int32_t income = 1000;
+};
+
+class PersonAggregate
+{
+public:
+    string name;
+    int32_t age;
+    int32_t income { 1000 };
+};
+
+void f()
+{
+    PersonAggregate p1; // Non-compliant - age not initialized, even though
+        // name and income are initialized
+    PersonAggregate p2 {}; // Compliant - name is default constructed, and age is
+}       // initialized to 0, income to 1000
+
+class Building // Non-compliant - height not initialized in the
+{ // implicit default constructor
+private:
+    string name;
+public:
+    int32_t height;
+}
+
+class Base
+{
+    int32_t a;
+public:
+    explicit Base( int32_t a ) : // Compliant
+    a { a } { }
+};
+
+class Derived : public Base
+{
+    int32_t b;
+
+public:
+    Derived() : // Compliant
+    Base { 0 }, b {} {}
+    using Base::Base; // Non-compliant - b not initialized by the
+};
+</code></pre>
+
+<p><b>Developer's Note:</b></p>
+<p>Members whose types are standard library types are assumed to be default-initialized.</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_defconstructed(mem_ref):
+    mem_ent = mem_ref.ent()
+    utype = str(mem_ent.freetext("UnderlyingType"))
+
+    if (utype.startswith("std::")
+            or mem_ent.freetext("InitText")
+            or has_ctor(mem_ent)):
+        return True
+
+    for set_ref in mem_ent.refs("Setby Init"):
+        if (set_ref.line() == mem_ref.line()
+                and set_ref.column() == mem_ref.column()):
+            return True
+
+    return False
+
+
+def has_ctor(ent):
+    type_ent, _ = get_ent_type(ent)
+
+    if type_ent and str(type_ent.longname()).startswith("std::"):
+        return True
+    elif type_ent:
+        for func_ref in type_ent.refs("Define, Declare", "Member Function", True):
+            if func_ref.ent().name() == type_ent.name():
+                return True
+
+    return False
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class Type, Struct Type", True):
+        uninit_membs = []
+        base = []
+        has_ctor = False
+
+        for mem_ref in class_ref.ent().refs("Define, Declare", "~Static Member Object", True):
+            if is_defconstructed(mem_ref):
+                continue
+
+            uninit_membs.append(mem_ref.ent().id())
+
+        for func_ref in class_ref.ent().refs("Define, Declare ~Implicit ~Delete", "Member Function", True):
+            if func_ref.ent().name() != class_ref.ent().name():
+                continue
+
+            has_ctor = True
+            init_membs = []
+
+            for setby_ref in func_ref.ent().refs("Set Init"):
+                init_membs.append(setby_ref.ent().id())
+
+            if any(uninit not in init_membs for uninit in uninit_membs):
+                check.violation(func_ref.ent(), func_ref.file(),
+                                func_ref.line(), func_ref.column(), ERR1)
+
+        # aggregate
+        if not has_ctor and uninit_membs and not class_ref.ent().ref("", "Private, Protected, Virtual"):
+            for func_ref in class_ref.ent().refs("Declare", "Implicit Function"):
+                if func_ref.ent().name() == class_ref.ent().name() and not func_ref.ent().parameters():
+                    for call_ref in func_ref.ent().refs("Callby Implicit"):
+                        check.violation(call_ref.scope(), call_ref.file(
+                        ), call_ref.line(), call_ref.column(), ERR1)
+        elif not has_ctor and uninit_membs:
+            check.violation(class_ref.ent(), file,
+                            class_ref.line(), class_ref.column(), ERR1)
+
+        for base_ref in class_ref.ent().refs("Base"):
+            base.append(base_ref.ent().name())
+
+        if not base:
+            continue
+
+        for using_ref in class_ref.ent().refs("Declare Using", "Function Explicit"):
+            if using_ref.ent().name() in base and uninit_membs:
+                check.violation(using_ref.ent(), using_ref.file(),
+                                using_ref.line(), using_ref.column(), ERR1)
