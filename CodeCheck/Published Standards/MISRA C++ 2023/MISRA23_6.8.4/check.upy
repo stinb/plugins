@@ -183,6 +183,17 @@ def is_overloaded(func_ref):
     return False
 
 
+def is_accessed(lex):
+    if lex.next(True, True).text() == "[":
+        while lex.text() != "]":
+            lex = lex.next(True, True)
+
+    if lex.next().text() in [".", "->"]:
+        return False
+
+    return True
+
+
 def check(check, file):
     for class_ref in file.filerefs("Define", "Class Type, Struct Type"):
         mem_ents = []
@@ -194,7 +205,9 @@ def check(check, file):
             mem_ents.append(mem_ref.ent().id())
 
         for func_ref in class_ref.ent().refs("Define, Declare ~Implicit", "Member Function", True):
-            if not is_reforptr(func_ref.ent()) or str(func_ref.ent().name()).startswith("operator"):
+            if (func_ref.ent().freetext("DefinedInMacro")
+                    or not is_reforptr(func_ref.ent())
+                    or str(func_ref.ent().name()).startswith("operator")):
                 continue
 
             func_cfg = func_ref.ent().control_flow_graph()
@@ -208,12 +221,21 @@ def check(check, file):
                 if node.kind() == "return":
                     start_line = node.line_begin()
                     start_column = node.column_begin()
+                    on_param = 0
 
-                    lex = file.lexer().lexeme(start_line, start_column)
+                    lex = func_ref.file().lexer().lexeme(start_line, start_column)
 
                     while lex and lex.text() != ";":
-                        if ((lex.ent() and lex.ent().id() in mem_ents)
-                                or lex.text() == "this"):
+                        if (lex.text() == "("
+                                and lex.previous().ent()
+                                and lex.previous().ent().kind().check("Function")):
+                            on_param += 1
+                        elif on_param and lex.text() == "(":
+                            on_param += 1
+                        elif on_param and lex.text() == ")":
+                            on_param -= 1
+                        elif not on_param and ((lex.ent() and lex.ent().id() in mem_ents)
+                                               or lex.text() == "this") and is_accessed(lex):
 
                             if not is_qualified(func_ref):
                                 check.violation(func_ref.ent(), func_ref.file(), func_ref.line(),
