@@ -1,0 +1,173 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2026-01-22
+
+
+import re
+
+from understand import Check
+
+
+ERR1 = 'Identifier reused in multiple C name spaces'
+
+
+def ids():
+    return ('MISRA04_5.6', 'CPP_I015')
+
+
+def name(id):
+    return {
+        'MISRA04_5.6': '''Published Standards/MISRA-C 2004/\
+5.6 Identifier Reuse in Multiple C Name Spaces''',
+        'CPP_I015': '''All Checks/Language Specific/C and C++/Identifiers/\
+Identifier Reuse in Multiple C Name Spaces''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA04_5.6': [
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2004',
+            'Category: Advisory',
+        ],
+        'CPP_I015': [
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>No identifier in one name space should have the same spelling as an identifier in another name space, with the exception of structure member and union member names.</p>
+
+<p><b>Description</b></p>
+
+<p>Name space and scope are different. This rule is not concerned with scope. For example, ISO C allows the same identifier (<code>vector</code>) for both a tag and a <i>typedef</i> at the same scope.</p>
+
+<pre><code language="C++">\
+typedef struct vector { uint16_t x ; uint16_t y; uint16_t z; } vector;
+/* Rule violation ^^                                             ^^ */\
+</code></pre>
+
+<p>ISO C defines a number of different name spaces (see ISO/IEC 9899:1990 6.1.2.3 [2]). It is technically possible to use the same name in separate name spaces to represent completely different items. However this practice is deprecated because of the confusion it can cause, and so names should not be reused, even in separate name spaces.</p>
+
+<p>The example below illustrates a violation of this rule in which <code>value</code> is inadvertently used instead of <code>record.value</code>:</p>
+
+<pre><code language="C++">\
+struct { int16_t key; int16_t value; } record;
+int16_t value;  /* Rule violation - second use of value */
+
+record.key = 1;
+value = 0;      /* should have been record.value */\
+</code></pre>
+
+<p>By contrast, the example below does not violate the rule because two member names are less likely to be confused:</p>
+
+<pre><code language="C++">\
+struct device_q { struct device_q *next;   /* ... */ }
+devices[N_DEVICES];
+struct task_q { struct task_q *next;      /* ... */ }
+tasks[N_TASKS];
+
+devices[0].next = &devices[1];
+tasks[0].next   = &tasks[1];\
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return False
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check: Check):
+    db = check.db()
+
+    label_ids: set[int] = set()
+    label_names: set[str] = set()
+    label_flags: set[str] = set()
+
+    tag_ids: set[int] = set()
+    tag_names: set[str] = set()
+    tag_flags: set[str] = set()
+
+    member_ids: set[int] = set()
+    member_names: set[str] = set()
+    member_flags: set[str] = set()
+
+    identifier_ids: set[int] = set()
+    identifier_names: set[str] = set()
+    identifier_flags: set[str] = set()
+
+    for ent in db.ents('C ~Macro ~Unknown ~Unresolved ~Unnamed'):
+        name = ent.name()
+        if name == '[unnamed]':
+            continue
+
+        kind = ent.kind()
+        if kind.check('Label'):
+            label_ids.add(ent.id())
+            label_names.add(name)
+            continue
+
+        if kind.check('Class, Enum, Struct, Union'):
+            tag_ids.add(ent.id())
+            tag_names.add(name)
+            continue
+
+        parent = ent.parent()
+        if parent and parent.kind().check('Class, Struct, Union'):
+            member_ids.add(ent.id())
+            member_names.add(name)
+            continue
+
+        identifier_ids.add(ent.id())
+        identifier_names.add(name)
+
+    for file in check.files():
+        if file.language() != 'C++':
+            continue
+
+        for ref in file.filerefs('Define', '~Macro ~Lambda ~Unnamed'):
+            ent = ref.ent()
+
+            name = ent.name()
+            if name == '[unnamed]':
+                continue
+
+            ent_id = ent.id()
+
+            reused = False
+            if ent_id in label_ids:
+                if name not in label_flags:
+                    reused = name in tag_names or name in member_names or name in identifier_names
+                    label_flags.add(name)
+            elif ent_id in tag_ids:
+                if name not in tag_flags:
+                    reused = name in label_names or name in member_names or name in identifier_names
+                    tag_flags.add(name)
+            elif ent_id in member_ids:
+                if name not in member_flags:
+                    reused = name in label_names or name in tag_names or name in identifier_names
+                    member_flags.add(name)
+            elif ent_id in identifier_ids:
+                if name not in identifier_flags:
+                    reused = name in label_names or name in tag_names or name in member_names
+                    identifier_flags.add(name)
+
+            if reused:
+                check.violation(ent, file, ref.line(), ref.column(), ERR1)
