@@ -21,7 +21,7 @@ uint16_t lookup ( uint16_t v )
 {
   if ( ( v < V_MIN ) || ( v > V_MAX ) )
   {
-    return; // UndCC_FalseNeg - no value returned. Constraint in C99
+    return; // UndCC_Violation - no value returned. Constraint in C99
   }
   return table[ v ];
 }
