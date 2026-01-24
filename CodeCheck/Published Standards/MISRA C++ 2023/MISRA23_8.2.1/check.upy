@@ -1,0 +1,109 @@
+ERR1 = "A virtual base class shall only be cast to a derived class by means of dynamic_cast"
+
+
+def ids():
+    return ('MISRA23_8.2.1')
+
+
+def name(id):
+    return {
+        'MISRA23_8.2.1': """Published Standards/MISRA C++ 2023/8.2.1 \
+A virtual base class shall only be cast to a derived class by means of dynamic_cast""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_8.2.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_8.2.1': """
+<p><b>Amplification</b></p>
+<p>This rule applies to both pointer and reference casts.</p>
+
+<p><b>Rationale</b></p>
+<p>The behaviour when casting from a virtual base class to a derived class is only well defined when
+dynamic_cast is used, whilst the use of the other casts can result in undefined behaviour. Since
+C++17, a static_cast from a virtual base class is now ill-formed, but some compilers may not yet
+issue a diagnostic. This rule ensures that all cases are detected.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class B { };
+class D: public virtual B { };
+
+D d;
+B * pB = &d;
+D * pD1 = reinterpret_cast&lt; D * &gt;( pB ); // Non-compliant
+D * pD2 = dynamic_cast&lt; D * &gt;( pB ); // Compliant - pD2 may be null
+D & D3 = dynamic_cast&lt; D & &gt;( *pB ); // Compliant - may throw an exception</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define, Declare", "Class Type, Struct Type", True):
+        vbase = []
+
+        for base_ref in class_ref.ent().refs("Virtual Base"):
+            vbase.append(base_ref.ent().id())
+
+        if not vbase:
+            continue
+
+        for typed_ref in class_ref.ent().refs("Typedby", "Object"):
+            for ass_ref in typed_ref.ent().refs("Assign Ptr, Assign Ref, Deref Assign Value"):
+                ent_type, _ = get_ent_type(ass_ref.ent())
+
+                if not ent_type or (ent_type and ent_type.id() not in vbase):
+                    continue
+
+                lex = ass_ref.file().lexer().lexeme(ass_ref.line(), ass_ref.column())
+                compliant = False
+
+                while lex and lex.text() != "=" and lex.line_begin() == ass_ref.line():
+                    if lex.text() == "dynamic_cast" and lex.token() == "Keyword":
+                        compliant = True
+                        break
+                    elif "cast" in lex.text() and lex.token() == "Keyword":
+                        break
+
+                    lex = lex.previous(True, True)
+
+                if not compliant:
+                    check.violation(ass_ref.ent(), ass_ref.file(),
+                                    ass_ref.line(), ass_ref.column(), ERR1)
