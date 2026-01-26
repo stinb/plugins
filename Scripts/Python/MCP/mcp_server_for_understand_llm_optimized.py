@@ -2,6 +2,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 from typing import Annotated, List, Literal, Optional, Union
 from pydantic import Field
@@ -69,6 +70,84 @@ def paginate_results(items: list, max_results: int, cursor: Optional[str]) -> tu
     next_cursor = encode_cursor(next_offset) if truncated else None
 
     return paginated, total_count, truncated, next_cursor
+
+def filter_entities_by_name_pattern(entities, name_pattern: Optional[str]):
+    """
+    Filter entities by name pattern (simple substring matching, case-insensitive).
+
+    Args:
+        entities: List, set, or iterator of entities
+        name_pattern: Substring to search for (case-insensitive). If None, returns all entities.
+
+    Returns:
+        Filtered list of entities
+    """
+    if not name_pattern:
+        return list(entities) if not isinstance(entities, list) else entities
+
+    pattern_lower = name_pattern.lower()
+    if isinstance(entities, (set, tuple)):
+        return [ent for ent in entities if pattern_lower in ent.name().lower()]
+    else:
+        # Handle both lists and iterators
+        return [ent for ent in entities if pattern_lower in ent.name().lower()]
+
+def expand_containers_in_architecture(arch: understand.Arch, kindstring: str, recursive: bool) -> set:
+    """
+    Expand containers (files, classes, packages) in an architecture to find entities matching kindstring.
+
+    This function finds entities that are logically within an architecture by expanding container
+    entities to find nested entities. For example, if an architecture contains files, this will
+    find functions, classes, and other entities defined within those files.
+
+    Args:
+        arch: The architecture to search within
+        kindstring: Entity kind to find (e.g., 'Function', 'Class', 'Method')
+        recursive: If True, includes entities from child architectures
+
+    Returns:
+        Set of entities matching the kindstring, including those found through container expansion
+    """
+    # Get direct entities from architecture
+    direct_entities = arch.ents(recursive)
+
+    # Collect entities matching the kindstring, expanding containers as needed
+    matching_entities = set()
+    files_to_expand = set()
+    classes_to_expand = set()
+    packages_to_expand = set()
+
+    for ent in direct_entities:
+        if ent.kind().check(kindstring):
+            # Direct match
+            matching_entities.add(ent)
+        elif ent.kind().check("file ~unresolved ~unknown"):
+            files_to_expand.add(ent)
+        elif ent.kind().check("python package ~unknown"):
+            packages_to_expand.add(ent)
+        elif ent.kind().check("class ~unresolved, struct ~unresolved"):
+            classes_to_expand.add(ent)
+
+    # Expand Python packages to get their files
+    for pkg in packages_to_expand:
+        for ref in pkg.refs("python contain", "file ~unknown ~unresolved", True):
+            file_ent = ref.ent()
+            if file_ent.kind().check(kindstring):
+                matching_entities.add(file_ent)
+            else:
+                files_to_expand.add(file_ent)
+
+    # Expand files to find nested entities
+    for file_ent in files_to_expand:
+        for ref in file_ent.filerefs("define, declare", kindstring, True):
+            matching_entities.add(ref.ent())
+
+    # Expand classes to find nested entities (methods, nested classes)
+    for class_ent in classes_to_expand:
+        for ref in class_ent.refs("define, declare", kindstring, True):
+            matching_entities.add(ref.ent())
+
+    return matching_entities
 
 @mcp.tool(name="lookup_entity_id")
 def lookup_entity_id(
@@ -522,10 +601,6 @@ def list_metrics_summary(
     all known metrics. Metric values can be calculated even if metrics are disabled (see get_entity_metrics),
     but enabling metrics controls their visibility in Understand's UI. If a metric you need isn't listed,
     try include_disabled=True or recommend the user enable it.
-
-    Documentation:
-    - Built-in metrics: https://docs.scitools.com/metrics/dist/index.html
-    - Custom metric plugins: https://support.scitools.com/support/solutions/articles/70000656986-creating-custom-metrics
     """
     database = require_db()
 
@@ -586,10 +661,6 @@ def get_metric_details(
     Note: If a metric ID is not found, it may be disabled. Metric values can still be calculated
     even if metrics are disabled (see get_entity_metrics), but you may want to recommend the user
     enable the metric for better visibility in Understand's UI.
-
-    Documentation:
-    - Built-in metrics: https://docs.scitools.com/metrics/dist/index.html
-    - Custom metric plugins: https://support.scitools.com/support/solutions/articles/70000656986-creating-custom-metrics
     """
     results = []
 
@@ -641,10 +712,6 @@ def get_entity_metrics(
     Enabling metrics controls visibility in Understand's UI, but doesn't affect whether values
     can be retrieved via the API. If a metric ID isn't found in list_metrics_summary, you can
     still try to get its value here if you know the metric ID.
-
-    Documentation:
-    - Built-in metrics: https://docs.scitools.com/metrics/dist/index.html
-    - Custom metric plugins: https://support.scitools.com/support/solutions/articles/70000656986-creating-custom-metrics
     """
     ent = require_db().ent_from_id(ent_id)
     if ent is None:
@@ -757,27 +824,31 @@ def get_project_overview() -> dict:
 @mcp.tool(name="find_entities_by_metric")
 def find_entities_by_metric(
     metric_id: Annotated[str, Field(description="The metric ID to filter by (e.g., 'Cyclomatic', 'CountLine', 'MaxNesting').")],
+    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide. If provided, filters to entities within that architecture (expanding containers to find nested entities). Use list_architectures_summary to discover available architectures.")] = None,
     kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class').")] = None,
     min_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional minimum metric value. Entities with metric values >= min_value will be returned.")] = None,
     max_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional maximum metric value. Entities with metric values <= max_value will be returned.")] = None,
     order_by: Annotated[Literal["asc", "desc"], Field(description="Sort order: 'desc' for highest values first, 'asc' for lowest values first.")] = "desc",
+    name_pattern: Annotated[Optional[str], Field(description="Optional name pattern to filter entities. Only entities whose names contain this substring (case-insensitive) are included. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'.")] = None,
     max_results: Annotated[int, Field(description="Maximum number of results to return. Default is 10 to keep responses concise.", ge=1, le=200)] = 10,
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
-    Find entities in the entire project filtered and sorted by metric values.
+    Find entities filtered and sorted by metric values. Can search project-wide or within a specific architecture.
 
     Returns: list of entities with their metric values, sorted by the metric.
 
-    Use this for project-wide queries like:
-    - "What are the key functions in the project?" → metric_id="Cyclomatic", order_by="desc"
-    - "What are the largest files?" → metric_id="CountLine", kindstring="File"
+    Use this for:
+    - Project-wide queries: "What are the key functions in the project?" → metric_id="Cyclomatic", order_by="desc", arch_name=None
+    - Architecture-scoped queries: "What are the key functions in src/?" → metric_id="Cyclomatic", order_by="desc", arch_name="Directory Structure/src"
+    - Combined filters: "What are the most complex parser functions in src/?" → metric_id="Cyclomatic", kindstring="Function", name_pattern="parser", arch_name="Directory Structure/src"
 
-    For scoped queries like "key functions in src/", use find_entities_in_architecture_scope instead.
+    If arch_name is provided, filters to entities within that architecture (expanding containers like files/classes to find nested entities like functions/methods).
+    If arch_name is None (default), searches project-wide.
 
     Workflow:
     1. list_metrics_summary(kindstring="Function") → discover relevant metrics
-    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function") → find top entities
+    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", arch_name="Directory Structure/src") → find top entities in architecture
     3. get_entity_details(ent_id) → get details about specific entities
     """
     # Coerce parameters to correct types (handle string inputs from LLMs)
@@ -788,11 +859,29 @@ def find_entities_by_metric(
 
     database = require_db()
 
-    # Get entities of specified kind
-    if kindstring:
-        entities = database.ents(kindstring)
+    # Get entities (project-wide or architecture-scoped)
+    if arch_name:
+        # Architecture-scoped: use expand_containers_in_architecture to find nested entities
+        arch = database.lookup_arch(arch_name)
+        if arch is None:
+            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+        if kindstring:
+            # Use expansion for nested entities (like find_entities_in_architecture_scope)
+            matching_entities = expand_containers_in_architecture(arch, kindstring, False)
+            entities = list(matching_entities)
+        else:
+            # No kind filter: get all entities from architecture (direct members only)
+            entities = list(arch.ents(False))
     else:
-        entities = database.ents()
+        # Project-wide: use existing logic
+        if kindstring:
+            entities = database.ents(kindstring)
+        else:
+            entities = database.ents()
+
+    # Filter by name pattern early (before expensive metric operations)
+    entities = filter_entities_by_name_pattern(entities, name_pattern)
 
     # Get metric values for all entities
     entity_metrics = []
@@ -854,11 +943,6 @@ def get_project_violations_summary() -> dict:
     If only UND_ERROR and UND_WARNING violations exist, or no violations at all, the user may need to:
     - Run CodeCheck with specific coding standards (MISRA, CERT, etc.) enabled
     - Import violations from other static analysis tools via SARIF format
-
-    For CodeCheck standards and instructions, see: https://docs.scitools.com and
-    https://support.scitools.com/support/solutions/articles/70000583282-codecheck-overview
-
-    For importing SARIF files, see: https://support.scitools.com/support/solutions/articles/70000641310-importing-sarif-files-in-understand
     """
     database = require_db()
 
@@ -1039,30 +1123,42 @@ def get_project_metrics(
         "count": len(results),
     }
 
-@mcp.tool(name="list_entities_by_kind")
-def list_entities_by_kind(
-    kindstring: Annotated[str, Field(description="Entity kind filter string (e.g., 'Function', 'File', 'Class', 'Method').")],
+@mcp.tool(name="list_entities")
+def list_entities(
+    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures.")] = None,
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class', 'Method'). If provided and arch_name is provided, expands containers to find nested entities. If not provided and arch_name is provided, returns direct members only (no expansion).")] = None,
+    name_pattern: Annotated[Optional[str], Field(description="Optional name pattern to filter entities. Only entities whose names contain this substring (case-insensitive) are included. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'.")] = None,
     max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20 to keep responses concise.", ge=1, le=500)] = 20,
     compact: Annotated[bool, Field(description="If True (default), returns id, name, kind only. If False, includes longname.")] = True,
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
-    List all entities of a specific kind in the entire project.
+    List entities. Can search project-wide or within a specific architecture, with optional filtering by kind and name pattern.
 
     Returns: list of entities with id, name, kind, and basic info.
 
-    Use this for project-wide listing:
-    - Get all functions in the project
-    - Get all classes to understand project structure
-    - Get all files for file-level analysis
+    Use this for:
+    - Project-wide listing: "List all functions" → kindstring="Function"
+    - Project-wide listing: "List all entities" → (no filters)
+    - Architecture-scoped listing (direct members): "List files in src/" → arch_name="Directory Structure/src" (no kindstring = direct members only)
+    - Architecture-scoped listing (expanded): "List functions in src/" → kindstring="Function", arch_name="Directory Structure/src" (kindstring = expands to find nested entities)
+    - Combined filters: "List parser functions in src/" → kindstring="Function", name_pattern="parser", arch_name="Directory Structure/src"
 
-    For scoped queries like "functions in src/", use find_entities_in_architecture_scope instead.
+    Behavior when arch_name is provided:
+    - If kindstring is provided: Expands containers (files/classes) to find nested entities (functions/methods)
+    - If kindstring is not provided: Returns direct members only (no expansion)
+
+    Behavior when arch_name is not provided:
+    - If kindstring is provided: Filters to entities of that kind project-wide
+    - If kindstring is not provided: Returns all entities project-wide
+
     For finding entities by metric values (e.g., "most complex functions"), use find_entities_by_metric instead.
 
     Workflow:
-    1. list_entities_by_kind(kindstring="Function") → get all functions
-    2. get_entity_details(ent_id) → get details about specific entities
-    3. get_entity_source(ent_id) → read source code
+    1. list_entities(kindstring="Function", arch_name="Directory Structure/src") → get functions in src/ (expanded)
+    2. list_entities(arch_name="Directory Structure/src") → get files in src/ (direct members only)
+    3. get_entity_details(ent_id) → get details about specific entities
+    4. get_entity_source(ent_id) → read source code
 
     Returns minimal info (id, name, kind) to keep response concise. Use get_entity_details for more info.
     Supports pagination: use next_cursor from response to get more results.
@@ -1071,8 +1167,29 @@ def list_entities_by_kind(
     """
     database = require_db()
 
-    # Get entities of specified kind
-    entities = database.ents(kindstring)
+    # Get entities (project-wide or architecture-scoped)
+    if arch_name:
+        # Architecture-scoped
+        arch = database.lookup_arch(arch_name)
+        if arch is None:
+            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+        if kindstring:
+            # Expand containers to find nested entities (e.g., functions inside files)
+            matching_entities = expand_containers_in_architecture(arch, kindstring, False)
+            entities = list(matching_entities)
+        else:
+            # Direct members only (no expansion)
+            entities = list(arch.ents(False))
+    else:
+        # Project-wide
+        if kindstring:
+            entities = database.ents(kindstring)
+        else:
+            entities = database.ents()
+
+    # Filter by name pattern early
+    entities = filter_entities_by_name_pattern(entities, name_pattern)
 
     # Apply pagination
     paginated_entities, total_count, truncated, next_cursor = paginate_results(entities, max_results, cursor)
@@ -1093,8 +1210,9 @@ def list_entities_by_kind(
         "entities": results,
         "total_count": total_count,
         "truncated": truncated,
-        "kind": kindstring,
     }
+    if kindstring:
+        response["kind"] = kindstring
     if next_cursor:
         response["next_cursor"] = next_cursor
     return response
@@ -1116,7 +1234,7 @@ def list_architectures_summary() -> dict:
     Workflow:
     1. list_architectures_summary() → discover available architectures
     2. get_architecture_details(arch_name) → get hierarchy and entity information
-    3. get_entities_in_architecture(arch_name) → explore files/entities in an architecture
+    3. list_entities(arch_name=arch_name) → explore files/entities in an architecture (direct members only)
     """
     database = require_db()
 
@@ -1143,7 +1261,7 @@ def directory_to_architecture(
     Example:
     - directory_to_architecture("/project/src/utils") → {"arch_longname": "Directory Structure/src/utils"}
 
-    After getting the longname, use get_architecture_details or get_entities_in_architecture to explore.
+    After getting the longname, use get_architecture_details or list_entities to explore.
     """
     database = require_db()
 
@@ -1174,7 +1292,7 @@ def get_architecture_details(
 
     Note: entity_counts_by_kind shows only direct members. For Directory Structure, this means
     files only (not functions inside those files). To find nested entities like functions within
-    a folder, use find_entities_in_architecture_scope.
+    a folder, use list_entities with kindstring parameter and arch_name, or use find_entities_by_metric with arch_name parameter.
 
     Use this to understand the structure and contents of an architecture:
     - See how many child architectures exist
@@ -1184,11 +1302,12 @@ def get_architecture_details(
     1. list_architectures_summary() → discover root architectures
     2. get_architecture_details(arch_name) → see child count and entity breakdown
     3. get_architecture_children(arch_name) → navigate deeper into hierarchy
-    4. get_entities_in_architecture(arch_name) → get direct members
+    4. list_entities(arch_name=arch_name) → get direct members (no kindstring = direct members only)
 
     Workflow for "key functions in src/":
     1. get_architecture_details("Directory Structure/src") → see it contains files
-    2. find_entities_in_architecture_scope("Directory Structure/src", kindstring="Function", metric_id="Cyclomatic") → find functions
+    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", arch_name="Directory Structure/src") → find functions by metric
+    3. list_entities(kindstring="Function", arch_name="Directory Structure/src") → list functions (expanded)
 
     Note: The longname format is "parent/child" or just "name" for root architectures.
     """
@@ -1263,222 +1382,6 @@ def get_architectures_for_entity(
         "count": len(architectures),
     }
 
-@mcp.tool(name="get_entities_in_architecture")
-def get_entities_in_architecture(
-    arch_name: Annotated[str, Field(description="Longname of the architecture to get entities from. Use list_architectures_summary to discover root architecture names.")],
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class') to filter entities by kind.")] = None,
-    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20.", ge=1, le=500)] = 20,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
-) -> dict:
-    """
-    Get direct members of an architecture (no expansion of containers).
-
-    Returns: list of entities with id, name, kind, and longname.
-
-    Returns only entities directly assigned to the architecture:
-    - Directory Structure architectures contain files (not the functions inside them)
-    - User-created architectures contain whatever entities the user assigned
-
-    Use this to see what's directly in an architecture:
-    - List files in a folder (Directory Structure)
-    - See entities in a user-created grouping (e.g., "Security Critical" architecture)
-    - Find files by metadata (Calendar, Git Author architectures)
-
-    For finding nested entities like "functions in a folder", use find_entities_in_architecture_scope
-    instead, which expands files/classes to find contained entities.
-
-    Workflow for exploring architectures:
-    1. list_architectures_summary() → discover root architectures
-    2. get_architecture_children(arch_name) → navigate to specific folder
-    3. get_entities_in_architecture(arch_name) → see files/entities in that folder
-    4. get_entity_details(ent_id) or get_entity_source(ent_id) → examine specific entities
-
-    Supports pagination: use next_cursor from response to get more results.
-    """
-    database = require_db()
-
-    arch = database.lookup_arch(arch_name)
-    if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
-
-    entities = arch.ents(False)
-
-    # Filter by kind if specified
-    if kindstring:
-        entities = [ent for ent in entities if ent.kind().check(kindstring)]
-
-    # Apply pagination
-    paginated_entities, total_count, truncated, next_cursor = paginate_results(entities, max_results, cursor)
-
-    results = []
-    for ent in paginated_entities:
-        results.append({
-            "id": ent.id(),
-            "name": ent.name(),
-            "kind": ent.kind().name(),
-            "longname": ent.longname(),
-        })
-
-    response = {
-        "entities": results,
-        "total_count": total_count,
-        "truncated": truncated,
-    }
-    if next_cursor:
-        response["next_cursor"] = next_cursor
-    return response
-
-@mcp.tool(name="find_entities_in_architecture_scope")
-def find_entities_in_architecture_scope(
-    arch_name: Annotated[str, Field(description="Longname of the architecture to search within.")],
-    kindstring: Annotated[str, Field(description="Entity kind to find (e.g., 'Function', 'Class', 'Method'). Required.")],
-    metric_id: Annotated[Optional[str], Field(description="Optional metric ID to sort/filter by (e.g., 'Cyclomatic', 'CountLine').")] = None,
-    min_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional minimum metric value filter.")] = None,
-    max_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional maximum metric value filter.")] = None,
-    order_by: Annotated[Optional[Literal["asc", "desc"]], Field(description="Sort order when metric_id is provided: 'desc' for highest first, 'asc' for lowest first.")] = None,
-    max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20.", ge=1, le=500)] = 20,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
-) -> dict:
-    """
-    Find entities within an architecture's logical scope, expanding containers as needed.
-
-    Unlike get_entities_in_architecture (which returns direct members only), this tool
-    finds entities that are *logically within* an architecture by expanding container
-    entities (files, classes, packages) to find nested entities (functions, methods).
-
-    Use this to answer questions like:
-    - "What are the most complex functions in the src folder?" → metric_id="Cyclomatic", order_by="desc"
-    - "What classes are in the utils directory?" → kindstring="Class"
-    - "Find the largest methods in this module" → kindstring="Method", metric_id="CountLine"
-
-    For architectures that directly contain the target kind (e.g., a user-created
-    "Key Functions" architecture), this behaves like get_entities_in_architecture.
-
-    Workflow:
-    1. get_architecture_details(arch_name) → see what's in the architecture
-    2. find_entities_in_architecture_scope(arch_name, kindstring="Function", metric_id="Cyclomatic") → find key functions
-    3. get_entity_details(ent_id) → get details about specific entities
-    """
-    # Coerce parameters to correct types (handle string inputs from LLMs)
-    if min_value is not None:
-        min_value = float(min_value)
-    if max_value is not None:
-        max_value = float(max_value)
-
-    database = require_db()
-
-    arch = database.lookup_arch(arch_name)
-    if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
-
-    # Get direct entities from architecture
-    direct_entities = arch.ents(False)
-
-    # Collect entities matching the kindstring, expanding containers as needed
-    matching_entities = set()
-    files_to_expand = set()
-    classes_to_expand = set()
-    packages_to_expand = set()
-
-    for ent in direct_entities:
-        if ent.kind().check(kindstring):
-            # Direct match
-            matching_entities.add(ent)
-        elif ent.kind().check("file ~unresolved ~unknown"):
-            files_to_expand.add(ent)
-        elif ent.kind().check("python package ~unknown"):
-            packages_to_expand.add(ent)
-        elif ent.kind().check("class ~unresolved, struct ~unresolved"):
-            classes_to_expand.add(ent)
-
-    # Expand Python packages to get their files
-    for pkg in packages_to_expand:
-        for ref in pkg.refs("python contain", "file ~unknown ~unresolved", True):
-            file_ent = ref.ent()
-            if file_ent.kind().check(kindstring):
-                matching_entities.add(file_ent)
-            else:
-                files_to_expand.add(file_ent)
-
-    # Expand files to find nested entities
-    for file_ent in files_to_expand:
-        for ref in file_ent.filerefs("define, declare", kindstring, True):
-            matching_entities.add(ref.ent())
-
-    # Expand classes to find nested entities (methods, nested classes)
-    for class_ent in classes_to_expand:
-        for ref in class_ent.refs("define, declare", kindstring, True):
-            matching_entities.add(ref.ent())
-
-    # Convert to list for processing
-    entities_list = list(matching_entities)
-
-    # If metric_id is provided, get metric values and sort/filter
-    if metric_id:
-        entity_metrics = []
-        for ent in entities_list:
-            try:
-                value = ent.metric(metric_id)
-                if value is not None:
-                    # Apply min/max filters
-                    if min_value is not None and value < min_value:
-                        continue
-                    if max_value is not None and value > max_value:
-                        continue
-                    entity_metrics.append((ent, value))
-            except:
-                continue
-
-        # Sort by metric value if order_by is specified
-        if order_by:
-            reverse = (order_by == "desc")
-            entity_metrics.sort(key=lambda x: x[1], reverse=reverse)
-
-        # Apply pagination
-        paginated, total_count, truncated, next_cursor = paginate_results(entity_metrics, max_results, cursor)
-
-        # Build results with metric values
-        results = []
-        for ent, value in paginated:
-            results.append({
-                "id": ent.id(),
-                "name": ent.name(),
-                "kind": ent.kind().name(),
-                "longname": ent.longname(),
-                "metric_value": value,
-            })
-
-        response = {
-            "entities": results,
-            "total_count": total_count,
-            "truncated": truncated,
-            "metric_id": metric_id,
-        }
-    else:
-        # No metric - just return entities
-        # Apply pagination
-        paginated, total_count, truncated, next_cursor = paginate_results(entities_list, max_results, cursor)
-
-        results = []
-        for ent in paginated:
-            results.append({
-                "id": ent.id(),
-                "name": ent.name(),
-                "kind": ent.kind().name(),
-                "longname": ent.longname(),
-            })
-
-        response = {
-            "entities": results,
-            "total_count": total_count,
-            "truncated": truncated,
-        }
-
-    if next_cursor:
-        response["next_cursor"] = next_cursor
-    return response
-
-
 @mcp.tool(name="get_architecture_children")
 def get_architecture_children(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get children for. Use list_architectures_summary to discover root architecture names.")],
@@ -1500,7 +1403,7 @@ def get_architecture_children(
     1. get_architecture_details(arch_name="Directory Structure") → see it has children
     2. get_architecture_children(arch_name="Directory Structure") → get child names like ["src", "tests"]
     3. get_architecture_details(arch_name="Directory Structure/src") → details for "src" child
-    4. get_entities_in_architecture(arch_name="Directory Structure/src") → files in that folder
+    4. list_entities(arch_name="Directory Structure/src") → files in that folder (direct members only)
 
     Supports pagination: use next_cursor from response to get more results.
     """
@@ -1618,6 +1521,480 @@ def get_architecture_metrics(
         "metrics": results,
         "count": len(results),
         "architecture": arch.longname(),
+    }
+
+@mcp.tool(name="get_architecture_intersection")
+def get_architecture_intersection(
+    source_arch_name: Annotated[str, Field(description="Longname of the source architecture to get entities from (e.g., 'Git Owner/Jason Haslam', 'Key Functions').")],
+    group_by_arch_name: Annotated[str, Field(description="Longname of the architecture to group entities by (e.g., 'Directory Structure', 'Git Owner'). Defaults to 'Directory Structure' if not specified.", default="Directory Structure")] = "Directory Structure",
+    recursive: Annotated[bool, Field(description="If True, includes entities from child architectures of source_arch_name and groups by all children (recursive) of group_by_arch_name. If False, only direct entities and direct children. Default is True.", default=True)] = True,
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class') to filter entities before grouping. If provided, automatically expands containers in source_arch to find nested entities matching the kindstring.")] = None,
+    max_results: Annotated[int, Field(description="Maximum number of groups to return. Groups are sorted by count (descending). Default is 50.", ge=1, le=500, default=50)] = 50,
+    compact: Annotated[bool, Field(description="If True (default), returns only group_name, count, and percentage. If False, includes sample_entities for each group.")] = True,
+) -> dict:
+    """
+    Get entity counts grouped by intersecting two architectures.
+
+    Finds entities in source_arch_name and groups them by which child of group_by_arch_name
+    they belong to. Useful for path-based analysis, contributor analysis, and cross-architecture
+    queries (e.g., "What directories does this contributor work in?").
+
+    Returns: groups with counts and percentages, sorted by count (descending), plus total_entities.
+
+    Expansion behavior: If kindstring is provided, automatically expands containers in source_arch
+    to find nested entities (e.g., Functions inside Files). Destination architecture always uses
+    implicit membership to find entities through parent containers.
+
+    Example: {"total_entities": 200, "groups": [{"group_name": "Directory Structure/src", "count": 150, "percentage": 75.0}]}
+    """
+    database = require_db()
+
+    # Look up source architecture
+    source_arch = database.lookup_arch(source_arch_name)
+    if source_arch is None:
+        return {"error": f"Source architecture '{source_arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    # Look up group-by architecture
+    group_by_arch = database.lookup_arch(group_by_arch_name)
+    if group_by_arch is None:
+        return {"error": f"Group-by architecture '{group_by_arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+    # Get entities from source architecture
+    if kindstring:
+        # Use expansion function to find entities matching kindstring
+        entities = expand_containers_in_architecture(source_arch, kindstring, recursive)
+    else:
+        # Get all entities directly (no kindstring filter)
+        entities = set(source_arch.ents(recursive))
+
+    # Count entities per group and optionally collect sample entities
+    group_counts = {}
+    group_entities = {} if not compact else None  # Only track entities if not compact
+    total_processed = 0
+
+    # For each entity, find which group architectures it belongs to
+    for ent in entities:
+        total_processed += 1
+
+        # Get all architectures this entity belongs to (with implicit=True for container expansion)
+        entity_archs = database.archs(ent, implicit=True)
+
+        # Find matching group architectures - those that start with group_by_arch_name
+        matching_groups = []
+        for arch in entity_archs:
+            arch_longname = arch.longname()
+
+            # Check if this architecture matches group_by_arch_name
+            if arch_longname == group_by_arch_name:
+                # Exact match
+                matching_groups.append(arch_longname)
+            elif arch_longname.startswith(group_by_arch_name + "/"):
+                # This is a child architecture of group_by_arch
+                if recursive:
+                    # Include all descendants
+                    matching_groups.append(arch_longname)
+                else:
+                    # Only include direct children (one level deep)
+                    # Check if there's only one "/" after group_by_arch_name
+                    suffix = arch_longname[len(group_by_arch_name) + 1:]
+                    if "/" not in suffix:
+                        # Direct child (no further nesting)
+                        matching_groups.append(arch_longname)
+
+        # Count in all matching groups and optionally collect sample entities
+        for group_name in matching_groups:
+            group_counts[group_name] = group_counts.get(group_name, 0) + 1
+            if not compact:
+                if group_name not in group_entities:
+                    group_entities[group_name] = []
+                if len(group_entities[group_name]) < 5:  # Limit sample size
+                    group_entities[group_name].append({
+                        "id": ent.id(),
+                        "name": ent.name(),
+                        "kind": ent.kind().name(),
+                    })
+
+    # Build results sorted by count
+    groups = []
+    for group_name, count in sorted(group_counts.items(), key=lambda x: -x[1]):
+        if count > 0:  # Only include groups with entities
+            percentage = (count / total_processed * 100) if total_processed > 0 else 0.0
+            group_data = {
+                "group_name": group_name,
+                "count": count,
+                "percentage": round(percentage, 2),
+            }
+            if not compact and group_name in group_entities:
+                group_data["sample_entities"] = group_entities[group_name]
+            groups.append(group_data)
+
+    # Limit results
+    if len(groups) > max_results:
+        groups = groups[:max_results]
+
+    return {
+        "total_entities": total_processed,
+        "groups": groups,
+    }
+
+@mcp.tool(name="get_entities_grouped_by_pattern")
+def get_entities_grouped_by_pattern(
+    pattern: Annotated[str, Field(description="Regular expression pattern to match entity names. Can include capture groups for grouping. Use (?i) prefix for case-insensitive matching.")],
+    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures.")] = None,
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class').")] = None,
+    group_by: Annotated[Literal["match", "group"], Field(description="How to group: 'match' groups by full match, 'group' uses capture groups. Default is 'match'.", default="match")] = "match",
+    group_index: Annotated[Optional[int], Field(description="If group_by='group', which capture group to use (1-indexed). If not specified, uses all groups as tuple key.", ge=1)] = None,
+    recursive: Annotated[bool, Field(description="If True and arch_name is provided, includes entities from child architectures. Default is True.", default=True)] = True,
+    max_results: Annotated[int, Field(description="Maximum number of groups to return. Groups are sorted by count (descending). Default is 50.", ge=1, le=500, default=50)] = 50,
+    compact: Annotated[bool, Field(description="If True (default), returns only group, count, and percentage. If False, includes sample_entities for each group.")] = True,
+) -> dict:
+    """
+    Group entities by regex pattern matches on their names (filenames for files). Can search project-wide or within a specific architecture.
+
+    Similar to get_architecture_intersection, but groups by filename patterns instead of
+    architecture membership. Use this for filename-based grouping (extensions, naming conventions).
+    Use get_architecture_intersection for path-based grouping by Directory Structure.
+
+    Returns: groups with counts, percentages, and sample entities, sorted by count (descending).
+
+    Use this for:
+    - Project-wide grouping: "Group all files by extension" → pattern=r"\.(\w+)$", group_by="group", group_index=1, arch_name=None
+    - Architecture-scoped grouping: "Group files by extension in src/" → pattern=r"\.(\w+)$", group_by="group", group_index=1, arch_name="Directory Structure/src"
+
+    IMPORTANT: This tool matches against ent.name() which for files is just the filename
+    (e.g., "file.cpp"), NOT the file path. Patterns like ^src/ or ^dep/ will NOT work
+    because they're path patterns. For path-based grouping, use get_architecture_intersection
+    with Directory Structure architecture.
+
+    Examples:
+    - File extension: pattern=r"\.(\w+)$", group_by="group", group_index=1
+    - Test files: pattern=r".*_test\.(\w+)$", group_by="group", group_index=1
+    - Build files: pattern="(?i)(CMakeLists\.txt|Makefile|package\.json)", group_by="match"
+    - Documentation: pattern="(?i)(readme|changelog|license).*", group_by="match"
+
+    For path-based patterns (e.g., "files in src/ directory"), use:
+    get_architecture_intersection(source_arch, "Directory Structure", group_by_arch_name="Directory Structure")
+    """
+    database = require_db()
+
+    # Get entities (project-wide or architecture-scoped)
+    if arch_name:
+        # Architecture-scoped
+        arch = database.lookup_arch(arch_name)
+        if arch is None:
+            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+        if kindstring:
+            entities = expand_containers_in_architecture(arch, kindstring, recursive)
+        else:
+            entities = set(arch.ents(recursive))
+    else:
+        # Project-wide
+        if kindstring:
+            entities = set(database.ents(kindstring))
+        else:
+            entities = set(database.ents())
+
+    # Compile regex
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        return {"error": f"Invalid regex pattern: {e}"}
+
+    # Group entities by pattern match
+    groups = {}
+    total_matched = 0
+
+    for ent in entities:
+        name = ent.name()
+        match = regex.search(name)
+
+        if match:
+            total_matched += 1
+
+            if group_by == "match":
+                # Group by full match
+                group_key = match.group(0)
+            else:
+                # Group by capture group
+                if group_index:
+                    if group_index <= len(match.groups()):
+                        group_key = match.group(group_index)
+                    else:
+                        continue  # Invalid group index
+                else:
+                    # Use all groups as tuple key
+                    group_key = match.groups()
+
+            # Convert tuple to string for JSON serialization
+            if isinstance(group_key, tuple):
+                group_key = "|".join(str(g) for g in group_key)
+
+            if group_key not in groups:
+                groups[group_key] = {"count": 0}
+                if not compact:
+                    groups[group_key]["entities"] = []  # Store sample entities (limit to avoid huge responses)
+
+            groups[group_key]["count"] += 1
+            if not compact and len(groups[group_key]["entities"]) < 10:  # Limit sample size
+                groups[group_key]["entities"].append({
+                    "id": ent.id(),
+                    "name": ent.name(),
+                    "kind": ent.kind().name(),
+                    "longname": ent.longname(),
+                })
+
+    # Build results sorted by count
+    result_groups = []
+    for group_key, data in sorted(groups.items(), key=lambda x: -x[1]["count"]):
+        if len(result_groups) >= max_results:
+            break
+
+        percentage = (data["count"] / total_matched * 100) if total_matched > 0 else 0
+        group_data = {
+            "group": str(group_key),
+            "count": data["count"],
+            "percentage": round(percentage, 2),
+        }
+        if not compact:
+            group_data["sample_entities"] = data["entities"][:5]  # Limit to 5 samples
+        result_groups.append(group_data)
+
+    return {
+        "total_matched": total_matched,
+        "total_entities": len(entities),
+        "groups": result_groups,
+    }
+
+def tokenize_name(name: str, include_numbers: bool = True, numbers_as_separators: bool = False) -> list[str]:
+    """
+    Tokenize an entity name into words, handling multiple naming conventions.
+
+    Handles:
+    - camelCase: "parseMarkdown" → ["parse", "markdown"]
+    - snake_case: "cmark_parser" → ["cmark", "parser"]
+    - kebab-case: "test-utils" → ["test", "utils"]
+    - PascalCase: "MyClass" → ["my", "class"]
+    - Spaces: "test utils" → ["test", "utils"]
+    - Mixed: "XMLParser_test" → ["xml", "parser", "test"]
+    - Numbers: Configurable handling (see parameters)
+
+    Args:
+        name: Entity name to tokenize
+        include_numbers: If True, includes numbers as separate tokens or part of words.
+                        If False, removes numbers entirely.
+        numbers_as_separators: If True, treats numbers as word separators (e.g., "test2util" → ["test", "util"]).
+                              If False, keeps numbers with adjacent letters (e.g., "test2util" → ["test2", "util"]).
+                              Only applies if include_numbers=True.
+
+    Returns:
+        List of lowercase word tokens
+
+    Number handling examples:
+    - include_numbers=True, numbers_as_separators=False:
+      "test2util" → ["test2", "util"]
+      "v1_parser" → ["v1", "parser"]
+      "file123" → ["file123"]
+
+    - include_numbers=True, numbers_as_separators=True:
+      "test2util" → ["test", "2", "util"]
+      "v1_parser" → ["v", "1", "parser"]
+      "file123" → ["file", "123"]
+
+    - include_numbers=False:
+      "test2util" → ["test", "util"]
+      "v1_parser" → ["v", "parser"]
+      "file123" → ["file"]
+    """
+    # Remove file extensions
+    name = re.sub(r'\.[^.]+$', '', name)
+
+    # Handle numbers based on configuration
+    if not include_numbers:
+        # Remove all numbers
+        name = re.sub(r'\d+', '', name)
+    elif numbers_as_separators:
+        # Insert separators around numbers to split words
+        # "test2util" → "test_2_util"
+        name = re.sub(r'(\d+)', r'_\1_', name)
+
+    # Split on underscores, hyphens, spaces, and numbers (if configured as separators)
+    if numbers_as_separators:
+        parts = re.split(r'[_\-\s]+', name)
+        # Further split on number boundaries that were inserted
+        all_parts = []
+        for part in parts:
+            if not part:
+                continue
+            # Split on inserted number separators
+            sub_parts = re.split(r'_+', part)
+            for sub_part in sub_parts:
+                if sub_part:
+                    all_parts.append(sub_part)
+        parts = all_parts
+    else:
+        parts = re.split(r'[_\-\s]+', name)
+
+    # Further split camelCase/PascalCase and extract words
+    words = []
+    for part in parts:
+        if not part:
+            continue
+
+        # Split on camelCase boundaries (lowercase to uppercase, or uppercase to lowercase)
+        # Handle acronyms (multiple uppercase letters)
+        # Pattern explanation:
+        # - [A-Z]?[a-z]+ : Matches lowercase words, optionally starting with uppercase (e.g., "parse", "Markdown")
+        # - [A-Z]+(?=[A-Z]|$) : Matches acronyms (multiple uppercase) followed by another uppercase or end (e.g., "XML", "HTML")
+        camel_parts = re.findall(r'[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)', part)
+
+        # If no camelCase split occurred, check if we need to split on number boundaries
+        if not camel_parts:
+            # Handle cases when numbers are not separators - keep numbers with adjacent letters
+            if include_numbers and not numbers_as_separators:
+                # Split on letter-number boundaries, keeping numbers with adjacent letters
+                # Strategy: Match sequences of letters+digits or digits+letters, prioritizing letters+digits
+                # "test2util" → ["test2", "util"] (number stays with preceding "test")
+                # "123abc" → ["123abc"] (number at start stays with following "abc")
+                # "test123util" → ["test123", "util"] (number stays with preceding "test")
+                # Pattern explanation:
+                # - \d+[a-zA-Z]+ : digits followed by letters (keeps number with following letters)
+                # - [a-zA-Z]+\d+ : letters followed by digits (keeps number with preceding letters)
+                # - [a-zA-Z]+ : standalone letters
+                # - \d+ : standalone digits
+                # Order matters: try digits+letters first to handle "123abc", then letters+digits for "test2"
+                camel_parts = re.findall(r'\d+[a-zA-Z]+|[a-zA-Z]+\d+|[a-zA-Z]+|\d+', part)
+            else:
+                # Just use the part as-is (might be a number or single word)
+                camel_parts = [part] if part else []
+
+        for camel_part in camel_parts:
+            # Normalize to lowercase
+            word = camel_part.lower()
+            if word:
+                words.append(word)
+
+    return words
+
+# Maximum number of entities to analyze for naming convention discovery
+# Set to 10,000 for optimal performance (~25ms) while maintaining statistical validity
+MAX_ENTITIES_FOR_NAME_ANALYSIS = 10000
+
+@mcp.tool(name="get_entity_name_parts_frequency")
+def get_entity_name_parts_frequency(
+    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, analyzes all entities in the database (project-wide). Use list_architectures_summary to discover available architectures.")] = None,
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class').")] = None,
+    name_pattern: Annotated[Optional[str], Field(description="Optional name pattern to filter entities. Only entities whose names contain this substring (case-insensitive) are included. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'. Use this to discover words that co-occur with a specific pattern (e.g., 'What words appear with parser?').")] = None,
+    min_word_length: Annotated[int, Field(description="Minimum word length to include. Default is 2.", ge=1, default=2)] = 2,
+    recursive: Annotated[bool, Field(description="If True and arch_name is provided, includes entities from child architectures. Default is True.", default=True)] = True,
+    max_results: Annotated[int, Field(description="Maximum number of words to return. Default is 50.", ge=1, le=200, default=50)] = 50,
+) -> dict:
+    """
+    Discover naming conventions by analyzing word frequency in entity names.
+
+    Tokenizes entity names into words (handling camelCase, snake_case, kebab-case, spaces)
+    and returns the most common words/parts. Numbers are automatically removed to focus on
+    semantic words (e.g., "test2util" → ["test", "util"]).
+
+    Returns: words with frequencies, percentages, and sample entities (if compact=False),
+    sorted by frequency (descending).
+
+    Use this to discover:
+    - Common prefixes/suffixes (e.g., "test", "util", "parser", "render")
+    - Naming conventions (e.g., "node", "iterator", "buffer")
+    - Domain-specific terminology (e.g., "markdown", "html", "git")
+    - Words that co-occur with a pattern: name_pattern="parser" → discover "markdown", "html", "node"
+
+    Examples:
+    - "What naming patterns are used in this project?" → project-wide (arch_name=None)
+    - "What naming patterns are used in this library?" → architecture-scoped (arch_name="...")
+    - "What are the common prefixes in function names?" → kindstring="Function"
+    - "What words co-occur with parser?" → name_pattern="parser"
+    """
+    import random
+    database = require_db()
+
+    # Get entities (architecture-scoped or project-wide)
+    if arch_name:
+        # Architecture-scoped analysis
+        arch = database.lookup_arch(arch_name)
+        if arch is None:
+            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+
+        if kindstring:
+            entities = expand_containers_in_architecture(arch, kindstring, recursive)
+        else:
+            entities = set(arch.ents(recursive))
+    else:
+        # Project-wide analysis
+        if kindstring:
+            entities = set(database.ents(kindstring))
+        else:
+            entities = set(database.ents())
+
+    # Filter by name pattern early (before sampling and tokenization)
+    entities = filter_entities_by_name_pattern(entities, name_pattern)
+
+    # Sample if needed for performance (hardcoded limit for optimal performance)
+    total_entities = len(entities)
+    if len(entities) > MAX_ENTITIES_FOR_NAME_ANALYSIS:
+        entities = random.sample(list(entities), MAX_ENTITIES_FOR_NAME_ANALYSIS)
+
+    entities_analyzed = len(entities)
+    sampled = entities_analyzed < total_entities
+
+    # Count word frequencies
+    # Use default: include_numbers=False (focus on semantic words, ignore version numbers/IDs)
+    word_frequencies = {}
+    word_entities = {}  # Track sample entities for each word
+
+    for ent in entities:
+        name = ent.name()
+        words = tokenize_name(name, include_numbers=False, numbers_as_separators=True)
+
+        for word in words:
+            # Filter by minimum word length
+            if len(word) < min_word_length:
+                continue
+
+            # Count frequency
+            if word not in word_frequencies:
+                word_frequencies[word] = 0
+                word_entities[word] = []
+
+            word_frequencies[word] += 1
+
+            # Store sample entities (limit to avoid huge responses)
+            if len(word_entities[word]) < 10:
+                word_entities[word].append({
+                    "id": ent.id(),
+                    "name": ent.name(),
+                    "kind": ent.kind().name(),
+                    "longname": ent.longname(),
+                })
+
+    # Build results sorted by frequency (no min_frequency filter - show all results)
+    result_words = []
+    total_entities = len(entities)
+
+    for word, frequency in sorted(word_frequencies.items(), key=lambda x: -x[1]):
+        # Limit results
+        if len(result_words) >= max_results:
+            break
+
+        percentage = (frequency / total_entities * 100) if total_entities > 0 else 0
+        result_words.append({
+            "word": word,
+            "frequency": frequency,
+            "percentage": round(percentage, 2),
+            "sample_entities": word_entities[word][:5],  # Limit to 5 samples
+        })
+
+    return {
+        "total_entities": total_entities,
+        "entities_analyzed": entities_analyzed,
+        "sampled": sampled,
+        "words": result_words,
     }
 
 @mcp.tool(name="get_architecture_dependencies")
