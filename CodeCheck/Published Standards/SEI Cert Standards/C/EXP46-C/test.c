@@ -38,3 +38,12 @@ void test_compliant() {
 
     if ((flags & 0x0001U) != 0) { ; } // UndCC_Valid
 }
+
+#define ID0 0x40U
+#define ID1 0x20U
+
+uint16_t read_register(int addr, int size);
+
+void test_macro_with_nested_bitwise() {
+    if ( (read_register(0x1234,1) & ( ID0 | ID1 ) ) != ( ID0 | ID1 ) ) { ; } // UndCC_Valid
+}
