@@ -98,7 +98,7 @@ void test_enum()
 void test_narrowing_and_widening()
 {
     unsigned long ul;
-    unsigned int ui = ul;     // UndCC_FalsePos - if sizes are equal (implementation defined)
+    unsigned int ui = ul;     // UndCC_FalsePos(Lin,Mac) - if sizes are equal (implementation defined)
 
     int16_t val1 = s8;        // UndCC_Valid - widening of id-expression
     int16_t val2{s8};         // UndCC_Valid - widening of id-expression
