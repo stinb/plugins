@@ -1,0 +1,163 @@
+ERR1 = "The argument passed via ellipsis does not have an appropriate type"
+
+
+def ids():
+    return ('MISRA23_8.2.11')
+
+
+def name(id):
+    return {
+        'MISRA23_8.2.11': """Published Standards/MISRA C++ 2023/8.2.11 \
+An argument passed via ellipsis shall have an appropriate type""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_8.2.11': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_8.2.11': """
+<p><b>Amplification</b></p>
+<p>The following types are not appropriate:</p>
+<p>1. class types with virtual member functions;</p>
+<p>2. class types having non-trivial copy or move operations;</p>
+<p>3. class types having a non-trivial destructor.</p>
+<p>This rule does not apply to unevaluated contexts.</p>
+
+<p><b>Rationale</b></p>
+<p>Passing arguments of some class types via an ellipses parameter is only conditionally-supported with
+implementation-defined behaviour.</p>
+<p>Default argument promotions are applied to ellipsis parameters, which may lead to the type that is
+passed to the function differing from the type that would be passed to a normal function parameter
+or when passed as a parameter pack.</p>
+<p>Note: passing arguments to a parameter pack is not passing via ellipsis.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">struct A
+{
+    int i { 42 };
+    virtual ~A() = default;
+};
+
+void f()
+{
+    std::printf ( "hello %d", A{} ); // Non-compliant
+}</code></pre>
+
+The following example uses overload resolution and type deduction; it does not pass an argument
+via ellipsis at run-time:
+
+<pre><code language="C++">struct two { char x[2]; };
+
+two test( int );
+char test( ... );
+
+template&lt; typename T &gt;
+constexpr bool isIntCompatible( T x )
+{
+    if constexpr ( sizeof( test( x ) ) == 1 ) // Compliant - unevaluated context
+    {
+        return false; // Overload resolution -&gt; test( ... )
+    }
+    else
+    {
+        return true; // Overload resolution -&gt; test( int )
+    }
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.10.1</p>
+
+<p><b>Developer's Note:</b></p>
+<p>This check only covers user-defined functions.</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def is_ent_invalid(ent):
+    type_ent, _ = get_ent_type(ent)
+
+    if not type_ent:
+        return False
+    elif type_ent:
+        if type_ent.ref("Define, Declare", "Virtual Member Function"):
+            return True
+        else:
+            for func_ref in type_ent.refs("Define, Declare", "Member Function"):
+                if str(func_ref.ent().name()).startswith(("~", "operator=")):
+                    return True
+
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define, Declare", "Function", True):
+        params = str(func_ref.ent().parameters())
+        params = params.split(",")
+        ellipses_param = []
+
+        for param_num, param in enumerate(params):
+            if param == "...":
+                ellipses_param.append(param_num)
+
+        if not ellipses_param:
+            continue
+
+        for call_ref in func_ref.ent().refs("Callby"):
+            lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+            on_param = 0
+            param_ctr = 0
+
+            while lex or lex.text() != ";":
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif on_param == 1 and lex.text() == ",":
+                    param_ctr += 1
+                elif (on_param == 1
+                      and param_ctr in ellipses_param
+                      and lex.ent() and is_ent_invalid(lex.ent())):
+                    check.violation(func_ref.ent(), call_ref.file(),
+                                    call_ref.line(), call_ref.column(), ERR1)
+
+                lex = lex.next(True, True)
