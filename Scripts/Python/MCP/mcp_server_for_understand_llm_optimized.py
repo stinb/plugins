@@ -92,60 +92,201 @@ def filter_entities_by_name_pattern(entities, name_pattern: Optional[str]):
         # Handle both lists and iterators
         return [ent for ent in entities if pattern_lower in ent.name().lower()]
 
-def expand_containers_in_architecture(arch: understand.Arch, kindstring: str, recursive: bool) -> set:
+def expand_containers_in_entity(ent: understand.Ent, kindstring: Optional[str] = None) -> set:
     """
-    Expand containers (files, classes, packages) in an architecture to find entities matching kindstring.
+    Expand containers in an entity to find entities matching kindstring.
 
-    This function finds entities that are logically within an architecture by expanding container
-    entities to find nested entities. For example, if an architecture contains files, this will
-    find functions, classes, and other entities defined within those files.
+    This function finds entities that are logically within an entity by expanding container
+    entities to find nested entities. Uses a generic approach that works for any container type:
+    - Files: use filerefs to find entities defined within the file
+    - Python packages: use "python contain" refs to find files in the package
+    - Generic containers (classes, functions, enums, etc.): use "define, declare" refs to find
+      nested entities (methods, parameters, enumerators, etc.)
 
     Args:
-        arch: The architecture to search within
-        kindstring: Entity kind to find (e.g., 'Function', 'Class', 'Method')
-        recursive: If True, includes entities from child architectures
+        ent: The entity to search within (file, class, function, enum, package, etc.)
+        kindstring: Optional entity kind to find (e.g., 'Function', 'Class', 'Parameter', 'Enumerator').
+                   If None or empty, returns the entity itself and expands containers to find all children.
 
     Returns:
-        Set of entities matching the kindstring, including those found through container expansion
+        Set of entities matching the kindstring (or all children if kindstring is None),
+        including those found through container expansion
     """
-    # Get direct entities from architecture
-    direct_entities = arch.ents(recursive)
-
-    # Collect entities matching the kindstring, expanding containers as needed
     matching_entities = set()
-    files_to_expand = set()
-    classes_to_expand = set()
-    packages_to_expand = set()
 
-    for ent in direct_entities:
-        if ent.kind().check(kindstring):
-            # Direct match
-            matching_entities.add(ent)
-        elif ent.kind().check("file ~unresolved ~unknown"):
-            files_to_expand.add(ent)
-        elif ent.kind().check("python package ~unknown"):
-            packages_to_expand.add(ent)
-        elif ent.kind().check("class ~unresolved, struct ~unresolved"):
-            classes_to_expand.add(ent)
+    # Determine what type of container this is and expand accordingly
+    files_to_expand = set()
+    packages_to_expand = set()
+    generic_containers_to_expand = set()
+
+    # If no kindstring provided, treat the entity itself as matching and expand containers
+    # Check if the entity itself matches
+    if not kindstring or ent.kind().check(kindstring):
+        matching_entities.add(ent)
+
+    # Check if this entity is a container type
+    # Files use filerefs (special case)
+    if ent.kind().check("file ~unresolved ~unknown"):
+        files_to_expand.add(ent)
+    # Python packages use "python contain" refs (special case)
+    elif ent.kind().check("python package ~unknown"):
+        packages_to_expand.add(ent)
+    # Generic containers: classes, functions, enums, etc. that contain entities via "define, declare" refs
+    # Check if entity has any "define, declare" references (indicates it's a container)
+    else:
+        # Check if this entity has "define, declare" references (generic container detection)
+        # This works for classes, functions, enums, and any other container type
+        has_define_declare_refs = len(ent.refs("define, declare", "", True)) > 0
+        if has_define_declare_refs:
+            generic_containers_to_expand.add(ent)
 
     # Expand Python packages to get their files
     for pkg in packages_to_expand:
         for ref in pkg.refs("python contain", "file ~unknown ~unresolved", True):
             file_ent = ref.ent()
-            if file_ent.kind().check(kindstring):
+            if not kindstring or file_ent.kind().check(kindstring):
+                # If no kind string, only expand direct children which are the files in this case
                 matching_entities.add(file_ent)
             else:
                 files_to_expand.add(file_ent)
 
-    # Expand files to find nested entities
+    # Expand files to find nested entities (use filerefs for files)
+    # Use "define, separate, ada declare body, vhdl declare" - "separate" is for Ada separate units,
+    # not "declare" which would include entities merely declared in a file
     for file_ent in files_to_expand:
-        for ref in file_ent.filerefs("define, declare", kindstring, True):
+        # Kind string is allowed to be None or "" and will match everything in that case
+        for ref in file_ent.filerefs("define, separate, ada declare body, vhdl declare", kindstring, True):
             matching_entities.add(ref.ent())
 
-    # Expand classes to find nested entities (methods, nested classes)
-    for class_ent in classes_to_expand:
-        for ref in class_ent.refs("define, declare", kindstring, True):
+    # Expand generic containers (classes, functions, enums, etc.) via "define, declare" refs
+    # This generic approach works for any entity type that contains other entities via references
+    for container_ent in generic_containers_to_expand:
+        # Kind string is allowed to be None or "" and will match everything in that case
+        for ref in container_ent.refs("define, declare", kindstring, True):
             matching_entities.add(ref.ent())
+
+    return matching_entities
+
+def architecture_not_found_error(database: understand.Db, arch_name: str) -> str:
+    """
+    Return an enhanced error message when an architecture is not found.
+    Works for any architecture type (Directory Structure, Cycles, Class Namespace, etc.).
+    When the path contains '/', suggests known children of the parent path.
+    """
+    error_msg = f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."
+    if "/" in arch_name:
+        parent_path = "/".join(arch_name.split("/")[:-1])
+        parent_arch = database.lookup_arch(parent_path)
+        if parent_arch:
+            children = parent_arch.children()
+            if children:
+                child_names = [c.name() for c in children[:5]]
+                error_msg += f" Known children of '{parent_path}': {', '.join(child_names)}"
+    return error_msg
+
+def get_entities_by_scope(
+    database: understand.Db,
+    ent_id: Optional[int] = None,
+    arch_name: Optional[str] = None,
+    kindstring: Optional[str] = None,
+) -> tuple[List, Optional[str]]:
+    """
+    Get entities based on entity scope, architecture scope, or both.
+
+    This is a common function used by list_entities and find_entities_by_metric
+    to handle entity/architecture expansion logic in one place.
+
+    Args:
+        database: The Understand database
+        ent_id: Optional entity ID to search within
+        arch_name: Optional architecture longname to filter by
+        kindstring: Optional entity kind filter
+
+    Returns:
+        Tuple of (entities_list, error_message). If error_message is not None, entities_list will be empty.
+    """
+    entities = []
+
+    if ent_id:
+        # Entity-scoped (or entity + architecture)
+        ent = database.ent_from_id(ent_id)
+        if ent is None:
+            return [], f"Entity with id {ent_id} not found."
+
+        # Expand containers to find nested entities (kindstring can be None)
+        matching_entities = expand_containers_in_entity(ent, kindstring)
+        entities = list(matching_entities)
+
+    if arch_name:
+        # Architecture-scoped (or architecture + entity)
+        arch = database.lookup_arch(arch_name)
+        if arch is None:
+            return [], architecture_not_found_error(database, arch_name)
+
+        if ent_id:
+            # Both ent_id and arch_name: filter entities from ent_id by architecture
+            # Use the same logic as get_architecture_intersection
+            filtered_entities = []
+            for ent in entities:
+                # Get all architectures this entity belongs to (with implicit=True for container expansion)
+                entity_archs = database.archs(ent, implicit=True)
+
+                # Check if entity belongs to the specified architecture
+                belongs_to_arch = False
+                for arch_ent in entity_archs:
+                    arch_longname = arch_ent.longname()
+                    if arch_longname == arch_name or arch_longname.startswith(arch_name + "/"):
+                        belongs_to_arch = True
+                        break
+
+                if belongs_to_arch:
+                    filtered_entities.append(ent)
+            entities = filtered_entities
+        else:
+            # Architecture-scoped only
+            if kindstring:
+                # Expand containers to find nested entities (recursive=True to search child architectures for Directory Structure)
+                matching_entities = expand_containers_in_architecture(arch, kindstring, True)
+                entities = list(matching_entities)
+            else:
+                # Direct members only (no expansion)
+                entities = list(arch.ents(False))
+
+    if not ent_id and not arch_name:
+        # Project-wide
+        if kindstring:
+            entities = database.ents(kindstring)
+        else:
+            entities = database.ents()
+
+    return entities, None
+
+def expand_containers_in_architecture(arch: understand.Arch, kindstring: str, recursive: bool) -> set:
+    """
+    Expand containers (files, classes, packages) in an architecture to find entities matching kindstring.
+
+    This function finds entities that are logically within an architecture by expanding container
+    entities to find nested entities. When recursive=True, arch.ents(recursive) already includes
+    entities from child architectures, so this function expands containers within those entities.
+
+    Args:
+        arch: The architecture to search within
+        kindstring: Entity kind to find (e.g., 'Function', 'Class', 'Method')
+        recursive: If True, arch.ents(recursive) includes entities from child architectures
+
+    Returns:
+        Set of entities matching the kindstring, including those found through container expansion
+    """
+    matching_entities = set()
+
+    # Get direct entities from architecture
+    direct_entities = arch.ents(recursive)
+
+    # Use expand_containers_in_entity for each entity to avoid code duplication
+    for ent in direct_entities:
+        # expand_containers_in_entity handles matching entities, files, classes, and packages
+        expanded = expand_containers_in_entity(ent, kindstring)
+        matching_entities.update(expanded)
 
     return matching_entities
 
@@ -163,11 +304,15 @@ def lookup_entity_id(
     Use this to discover entities when you know their name but need the entity ID for other operations.
 
     Common workflow:
-    1. lookup_entity_id(name) → get list of matches
-    2. Review matches and select an entity ID
-    3. get_entity_details(ent_id) → get full details including location
-    4. Optionally: get_entity_source(ent_id) → get source code
-    5. Optionally: get_entity_references_summary(ent_id) → explore usage
+    1. lookup_entity_id(name="egrep.c", kindstring="File") → get entity ID (e.g., 276)
+    2. Review matches and select the correct entity ID
+    3. Optionally:get_entity_source(ent_id=276, start_line=80, end_line=82) → get source code
+    4. Optionally: get_entity_details(ent_id=276) → get full details including location
+    5. Optionally: get_entity_references_summary(ent_id=276) → explore usage
+
+    Example: To read line 81 of "egrep.c":
+    - Step 1: lookup_entity_id(name="egrep.c", kindstring="File") → returns ent_id=276
+    - Step 2: get_entity_source(ent_id=276, start_line=81, end_line=81) → returns line 81
 
     The name parameter supports regex patterns for flexible searching.
     Supports pagination: use next_cursor from response to get more results.
@@ -206,13 +351,17 @@ def lookup_entity_id(
 
 @mcp.tool(name="get_entity_details")
 def get_entity_details(
-    ent_id: Annotated[int, Field(description="The entity ID to get full details for.", ge=1)],
+    ent_id: Annotated[int, Field(description="The entity ID to get full details for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand and cannot be guessed. You must discover the correct entity ID first using lookup_entity_id(name='...') or list_entities(...). Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
 ) -> Optional[dict]:
     """
     Get complete details about an entity including location and relationships.
 
     Returns: longname, kind, definition location (file path, line, column), type information,
     parent entity (if nested), and parameters (for functions/methods).
+
+    Common workflow:
+    1. lookup_entity_id(name="function_name", kindstring="Function") → get entity ID
+    2. get_entity_details(ent_id=<id>) → get full details including location
 
     Use this after lookup_entity_id when you need to:
     - Identify which entity to work with when multiple matches exist
@@ -271,7 +420,7 @@ def get_entity_details(
 
 @mcp.tool(name="get_entity_source")
 def get_entity_source(
-    ent_id: Annotated[int, Field(description="The entity ID to get source code for.", ge=1)],
+    ent_id: Annotated[int, Field(description="The entity ID to get source code for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand and cannot be guessed. You must discover the correct entity ID first using lookup_entity_id(name='...') or list_entities(kindstring='File', name_pattern='...'). Do not assume entity IDs are sequential (e.g., 1, 2, 3) or reuse IDs from unrelated entities.", ge=1)],
     start_line: Annotated[Optional[Union[int, str]], Field(description="Optional start line number (1-based, relative to the entity's content). Line 1 is the first line of the entity. If specified, only returns code from this line onwards. Accepts numeric or string values.")] = None,
     end_line: Annotated[Optional[Union[int, str]], Field(description="Optional end line number (1-based, relative to the entity's content). If specified with start_line, returns only the specified line range. Accepts numeric or string values.")] = None,
     max_length: Annotated[int, Field(description="Maximum length of source code to return in characters. Default is 5000 to avoid filling the context window. Response will be truncated if longer.", ge=100, le=50000)] = 5000,
@@ -280,6 +429,10 @@ def get_entity_source(
     Get source code for an entity with optional line range filtering.
 
     Returns: source code, truncated flag, line range returned, and total lines.
+
+    Common workflow:
+    1. lookup_entity_id(name="egrep.c", kindstring="File") → get entity ID (e.g., 276)
+    2. get_entity_source(ent_id=276, start_line=80, end_line=82) → get source code
 
     Note: Source code is only available for entities that have contents, such as:
     - Files
@@ -361,7 +514,7 @@ def get_entity_source(
 
 @mcp.tool(name="get_entity_references_summary")
 def get_entity_references_summary(
-    ent_id: Annotated[int, Field(description="The entity ID to get a summary of references for.", ge=1)],
+    ent_id: Annotated[int, Field(description="The entity ID to get a summary of references for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
 ) -> dict:
     """
     Get overview of all references to/from an entity (callers, callees, usage, etc.).
@@ -422,7 +575,7 @@ def get_entity_references_summary(
 
 @mcp.tool(name="get_entity_references_by_file")
 def get_entity_references_by_file(
-    ent_id: Annotated[int, Field(description="The entity ID to get references grouped by file for.", ge=1)],
+    ent_id: Annotated[int, Field(description="The entity ID to get references grouped by file for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
     refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string to filter references before grouping by file. Note: This filters based on how the entity references things, not how things reference the entity. For example, filtering by 'Type' on a class will show files where the class has Type references, not files that use the class as a type.")] = None,
     compact: Annotated[bool, Field(description="If True (default), returns only file_id and count. If False, includes file path.")] = True,
 ) -> dict:
@@ -484,9 +637,9 @@ def get_entity_references_by_file(
 
 @mcp.tool(name="get_entity_references")
 def get_entity_references(
-    ent_id: Annotated[int, Field(description="The entity ID to get references for.", ge=1)],
-    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string. Use forward kinds (e.g., 'call', 'definein', 'use', 'set') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated.")] = None,
-    entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to filter by the kind of entity being referenced (e.g., 'Function', 'Variable', 'Class'). Can be used alone without refkindstring.")] = None,
+    ent_id: Annotated[int, Field(description="The entity ID to get references for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
+    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string. Filters by the TYPE OF RELATIONSHIP (e.g., 'C Call', 'C Use', 'C Define', 'C Set'). Use forward kinds (e.g., 'call', 'definein', 'use', 'set') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated. IMPORTANT: This filters by reference relationship type, NOT by entity kind. To filter by entity kind (e.g., Parameter, Function), use entkindstring instead.")] = None,
+    entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to filter by the KIND OF ENTITY being referenced (e.g., 'Function', 'Parameter', 'Variable', 'Class', 'Local Object'). This filters by what type of entity is referenced, not how it's referenced. Can be used alone without refkindstring. Example: entkindstring='Parameter' to list parameter entities of a function.")] = None,
     file_id: Annotated[Optional[Union[int, str]], Field(description="Optional file entity ID to filter references to only those occurring in a specific file.")] = None,
     unique: Annotated[bool, Field(description="If True, return only the first matching reference to each unique entity. Useful to avoid duplicates when the same entity is referenced multiple times. Can be used alone without other filters.")] = False,
     max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 10 to keep responses concise.", ge=1, le=200)] = 10,
@@ -507,9 +660,24 @@ def get_entity_references(
     - Multiple kinds: refkindstring="call,callby" (comma-separated)
     - Exclusions: refkindstring="call ~inactive" (exclude inactive/conditional calls)
 
+    IMPORTANT: Understanding refkindstring vs entkindstring:
+    - refkindstring: Filters by REFERENCE RELATIONSHIP TYPE (how entities are related)
+      Examples: "Call", "Callby", "Use", "Useby", "Define", "Definein"
+    - entkindstring: Filters by REFERENCED ENTITY KIND (what type of entity is referenced)
+      Examples: "Function", "Parameter", "Variable", "Class", "Local Object"
+
+    Common use cases:
+    - List functions called by this function: refkindstring="call"
+    - List callers of this function: refkindstring="callby"
+    - List global objects set by this function: refkindstring="set", entkindstring="Global Object"
+
+    Note: for finding children, prefer using list_entities instead.
+    - list_entities(ent_id=<file_id>, kindstring="Function") → get functions in a specific file
+    - list_entities(ent_id=<function_id>, kindstring="Parameter") → get parameters of a specific function
+
     Filtering options:
-    - refkindstring: Filter by reference type (use values from get_entity_references_summary for precision)
-    - entkindstring: Filter by entity kind (e.g., only references to Functions)
+    - refkindstring: Filter by reference relationship type (use values from get_entity_references_summary)
+    - entkindstring: Filter by referenced entity kind (e.g., "Parameter" to get function parameters)
     - file_id: Filter to specific file (use from get_entity_references_by_file)
     - unique: Get only first reference per unique entity (reduces duplicates)
 
@@ -685,7 +853,7 @@ def get_metric_details(
 
 @mcp.tool(name="get_entity_metrics")
 def get_entity_metrics(
-    ent_id: Annotated[int, Field(description="The entity ID to get metrics for.", ge=1)],
+    ent_id: Annotated[int, Field(description="The entity ID to get metrics for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
     metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available metrics for the entity. Note: metric values can be calculated even if the metric is disabled (not visible in UI).", default=[])] = [],
     compact: Annotated[bool, Field(description="If True (default), returns {metric_id: value}. If False, returns {metric_id: {name, value}}.")] = True,
 ) -> dict:
@@ -824,7 +992,8 @@ def get_project_overview() -> dict:
 @mcp.tool(name="find_entities_by_metric")
 def find_entities_by_metric(
     metric_id: Annotated[str, Field(description="The metric ID to filter by (e.g., 'Cyclomatic', 'CountLine', 'MaxNesting').")],
-    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide. If provided, filters to entities within that architecture (expanding containers to find nested entities). Use list_architectures_summary to discover available architectures.")] = None,
+    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide or within ent_id. If provided, filters to entities within that architecture (expanding containers to find nested entities). Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.")] = None,
+    ent_id: Annotated[Optional[int], Field(description="Optional entity ID to search within (e.g., file, class, package). If provided, finds entities within this entity (expanding containers as needed). If kindstring is provided, filters to entities of that kind; if not provided, returns the entity itself and all its children. Can be combined with arch_name to filter results by architecture.")] = None,
     kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class').")] = None,
     min_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional minimum metric value. Entities with metric values >= min_value will be returned.")] = None,
     max_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional maximum metric value. Entities with metric values <= max_value will be returned.")] = None,
@@ -834,22 +1003,31 @@ def find_entities_by_metric(
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
-    Find entities filtered and sorted by metric values. Can search project-wide or within a specific architecture.
+    Find entities filtered and sorted by metric values. Can search project-wide, within a specific architecture, or within a specific entity.
 
     Returns: list of entities with their metric values, sorted by the metric.
 
     Use this for:
     - Project-wide queries: "What are the key functions in the project?" → metric_id="Cyclomatic", order_by="desc", arch_name=None
-    - Architecture-scoped queries: "What are the key functions in src/?" → metric_id="Cyclomatic", order_by="desc", arch_name="Directory Structure/src"
+    - Architecture-scoped queries: "What are the key functions in src/?" → metric_id="Cyclomatic", order_by="desc", arch_name="Directory Structure/src" or "Directory Structure/<project>/src"
+    - Entity-scoped queries: "What are the most complex functions in this file?" → metric_id="Cyclomatic", kindstring="Function", ent_id=<file_id>
     - Combined filters: "What are the most complex parser functions in src/?" → metric_id="Cyclomatic", kindstring="Function", name_pattern="parser", arch_name="Directory Structure/src"
+    - Entity + architecture: "What are the most complex functions in this file that belong to Security Risk/High?" → metric_id="Cyclomatic", kindstring="Function", ent_id=<file_id>, arch_name="Security Risk/High"
+
+    Note: Architecture paths vary by project structure. Some projects have flat layouts (Directory Structure/src),
+    others have nested roots (Directory Structure/<project>/src). Use get_architecture_children to discover the actual hierarchy.
 
     If arch_name is provided, filters to entities within that architecture (expanding containers like files/classes to find nested entities like functions/methods).
-    If arch_name is None (default), searches project-wide.
+    If ent_id is provided, filters to entities within that entity (expanding containers as needed). If kindstring is not provided, returns the entity itself and all its children.
+    If both are provided, first expands entities within ent_id, then filters by architecture.
+    If neither is provided, searches project-wide.
 
     Workflow:
-    1. list_metrics_summary(kindstring="Function") → discover relevant metrics
-    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", arch_name="Directory Structure/src") → find top entities in architecture
-    3. get_entity_details(ent_id) → get details about specific entities
+    1. get_architecture_children("Directory Structure") → discover project structure (may show <project> child)
+    2. list_metrics_summary(kindstring="Function") → discover relevant metrics
+    3. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", arch_name="Directory Structure/<project>/src") → find top entities in architecture
+    4. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", ent_id=<file_id>) → find top entities in a specific file
+    5. get_entity_details(ent_id) → get details about specific entities
     """
     # Coerce parameters to correct types (handle string inputs from LLMs)
     if min_value is not None:
@@ -859,26 +1037,10 @@ def find_entities_by_metric(
 
     database = require_db()
 
-    # Get entities (project-wide or architecture-scoped)
-    if arch_name:
-        # Architecture-scoped: use expand_containers_in_architecture to find nested entities
-        arch = database.lookup_arch(arch_name)
-        if arch is None:
-            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
-
-        if kindstring:
-            # Use expansion for nested entities (like find_entities_in_architecture_scope)
-            matching_entities = expand_containers_in_architecture(arch, kindstring, False)
-            entities = list(matching_entities)
-        else:
-            # No kind filter: get all entities from architecture (direct members only)
-            entities = list(arch.ents(False))
-    else:
-        # Project-wide: use existing logic
-        if kindstring:
-            entities = database.ents(kindstring)
-        else:
-            entities = database.ents()
+    # Get entities using common function
+    entities, error_msg = get_entities_by_scope(database, ent_id, arch_name, kindstring)
+    if error_msg:
+        return {"error": error_msg}
 
     # Filter by name pattern early (before expensive metric operations)
     entities = filter_entities_by_name_pattern(entities, name_pattern)
@@ -919,9 +1081,11 @@ def find_entities_by_metric(
         "entities": paginated,
         "total_found": total_count,
         "truncated": truncated,
-        "metric_id": metric_id,
-        "sort_order": order_by,
     }
+    if arch_name and total_count == 0:
+        response["note"] = f"Architecture '{arch_name}' was resolved. No entities of kind '{kindstring}' (after expansion) were found matching the metric filter." if kindstring else f"Architecture '{arch_name}' has no entities matching the metric filter."
+    if ent_id and total_count == 0:
+        response["note"] = f"Entity {ent_id} was resolved. No entities of kind '{kindstring}' (after expansion) were found matching the metric filter." if kindstring else f"Entity {ent_id} has no entities matching the metric filter."
     if next_cursor:
         response["next_cursor"] = next_cursor
     return response
@@ -1125,40 +1289,48 @@ def get_project_metrics(
 
 @mcp.tool(name="list_entities")
 def list_entities(
-    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures.")] = None,
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class', 'Method'). If provided and arch_name is provided, expands containers to find nested entities. If not provided and arch_name is provided, returns direct members only (no expansion).")] = None,
+    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide or within ent_id. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.")] = None,
+    ent_id: Annotated[Optional[int], Field(description="Optional entity ID to search within (e.g., file, class, package). If provided, finds entities within this entity (expanding containers as needed). If kindstring is provided, expands containers to find nested entities. Can be combined with arch_name to filter results by architecture.")] = None,
+    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class', 'Method'). If provided and arch_name or ent_id is provided, expands containers to find nested entities. If not provided and arch_name or ent_id is provided, returns direct members only (no expansion).")] = None,
     name_pattern: Annotated[Optional[str], Field(description="Optional name pattern to filter entities. Only entities whose names contain this substring (case-insensitive) are included. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'.")] = None,
     max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20 to keep responses concise.", ge=1, le=500)] = 20,
     compact: Annotated[bool, Field(description="If True (default), returns id, name, kind only. If False, includes longname.")] = True,
     cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
 ) -> dict:
     """
-    List entities. Can search project-wide or within a specific architecture, with optional filtering by kind and name pattern.
+    List entities. Can search project-wide, within a specific architecture, within a specific entity, or combine entity and architecture filters.
 
     Returns: list of entities with id, name, kind, and basic info.
 
     Use this for:
     - Project-wide listing: "List all functions" → kindstring="Function"
     - Project-wide listing: "List all entities" → (no filters)
-    - Architecture-scoped listing (direct members): "List files in src/" → arch_name="Directory Structure/src" (no kindstring = direct members only)
-    - Architecture-scoped listing (expanded): "List functions in src/" → kindstring="Function", arch_name="Directory Structure/src" (kindstring = expands to find nested entities)
+    - Architecture-scoped listing (direct members): "List files in src/" → arch_name="Directory Structure/src" or "Directory Structure/<project>/src" (no kindstring = direct members only)
+    - Architecture-scoped listing (expanded): "List functions in src/" → kindstring="Function", arch_name="Directory Structure/src" or "Directory Structure/<project>/src" (kindstring = expands to find nested entities)
+    - Entity-scoped listing (direct members): "List entities in this file" → ent_id=<file_id> (reports all nested entities)
+    - Entity-scoped listing (expanded): "List parameters of this function" → ent_id=<function_id>, kindstring="Parameter" (reports only parameters)
     - Combined filters: "List parser functions in src/" → kindstring="Function", name_pattern="parser", arch_name="Directory Structure/src"
+    - Entity + architecture: "List functions in this file that belong to Security Risk/High" → ent_id=<file_id>, kindstring="Function", arch_name="Security Risk/High"
 
-    Behavior when arch_name is provided:
-    - If kindstring is provided: Expands containers (files/classes) to find nested entities (functions/methods)
-    - If kindstring is not provided: Returns direct members only (no expansion)
+    Note: Architecture paths vary by project structure. Some projects have flat layouts (Directory Structure/src),
+    others have nested roots (Directory Structure/<project>/src). Use get_architecture_children to discover the actual hierarchy.
 
-    Behavior when arch_name is not provided:
-    - If kindstring is provided: Filters to entities of that kind project-wide
-    - If kindstring is not provided: Returns all entities project-wide
+    Kindstring behavior:
+    - When a kindstring is provided with an arch_name or ent_id, it expands containers (files/classes) to find nested entities matching the kindstring (functions/parameters)
+    - When a kindstring is not provided with an arch_name or ent_id, it returns direct members only (no expansion)
 
     For finding entities by metric values (e.g., "most complex functions"), use find_entities_by_metric instead.
 
     Workflow:
-    1. list_entities(kindstring="Function", arch_name="Directory Structure/src") → get functions in src/ (expanded)
-    2. list_entities(arch_name="Directory Structure/src") → get files in src/ (direct members only)
+    1. get_project_overview() → discover entity kinds that exist in the project
+    2. list_entities(kindstring=<kindstring>) → get all entities of that kind (such as function, file, class, etc) in the project
     3. get_entity_details(ent_id) → get details about specific entities
     4. get_entity_source(ent_id) → read source code
+
+    Filtering Examples:
+    - list_entities(kindstring="Function", arch_name="Directory Structure/<project>/src") → get functions in src/ (expanded)
+    - list_entities(arch_name="Directory Structure/<project>/src") → get files in src/ (direct members only)
+    - list_entities(ent_id=<file_id>, kindstring="Function") → get functions in a specific file
 
     Returns minimal info (id, name, kind) to keep response concise. Use get_entity_details for more info.
     Supports pagination: use next_cursor from response to get more results.
@@ -1167,26 +1339,10 @@ def list_entities(
     """
     database = require_db()
 
-    # Get entities (project-wide or architecture-scoped)
-    if arch_name:
-        # Architecture-scoped
-        arch = database.lookup_arch(arch_name)
-        if arch is None:
-            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
-
-        if kindstring:
-            # Expand containers to find nested entities (e.g., functions inside files)
-            matching_entities = expand_containers_in_architecture(arch, kindstring, False)
-            entities = list(matching_entities)
-        else:
-            # Direct members only (no expansion)
-            entities = list(arch.ents(False))
-    else:
-        # Project-wide
-        if kindstring:
-            entities = database.ents(kindstring)
-        else:
-            entities = database.ents()
+    # Get entities using common function
+    entities, error_msg = get_entities_by_scope(database, ent_id, arch_name, kindstring)
+    if error_msg:
+        return {"error": error_msg}
 
     # Filter by name pattern early
     entities = filter_entities_by_name_pattern(entities, name_pattern)
@@ -1211,8 +1367,10 @@ def list_entities(
         "total_count": total_count,
         "truncated": truncated,
     }
-    if kindstring:
-        response["kind"] = kindstring
+    if arch_name and total_count == 0:
+        response["note"] = f"Architecture '{arch_name}' was resolved. No entities of kind '{kindstring}' (after expansion) were found." if kindstring else f"Architecture '{arch_name}' has no direct members."
+    if ent_id and total_count == 0:
+        response["note"] = f"Entity {ent_id} was resolved. No entities of kind '{kindstring}' (after expansion) were found." if kindstring else f"Entity {ent_id} has no children."
     if next_cursor:
         response["next_cursor"] = next_cursor
     return response
@@ -1315,7 +1473,7 @@ def get_architecture_details(
 
     arch = database.lookup_arch(arch_name)
     if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+        return {"error": architecture_not_found_error(database, arch_name)}
 
     children = arch.children()
     entities = arch.ents(False)
@@ -1340,7 +1498,7 @@ def get_architecture_details(
 
 @mcp.tool(name="get_architectures_for_entity")
 def get_architectures_for_entity(
-    ent_id: Annotated[int, Field(description="The entity ID to find architectures for.", ge=1)],
+    ent_id: Annotated[int, Field(description="The entity ID to find architectures for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
     implicit: Annotated[bool, Field(description="If True, also returns architectures that contain any of the entity's parents. Default is False.",)] = False,
 ) -> dict:
     """
@@ -1411,7 +1569,7 @@ def get_architecture_children(
 
     arch = database.lookup_arch(arch_name)
     if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+        return {"error": architecture_not_found_error(database, arch_name)}
 
     children = arch.children()
 
@@ -1464,7 +1622,7 @@ def get_architecture_metrics(
 
     arch = database.lookup_arch(arch_name)
     if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+        return {"error": architecture_not_found_error(database, arch_name)}
 
     results = {}
 
@@ -1552,12 +1710,12 @@ def get_architecture_intersection(
     # Look up source architecture
     source_arch = database.lookup_arch(source_arch_name)
     if source_arch is None:
-        return {"error": f"Source architecture '{source_arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+        return {"error": architecture_not_found_error(database, source_arch_name)}
 
     # Look up group-by architecture
     group_by_arch = database.lookup_arch(group_by_arch_name)
     if group_by_arch is None:
-        return {"error": f"Group-by architecture '{group_by_arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+        return {"error": architecture_not_found_error(database, group_by_arch_name)}
 
     # Get entities from source architecture
     if kindstring:
@@ -1658,8 +1816,8 @@ def get_entities_grouped_by_pattern(
     Returns: groups with counts, percentages, and sample entities, sorted by count (descending).
 
     Use this for:
-    - Project-wide grouping: "Group all files by extension" → pattern=r"\.(\w+)$", group_by="group", group_index=1, arch_name=None
-    - Architecture-scoped grouping: "Group files by extension in src/" → pattern=r"\.(\w+)$", group_by="group", group_index=1, arch_name="Directory Structure/src"
+    - Project-wide grouping: "Group all files by extension" → pattern=r"\\.(\\w+)$", group_by="group", group_index=1, arch_name=None
+    - Architecture-scoped grouping: "Group files by extension in src/" → pattern=r"\\.(\\w+)$", group_by="group", group_index=1, arch_name="Directory Structure/src"
 
     IMPORTANT: This tool matches against ent.name() which for files is just the filename
     (e.g., "file.cpp"), NOT the file path. Patterns like ^src/ or ^dep/ will NOT work
@@ -1667,9 +1825,9 @@ def get_entities_grouped_by_pattern(
     with Directory Structure architecture.
 
     Examples:
-    - File extension: pattern=r"\.(\w+)$", group_by="group", group_index=1
-    - Test files: pattern=r".*_test\.(\w+)$", group_by="group", group_index=1
-    - Build files: pattern="(?i)(CMakeLists\.txt|Makefile|package\.json)", group_by="match"
+    - File extension: pattern=r"\\.(\\w+)$", group_by="group", group_index=1
+    - Test files: pattern=r".*_test\\.(\\w+)$", group_by="group", group_index=1
+    - Build files: pattern="(?i)(CMakeLists\\.txt|Makefile|package\\.json)", group_by="match"
     - Documentation: pattern="(?i)(readme|changelog|license).*", group_by="match"
 
     For path-based patterns (e.g., "files in src/ directory"), use:
@@ -1682,7 +1840,7 @@ def get_entities_grouped_by_pattern(
         # Architecture-scoped
         arch = database.lookup_arch(arch_name)
         if arch is None:
-            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+            return {"error": architecture_not_found_error(database, arch_name)}
 
         if kindstring:
             entities = expand_containers_in_architecture(arch, kindstring, recursive)
@@ -1919,7 +2077,7 @@ def get_entity_name_parts_frequency(
         # Architecture-scoped analysis
         arch = database.lookup_arch(arch_name)
         if arch is None:
-            return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+            return {"error": architecture_not_found_error(database, arch_name)}
 
         if kindstring:
             entities = expand_containers_in_architecture(arch, kindstring, recursive)
@@ -2031,7 +2189,7 @@ def get_architecture_dependencies(
 
     arch = database.lookup_arch(arch_name)
     if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found. Use list_architectures_summary to discover available architectures."}
+        return {"error": architecture_not_found_error(database, arch_name)}
 
     if forward:
         dependencies_dict = arch.depends()
@@ -2088,11 +2246,11 @@ def get_architecture_dependency_summary(
 
     arch = database.lookup_arch(arch_name)
     if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found."}
+        return {"error": architecture_not_found_error(database, arch_name)}
 
     other_arch = database.lookup_arch(other_arch_name)
     if other_arch is None:
-        return {"error": f"Architecture '{other_arch_name}' not found."}
+        return {"error": architecture_not_found_error(database, other_arch_name)}
 
     if forward:
         dependencies_dict = arch.depends()
@@ -2153,11 +2311,11 @@ def get_architecture_dependency_references(
 
     arch = database.lookup_arch(arch_name)
     if arch is None:
-        return {"error": f"Architecture '{arch_name}' not found."}
+        return {"error": architecture_not_found_error(database, arch_name)}
 
     other_arch = database.lookup_arch(other_arch_name)
     if other_arch is None:
-        return {"error": f"Architecture '{other_arch_name}' not found."}
+        return {"error": architecture_not_found_error(database, other_arch_name)}
 
     if forward:
         dependencies_dict = arch.depends()
