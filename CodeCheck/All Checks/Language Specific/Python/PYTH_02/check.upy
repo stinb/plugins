@@ -1,0 +1,142 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-01-29
+
+
+import json
+import os
+import subprocess
+import shutil
+from pathlib import Path
+
+from understand import Check, Ent
+
+
+def ids():
+    return ('PYTH_02')
+
+
+def name(id):
+    return {
+        'PYTH_02': '''All Checks/Language Specific/Python/CATEGORY/\
+Static Typing with mypy''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'PYTH_02': [
+            'Language: Python',
+            'Types',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>Static Typing with mypy</p>
+
+<p><b>Developer's Notes</b></p>
+
+<p>If you have not already installed mypy, install it with <code>python -m pip install mypy</code></p>
+
+<p>If you are using a Python virtual environment, specify that Python executable path in the provided option and use the virtual environment Python to install mypy.</p>
+'''
+
+
+def test_entity(file):
+    return False
+
+
+def test_global():
+    return True
+
+
+def define_options(check: Check):
+    check.options().text('python_exe', 'Python executable path', '')
+
+
+def check(check: Check):
+    files = check.files()
+    if not files:
+        return
+
+    # Find
+    # - The first file to report any general errors
+    # - The lowest common directory because mypy requires it for some reason
+    first_file: Ent = files[0]
+    first_file_path: str = first_file.longname()
+    common_folder: str = str(Path(first_file_path).parent)
+    for file in files:
+        file_path = file.longname()
+
+        if file_path < first_file_path:
+            first_file = file
+            first_file_path = file_path
+
+        common_folder = os.path.commonpath((Path(file_path).parent, common_folder))
+
+    exe = shutil.which(str(check.options().lookup('python_exe')) or 'python')
+    if not exe:
+        check.violation(None, first_file, 1, 1, 'Failed to find the Python executable')
+        return
+
+    # https://mypy.readthedocs.io/en/stable/command_line.html
+    exe_and_args = [
+        exe, '-m', 'mypy',
+        '--output', 'json',
+        '--show-absolute-path',
+        '--sqlite-cache',
+    ]
+
+    # Add file paths to the command and remember them
+    path_to_file: dict[str, Ent] = dict()
+    for file in files:
+        if str(file.relname()).startswith('lib\\'): # TODO DEBUG
+            continue
+        longname = file.longname()
+        path_to_file[longname] = file
+        exe_and_args.append(longname)
+
+    try:
+        # https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+        CREATION_FLAGS = subprocess.CREATE_NO_WINDOW
+        process = subprocess.run(
+            exe_and_args,
+            capture_output=True,
+            creationflags=CREATION_FLAGS,
+            cwd=common_folder,
+        )
+    except Exception as exception:
+        check.violation(None, first_file, 1, 1, f'Failed to run mypy: {exception}')
+        return
+
+    # Exit codes of mypy:
+    # - 0 if no type errors
+    # - 1 if there are some type errors
+    # - 2 in case of a crash, bad arguments, and other non-standard conditions
+    # https://github.com/python/mypy/issues/6003
+    if process.returncode == 0:
+        return
+    if process.returncode != 1:
+        error = process.stderr.decode()
+        if not error:
+            error = process.stdout.decode()
+        if error:
+            check.violation(None, first_file, 1, 1, error)
+        else:
+            check.violation(None, first_file, 1, 1, 'No error message from mypy, although the exit code indicates failure')
+        return
+
+    # If mypy is not installed
+    stderr = process.stderr.decode().strip()
+    if stderr:
+        check.violation(None, first_file, 1, 1, f'Failed to run mypy: {stderr}')
+
+    for line in process.stdout.decode().splitlines():
+        result = json.loads(line)
+        if result['severity'] == 'note':
+            continue
+        check.violation(None, path_to_file[result['file']], result['line'], result['column'], result['message'])
