@@ -1,0 +1,228 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2026-01-29
+
+
+import re
+
+from understand import Check, Ent
+
+
+ERR1 = 'Static keyword in array brackets'
+
+
+def ids():
+    return ('MISRA12_17.6', 'MISRA23_17.6', 'CPP_DD031')
+
+
+def name(id):
+    return {
+        'MISRA12_17.6': '''Published Standards/MISRA C 2012/\
+17.6 Static Keyword in Array Brackets''',
+        'MISRA23_17.6': '''Published Standards/MISRA C 2023/\
+17.6 Static Keyword in Array Brackets''',
+        'CPP_DD031': '''All Checks/Language Specific/C and C++/CATEGORY/\
+Static Keyword in Array Brackets''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA12_17.6': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Mandatory',
+        ],
+        'MISRA23_17.6': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+        ],
+        'CPP_DD031': [
+            'Declarations and Definitions',
+            'Language: C',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    match id:
+        case 'MISRA12_17.6' | 'MISRA23_17.6': return '''\
+<p><b>Title</b></p>
+
+<p>The declaration of an array parameter shall not contain the <i>static</i> keyword between the <code>[ ]</code></p>
+
+<p><b>Rationale</b></p>
+
+<p>
+The C99 language standard provides a mechanism for the programmer to inform the compiler that an
+array parameter contains a specified minimum number of elements. Some compilers are able to take
+advantage of this information to generate more efficient code for some types of processor.
+</p>
+
+<p>
+If the guarantee made by the programmer is not honoured, and the number of elements is less than
+the minimum specified, the behaviour is undefined.
+</p>
+
+<p>
+The processors used in typical embedded applications are unlikely to provide the facilities required
+to take advantage of the additional information provided by the programmer. The risk of the program
+failing to meet the guaranteed minimum number of elements outweighs any potential performance
+increase.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+There is no use of this C99 language feature that is compliant with this rule. The examples show some
+of the undefined behaviour that can arise from its use.
+</p>
+
+<pre><code language="C++">\
+/* Non-compliant - uses static in array declarator */
+uint16_t total ( uint16_t n, uint16_t a[ static 20 ] )
+{
+  uint16_t i;
+
+  uint16_t sum = 0U;
+
+  /* Undefined behaviour if a has fewer than 20 elements */
+  for ( i = 0U; i &lt; n; ++i )
+  {
+    sum = sum + a[ i ];
+  }
+
+  return sum;
+}
+
+extern uint16_t v1[ 10 ];
+extern uint16_t v2[ 20 ];
+
+void g ( void )
+{
+  uint16_t x;
+
+  x = total ( 10U, v1 ); /* Undefined - v1 has 10 elements but needs
+                          *             at least 20                   */
+  x = total ( 20U, v2 ); /* Defined but non-compliant                 */
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 17.5
+</p>
+'''
+        case 'CPP_DD031': return '''\
+<p><b>Title</b></p>
+
+<p>The declaration of an array parameter shall not contain the <i>static</i> keyword between the <code>[ ]</code></p>
+
+<p><b>Rationale</b></p>
+
+<p>
+The C99 language standard provides a mechanism for the programmer to inform the compiler that an
+array parameter contains a specified minimum number of elements. Some compilers are able to take
+advantage of this information to generate more efficient code for some types of processor.
+</p>
+
+<p>
+If the guarantee made by the programmer is not honoured, and the number of elements is less than
+the minimum specified, the behaviour is undefined.
+</p>
+
+<p>
+The processors used in typical embedded applications are unlikely to provide the facilities required
+to take advantage of the additional information provided by the programmer. The risk of the program
+failing to meet the guaranteed minimum number of elements outweighs any potential performance
+increase.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+There is no use of this C99 language feature that is compliant with this rule. The examples show some
+of the undefined behaviour that can arise from its use.
+</p>
+
+<pre><code language="C++">\
+/* Non-compliant - uses static in array declarator */
+uint16_t total ( uint16_t n, uint16_t a[ static 20 ] )
+{
+  uint16_t i;
+
+  uint16_t sum = 0U;
+
+  /* Undefined behaviour if a has fewer than 20 elements */
+  for ( i = 0U; i &lt; n; ++i )
+  {
+    sum = sum + a[ i ];
+  }
+
+  return sum;
+}
+
+extern uint16_t v1[ 10 ];
+extern uint16_t v2[ 20 ];
+
+void g ( void )
+{
+  uint16_t x;
+
+  x = total ( 10U, v1 ); /* Undefined - v1 has 10 elements but needs
+                          *             at least 20                   */
+  x = total ( 20U, v2 ); /* Defined but non-compliant                 */
+}\
+</code></pre>
+'''
+
+
+def test_entity(file):
+    return file.file_type() == 'C'
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check: Check, file: Ent):
+    for ref in file.filerefs('Define, Declare', 'Parameter', True):
+        line = ref.line()
+        column = ref.column()
+
+        lex = file.lexer(False).lexeme(line, column)
+        if not lex:
+            continue
+
+        lex = lex.next(True, True)
+        if not lex or lex.token() != 'Operator' or lex.text() != '[':
+            continue
+
+        brackets = 1
+
+        while brackets > 0:
+            lex = lex.next(True, True)
+            if not lex:
+                break
+
+            token = lex.token()
+
+            if token == 'Operator':
+                text = lex.text()
+                if text == '[':
+                    brackets += 1
+                elif text == ']':
+                    brackets -= 1
+            elif token == 'Keyword':
+                if lex.text() == 'static':
+                    check.violation(ref.ent(), file, line, column, ERR1)
+            elif token == 'Newline':
+                break
