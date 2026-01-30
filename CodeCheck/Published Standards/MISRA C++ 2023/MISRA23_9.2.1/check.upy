@@ -1,3 +1,6 @@
+import re
+
+
 ERR1 = "An explicit type conversion shall not be an expression statement"
 
 
@@ -85,81 +88,45 @@ def test_global():
     return False
 
 
-def is_valid_statement(line_tokens):
-    if "Whitespace" in line_tokens:
-        return False
-
-    return True
-
-
-def is_lex_valid(lex):
-    if (lex.token() == "Identifier"
-            and lex.next(True, True) and lex.next(True, True).text() in "({"
-            and lex.previous(True, True) and lex.previous(True, True).text() not in ["=", ".", "->"]):
-        return True
-
-    return False
-
-
-def is_ent_invalid(ent):
-    if ent.kind().check("Function, Macro, Namespace, FunctionTemplate"):
-        return True
-
-    return False
-
-
-def is_ref_invalid(ref):
-    if ref.kind().check("Define, Definein, Declare, Declarein, Derive, Deriveby, Call, Callby"):
-        return True
-
-    return False
-
-
-def is_newline(lex):
-    if ((lex.token() == "Newline" or lex.text() == ";")
-            and lex.previous(True, True)
-            and lex.previous(True, True).token() not in ["Operator", "Identifier", "Keyword"]):
-        return True
-
-    return False
+def is_keyword(lex):
+    return ((lex.token() == "Keyword" and lex.text() in ["return", "throw"])
+            or (lex.token() == "Operator" and lex.text() not in ["::", "}", "{", ";", "<", ">"]))
 
 
 def check(check, file):
-    lexer = file.lexer(True, 8, False, False)
-    lex = lexer.first()
-    line_tokens = []
+    for call_ref in file.filerefs("Call ~Inactive ~Implicit, Cast Use", "Explicit Member Function, Type"):
+        lex = file.lexer().lexeme(call_ref.line(), 0)
 
-    while lex:
-        if is_valid_statement(line_tokens) and is_lex_valid(lex):
-            if ((lex.ent() and is_ent_invalid(lex.ent()))
-                    or (lex.ref() and is_ref_invalid(lex.ref()))):
-                lex = lex.next()
-                continue
-
-            open_bracket = lex.next(True, True).text()
-            close_bracket = ")" if open_bracket == "(" else "}"
-            flag_lex = lex
-            on_bracket = 0
-
-            while lex:
-                if lex.text() == open_bracket:
-                    on_bracket += 1
-                elif lex.text() == close_bracket:
-                    on_bracket -= 1
-
-                    if not on_bracket:
-                        break
-
-                lex = lex.next(True, True)
-
-            if lex.next(True, True) and lex.next(True, True).text() == ";":
-                check.violation(flag_lex.ent(), file,
-                                flag_lex.line_begin(), flag_lex.column_begin(), ERR1)
-        elif is_newline(lex):
-            line_tokens.clear()
-            lex = lex.next(True, True)
+        if is_keyword(lex.previous(True, True)) or lex.previous(True, True).text() in "(":
             continue
-        else:
-            line_tokens.append(lex.token())
 
-        lex = lex.next()
+        on_func = False
+        skip = False
+
+        if lex.token() in ["Indent", "Whitespace"]:
+            lex = lex.next(True, True)
+
+        statement = ""
+
+        while lex and lex.line_begin() == call_ref.line():
+            if on_func and lex.text() == ",":
+                pass
+            elif ((not on_func
+                    and lex.token() not in ["Operator", "Punctuation"]
+                    and lex.text() not in call_ref.ent().longname())
+                    or is_keyword(lex)):
+                skip = True
+                break
+            elif lex.ent() and lex.ent().id() == call_ref.ent().id():
+                on_func = True
+
+            statement += lex.text()
+
+            lex = lex.next(True, True)
+
+        if skip:
+            continue
+
+        if re.search(rf"\(?(std::)?(.*::)?{call_ref.ent().name()}(<.*>)?\)?[\({{].+[\)\}}];", statement):
+            check.violation(call_ref.ent(), file,
+                            call_ref.line(), call_ref.column(), ERR1)
