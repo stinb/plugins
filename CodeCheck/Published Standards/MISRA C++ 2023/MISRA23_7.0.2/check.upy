@@ -1,3 +1,6 @@
+import re
+
+
 ERR1 = "There shall be no conversion to type bool"
 BOOL_OPS = ["<", ">", "<=", ">=", "==", "!=", "!", "&&", "||", "true", "false"]
 BOOL = ["true", "false"]
@@ -117,6 +120,9 @@ void foo( C c )
 
 <p><b>See also</b></p>
 <p>Rule 7.0.1, Rule 7.11.3, Rule 8.2.4</p>
+
+<p><b>Developer's Note:</b></p>
+<p>Due to limitations, a lambda returning a bool that is assigned to a bool variable may be falsely flagged as a violation.</p>
 """,
     }[id]
 
@@ -185,7 +191,9 @@ def ent_is_bool(ent, inc_ptr=True):
 
     bfield = str(ent.freetext("Bitfield"))
 
-    if utype in BOOL_TYPES or (inc_ptr and utype.endswith("*")) or bfield == "1":
+    if (utype in BOOL_TYPES
+        or (inc_ptr and (utype.endswith("*") or re.search(r"\(\*\)\(.*\)$", utype)))
+            or bfield == "1"):
         return True
 
     return False
@@ -203,7 +211,8 @@ def rop_is_bool(lex):
 
     while lex.token() not in ["Whitespace", "Newline", "Indent"]:
         if (lex.ent() and ent_is_bool(lex.ent())
-                or lex.text() in BOOL_OPS):
+                or lex.text() in BOOL_OPS
+                or lex.token() == "Preprocessor"):  # exclude preprocessor
             return True
 
         lex = lex.previous()
@@ -219,7 +228,8 @@ def lop_is_bool(lex):
 
     while lex.token() not in ["Whitespace", "Newline", "Indent"]:
         if (lex.ent() and ent_is_bool(lex.ent())
-                or lex.text() in BOOL_OPS):
+                or lex.text() in BOOL_OPS
+                or lex.token() == "Preprocessor"):  # exclude preprocessor
             return True
 
         lex = lex.next()
@@ -231,12 +241,12 @@ def lop_is_bool(lex):
 
 
 def get_ent_type(entity):
-    typed_ref = entity.ref("Typed")
+    typed_ref = entity.ref("Typed ~TemplateArgument")
 
     while typed_ref:
         obj_ent = typed_ref.ent()
         obj_ref_type = obj_ent.type()
-        typed_ref = typed_ref.ent().ref("Typed")
+        typed_ref = typed_ref.ent().ref("Typed ~TemplateArgument")
 
         if not typed_ref:
             return obj_ent, obj_ref_type
@@ -279,6 +289,7 @@ def check(check, file):
                 check.violation(None, file, flag_lex.line_begin(),
                                 flag_lex.column_begin(), ERR1)
         elif lex.text() in ["if", "while"] and lex.next(True, True).text() == "(":
+
             flag_lex = lex
             compliant = False
             on_assignment = False
@@ -378,11 +389,12 @@ def check(check, file):
         lex = lex.next(True, True)
 
     for obj_ref in file.filerefs("Define", "Object"):
-        if not ent_is_bool(obj_ref.ent()):
+        if not ent_is_bool(obj_ref.ent(), False):
             continue
 
         for ass_ref in obj_ref.ent().refs("Assign Value"):
-            if ass_ref.ent().name() == "operator bool" or ent_is_bool(ass_ref.ent(), False):
+            if (ass_ref.ent().name() == "operator bool"
+                    or ent_is_bool(ass_ref.ent(), False)):
                 continue
 
             lex = ass_ref.file().lexer().lexeme(ass_ref.line(), ass_ref.column())
@@ -392,7 +404,7 @@ def check(check, file):
             if lex.previous(True, True).text() in BOOL_OPS:
                 continue
 
-            while lex.previous().text() in [".", "->", "::"]:
+            while lex.previous().text() in [".", "->", "::", "&"]:
                 lex = lex.previous().previous()
 
             if lex.previous(True, True).text() in BOOL_OPS:

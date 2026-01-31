@@ -53,6 +53,64 @@ def decode_cursor(cursor: str) -> int:
     except:
         return 0
 
+def _pick_sample_ref_for_entity(ent):
+    """
+    Pick a sample reference for an entity: first definein, else first declarein, else first ref with file.
+    Returns (ref, file_ent, kind_label) or (None, None, None).
+    """
+    refs = list(ent.refs())
+    definein = [r for r in refs if r.kind().check("definein")]
+
+    if definein:
+        r = definein[0]
+        return r, r.file(), "definein"
+    declarein = [r for r in refs if r.kind().check("declarein")]
+    if declarein:
+        r = declarein[0]
+        return r, r.file(), "declarein"
+    if refs:
+        r = refs[0]
+        return r, r.file(), r.kind().longname()
+    return None, None, None
+
+
+def _build_no_source_error(ent_id: int, ent) -> str:
+    """Build error message when entity has no source, with workflow suggestion and optional 5-line example."""
+    ent_name = ent.name()
+    ent_kind = ent.kind().name()
+    base = (
+        f"Entity {ent_id} ('{ent_name}', {ent_kind}) has no source code. "
+        "Retrieve references with get_entity_references(ent_id={ent_id}), "
+        "then get source at those locations with get_entity_source(ent_id=<file_id>, start_line=<line>-2, end_line=<line>+2)."
+    ).format(ent_id=ent_id)
+
+    sample_ref, file_ent, kind_label = _pick_sample_ref_for_entity(ent)
+    if not sample_ref or not file_ent:
+        return base
+
+    line = sample_ref.line()
+    file_id = file_ent.id()
+    file_contents = file_ent.contents()
+    if not file_contents:
+        return base
+
+    lines = file_contents.split("\n")
+    total = len(lines)
+    start_1 = max(1, line - 2)
+    end_1 = min(total, line + 2)
+    snippet = "\n".join(lines[start_1 - 1 : end_1])
+
+    example = (
+        f'\n\nExample: retrieve five lines for the first "{kind_label}" ref at file_id={file_id}, line={line}:\n'
+        f"  get_entity_source(ent_id={file_id}, start_line={start_1}, end_line={end_1})\n"
+        "returns (5-line window):\n"
+        "---\n"
+        f"{snippet}\n"
+        "---"
+    )
+    return base + example
+
+
 def paginate_results(items: list, max_results: int, cursor: Optional[str]) -> tuple:
     """
     Apply pagination to a list of items.
@@ -434,12 +492,9 @@ def get_entity_source(
     1. lookup_entity_id(name="egrep.c", kindstring="File") → get entity ID (e.g., 276)
     2. get_entity_source(ent_id=276, start_line=80, end_line=82) → get source code
 
-    Note: Source code is only available for entities that have contents, such as:
-    - Files
-    - Functions/Methods
-    - Classes/Structs
-    Entities like variables, namespaces that occur in multiple places, or other entities
-    without a single definition location will not have source code available.
+    It's safe to call this on any entity. If the entity has no source (e.g. parameters,
+    namespaces, unresolved functions), the error message will include a code snippet from
+    a reference location and guidance.
 
     Use this to:
     - Read function/method/class implementations
@@ -466,7 +521,7 @@ def get_entity_source(
 
     # Check if entity has source code (contents() returns empty string if not available)
     if not source_code:
-        raise ValueError(f"Entity with id {ent_id} does not have source code available. Source code is only available for entities like files, functions, classes that have contents.")
+        raise ValueError(_build_no_source_error(ent_id, ent))
 
     # Handle line range filtering
     lines = source_code.split('\n')
