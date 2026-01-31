@@ -2,7 +2,8 @@ import re
 
 
 ERR1 = "The numerical value of a character shall not be used"
-INT_TYPES = ["int", "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t", "int64_t", "uint64_t"]
+INT_TYPES = ["int", "int8_t", "uint8_t", "int16_t",
+             "uint16_t", "int32_t", "uint32_t", "int64_t", "uint64_t"]
 UNUSABLE_OPS = ["&&", "||", "!", "++", "--", "+", "-", "*", "/", "%"]
 COMPARISON_OPS = ["==", "!=", "<", ">", "<=", ">="]
 
@@ -26,7 +27,7 @@ def tags(id):
             'Language: C',
             'Language: C++',
             'Standard: MISRA C++ 2023',
-            'Category: Required',            
+            'Category: Required',
             'Variables',
         ],
     }.get(id)
@@ -113,6 +114,13 @@ def test_language(language):
     return language == 'C++'
 
 
+def is_char(ent):
+    utype = str(ent.freetext("UnderlyingType"))
+    ent_type = str(ent.type())
+
+    return utype == "char" or ent_type == "char" or utype.endswith("<char>")
+
+
 def check(check, file):
     for obj_ref in file.filerefs("Define", "Object"):
         utype = obj_ref.ent().freetext("UnderlyingType")
@@ -120,14 +128,18 @@ def check(check, file):
 
         if obj_ref.ent().type() in INT_TYPES:
             if init_text and re.search(r"^'\D+'", str(init_text)):
-                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)
         elif utype and utype in INT_TYPES and re.search(r"cast<.+>\('\D+'\)", str(init_text)):
-            check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
-        elif obj_ref.ent().type() == "char":
+            check.violation(obj_ref.ent(), file, obj_ref.line(),
+                            obj_ref.column(), ERR1)
+        elif is_char(obj_ref.ent()):
             if init_text and init_text.isdigit():
-                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)
             elif re.search("^L'.*'", str(init_text)):
-                check.violation(obj_ref.ent(), file, obj_ref.line(), obj_ref.column(), ERR1)
+                check.violation(obj_ref.ent(), file,
+                                obj_ref.line(), obj_ref.column(), ERR1)
 
     for ass_ref in file.filerefs("Assign Value", "Object"):
         utype = ass_ref.ent().freetext("UnderlyingType")
@@ -137,21 +149,25 @@ def check(check, file):
 
         if ass_ref.ent().type() in INT_TYPES or utype and utype in INT_TYPES:
             if ent_scope and (ent_scope.type() == "char") or (scope_utype == "char"):
-                check.violation(ass_ref.ent(), file, ass_ref.line(), ass_ref.column(), ERR1)
-        elif (ass_ref.ent().type() == "char") or (utype == "char"):
+                check.violation(ass_ref.ent(), file,
+                                ass_ref.line(), ass_ref.column(), ERR1)
+        elif is_char(ass_ref.ent()):
             if ent_scope and (ent_scope.type() in INT_TYPES) or (scope_utype in INT_TYPES):
-                check.violation(ass_ref.ent(), file, ass_ref.line(), ass_ref.column(), ERR1)
+                check.violation(ass_ref.ent(), file,
+                                ass_ref.line(), ass_ref.column(), ERR1)
 
     for use_ref in file.filerefs("Use", "Object"):
         utype = use_ref.ent().freetext("UnderlyingType")
 
-        if (use_ref.ent().type() == "char") or (utype == "char"):
+        if is_char(use_ref.ent()):
             lex = file.lexer().lexeme(use_ref.line(), use_ref.column())
             next_lex = lex.next(True, True)
             prev_lex = lex.previous(True, True)
 
-            if next_lex.text() in UNUSABLE_OPS or prev_lex.text() in UNUSABLE_OPS:
-                check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+            if ((next_lex.text() in UNUSABLE_OPS and prev_lex.text() not in COMPARISON_OPS)
+                    or (prev_lex.text() in UNUSABLE_OPS and next_lex.text() not in COMPARISON_OPS)):
+                check.violation(use_ref.ent(), file,
+                                use_ref.line(), use_ref.column(), ERR1)
             elif next_lex.text() in COMPARISON_OPS:
                 next_lex = next_lex.next(True, True)
 
@@ -159,18 +175,22 @@ def check(check, file):
                     utype = next_lex.ent().freetext("UnderlyingType")
 
                     if next_lex.ent().type() in INT_TYPES or (utype and utype in INT_TYPES):
-                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)
                 elif (next_lex.token() == "String") and re.search("^'.'", next_lex.text()):
                     if next_lex.text().strip("'").isdigit():
-                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
-            elif prev_lex.text() in COMPARISON_OPS:                    
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)
+            elif prev_lex.text() in COMPARISON_OPS:
                 prev_lex = prev_lex.previous(True, True)
 
                 if prev_lex.ent():
                     utype = prev_lex.ent().freetext("UnderlyingType")
 
                     if prev_lex.ent().type() in INT_TYPES or (utype and utype in INT_TYPES):
-                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)
                 elif (prev_lex.token() == "String") and re.search("^'.'", prev_lex.text()):
                     if prev_lex.text().strip("'").isdigit():
-                        check.violation(use_ref.ent(), file, use_ref.line(), use_ref.column(), ERR1)
+                        check.violation(use_ref.ent(), file,
+                                        use_ref.line(), use_ref.column(), ERR1)
