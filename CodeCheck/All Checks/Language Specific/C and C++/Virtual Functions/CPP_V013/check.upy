@@ -1,0 +1,196 @@
+# This script is designed to run with Understand - CodeCheck
+# Rewritten by Robby Bennett
+# 2026-02-03
+
+
+import re
+
+from understand import Check, Ent
+
+
+ERR1 = 'Virtual function is defined more than once'
+
+
+def ids():
+    return ('MISRA08_10-3-1', 'CPP_V013')
+
+
+def name(id):
+    return {
+        'MISRA08_10-3-1': '''Published Standards/MISRA-C++ 2008/\
+10-3-1 Virtual Function Redefinition''',
+        'CPP_V013': '''All Checks/Language Specific/C and C++/Virtual Functions/\
+Virtual Function Redefinition''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA08_10-3-1': [
+            'Virtual Functions',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+        ],
+        'CPP_V013': [
+            'Virtual Functions',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>There shall be no more than one definition of each virtual function on each path through the inheritance hierarchy.</p>
+
+<p><b>Rationale</b></p>
+
+<p>The main aim of this rule is clarity for maintainers and reviewers, by ensuring that the version of
+a function that can be executed from any point in a class hierarchy is unambiguous.</p>
+
+<p>Additionally, where classes form a diamond hierarchy, <i>call by dominance</i> ([1] §10.3(11)) may
+occur resulting in a call to a function that is inconsistent with developer expectations. This rule
+also prevents <i>call by dominance</i>.</p>
+
+<p><b>Exception</b></p>
+
+<p>Destructors may be declared virtual in multiple members of a class hierarchy.</p>
+
+<p>If a function is declared pure and defined in the same class, then that definition is ignored for this
+rule.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+class A
+{
+public:
+   virtual void f1 ( ) = 0;   // f1 is pure
+   virtual void f2 ( ) = 0;   // f2 is pure
+   virtual void f3 ( ) { }    // f3 is not pure
+   virtual void f4 ( ) = 0;   // f4 is pure
+
+   virtual ~A();              // destructor
+};
+
+// A::f1 is both pure and has a definition
+void A::f1 ( )
+{
+}
+
+// A::f4 is both pure and has a definition
+void A::f4 ( )
+{
+}
+
+class B : public A
+{
+public:
+   virtual void f2 ( ) { }    // Compliant: f2 pure in A and
+                              //            defined in B
+   virtual void f3 ( ) { }    // Non-compliant: f3 defined in A and B
+   virtual void f4 ( ) = 0;   // Compliant: f4 is pure in A and in B
+
+   virtual ~B();              // Compliant: destructor
+};
+
+// Compliant by Exception - f4 defined in A but also declared pure in A
+void B::f4 ( )
+{
+}
+
+class C : public B
+{
+public:
+   virtual void f1 ( ) { } // Compliant: f1 defined in A and C
+                           //            but was pure in A
+   virtual void f2 ( ) { } // Non-compliant f2: defined in B and C
+                           // and not declared pure in B
+   virtual void f4 ( ) { } // Compliant by Exception: f4 defined in A
+                           // and B but also declared pure in A and B
+};
+
+class D : public C
+{
+public:
+   virtual void f1 ( ) { } // Non-compliant f1: defined in C and D
+                           // as well as A
+   virtual ~D();           // Compliant: destructor
+};
+
+// Call by dominance example
+class V
+{
+public:
+   virtual void foo ( )
+   {
+   }
+};
+
+class B1 : public virtual V
+{
+public:
+   virtual void foo ( )  // Non-compliant
+   {
+   }
+};
+
+class B2 : public virtual V
+{
+public:
+   void f1 ( )
+   {
+      foo();  // V::foo would appear to be the only
+              // canadidate to be called here
+   }
+};
+
+class D : public B1, public B2
+{
+public:
+   void f2 ( )
+   {
+      f1();
+   }
+};
+
+B2 b2;
+
+b2.f1();  // calls V::foo by normal inheritance rules
+
+D d;
+
+d.f2();   // calls B2::f1 which now calls B1::foo
+          // "by dominance"
+d.f1();   // also calls B1::foo "by dominance"\
+</code></pre>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return file.file_type() == 'C++'
+
+
+def test_global() -> bool:
+    return False
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+def check(check: Check, file: Ent):
+    for ref in file.filerefs('Define', 'Member Function Virtual'):
+        ent = ref.ent()
+
+        # Skip destructors
+        if ent.name().startswith('~'):
+            continue
+
+        # Skip unless it overrides a defined virtual function
+        if not ent.ref('Overrides', '~Pure Virtual'):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
