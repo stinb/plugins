@@ -1,0 +1,175 @@
+import und_lib.kind_util as kind_util
+import understand
+
+def ids():
+    return [
+        "CallNodes",
+        "CallSumCyclomatic",
+        "CallCountLineCode",
+        "CallByNodes",
+        "CallByDepth",
+        "CallBySumCyclomatic",
+        "CallByCountLineCode"
+    ]
+
+def name(id):
+    if id == "CallNodes":
+        return "Call Nodes"
+    elif id == "CallSumCyclomatic":
+        return "Call Sum Cyclomatic"
+    elif id == "CallCountLineCode":
+        return "Call Count Line Code"
+    elif id == "CallByNodes":
+        return "Call By Nodes"
+    elif id == "CallByDepth":
+        return "Call By Depth"
+    elif id == "CallBySumCyclomatic":
+        return "Call By Sum Cyclomatic"
+    elif id == "CallByCountLineCode":
+        return "Call By Count Line Code"
+
+def description(id):
+    if id == "CallNodes":
+        return '''<p>The number of unique nodes in the call tree (including self).</p>
+        <p>Counts all unique functions called by this function, directly or indirectly,
+        including the function itself.</p>'''
+    elif id == "CallSumCyclomatic":
+        return '''<p>Sum of Cyclomatic Complexities for each unique node in the call tree.</p>
+        <p>Aggregates the cyclomatic complexity of all functions in the call tree,
+        providing a measure of total complexity reachable from this function.</p>'''
+    elif id == "CallCountLineCode":
+        return '''<p>Sum of CountLineCode for each unique node in the call tree.</p>
+        <p>Total lines of code across all functions in the call tree.</p>'''
+    elif id == "CallByNodes":
+        return '''<p>The number of unique nodes in the called-by tree (not including self).</p>
+        <p>Counts all unique functions that call this function, directly or indirectly.</p>'''
+    elif id == "CallByDepth":
+        return '''<p>Maximum number of levels the called-by tree reaches (not including self).</p>
+        <p>Measures the maximum call chain depth from any caller to this function.</p>'''
+    elif id == "CallBySumCyclomatic":
+        return '''<p>Sum of Cyclomatic Complexities for each unique node in the called-by tree (not including self).</p>
+        <p>Aggregates the cyclomatic complexity of all functions that call this function.</p>'''
+    elif id == "CallByCountLineCode":
+        return '''<p>Sum of CountLineCode for each unique node in the called-by tree (not including self).</p>
+        <p>Total lines of code across all functions that call this function.</p>'''
+
+def tags(id):
+    return [
+        'Target: Functions',
+        'Language: Any',
+    ]
+
+def test_available(metric, entkindstr):
+    # Kind check if requested
+    if entkindstr:
+        my_kinds = set(understand.Kind.list_entity(kind_util.FUNCTION_KIND_STR))
+        test_kinds = set(understand.Kind.list_entity(entkindstr))
+        return len(my_kinds.intersection(test_kinds)) > 0
+    return True
+
+def is_integer(id):
+    return True
+
+def test_entity(metric, ent):
+    return ent.kind().check(kind_util.FUNCTION_KIND_STR)
+
+def value(metric, ent):
+    metric_id = metric.id()
+
+    # Determine direction and whether to include self
+    if metric_id.startswith("CallBy"):
+        ref_type = "callby"
+        include_self = False
+    else:
+        ref_type = "call"
+        include_self = True
+
+    # Collect unique nodes in the tree
+    unique_nodes = collect_tree_nodes(ent, ref_type, include_self)
+
+    # Calculate the requested metric
+    if metric_id == "CallNodes":
+        return len(unique_nodes)
+    elif metric_id == "CallByNodes":
+        return len(unique_nodes)
+    elif metric_id == "CallByDepth":
+        return calculate_max_depth(ent, ref_type)
+    elif metric_id == "CallSumCyclomatic":
+        return sum_metric(unique_nodes, "Cyclomatic")
+    elif metric_id == "CallCountLineCode":
+        return sum_metric(unique_nodes, "CountLineCode")
+    elif metric_id == "CallBySumCyclomatic":
+        return sum_metric(unique_nodes, "Cyclomatic")
+    elif metric_id == "CallByCountLineCode":
+        return sum_metric(unique_nodes, "CountLineCode")
+
+    return None
+
+# Traverse the tree and collect all unique nodes
+def collect_tree_nodes(start_ent, ref_type, include_self):
+    visited = set()
+    to_visit = []
+
+    if include_self:
+        to_visit.append(start_ent)
+    else:
+        # Start with direct references, not including self
+        for ref in start_ent.refs(ref_type + ' ~inactive', kind_util.FUNCTION_KIND_STR_WITH_UNRESOLVED, True):
+            to_visit.append(ref.ent())
+
+    while to_visit:
+        current = to_visit.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+
+        # Add children to visit
+        for ref in current.refs(ref_type + ' ~inactive', kind_util.FUNCTION_KIND_STR_WITH_UNRESOLVED, True):
+            child = ref.ent()
+            if child not in visited:
+                to_visit.append(child)
+
+    return visited
+
+# Calculate maximum depth of tree (not including start_ent for callby)
+def calculate_max_depth(start_ent, ref_type):
+    visited_in_path = set()
+
+    def depth_recursive(ent, current_depth):
+        # Check for cycles
+        if ent in visited_in_path:
+            return current_depth - 1
+
+        visited_in_path.add(ent)
+
+        # Get children
+        children = ent.refs(ref_type + ' ~inactive', kind_util.FUNCTION_KIND_STR_WITH_UNRESOLVED, True)
+
+        if not children:
+            visited_in_path.remove(ent)
+            return current_depth
+
+        max_child_depth = current_depth
+        for ref in children:
+            child_depth = depth_recursive(ref.ent(), current_depth + 1)
+            max_child_depth = max(max_child_depth, child_depth)
+
+        visited_in_path.remove(ent)
+        return max_child_depth
+
+    # Start depth calculation from the entity's children
+    max_depth = 0
+    for ref in start_ent.refs(ref_type + ' ~inactive', kind_util.FUNCTION_KIND_STR_WITH_UNRESOLVED, True):
+        depth = depth_recursive(ref.ent(), 1)
+        max_depth = max(max_depth, depth)
+
+    return max_depth
+
+# Sum a specific metric across all entities
+def sum_metric(entities, metric_name):
+    total = 0
+    for ent in entities:
+        metric_value = ent.metric(metric_name)
+        if metric_value is not None:
+            total += metric_value
+    return total

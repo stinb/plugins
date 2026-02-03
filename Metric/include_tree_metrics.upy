@@ -1,0 +1,188 @@
+import und_lib.kind_util as kind_util
+import understand
+
+def ids():
+    return [
+        "IncludeNodes",
+        "IncludeDepth",
+        "IncludeSumCyclomatic",
+        "IncludeCountLineCode",
+        "IncludeByNodes",
+        "IncludeByDepth",
+        "IncludeBySumCyclomatic",
+        "IncludeByCountLineCode"
+    ]
+
+def name(id):
+    if id == "IncludeNodes":
+        return "Include Nodes"
+    elif id == "IncludeDepth":
+        return "Include Depth"
+    elif id == "IncludeSumCyclomatic":
+        return "Include Sum Cyclomatic"
+    elif id == "IncludeCountLineCode":
+        return "Include Count Line Code"
+    elif id == "IncludeByNodes":
+        return "Include By Nodes"
+    elif id == "IncludeByDepth":
+        return "Include By Depth"
+    elif id == "IncludeBySumCyclomatic":
+        return "Include By Sum Cyclomatic"
+    elif id == "IncludeByCountLineCode":
+        return "Include By Count Line Code"
+
+def description(id):
+    if id == "IncludeNodes":
+        return '''<p>Number of unique nodes in the include tree (including self).</p>
+        <p>Counts all unique files included by this file, directly or indirectly,
+        including the file itself.</p>'''
+    elif id == "IncludeDepth":
+        return '''<p>Maximum number of levels the include tree reaches.</p>
+        <p>Measures the maximum include chain depth from this file.</p>'''
+    elif id == "IncludeSumCyclomatic":
+        return '''<p>Sum of Cyclomatic Complexities for each unique node in the include tree.</p>
+        <p>Aggregates the cyclomatic complexity of all files in the include tree.</p>'''
+    elif id == "IncludeCountLineCode":
+        return '''<p>Sum of CountLineCode for each unique node in the include tree.</p>
+        <p>Total lines of code across all files in the include tree.</p>'''
+    elif id == "IncludeByNodes":
+        return '''<p>Number of unique nodes in the included-by tree (not including self).</p>
+        <p>Counts all unique files that include this file, directly or indirectly.</p>'''
+    elif id == "IncludeByDepth":
+        return '''<p>Maximum number of levels the included-by tree reaches (not including self).</p>
+        <p>Measures the maximum include chain depth from any file to this file.</p>'''
+    elif id == "IncludeBySumCyclomatic":
+        return '''<p>Sum of Cyclomatic Complexities for each unique node in the included-by tree (not including self).</p>
+        <p>Aggregates the cyclomatic complexity of all files that include this file.</p>'''
+    elif id == "IncludeByCountLineCode":
+        return '''<p>Sum of CountLineCode for each unique node in the included-by tree (not including self).</p>
+        <p>Total lines of code across all files that include this file.</p>'''
+
+def tags(id):
+    return [
+        'Target: Files',
+        'Language: Any',
+    ]
+
+def test_available(metric, entkindstr):
+    # Kind check if requested
+    if entkindstr:
+        my_kinds = set(understand.Kind.list_entity(kind_util.FILE_KIND_STR))
+        test_kinds = set(understand.Kind.list_entity(entkindstr))
+        return len(my_kinds.intersection(test_kinds)) > 0
+    return True
+
+def is_integer(id):
+    return True
+
+def test_entity(metric, ent):
+    return ent.kind().check(kind_util.FILE_KIND_STR)
+
+def value(metric, ent):
+    metric_id = metric.id()
+
+    # Determine direction and whether to include self
+    if metric_id.startswith("IncludeBy"):
+        ref_type = "includeby"
+        include_self = False
+    else:
+        ref_type = "include"
+        include_self = True
+
+    # Collect unique nodes in the tree
+    unique_nodes = collect_tree_nodes(ent, ref_type, include_self)
+
+    # Calculate the requested metric
+    if metric_id == "IncludeNodes":
+        return len(unique_nodes)
+    elif metric_id == "IncludeByNodes":
+        return len(unique_nodes)
+    elif metric_id == "IncludeDepth":
+        return calculate_max_depth(ent, ref_type, include_self)
+    elif metric_id == "IncludeByDepth":
+        return calculate_max_depth(ent, ref_type, include_self)
+    elif metric_id == "IncludeSumCyclomatic":
+        return sum_metric(unique_nodes, "Cyclomatic")
+    elif metric_id == "IncludeCountLineCode":
+        return sum_metric(unique_nodes, "CountLineCode")
+    elif metric_id == "IncludeBySumCyclomatic":
+        return sum_metric(unique_nodes, "Cyclomatic")
+    elif metric_id == "IncludeByCountLineCode":
+        return sum_metric(unique_nodes, "CountLineCode")
+
+    return None
+
+# Traverse the tree and collect all unique nodes
+def collect_tree_nodes(start_ent, ref_type, include_self):
+    visited = set()
+    to_visit = []
+
+    if include_self:
+        to_visit.append(start_ent)
+    else:
+        # Start with direct references, not including self
+        refs = start_ent.refs(ref_type) if ref_type == "includeby" else start_ent.filerefs(ref_type)
+        for ref in refs:
+            to_visit.append(ref.ent())
+
+    while to_visit:
+        current = to_visit.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+
+        # Add children to visit
+        refs = current.refs(ref_type) if ref_type == "includeby" else current.filerefs(ref_type)
+        for ref in refs:
+            child = ref.ent()
+            if child not in visited:
+                to_visit.append(child)
+
+    return visited
+
+# Calculate maximum depth of tree
+def calculate_max_depth(start_ent, ref_type, include_self):
+    visited_in_path = set()
+
+    def depth_recursive(ent, current_depth):
+        # Check for cycles
+        if ent in visited_in_path:
+            return current_depth - 1
+
+        visited_in_path.add(ent)
+
+        # Get children
+        refs = ent.refs(ref_type) if ref_type == "includeby" else ent.filerefs(ref_type)
+
+        if not refs:
+            visited_in_path.remove(ent)
+            return current_depth
+
+        max_child_depth = current_depth
+        for ref in refs:
+            child_depth = depth_recursive(ref.ent(), current_depth + 1)
+            max_child_depth = max(max_child_depth, child_depth)
+
+        visited_in_path.remove(ent)
+        return max_child_depth
+
+    if include_self:
+        # For include direction, depth starts at 0 for self
+        return depth_recursive(start_ent, 0)
+    else:
+        # For includeby direction, start from children at depth 1
+        max_depth = 0
+        refs = start_ent.refs(ref_type) if ref_type == "includeby" else start_ent.filerefs(ref_type)
+        for ref in refs:
+            depth = depth_recursive(ref.ent(), 1)
+            max_depth = max(max_depth, depth)
+        return max_depth
+
+# Sum a specific metric across all entities
+def sum_metric(entities, metric_name):
+    total = 0
+    for ent in entities:
+        metric_value = ent.metric(metric_name)
+        if metric_value is not None:
+            total += metric_value
+    return total
