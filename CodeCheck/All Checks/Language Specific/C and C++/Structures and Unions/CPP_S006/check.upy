@@ -1,0 +1,276 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-03
+
+
+import re
+from dataclasses import dataclass
+
+from understand import Check, Ent, Ref
+
+
+ERR1 = 'Union declared'
+ERR2 = 'Union used'
+
+
+def ids():
+    return ('MISRA12_19.2', 'MISRA23_19.2', 'MISRA23_12.3.1', 'CPP_S006')
+
+
+def name(id):
+    return {
+        'MISRA12_19.2': '''Published Standards/MISRA C 2012/\
+19.2 Unions''',
+        'MISRA23_19.2': '''Published Standards/MISRA C 2023/\
+19.2 Unions''',
+        'MISRA23_12.3.1': '''Published Standards/MISRA C++ 2023/\
+12.3.1 Unions''',
+        'CPP_S006': '''All Checks/Language Specific/C and C++/Structures and Unions/\
+Unions''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA12_19.2': [
+            'Structures and Unions',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+        ],
+        'MISRA23_19.2': [
+            'Structures and Unions',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+        ],
+        'MISRA23_12.3.1': [
+            'Structures and Unions',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+        ],
+        'CPP_S006': [
+            'Structures and Unions',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    match id:
+        case 'MISRA12_19.2' | 'MISRA23_19.2': return '''\
+<p><b>Title</b></p>
+
+<p>The <i>union</i> keyword should not be used.</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+A union member can be written and the same member can then be read back in a well-defined
+manner.
+</p>
+
+<p>
+However, if a union member is written and then a different union member is read back, the behaviour
+depends on the relative sizes of the members:
+</p>
+
+<ul>
+<li>
+If the member read is wider than the member written then the value is unspecified;
+</li>
+<li>
+Otherwise, the value is implementation-defined.
+</li>
+</ul>
+
+<p>
+The Standard permits the bytes of a union member to be accessed by means of another member
+whose type is array of <i>unsigned char</i>. However, since it is possible to access bytes with unspecified
+values, unions should not be used.
+</p>
+
+<p>
+If this rule is not followed, the kinds of behaviour that need to be determined are:
+</p>
+
+<ul>
+<li>
+Padding — how much padding is inserted at the end of the union;
+</li>
+<li>
+Alignment — how are members of any structures within the union aligned;
+</li>
+<li>
+Endianness — is the most significant byte of a word stored at the lowest or highest memory
+address;
+</li>
+<li>
+Bit-order — how are bits numbered within bytes and how are bits allocated to bit fields.
+</li>
+</ul>
+
+<p><b>Example</b></p>
+
+<p>In this non-compliant example, a 16-bit value is stored into a union but a 32-bit value is read back
+resulting in an unspecified value being returned.</p>
+
+<pre><code language="C++">\
+uint32_t zext ( uint16_t s )
+{
+  union
+  {
+    uint32_t ul;
+    uint16_t us;
+  } tmp;
+
+  tmp.us = s;
+  return tmp.ul;   /* unspecified value */
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 19.1</p>
+'''
+        case 'MISRA23_12.3.1' | 'CPP_S006': return '''\
+<p><b>Title</b></p>
+
+<p>The <code>union</code> keyword shall not be used.</p>
+
+<p><b>Rationale</b></p>
+
+<p>A member of a union can be written and the same member can then be read back in a well-defined
+manner.</p>
+
+<p>
+However, writing to one union member and then reading back from a different union member results
+in <i>undefined behaviour</i>. In addition, the use of a member of non-trivial type requires manual control
+of its lifetime. For these reasons, unions shall not be used.
+</p>
+
+<p>
+The class <code>std::variant</code>, available since C++17, provides a type-safe union that can be used to store a
+value of one type from a 9xed set of alternatives. In contrast to unions, the alternatives are accessed
+by type (if the types are different) or index, not by name. It is impossible to access an inactive member
+of a <code>std::variant</code>. For example, trying to access an inactive member via <code>std::get</code> will lead to an
+exception being thrown.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+union Data1                                    // Non-compliant
+{
+  int32_t i;
+  float   j;
+};
+
+using Data2 = std::variant< int32_t, float >;  // Rule does not apply\
+</code></pre>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return False
+
+
+def test_global() -> bool:
+    return True
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+@dataclass
+class NoteInfo:
+    ref: Ref
+    note: str
+
+
+def check(check: Check):
+    visited_unions: set[Ent] = set()
+
+    # Map of ents that use unions -> info to create each note
+    flagged: dict[Ent, list[NoteInfo]] = dict()
+
+    # Find all entities that are unions or use unions
+    for union in check.db().ents('C Union, C Unresolved Type Alias, C Unresolved Typedef'):
+        if union.kind().check('Type Alias, Typedef'):
+            t = union.type()
+            if not t or not re.search(r'\bunion\b', t):
+                continue
+            note = f'Using the type {union.name()} declared here which uses a union'
+        else:
+            name = union.name()
+            if name == '[unnamed]':
+                note = f'Using the anonymous union declared here'
+            else:
+                note = f'Using union {union.name()} declared here'
+
+        if union in visited_unions:
+            continue
+        visited_unions.add(union)
+
+        ref = union.ref('Definein')
+        if not ref:
+            ref = union.ref('Declarein')
+            if not ref:
+                ref = union.ref()
+                if not ref:
+                    continue
+        note_info = NoteInfo(ref, note)
+
+        # Visit everything using the union
+        visited = set()
+        to_visit = [union]
+        while to_visit:
+            ent = to_visit.pop()
+            if ent in visited:
+                continue
+            visited.add(ent)
+
+            kind = ent.kind()
+
+            if kind.check('Type'):
+                to_visit += ent.ents('Typedby', 'Object, Parameter, Type Alias, Typedef')
+
+            note_infos = flagged.get(ent)
+            if note_infos != None:
+                if ent == union:
+                    note_infos.append(note_info)
+            else:
+                if ent == union:
+                    flagged[ent] = []
+                else:
+                    flagged[ent] = [note_info]
+
+    # Create the violations in the selected files
+    for file in check.files():
+        if file.language() != 'C++':
+            continue
+
+        for ref in file.filerefs('Declare, Define', 'Object, Parameter, Type'):
+            ent = ref.ent()
+
+            note_infos = flagged.get(ent)
+            if note_infos == None:
+                t = ent.type()
+                if not t or not re.search(r'\bunion\b', t):
+                    continue
+                # GNU compiler extension typeof that uses union
+                violation = check.violation(ent, file, ref.line(), ref.column(), ERR2)
+                continue
+
+            error = ERR1 if ent.kind().check('Union') else ERR2
+
+            violation = check.violation(ent, file, ref.line(), ref.column(), error)
+            for note_info in note_infos:
+                ref = note_info.ref
+                violation.add_note(ref.file(), ref.line(), ref.column(), note_info.note)
