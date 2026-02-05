@@ -1,0 +1,233 @@
+ERR1 = "An object shall not be used while in a potentially moved-from state"
+
+
+def ids():
+    return ('MISRA23_28.6.3')
+
+
+def name(id):
+    return {
+        'MISRA23_28.6.3': """Published Standards/MISRA C++ 2023/28.6.3 \
+An object shall not be used while in a potentially moved-from state""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_28.6.3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_28.6.3': """
+<p><b>Amplification</b></p>
+<p>Calling std::move, std::forward or using an equivalent static_cast puts its argument into a
+potentially moved-from state.</p>
+<p>An object in a potentially moved-from state shall not be used on any path, regardless of the path's
+feasibility.</p>
+<p>An object passed as an lvalue reference function parameter shall not be in a potentially moved-from
+state when the function returns. This additional restriction is included as it allows compliance to be
+determined within a translation unit.</p>
+<p>This rule does not apply to the following:</p>
+<p>● Assigning to an object; or</p>
+<p>● Destroying an object; or</p>
+<p>● Using an object having type std::unique_ptr.</p>
+<p>For the purposes of this rule, aliases of an object are considered to refer to different objects. This
+allows compliance checks to be decidable.</p>
+
+<p><b>Rationale</b></p>
+<p>Using std::forward or std::move on an lvalue to pass it as an rvalue reference argument in a
+function call can result in the lvalue object being in an indeterminate state after the call. However, a
+std::unique_ptr that has been moved-from is in a well-defined state, equal to nullptr.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">size_t a( std::string s1 )
+{
+    std::string s2 = std::move( s1 );
+    return s1.size(); // Non-compliant - s1 has potentially
+} // moved-from state
+
+size_t b( std::string s1 )
+{
+    std::string s2 =
+        static_cast&lt; std::string && &gt;( s1 ); // Equivalent to std::move
+    return s1.size(); // Non-compliant - s1 has potentially
+}
+
+void c( std::string s1 )
+{
+    std::string s2 = std::move( s1 );
+    std::string s3 = s1; // Non-compliant - s1 has potentially
+} // moved-from state
+
+template&lt; typename T &gt;
+void bar( T & t );
+
+template&lt; typename T &gt;
+void foo( T && t )
+{
+    bar( std::forward&lt; T &gt;( t ) );
+    ++t; // Non-compliant - std::forward leaves t
+} // in a potentially moved-from state
+
+struct X { std::string s; };
+
+void f( X & x )
+{
+    X y ( std::move( x ) ); // Non-compliant - lvalue reference
+    // parameter left in potentially moved-
+} // from state when function returns
+
+void g( X x )
+{
+    X y;
+    y = std::move( x ); // Compliant - no more uses of x
+}
+
+void h( X x )
+{
+    X y;
+    y = std::move( x );
+    x = X{}; // Compliant - assigns to potentially
+} </code></pre>
+
+<p>The following is non-compliant as the evaluation order of the arguments to d1 is implementation-
+defined and there is a permitted order in which the first argument s has potentially moved-from state.</p>
+<pre><code language="C++">void d1 ( std::string const &, int32_t );
+int32_t d2 ( std::string && );
+void d3( std::string s )
+{
+    d1( s, d2( std::move( s ) ) ); // Non-compliant
+}
+</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_obj_valid(lex):
+    next_lex = lex.next(True, True)
+
+    if next_lex.text() == "(":
+        while next_lex and next_lex.text() != ")":
+            next_lex = next_lex.next(True, True)
+
+        if next_lex.next(True, True).text() in [".", "->"]:
+            return False
+
+    utype = str(lex.ent().freetext("UnderlyingType"))
+
+    if (utype.startswith("std::unique_ptr")
+            or lex.next().text() in [".", "->", "::"]):
+        return False
+
+    return True
+
+
+def get_moved_obj(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    on_param = 0
+
+    while lex and lex.text() != ";":
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+                break
+        elif on_param == 1 and lex.ent() and is_obj_valid(lex):
+            return lex
+
+        lex = lex.next(True, True)
+
+    return None
+
+
+def find_err_refs(lex, call_ref, check):
+    ent = lex.ent()
+
+    for use_ref in ent.refs("~Setby ~Assign ~Declarein"):
+        if (use_ref.ent().id() != call_ref.scope().id()
+                or use_ref.file().id() != call_ref.file().id()
+                or (use_ref.line() == lex.line_begin()
+                    and use_ref.column() == lex.column_begin() and not use_ref.kind().check("Return"))
+                or use_ref.line() < call_ref.line()):
+            continue
+
+        check.violation(ent, use_ref.file(), use_ref.line(),
+                        use_ref.column(), ERR1)
+
+    for ass_ref in call_ref.ent().refs("Assignby Value"):
+        if ass_ref.file().id() != call_ref.file().id():
+            continue
+        elif (ass_ref.line() != call_ref.line()
+              or ass_ref.column() != call_ref.column()):
+            continue
+
+        ent_utype = str(ent.freetext("UnderlyingType"))
+
+        if ent_utype.endswith("&"):
+            check.violation(ent, ass_ref.file(),
+                            ass_ref.line(), ass_ref.column(), ERR1)
+
+
+def is_ref_cast(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+    if lex and lex.text() != "static_cast":
+        return False
+
+    on_type = 0
+
+    while lex:
+        if lex.text() == "<":
+            on_type += 1
+        elif lex.text() == ">":
+            on_type -= 1
+
+            if not on_type:
+                break
+        elif on_type and lex.text() == "&&" and lex.token() == "Operator":
+            return True
+
+        lex = lex.next(True, True)
+
+    return False
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        for call_ref in func_ref.ent().refs("Call", "Function Template, Public Member Function"):
+            if call_ref.kind().check("Implicit"):
+                if not is_ref_cast(call_ref):
+                    continue
+            elif (call_ref.ent().name() not in ["move", "forward"]
+                  or (call_ref.ent().name() == "move"
+                      and str(call_ref.ent().parameters()) != "_Tp &&")):
+                continue
+
+            moved_obj = get_moved_obj(call_ref)
+
+            if not moved_obj:
+                continue
+
+            find_err_refs(moved_obj, call_ref, check)
