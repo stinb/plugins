@@ -76,10 +76,18 @@ def is_integer(id):
     return True
 
 def test_entity(metric, ent):
-    return ent.kind().check(kind_util.FILE_KIND_STR)
+    return ent.kind().check(kind_util.FILE_KIND_STR) and hasattr(metric, "cache")
 
 def value(metric, ent):
-    metric_id = metric.id()
+    und_cache = metric.cache()
+    if und_cache:
+        return calculate_metric(metric.id(), und_cache, ent)
+
+def calculate_metric(metric_id, und_cache, ent):
+    # Check cache first
+    cached_value = und_cache.value(ent=ent)
+    if cached_value is not None:
+        return cached_value
 
     # Determine direction and whether to include self
     if metric_id.startswith("IncludeBy"):
@@ -89,28 +97,33 @@ def value(metric, ent):
         ref_type = "include"
         include_self = True
 
-    # Collect unique nodes in the tree
-    unique_nodes = collect_tree_nodes(ent, ref_type, include_self)
-
     # Calculate the requested metric
-    if metric_id == "IncludeNodes":
-        return len(unique_nodes)
-    elif metric_id == "IncludeByNodes":
-        return len(unique_nodes)
-    elif metric_id == "IncludeDepth":
-        return calculate_max_depth(ent, ref_type, include_self)
-    elif metric_id == "IncludeByDepth":
-        return calculate_max_depth(ent, ref_type, include_self)
-    elif metric_id == "IncludeSumCyclomatic":
-        return sum_metric(unique_nodes, "Cyclomatic")
-    elif metric_id == "IncludeCountLineCode":
-        return sum_metric(unique_nodes, "CountLineCode")
-    elif metric_id == "IncludeBySumCyclomatic":
-        return sum_metric(unique_nodes, "Cyclomatic")
-    elif metric_id == "IncludeByCountLineCode":
-        return sum_metric(unique_nodes, "CountLineCode")
+    if metric_id == "IncludeDepth" or metric_id == "IncludeByDepth":
+        result = calculate_max_depth(ent, ref_type, include_self, und_cache)
+    else:
+        # Collect unique nodes in the tree
+        unique_nodes = collect_tree_nodes(ent, ref_type, include_self)
 
-    return None
+        if metric_id == "IncludeNodes":
+            result = len(unique_nodes)
+        elif metric_id == "IncludeByNodes":
+            result = len(unique_nodes)
+        elif metric_id == "IncludeSumCyclomatic":
+            result = sum_metric(unique_nodes, "Cyclomatic")
+        elif metric_id == "IncludeCountLineCode":
+            result = sum_metric(unique_nodes, "CountLineCode")
+        elif metric_id == "IncludeBySumCyclomatic":
+            result = sum_metric(unique_nodes, "Cyclomatic")
+        elif metric_id == "IncludeByCountLineCode":
+            result = sum_metric(unique_nodes, "CountLineCode")
+        else:
+            result = None
+
+    # Store in cache
+    if result is not None:
+        und_cache.insert(result, ent=ent)
+
+    return result
 
 # Traverse the tree and collect all unique nodes
 def collect_tree_nodes(start_ent, ref_type, include_self):
@@ -141,10 +154,18 @@ def collect_tree_nodes(start_ent, ref_type, include_self):
     return visited
 
 # Calculate maximum depth of tree
-def calculate_max_depth(start_ent, ref_type, include_self):
+def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
+    # Build a cache key specific to this ref_type to avoid collision
+    cache_key = f"depth_{ref_type}"
+
     visited_in_path = set()
 
     def depth_recursive(ent, current_depth):
+        # Check cache for this entity's depth
+        cached_depth = und_cache.value(key=cache_key, ent=ent)
+        if cached_depth is not None:
+            return current_depth + cached_depth
+
         # Check for cycles
         if ent in visited_in_path:
             return current_depth - 1
@@ -156,6 +177,8 @@ def calculate_max_depth(start_ent, ref_type, include_self):
 
         if not refs:
             visited_in_path.remove(ent)
+            # Cache: this entity has depth 0 from itself
+            und_cache.insert(0, key=cache_key, ent=ent)
             return current_depth
 
         max_child_depth = current_depth
@@ -164,6 +187,11 @@ def calculate_max_depth(start_ent, ref_type, include_self):
             max_child_depth = max(max_child_depth, child_depth)
 
         visited_in_path.remove(ent)
+
+        # Cache the depth from this entity
+        depth_from_here = max_child_depth - current_depth
+        und_cache.insert(depth_from_here, key=cache_key, ent=ent)
+
         return max_child_depth
 
     if include_self:
