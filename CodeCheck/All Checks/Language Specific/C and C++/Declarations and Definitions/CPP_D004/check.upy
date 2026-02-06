@@ -1,0 +1,293 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-06
+
+
+import re
+from dataclasses import dataclass
+
+from understand import Check, Ent
+
+
+ERR_U   = '"U" or "u" suffix not applied to unsigned integer constant %1'
+ERR_UL  = '"U" or "u" suffix not applied to unsigned long integer constant %1'
+ERR_ULL = '"U" or "u" suffix not applied to unsigned long long integer constant %1'
+
+
+def ids():
+    return ('MISRA12_7.2', 'MISRA23_7.2', 'CPP_D004')
+
+
+def name(id):
+    return {
+        'MISRA12_7.2': '''Published Standards/MISRA C 2012/\
+7.2 Unsigned Integer Literal Without Suffix''',
+        'MISRA23_7.2': '''Published Standards/MISRA C 2023/\
+7.2 Unsigned Integer Literal Without Suffix''',
+        'CPP_D004': '''All Checks/Language Specific/C and C++/Declarations and Definitions/\
+Unsigned Integer Literal Without Suffix''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA12_7.2': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+        ],
+        'MISRA23_7.2': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_D004': [
+            'Declarations and Definitions',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A "u" or "U" suffix shall be applied to all integer constants that are
+represented in an unsigned type.</p>
+
+<p><b>Amplification</b></p>
+
+<p>This rule applies to:</p>
+
+<ul>
+<li>Integer constants that appear in the controlling expressions of <i>#if</i> and <i>#elif</i> preprocessing directives;</li>
+<li>Any other integer constants that exist after preprocessing.</li>
+</ul>
+
+<p>
+<i>Note</i>: during preprocessing, the type of an integer constant is determined in the same manner as after
+preprocessing except that:
+</p>
+
+<ul>
+<li>All signed integer types behave as if they were <i>long</i> (C90) or <i>intmax_t</i> (C99);</li>
+<li>All unsigned integer types behave as if they were <i>unsigned long</i> (C90) or <i>uintmax_t</i> (C99).</li>
+</ul>
+
+<p><b>Rationale</b></p>
+
+<p>
+The type of an integer constant is a potential source of confusion, because it is dependent on a
+complex combination of factors including:
+</p>
+
+<ul>
+<li>The magnitude of the constant;</li>
+<li>The implemented sizes of the integer types;</li>
+<li>The presence of any suffixes;</li>
+<li>The number base in which the value is expressed (i.e. decimal, octal or hexadecimal).</li>
+</ul>
+
+<p>
+For example, the integer constant <code>40000</code> is of type <i>signed int</i> in a 32-bit environment but of type <i>signed
+long</i> in a 16-bit environment. The value <code>0x8000</code> is of type <i>unsigned int</i> in a 16-bit environment, but of
+type <i>signed int</i> in a 32-bit environment.
+</p>
+
+<p>
+<i>Note:</i>
+</p>
+
+<ul>
+<li>Any value with a "U" suffix is of unsigned type;</li>
+<li>An unsuffixed decimal value less than 2³¹ is of signed type.</li>
+</ul>
+
+<p>
+But:
+</p>
+
+<ul>
+<li>An unsuffixed hexadecimal value greater than or equal to 2¹⁵ may be of signed or unsigned type;</li>
+<li>For C90, an unsuffixed decimal value greater than or equal to 2³¹ may be of signed or unsigned type.</li>
+</ul>
+
+<p>
+Signedness of constants should be explicit. If a constant is of an unsigned type, applying a "U" suffix
+makes it clear that the programmer understands that the constant is unsigned.
+</p>
+
+<p>
+<i>Note</i>: this rule does not depend on the context in which a constant is used; promotion and other
+conversions that may be applied to the constant are not relevant in determining compliance with this
+rule.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+The following example assumes a machine with a 16-bit <i>int</i> type and a 32-bit <i>long</i> type. It shows the
+type of each i nteger constant determined in accordance with The Standard. The integer constant
+<code>0x8000</code> is non-compliant because it has an unsigned type but does not have a “U” suffix.
+</p>
+
+<table style="border-collapse: collapse; text-align: center;">
+<thead>
+<tr>
+<th style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Constant</th>
+<th style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Type</th>
+<th style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Compliance</th></tr>
+</thead>
+<tbody>
+<tr>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><code>32767</code></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><i>signed int</i></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Compliant</td></tr>
+<tr>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><code>0x7fff</code></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><i>signed int</i></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Compliant</td></tr>
+<tr>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><code>32768</code></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><i>signed long</i></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Compliant</td></tr>
+<tr>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><code>32768u</code></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><i>unsigned int</i></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Compliant</td></tr>
+<tr>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><code>0x8000</code></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><i>unsigned int</i></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Non-compliant</td></tr>
+<tr>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><code>0x8000u</code></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;"><i>unsigned int</i></td>
+<td style="border: 1px solid gray; padding: 4px 16px; text-align: center;">Compliant</td></tr>
+</tbody>
+</table>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return True
+
+
+def test_global() -> bool:
+    return False
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+def define_options(check: Check):
+    check.options().integer('int', 'Integer size in bits', 16)
+    check.options().integer('long', 'Long size in bits', 32)
+    check.options().integer('long_long', 'Long long size in bits', 64)
+    check.options().checkbox('new_std', 'Using standards >= C99 and >= C++11', False)
+
+
+def check(check: Check, file: Ent):
+    options = check.options()
+    int_bits = options.lookup('int')
+    long_bits = options.lookup('long')
+    long_long_bits = options.lookup('long_long')
+    new_std = options.lookup('new_std')
+
+    if type(int_bits) != int or type(long_bits) != int or type(long_long_bits) != int:
+        return
+
+    int_max           = 2 ** (int_bits - 1) - 1
+    long_max          = 2 ** (long_bits - 1) - 1
+    long_long_max     = 2 ** (long_long_bits - 1) - 1
+    unsigned_max      = 2 ** int_bits - 1
+    unsigned_long_max = 2 ** long_bits - 1
+
+    preprocessor_condition = False
+
+    for lex in file.lexer(False):
+        token = lex.token()
+        if token == 'Literal':
+            pass
+        elif token == 'Preprocessor':
+            if lex.text() in ('if', 'elif'):
+                preprocessor_condition = True
+            continue
+        elif token == 'Newline':
+            preprocessor_condition = False
+            continue
+        else:
+            continue
+
+        text = lex.text()
+
+        is_decimal, value, suffix = parse_int(text)
+        if value == 0:
+            continue
+
+        if re.search(r'[uU]', text):
+            continue
+
+        error = ''
+
+        # https://en.cppreference.com/w/c/language/integer_constant.html
+
+        if preprocessor_condition:
+            if not new_std and value > long_max:
+                error = ERR_UL
+        elif is_decimal:
+            if not new_std and value > long_max and value <= unsigned_long_max \
+            and suffix in ('l', 'L', ''):
+                error = ERR_UL
+        # Hexadecimal, octal, or binary
+        elif suffix in ('ll', 'LL'):
+            if value > long_long_max:
+                error = ERR_ULL
+        elif suffix in ('l', 'L'):
+            if value > long_long_max:
+                error = ERR_ULL
+            elif value > long_max and value <= unsigned_long_max:
+                error = ERR_UL
+        elif not suffix:
+            if value > long_long_max:
+                error = ERR_ULL
+            elif value > long_max and value <= unsigned_long_max:
+                error = ERR_UL
+            elif value > int_max and value <= unsigned_max:
+                error = ERR_U
+
+        if not error:
+            continue
+
+        check.violation(None, file, lex.line_begin(), lex.column_begin(), error, text)
+
+
+# Parse an integer, possibly with apostrophe separators,
+# returning (is_decimal, value, suffix)
+def parse_int(literal: str) -> tuple[bool, int, str]:
+    # Decimal
+    match = re.match(r"(^[1-9](?:'?[0-9])*)(.*)", literal)
+    if match:
+        return True, int(match[1].replace("'", ""), 10), match[2]
+
+    # Hexadecimal
+    match = re.match(r"(^0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*)(.*)", literal)
+    if match:
+        return False, int(match[1].replace("'", ""), 16), match[2]
+
+    # Octal
+    match = re.match(r"(^0(?:'?[0-7])*)(.*)", literal)
+    if match:
+        return False, int(match[1].replace("'", ""), 8), match[2]
+
+    # Binary
+    match = re.match(r"(^0[bB][01](?:'?[01])*)(.*)", literal)
+    if match:
+        return False, int(match[1].replace("'", ""), 2), match[2]
+
+    return False, 0, ''
