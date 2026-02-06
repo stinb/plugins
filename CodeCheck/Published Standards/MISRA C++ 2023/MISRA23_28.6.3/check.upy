@@ -162,32 +162,55 @@ def get_moved_obj(ref):
     return None
 
 
+def has_asgn(ref):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+
+    while lex and lex.line_begin() == ref.line():
+        if ((lex.text() == "=" and lex.token() == "Operator")
+                or (lex.text() == "return" and lex.token() == "Keyword")):
+            return True
+
+        lex = lex.previous(True, True)
+
+    return False
+
+
 def find_err_refs(lex, call_ref, check):
     ent = lex.ent()
 
-    for use_ref in ent.refs("~Setby ~Assign ~Declarein"):
+    for use_ref in sorted(ent.refs("~Declarein ~Definein ~Init"), key=lambda ref: ref.line()):
         if (use_ref.ent().id() != call_ref.scope().id()
-                or use_ref.file().id() != call_ref.file().id()
-                or (use_ref.line() == lex.line_begin()
-                    and use_ref.column() == lex.column_begin() and not use_ref.kind().check("Return"))
-                or use_ref.line() < call_ref.line()):
+                or use_ref.file().id() != call_ref.file().id()):
             continue
+        elif ((use_ref.line() == lex.line_begin()
+               and use_ref.column() == lex.column_begin())
+                or use_ref.line() < call_ref.line()
+                or use_ref.ent().name() == "operator="):
+            continue
+        elif use_ref.kind().check("Setby, Assign") and use_ref.line() >= call_ref.line():
+            break
 
         check.violation(ent, use_ref.file(), use_ref.line(),
                         use_ref.column(), ERR1)
 
+    ent_utype = str(ent.freetext("UnderlyingType"))
+
+    if ent_utype.endswith("&&") or not ent_utype.endswith("&"):
+        return
+
     for ass_ref in call_ref.ent().refs("Assignby Value"):
-        if ass_ref.file().id() != call_ref.file().id():
+        if (ass_ref.file().id() != call_ref.file().id()
+                or ass_ref.ent().name() == "operator="):
             continue
         elif (ass_ref.line() != call_ref.line()
               or ass_ref.column() != call_ref.column()):
             continue
 
-        ent_utype = str(ent.freetext("UnderlyingType"))
+        if has_asgn(ass_ref):
+            continue
 
-        if ent_utype.endswith("&"):
-            check.violation(ent, ass_ref.file(),
-                            ass_ref.line(), ass_ref.column(), ERR1)
+        check.violation(ent, ass_ref.file(), ass_ref.line(),
+                        ass_ref.column(), ERR1)
 
 
 def is_ref_cast(ref):
