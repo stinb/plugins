@@ -1,0 +1,219 @@
+ERR1 = "Forwarding reference parameter shall be forwarded using std::forward when passed to other function"
+ERR2 = "std::forward shall only be used to forward a forwarding reference"
+ERR3 = "Template argument does not match with the forwarding reference parameter type"
+
+
+def ids():
+    return ('MISRA23_28.6.2')
+
+
+def name(id):
+    return {
+        'MISRA23_28.6.2': """Published Standards/MISRA C++ 2023/28.6.2 \
+Forwarding references and std::forward shall be used together""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_28.6.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_28.6.2': """
+<p><b>Amplification</b></p>
+<p>A forwarding reference parameter (of type T &&) shall be forwarded when passed to other functions
+by wrapping the parameter in a call to the function std::forward&lt; T &gt;.</p>
+<p>Furthermore, std::forward shall only be used to forward a forwarding reference.</p>
+
+<p><b>Rationale</b></p>
+<p>Perfect forwarding relies on language features such as reference collapsing and type deduction, which
+are complex to master. Enforcing the use of well known idioms avoids the risk of writing code that
+does not do what was intended.</p>
+<p>Note: care must be taken not to forward the same argument twice — see Rule 28.6.3.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">void f1( std::string & ); // #1
+void f1( std::string && ); // #2
+
+template&lt; typename T1, typename T2 &gt;
+void f2( T1 && t1, T2 & t2 )
+{
+    f1( t1 ); // Non-compliant - calls #1
+    #1 (for #4) or #2 (for #3)
+    f1( std::forward&lt; T1 &gt;( t1 ) ); // Compliant - calls
+    f1( std::forward&lt; T2 &gt;( t2 ) ); // Non-compliant - calls #2
+    f1( std::forward&lt; T2 &gt;( t1 ) ); // Non-compliant - wrong template parameter
+    f1( std::move( t1 ) ); // Non-compliant - calls #2
+    f1( std::move( t2 ) ); // Rule does not apply - calls #2
+    auto lambda = [] ( auto && t )
+    { f1(t); }; // Non-compliant - calls #1
+}
+
+void f3()
+{
+    std::string s;
+    f2( std::string { "Hello" }, s ); // #3
+    f2( s, s ); // #4
+}
+
+template&lt; typename T &gt;
+struct A
+{
+    void foo( T && t )
+    {
+        std::move( t ); // Rule does not apply - not a forwarding reference
+    }
+};</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 28.6.1, Rule 28.6.3</p>
+
+<p><b>Developer's Note:</b></p>
+<p>This check automatically flags the use of forwarding references that are not passed through std::forward.</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_fwdref(ent):
+    ent_type, _ = get_ent_type(ent)
+    utype = str(ent.freetext("UnderlyingType"))
+    utype = utype.strip("...")
+
+    return ent_type and ent_type.kind().check("TemplateParameter") and utype.endswith("&&")
+
+
+def get_fwd_obj(ref, fwd_params):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+    on_param = 0
+    on_temp = 0
+    template = None
+
+    while lex and lex.text() != ";":
+        if lex.text() == "<":
+            on_temp += 1
+        elif lex.text() == ">":
+            on_temp -= 1
+        elif on_temp and lex.ent() and lex.ent().kind().check("Type"):
+            template = lex.ent()
+
+        if lex.text() == "(":
+            on_param += 1
+        elif lex.text() == ")":
+            on_param -= 1
+
+            if not on_param:
+                break
+        elif on_param == 1 and lex.ent() and lex.ent() in fwd_params:
+            return lex, template
+
+        lex = lex.next(True, True)
+
+    return None, None
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        fwd_params = []
+
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            if is_fwdref(param_ref.ent()):
+                fwd_params.append(param_ref.ent())
+
+        if not fwd_params:
+            continue
+
+        fwd_lines = {}
+
+        for call_ref in func_ref.ent().refs("Call", "Function Template"):
+            if call_ref.ent().name() != "forward":
+                continue
+
+            fwd_lex, template = get_fwd_obj(call_ref, fwd_params)
+
+            if not fwd_lex:
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), ERR2)
+                continue
+
+            while fwd_lex.next(True, True).text() in [".", "->"]:
+                fwd_lex = fwd_lex.next(True, True).next(True, True)
+
+            param_type, _ = get_ent_type(fwd_lex.ent())
+
+            if not template or (param_type and param_type.id() != template.id()):
+                check.violation(call_ref.ent(), file,
+                                call_ref.line(), call_ref.column(), f"ERR3 {fwd_lex.text()} {param_type}")
+
+            if fwd_lex.line_begin() not in fwd_lines:
+                fwd_lines[fwd_lex.line_begin()] = [fwd_lex.column_begin()]
+            else:
+                fwd_lines[fwd_lex.line_begin()].append(
+                    fwd_lex.column_begin())
+
+        lexer = file.lexer(True, 8, False, False)
+
+        for call_ref in func_ref.ent().refs("Call", "Function"):
+            if call_ref.ent().name() == "move":
+                continue
+
+            lex = lexer.lexeme(call_ref.line(), call_ref.column())
+
+            if lex and (lex.text() != call_ref.ent().name()
+                        or lex.next(True, True).text() != "("):
+                continue
+
+            on_param = 0
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        break
+                elif (on_param and lex.ent() and lex.ent() in fwd_params
+                      and lex.next().text() not in [".", "->"]):
+                    if (lex.line_begin() in fwd_lines
+                            and lex.column_begin() in fwd_lines[lex.line_begin()]):
+                        pass
+                    else:
+                        check.violation(lex.ent(), file,
+                                        lex.line_begin(), lex.column_begin(), ERR1)
+
+                lex = lex.next(True, True)
