@@ -1,0 +1,194 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-11
+
+
+import re
+from enum import Enum
+
+from understand import Check, Ent, Lexeme
+
+
+ERR1 = 'Macro used for something other than include guards, type qualifiers, or storage class specifiers'
+
+ALLOWED = {'_Thread_local', 'auto', 'const', 'extern', 'mutable', 'register', 'restrict', 'static', 'thread_local', 'volatile'}
+
+
+def ids():
+    return ('MISRA08_16-2-2', 'CPP_P020')
+
+
+def name(id):
+    return {
+        'MISRA08_16-2-2': '''Published Standards/MISRA-C++ 2008/\
+16-2-2 Invalid Macro Usage''',
+        'CPP_P020': '''All Checks/Language Specific/C and C++/Preprocessor/\
+Invalid Macro Usage''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA08_16-2-2': [
+            'Preprocessor',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+        ],
+        'CPP_P020': [
+            'Preprocessor',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    match id:
+        case 'MISRA08_16-2-2': return '''\
+<p><b>Title</b></p>
+
+<p>C++ macros shall only be used for <i>include guards</i>, type
+qualifiers, or storage class specifiers.</p>
+
+<p><b>Rationale</b></p>
+
+<p>These are the only permitted uses of macros. C++ offers const variable and function templates,
+which provide a type-safe alternative to the preprocessor.</p>
+
+<p>Note that the use of macros for type qualifiers and storage class specifiers will break
+Rule 16–2–1.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+// The following are compliant
+#define STOR extern                  // storage class specifier
+                                     // Breaks Rule 16–2–1
+
+// The following are non-compliant
+#define CLOCK (xtal/16)              // Constant expression
+#define PLUS2(X) ((X) + 2)           // Macro expanding to expression
+#define PI 3.14159F                  // use const object instead
+#define int32_t long                 // use typedef instead
+#define STARTIF if(                  // language redefinition
+#define INIT(value) {(value), 0, 0}  // braced initializer
+#define HEADER "filename.h"          // string literal\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 16-2-1</p>
+'''
+        case 'CPP_P020': return '''\
+<p><b>Title</b></p>
+
+<p>C++ macros shall only be used for <i>include guards</i>, type
+qualifiers, or storage class specifiers.</p>
+
+<p><b>Rationale</b></p>
+
+<p>These are the only permitted uses of macros. C++ offers const variable and function templates,
+which provide a type-safe alternative to the preprocessor.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+// The following are compliant
+#define STOR extern                  // storage class specifier
+
+// The following are non-compliant
+#define CLOCK (xtal/16)              // Constant expression
+#define PLUS2(X) ((X) + 2)           // Macro expanding to expression
+#define PI 3.14159F                  // use const object instead
+#define int32_t long                 // use typedef instead
+#define STARTIF if(                  // language redefinition
+#define INIT(value) {(value), 0, 0}  // braced initializer
+#define HEADER "filename.h"          // string literal\
+</code></pre>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return True
+
+
+def test_global() -> bool:
+    return False
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+class Expecting(Enum):
+    Directive    = 0
+    Name         = 1
+    OptOpenParen = 2
+    ClosedParen  = 3
+    Definition   = 4
+
+
+def check(check: Check, file: Ent):
+    lex: Lexeme | None = file.lexer(False).first()
+
+    while lex:
+        if lex.token() != 'Preprocessor' or lex.text() != '#' or lex.inactive():
+            lex = lex.next(True, True)
+            continue
+
+        valid, next_lex = analyze_directive(lex)
+
+        if not valid:
+            if lex:
+                lex.next(True, True)
+                if lex:
+                    lex.next(True, True)
+            check.violation(None, file, lex.line_begin(), lex.column_begin(), ERR1)
+
+        lex = next_lex
+
+
+# Go through the whole preprocessor directive, returning whether it's valid and the following lexeme
+def analyze_directive(lex: Lexeme | None) -> tuple[bool, Lexeme | None]:
+    expecting = Expecting.Directive
+    is_define = False
+    is_good_define = True
+
+    if lex:
+        lex = lex.next(ignore_comments=True)
+
+    while lex:
+        token = lex.token()
+        if token == 'Newline':
+            break
+
+        #define
+        if expecting == Expecting.Directive:
+            if token == 'Preprocessor' and lex.text() == 'define':
+                expecting = Expecting.Name
+                is_define = True
+        #define NAME
+        elif expecting == Expecting.Name:
+            if token == 'Identifier':
+                expecting = Expecting.OptOpenParen
+        #define NAME(
+        elif expecting == Expecting.OptOpenParen:
+            if lex.text() == '(':
+                expecting = Expecting.ClosedParen
+            else:
+                expecting = Expecting.Definition
+        #define NAME(ARGS)
+        elif expecting == Expecting.ClosedParen:
+            if lex.text() == ')':
+                expecting = Expecting.Definition
+        #define NAME(OPTIONAL_ARGS) DEFINITION
+        elif expecting == Expecting.Definition:
+            if is_good_define and lex.token() != 'Whitespace' and lex.text() not in ALLOWED:
+                is_good_define = False
+
+        lex = lex.next(ignore_comments=True)
+
+    valid = not is_define or is_good_define
+    return valid, lex
