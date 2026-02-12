@@ -1,0 +1,174 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-12
+
+
+import re
+from dataclasses import dataclass
+
+from understand import Check, Ent
+
+
+ERR1 = 'Identifier reused'
+
+
+def ids():
+    return ('MISRA04_5.7', 'CPP_I005')
+
+
+def name(id):
+    return {
+        'MISRA04_5.7': '''Published Standards/MISRA-C 2004/\
+5.7 Identifier Reuse''',
+        'CPP_I005': '''All Checks/Language Specific/C and C++/Identifiers/\
+Identifier Reuse''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA04_5.7': [
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2004',
+            'Category: Advisory',
+        ],
+        'CPP_I005': [
+            'Identifiers',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    match id:
+        case 'MISRA04_5.7': return '''\
+<p><b>Title</b></p>
+
+<p>No identifier name should be reused.</p>
+
+<p><b>Description</b></p>
+
+<p>Regardless of scope, no identifier should be re-used across any files in the system. This rule
+incorporates the provisions of Rules 5.2, 5.3, 5.4, 5.5 and 5.6.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+struct air_speed
+{
+   uint16_t speed;   /* knots */
+} * x;
+struct gnd_speed
+{
+   uint16_t speed;   /* mph */
+                     /* Not Compliant - speed is in different units */
+} * y;
+x-&gt;speed = y-&gt;speed;\
+</code></pre>
+
+<p>Where an identifier name is used in a header file, and that header file is included in multiple
+source files, this rule is not violated. The use of a rigorous naming convention can support the
+implementation of this rule.</p>
+'''
+        case 'CPP_I005': return '''\
+<p><b>Title</b></p>
+
+<p>No identifier name should be reused.</p>
+
+<p><b>Description</b></p>
+
+<p>Regardless of scope, no identifier should be re-used across any files in the system.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+struct air_speed
+{
+   uint16_t speed;   /* knots */
+} * x;
+struct gnd_speed
+{
+   uint16_t speed;   /* mph */
+                     /* Not Compliant - speed is in different units */
+} * y;
+x-&gt;speed = y-&gt;speed;\
+</code></pre>
+
+<p>Where an identifier name is used in a header file, and that header file is included in multiple
+source files, this rule is not violated. The use of a rigorous naming convention can support the
+implementation of this rule.</p>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return False
+
+
+def test_global() -> bool:
+    return True
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+def define_options(check: Check):
+    check.options().text('exceptions', 'Exceptions (comma-separated)', '')
+    check.options().checkbox('overloads', 'Ignore overloads', False)
+
+
+@dataclass
+class CountInfo:
+    count: int
+    fn_parents: set[Ent]
+
+
+def check(check: Check):
+    exceptions: set[str] = set(map(str.strip, str(check.options().lookup('exceptions')).split(',')))
+    overloads = bool(check.options().lookup('overloads'))
+
+    re_identifier: re.Pattern = re.compile(r'^(?!\d)\w\w*$')
+
+    # Count the repeats
+    name_to_count: dict[str, CountInfo] = dict()
+    for ent in check.db().ents('~File ~Unknown ~Unnamed ~Unresolved'):
+        name = ent.name()
+        if name in exceptions or not re_identifier.search(name):
+            continue
+
+        name = ent.name()
+
+        info = name_to_count.get(name)
+        if not info:
+            name_to_count[name] = CountInfo(0, set())
+            info = name_to_count[name]
+
+        info.count += 1
+
+        if not overloads or not ent.kind().check('Function'):
+            continue
+        parent = ent.parent()
+        if not parent:
+            continue
+        info.fn_parents.add(parent)
+
+    # Make the violations
+    for file in check.files():
+        for ref in file.filerefs('Declare, Define', '~File ~Unknown ~Unnamed ~Unresolved', True):
+            ent = ref.ent()
+
+            name = ent.name()
+            if name in exceptions or not re_identifier.search(name):
+                continue
+
+            info = name_to_count.get(name)
+            if not info or info.count < 2:
+                continue
+
+            if overloads and ent.kind().check('Function') and len(info.fn_parents) < 2:
+                continue
+
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
