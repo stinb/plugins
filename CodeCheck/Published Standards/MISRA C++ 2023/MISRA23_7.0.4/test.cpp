@@ -49,3 +49,21 @@ void foo()
     u32 >>= 2;              // UndCC_Valid
     s32 >>= 2;              // UndCC_Violation - left operand is signed
 }
+
+void some_func(int a, int32_t *b) {}
+
+// Address-of operator (should not trigger)
+void test_address_of()
+{
+    int x = 5;
+    int *ptr = &x;                    // UndCC_Valid - address-of
+    int32_t val = 10;
+    some_func(0, &val);               // UndCC_Valid - address-of in function call
+}
+
+// Reference declarations (should not trigger)
+void test_reference()
+{
+    int32_t a = 5;
+    int32_t &ref = a;                 // UndCC_Valid - reference declaration
+}
