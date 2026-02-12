@@ -1,0 +1,196 @@
+ERR1 = "Constructor should explicitly initialize all of its virtual base classes and immediate base classes"
+
+
+def ids():
+    return ('MISRA23_15.1.2')
+
+
+def name(id):
+    return {
+        'MISRA23_15.1.2': """Published Standards/MISRA C++ 2023/15.1.2 \
+All constructors of a class should explicitly initialize all of its virtual \
+base classes and immediate base classes""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_15.1.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Constructors',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_15.1.2': """
+<p><b>Amplification</b></p>
+<p>This rule applies to all user-provided constructors that are not defaulted.</p>
+<p>A base class is considered as explicitly initialized by a constructor when:</p>
+<p>1. The base class is initialized in the member initializer list of the constructor; or</p>
+<p>2. The constructor is a delegating constructor, assuming that the delegated-to constructor
+conforms to this rule.</p>
+
+<p><b>Rationale</b></p>
+<p>This rule reduces the chance of confusion over which constructor will be used, and with what
+parameters.</p>
+
+<p><b>Exception</b></p>
+<p>A class is empty when it has no non-static data members, no virtual member functions, no virtual base
+classes, and only empty base classes. A base class that is empty need not be initialized, as there is
+nothing to initialize.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class A
+{
+public:
+    A() {} // Rule does not apply - no base classes
+};
+
+class B : public A
+{
+public:
+    B() {} // Compliant by exception
+};
+
+class V
+{
+public:
+    V() {} // Rule does not apply - no base classes
+    V( int32_t i ): i ( i ) {} // Rule does not apply - no base classes
+private:
+    int32_t i = 0;
+};
+
+class C1 : public virtual V
+{
+public:
+    C1() : V { 21 } {} // Compliant
+};
+
+class C2 : public virtual V
+{
+public:
+    C2() : V { 42 } {} // Compliant
+};</code></pre>
+
+<p>In the following, there would appear to be an ambiguity as D only includes one copy of V. Which version
+of V's constructor is executed and with what parameter? In fact, V's default constructor is always
+executed. This would be the case even if C1 and C2 constructed their bases with the same integer
+parameter.</p>
+<pre><code language="C++">class D: public C1, public C2
+{
+public:
+    D() {} // Non-compliant
+};
+</code></pre>
+
+<p>This is clarified by making the initialization explicit:</p>
+<pre><code language="C++">D() : V {}, C1 {}, C2 {} {} // Compliant - V::i == 0
+struct E
+{
+    int32_t i;
+    int32_t j;
+};
+
+class F : public E
+{
+public:
+    F( int32_t val ) : E { val } // Compliant - E is initialized by aggregate
+    {} // initialization, with E::j initialized to 0
+    F() : F ( 0 ) {} // Compliant - delegates to the other constructor
+};
+
+class G : public A // Rule does not apply - no user-provided
+{ // constructor
+};
+
+class H : public A, public V // Rule does not apply - no user-provided
+{ // constructor
+public:
+    using V::V; // Subobject 'A' implicitly initialized
+};</code></pre>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def get_vbase(base_ent):
+    vbase = []
+
+    for vbase_ref in base_ent.refs("Virtual Base"):
+        if not is_empty(vbase_ref.ent()):
+            vbase.append(vbase_ref.ent().name())
+
+        vbase.extend(get_vbase(vbase_ref.ent()))
+
+    return vbase
+
+
+def is_empty(ent):
+    if not ent.refs("Define, Declare", "~Static Member Object, Virtual Member Function, Virtual Base"):
+        for base in ent.refs("Define, Declare", "~Virtual Base"):
+            return is_empty(base.ent())
+
+        return True
+
+    return False
+
+
+def has_init_base(ent, class_name, bases, begin_ref):
+    for call_ref in ent.refs("Call", "Function"):
+        if call_ref.ent().name() in bases and not call_ref.kind().check("Implicit"):
+            return True
+        elif call_ref.ent().name() == class_name:
+            new_beginref = call_ref.ent().ref("Begin, Beginby")
+
+            if has_init_base(call_ref.ent(), class_name, bases, new_beginref):
+                return True
+
+    for typed_ref in ent.refs("Typed"):
+        if (typed_ref.ent().name() in bases
+                and begin_ref and typed_ref.line() <= begin_ref.line()):
+            return True
+
+    return False
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class Type, Struct Type"):
+        bases = []
+
+        for base_ref in class_ref.ent().refs("Base"):
+            if not is_empty(base_ref.ent()):
+                bases.append(base_ref.ent().name())
+
+            bases.extend(get_vbase(base_ref.ent()))
+
+        if not bases:
+            continue
+
+        for func_ref in class_ref.ent().refs("Define", "Member Function"):
+            if func_ref.ent().name() != class_ref.ent().name():
+                continue
+
+            begin_ref = func_ref.ent().ref("Begin, Beginby")
+
+            if has_init_base(func_ref.ent(), class_ref.ent().name(), bases, begin_ref):
+                continue
+
+            check.violation(func_ref.ent(), func_ref.file(),
+                            func_ref.line(), func_ref.column(), ERR1)
