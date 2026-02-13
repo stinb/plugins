@@ -67,3 +67,12 @@ void test_reference()
     int32_t a = 5;
     int32_t &ref = a;                 // UndCC_Valid - reference declaration
 }
+
+// Hex bitmask literals (should not trigger)
+void test_hex_bitmasks()
+{
+    uint32_t version = 0x12345678;
+    auto major = (version & 0xFFFF0000) >> 16; // UndCC_Valid - hex bitmask
+    auto minor = version & 0x0000FFFF;         // UndCC_Valid - hex bitmask
+    unsigned char byte = (version & 0xff);     // UndCC_Valid - hex bitmask
+}
