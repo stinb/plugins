@@ -1,0 +1,300 @@
+import re
+
+
+ERR1 = "Exception-unfriendly function shall be noexcept"
+ERR2 = "Arguments passed to function %1 shall be convertible to function pointers to noexcept functions"
+ERR3 = "Destructor shall be noexcept"
+ERR4 = "Constructor shall be noexcept"
+
+
+def ids():
+    return ('MISRA23_18.4.1')
+
+
+def name(id):
+    return {
+        'MISRA23_18.4.1': """Published Standards/MISRA C++ 2023/18.4.1 \
+Exception-unfriendly functions shall be noexcept""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_18.4.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Exception Handling',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_18.4.1': """
+<p><b>Amplification</b></p>
+<p>The following functions are considered as exception-unfriendly and are required to be implicitly or
+explicitly noexcept:</p>
+<p>1. Any function or constructor directly called (explicitly or implicitly) to initialize a non-constexpr,
+non-local variable with static or thread storage duration;</p>
+<p>2. All destructors;</p>
+<p>3. All copy-constructors of an exception object;</p>
+<p>4. All move constructors;</p>
+<p>5. All move assignment operators;</p>
+<p>6. All functions named "swap”;</p>
+<p>Additionally, the arguments passed to extern "C" functions std::set_terminate, std::atexit
+or std::at_quick_exit shall be convertible to function pointers to noexcept functions.</p>
+<p>This rule does not apply to any member function defined as = delete.</p>
+
+<p><b>Rationale</b></p>
+<p>When an exception is thrown, the call stack is unwound up to the point where the exception is to be
+handled. The destructors for all automatic objects declared between the point where the exception is
+thrown and where it is to be handled will be invoked. If one of these destructors exits with an exception,
+then the program will terminate in an implementation-defined manner. Requiring destructors to be
+noexcept and enforcing Rule 18.5.1 ensures that std::terminate does not get called, as required
+by Rule 18.5.2.</p>
+<p>Exceptions from destructors are also undesirable for objects that are at non-local scope or that are
+declared static, as they are destroyed in a "close-down” phase after main terminates. There is
+nowhere within the code that a handler can be placed to catch any exception that may be thrown,
+leading to a call to std::terminate. Similarly, non-local objects may be constructed before main
+starts, meaning that any exception thrown during their construction cannot be caught.</p>
+<p>Most destructors are noexcept by default, meaning that the omission of an explicit noexcept-specifier
+is generally compliant.</p>
+<p>Note: this rule does not apply to the constructors of classes used to construct local objects with static
+storage duration, as these are constructed the first time their owning function is called (i.e. after main
+has started), allowing exceptions thrown by them to be caught.</p>
+<p>When an exception is thrown, the exception object is copy-initialized from the operand of the throw-
+expression. If an exception is thrown during this copy, this is the exception that will be propagated,
+which may surprise developers. Furthermore, if a catch handler catches by value (which is prohibited
+by Rule 18.3.2), another copy-initialization will happen. If this throws, the program will terminate. It is
+therefore better to ensure that exception objects' copy constructors do not throw.</p>
+<p>Functions named "swap” are conventionally used as customization points for std::swap. The C++
+Standard Library containers and algorithms will not work correctly if swapping of two elements exits
+with an exception.</p>
+<p>Non-throwing "swap” functions are also important when implementing the strong exception safety
+guarantee in a copy (or move) assignment operator. Similarly, move constructors and move assignment
+operators are usually expected to be non-throwing. If they are not declared noexcept, strong
+exception safety is more difficult to achieve. Furthermore, algorithms may choose a different, possibly
+more expensive, code path if move operations are not noexcept.</p>
+<p>Functions passed as arguments to extern "C" functions are likely to be invoked from C code that is
+not able to handle exceptions.</p>
+<p>The C++ Standard states that if a function registered using std::atexit or std::at_quick_exit
+is called and exits with an exception, then std::terminate is called. The C++ Standard requires
+that a terminate handler set via std::set_terminate must not return to its caller, including with
+an exception (see [terminate.handler]).</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class C1
+{
+public:
+    C1(){} // Compliant - never used at non-local scope
+    ~C1(){} // Compliant - noexcept by default
+};
+
+class C2
+{
+public:
+    C2(){} // Not noexcept - see declaration of c2 below
+    C2( C2 && other ) {} // Non-compliant - move constructor
+    C2 & operator=( C2 && other ); // Non-compliant - move assignment
+    ~C2() noexcept( true ) {} // Compliant
+    friend void swap( C2 &, C2 & ); // Non-compliant - function named swap
+};
+
+C2 c2; // Non-compliant - construction is non-local
+
+class C3
+{
+public:
+    C3(){} // Compliant - c3 in foo not in non-local scope
+    ~C3() noexcept( false ) {} // Non-compliant
+};
+
+class MyException : public std::exception // Non-compliant - implicit copy
+{ // constructor is noexcept( false )
+public:
+    MyException ( std::string const & sender ); // Rule does not apply
+    const char * what() const noexcept override;
+    std::string sender;
+};
+
+void foo()
+{
+    static C3 c3; // Compliant - constructed on first call to foo
+    throw MyException( "foo" );
+}
+
+void exit_handler1(); // Non-compliant - passed to atexit
+void exit_handler2() noexcept; // Compliant - also passed to atexit
+
+int main()
+{
+    try
+    {
+        const int32_t result1 = std::atexit( exit_handler1 );
+        const int32_t result2 = std::atexit( exit_handler2 );
+        C1 c1;
+        foo(); // Any exception thrown will be caught below
+    }
+    catch ( ... ) {}
+}
+
+extern "C"
+{
+    void f( void( *func )() );
+}
+
+f( [](){} ); // Non-compliant - function passed to extern "C"</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 18.3.2, Rule 18.5.1, Rule 18.5.2</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def is_not_noexcept(ent):
+    return str(ent.freetext("Noexcept")) in ["None", "false"]
+
+
+def on_macro(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+
+    return lex and lex.ent() and lex.ent().kind().check("Macro")
+
+
+def check_params(ent, check):
+    for param_ref in ent.refs("Define, Declare", "Parameter", True):
+        for ptr_ref in param_ref.ent().refs("Assign FunctionPtr"):
+            if is_not_noexcept(ptr_ref.ent()):
+                check.violation(ptr_ref.ent(), ptr_ref.file(),
+                                ptr_ref.line(), ptr_ref.column(), ERR2, ent.name())
+
+
+def scan_extern(file, check):
+    extern_cnt = len(re.findall('extern "C"', file.contents()))
+    lex = file.lexer().first()
+    ctr = 0
+
+    while lex:
+        if lex.text() == "extern" and lex.next(True, True).text() == '"C"':
+            lex = lex.next(True, True).next(True, True)
+
+            if lex.text() == "{":
+                on_extern = 0
+                ctr += 1
+
+                while lex:
+                    if lex.text() == "{":
+                        on_extern += 1
+                    elif lex.text() == "}":
+                        on_extern -= 1
+
+                        if not on_extern:
+                            break
+                    elif (lex.ent() and lex.ent().kind().check("Function")
+                          and lex.ref() and lex.ref().kind().check("Definein, Declarein")):
+                        check_params(lex.ent(), check)
+
+                    lex = lex.next(True, True)
+            else:
+                while lex.text() != ";":
+                    if (lex.ent() and lex.ent().kind().check("Function")
+                            and lex.ref() and lex.ref().kind().check("Definein, Declarein")):
+                        check_params(lex.ent(), check)
+
+                    lex = lex.next(True, True)
+
+        if ctr == extern_cnt:
+            break
+
+        lex = lex.next(True, True)
+
+
+def check(check, file):
+    for class_ref in file.filerefs("Define", "Class Type, Struct Type"):
+        class_name = str(class_ref.ent().name())
+
+        for func_ref in class_ref.ent().refs("Define, Declare ~Delete, Friend", "Function", True):
+            func_name = str(func_ref.ent().name())
+            params = str(func_ref.ent().freetext("Parameters"))
+            noexcept = str(func_ref.ent().freetext("Noexcept"))
+            is_thrown = True if class_ref.ent().ref("Throwby Exception") else False
+
+            if func_name.startswith("~") and noexcept == "false":
+                check.violation(func_ref.ent(), func_ref.file(),
+                                func_ref.line(), func_ref.column(), ERR3)
+            elif (((not func_ref.kind().check("Implicit")
+                    and func_name in [class_name, "operator="] and params.startswith(f"{class_name} &&"))
+                    or (is_thrown and func_name == class_name and params.startswith(f"const {class_name} &"))
+                    or (func_name in "swap"))
+                    and noexcept in ["None", "false"]):
+                check.violation(func_ref.ent(), func_ref.file(),
+                                func_ref.line(), func_ref.column(), ERR1)
+            elif func_name == class_name and noexcept in ["None", "false"]:
+                for call_ref in func_ref.ent().refs("Callby"):
+                    lex = call_ref.file().lexer().lexeme(call_ref.line(), call_ref.column())
+
+                    if lex and lex.ent() and lex.ent().kind().check("Global"):
+                        for init_ref in lex.ent().refs("Setby Init"):
+                            if (init_ref.file() == call_ref.file()
+                                    and init_ref.line() == call_ref.line()
+                                    and init_ref.column() == call_ref.column()):
+                                check.violation(func_ref.ent(), call_ref.file(),
+                                                call_ref.line(), call_ref.column(), ERR4)
+                                break
+
+    for call_ref in file.filerefs("Call", "Function"):
+        func_name = call_ref.ent().name()
+
+        if func_name not in ["set_terminate", "atexit", "at_quick_exit"]:
+            continue
+
+        lex = file.lexer().lexeme(call_ref.line(), call_ref.column())
+
+        if not lex or lex.text() != func_name or lex.next(True, True).text() != "(":
+            continue
+
+        on_param = 0
+
+        while lex:
+            if lex.text() == "(":
+                on_param += 1
+            elif lex.text() == ")":
+                on_param -= 1
+
+                if not on_param:
+                    break
+            elif on_param == 1 and lex.ent() and lex.ent().kind().check("Function"):
+                if is_not_noexcept(lex.ent()):
+                    check.violation(call_ref.ent(), file,
+                                    lex.line_begin(), lex.column_begin(), ERR2, func_name)
+
+            lex = lex.next(True, True)
+
+    for obj_ref in file.filerefs("Set Init", "Global Object"):
+        for ass_ref in obj_ref.ent().refs("Assign Value", "Function"):
+            if (file.id() != ass_ref.file().id()
+                    or ass_ref.line() != obj_ref.line()
+                    or not ass_ref.ent().ref("Definein, Declarein")
+                    or on_macro(ass_ref)):
+                continue
+
+            if is_not_noexcept(ass_ref.ent()):
+                check.violation(ass_ref.ent(), file,
+                                ass_ref.line(), ass_ref.column(), ERR1)
+
+    if 'extern "C"' in file.contents():
+        scan_extern(file, check)
