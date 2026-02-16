@@ -1,0 +1,151 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-16
+
+
+import re
+
+from understand import Check, Ent
+
+
+ERR1 = 'Unused tag declaration'
+
+
+def ids():
+    return ('MISRA12_2.4', 'MISRA23_2.4', 'CPP_U005')
+
+
+def name(id):
+    return {
+        'MISRA12_2.4': '''Published Standards/MISRA C 2012/\
+2.4 Unused Tag Declarations''',
+        'MISRA23_2.4': '''Published Standards/MISRA C 2023/\
+2.4 Unused Tag Declarations''',
+        'CPP_U005': '''All Checks/Language Specific/C and C++/Unnecessary Constructs/\
+Unused Tag Declarations''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA12_2.4': [
+            'Declarations and Definitions',
+            'Unnecessary Constructs',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advnisory',
+        ],
+        'MISRA23_2.4': [
+            'Declarations and Definitions',
+            'Unnecessary Constructs',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advnisory',
+        ],
+        'CPP_U005': [
+            'Declarations and Definitions',
+            'Unnecessary Constructs',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A project should not contain unused tag declarations.</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+If a tag is declared but not used, then it is unclear to a reviewer if the tag is redundant or it has been
+left unused by mistake.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+In the following example, the tag <code>state</code> is unused and the declaration could have been written
+without it.
+</p>
+
+<pre><code language="C++">\
+void unusedtag ( void )
+{
+  enum state { S_init, S_run, S_sleep };   /* Non-compliant */
+}\
+</code></pre>
+
+<p>
+In the following example, the tag <code>record_t</code> is used only in the typedef of <code>record1_t</code> which is used in
+the rest of the translation unit whenever the type is needed. This <i>typedef</i> can be written in a compliant
+manner by omitting the tag as shown in the definition of <code>record2_t</code>.
+</p>
+
+<pre><code language="C++">\
+typedef struct record_t                    /* Non-compliant */
+{
+  uint16_t  key;
+  uint16_t  val;
+} record1_t;
+
+typedef struct                             /* Compliant */
+{
+  uint16_t  key;
+  uint16_t  val;
+} record2_t;\
+</code></pre>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return True
+
+
+def test_global() -> bool:
+    return False
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+def check(check: Check, file: Ent):
+    for ref in file.filerefs('Define', 'Class ~Unnamed, Enum ~Unnamed, Struct ~Unnamed, Union ~Unnamed'):
+        ent = ref.ent()
+
+        if ent.ref('Derive, Nameby, Useby'):
+            continue
+
+        typed_bys = ent.refs('Typedby')
+        if len(typed_bys) > 1:
+            continue
+
+        if typed_bys:
+            typed_by = typed_bys[0]
+            if typed_by.line() != ref.line() or typed_by.column() != ref.column():
+                continue
+
+        line = ref.line()
+        column = ref.column()
+
+        if ent.kind().check('~Enum') and constructed(ent, line, column):
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
+
+
+def constructed(ent: Ent, line: int, column: int) -> bool:
+    ent_name = ent.name()
+    for method in ent.ents('Declare, Define', 'Member Function'):
+        if method.name() != ent_name:
+            continue
+        for use in method.refs('Callby'):
+            if use.line() == line or use.column() == column:
+                continue
+            return True
+    return False
