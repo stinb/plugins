@@ -1,0 +1,300 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-17
+
+
+import re
+from enum import Enum
+
+from understand import Check, Ent, Lexer, Ref
+
+
+ERR1 = 'Goto statement is not in the same block or containing block'
+
+
+def ids():
+    return ('MISRA12_15.3', 'MISRA23_15.3', 'CPP_CF011')
+
+
+def name(id):
+    return {
+        'MISRA12_15.3': '''Published Standards/MISRA C 2012/\
+15.3 Goto Into or Between Blocks''',
+        'MISRA23_15.3': '''Published Standards/MISRA C 2023/\
+15.3 Goto Into or Between Blocks''',
+        'CPP_CF011': '''All Checks/Language Specific/C and C++/Control Flow/\
+Goto Into or Between Blocks''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA12_15.3': [
+            'Control Flow',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+        ],
+        'MISRA23_15.3': [
+            'Control Flow',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_CF011': [
+            'Control Flow',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    match id:
+        case 'MISRA12_15.3' | 'MISRA23_15.3': return '''\
+<p><b>Title</b></p>
+
+<p>Any label referenced by a <i>goto</i> statement shall be declared in the same block, or in any block enclosing the <i>goto</i> statement.</p>
+
+<p><b>Amplification</b></p>
+
+<p>
+For the purposes of this rule, a <i>switch-clause</i> that does not consist of a compound statement is treated
+as if it were a block.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Unconstrained use of <i>goto</i> can lead to programs that are unstructured and extremely difficult to
+understand.
+</p>
+
+<p>
+Preventing jumps between blocks, or into nested blocks, helps to minimize visual code complexity.
+</p>
+
+<p>
+<i>Note</i>: C99 is more restrictive when variably modified types are used. An attempt to make a jump from
+outside the scope of an identifier with a variably modified type into such a scope results in a <i>constraint</i>
+violation.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+void f1 ( int32_t a )
+{
+  if ( a <= 0 )
+  {
+    goto L2;             /* Non-compliant */
+  }
+
+  goto L1;               /* Compliant */
+
+  if ( a == 0 )
+  {
+    goto L1;             /* Compliant */
+  }
+
+  goto L2;               /* Non-compliant */
+
+L1:
+  if ( a > 0 )
+  {
+  L2:
+    ;
+  }
+}\
+</code></pre>
+
+<p>
+In the following example, the label <code>L1</code> is defined in a block which encloses the block containing the
+<i>goto</i> statement. However, the jump crosses from one <i>switch-clause</i> to another and, since <i>switch-clauses</i>
+are treated like blocks for the purposes of this rule, the <i>goto</i> statement is non-compliant.
+</p>
+
+<pre><code language="C++">\
+switch ( x )
+{
+  case 0:
+    if ( x == y )
+    {
+      goto L1;
+    }
+    break;
+  case 1:
+    y = x;
+L1:
+    ++x;
+    break;
+  default:
+    break;
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 9.1, Rule 15.1, Rule 15.2, Rule 15.4, Rule 16.1
+</p>
+'''
+        case 'CPP_CF011': return '''\
+<p><b>Title</b></p>
+
+<p>Any label referenced by a <i>goto</i> statement shall be declared in the same block, or in any block enclosing the <i>goto</i> statement.</p>
+
+<p><b>Amplification</b></p>
+
+<p>
+For the purposes of this rule, a <i>switch-clause</i> that does not consist of a compound statement is treated
+as if it were a block.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Unconstrained use of <i>goto</i> can lead to programs that are unstructured and extremely difficult to
+understand.
+</p>
+
+<p>
+Preventing jumps between blocks, or into nested blocks, helps to minimize visual code complexity.
+</p>
+
+<p>
+<i>Note</i>: C99 is more restrictive when variably modified types are used. An attempt to make a jump from
+outside the scope of an identifier with a variably modified type into such a scope results in a <i>constraint</i>
+violation.
+</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+void f1 ( int32_t a )
+{
+  if ( a <= 0 )
+  {
+    goto L2;             /* Non-compliant */
+  }
+
+  goto L1;               /* Compliant */
+
+  if ( a == 0 )
+  {
+    goto L1;             /* Compliant */
+  }
+
+  goto L2;               /* Non-compliant */
+
+L1:
+  if ( a > 0 )
+  {
+  L2:
+    ;
+  }
+}\
+</code></pre>
+
+<p>
+In the following example, the label <code>L1</code> is defined in a block which encloses the block containing the
+<i>goto</i> statement. However, the jump crosses from one <i>switch-clause</i> to another and, since <i>switch-clauses</i>
+are treated like blocks for the purposes of this rule, the <i>goto</i> statement is non-compliant.
+</p>
+
+<pre><code language="C++">\
+switch ( x )
+{
+  case 0:
+    if ( x == y )
+    {
+      goto L1;
+    }
+    break;
+  case 1:
+    y = x;
+L1:
+    ++x;
+    break;
+  default:
+    break;
+}\
+</code></pre>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return True
+
+
+def test_global() -> bool:
+    return False
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+def check(check: Check, file: Ent):
+    lexer = None
+
+    for define in file.filerefs('~Inactive Define', 'Label'):
+        label = define.ent()
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False, show_inactive=False)
+
+        for goto in label.refs('~Inactive Useby'):
+            if is_okay(lexer, define, goto):
+                continue
+            check.violation(label, file, goto.line(), goto.column(), ERR1)
+
+
+class State(Enum):
+    BlockBegin = 0
+    CaseOrDefault = 1
+
+
+def is_okay(lexer: Lexer, define: Ref, goto: Ref) -> bool:
+    # Start at the goto statement and end at the label definition
+    lex = lexer.lexeme(goto.line(), goto.column())
+
+    stack: list[State] = []
+
+    define_line = define.line()
+    define_column = define.column()
+
+    # About to parse forward, only pushing { and case/default
+    if define.line() > goto.line() or (define.line() == goto.line() and define.column() > goto.column()):
+        forward = True
+        block_begin = '{'
+        block_end = '}'
+    # About to parse in reverse, only pushing } and case/default
+    else:
+        forward = False
+        block_begin = '}'
+        block_end = '{'
+
+    while lex and not (lex.line_begin() == define_line and lex.column_begin() == define_column):
+        text = lex.text()
+
+        if text == block_begin:
+            stack.append(State.BlockBegin)
+        elif text == block_end:
+            if stack and stack[-1] == State.CaseOrDefault:
+                stack.pop()
+            if stack and stack[-1] == State.BlockBegin:
+                stack.pop()
+        elif lex.token() == 'Keyword' and text in ('case', 'default'):
+            # Only need to push 1 case/default
+            if not stack or stack[-1] != State.CaseOrDefault:
+                stack.append(State.CaseOrDefault)
+
+        if forward:
+            lex = lex.next(True, True)
+        else:
+            lex = lex.previous(True, True)
+
+    return len(stack) == 0
