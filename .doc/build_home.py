@@ -5,8 +5,8 @@ import sys
 columns = 3
 
 parser = argparse.ArgumentParser(description='Fake Debugger Prototype')
-parser.add_argument("--out", type=argparse.FileType('w'),nargs="?",const=sys.stdout,help='The output file name')
-parser.add_argument("jsonin", type=argparse.FileType('r'),help='The data for the page in json format')
+parser.add_argument("--out", type=lambda p: open(p, "w", encoding="utf-8"),nargs="?",const=sys.stdout,help='The output file name')
+parser.add_argument("jsonin", type=lambda p: open(p, "r", encoding="utf-8"),help='The data for the page in json format')
 
 args = parser.parse_args()
 
