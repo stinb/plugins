@@ -1,0 +1,231 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-18
+
+
+import re
+
+from understand import Check, Ent
+
+
+ERR1 = 'Keyword %1 redefined as a macro'
+
+C89_KEYWORDS = {'auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if', 'int', 'long', 'register', 'return', 'short', 'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union', 'unsigned', 'void', 'volatile', 'while'}
+C99_KEYWORDS = C89_KEYWORDS | {'_Bool', '_Complex', '_Imaginary', 'inline', 'restrict'}
+C11_KEYWORDS = C99_KEYWORDS | {'_Alignas', '_Alignof', '_Atomic', '_Generic', '_Noreturn', '_Static_assert', '_Thread_local'}
+C23_KEYWORDS = C11_KEYWORDS | {'_BitInt', '_Decimal128', '_Decimal32', '_Decimal64', 'alignas', 'alignof', 'bool', 'constexpr', 'false', 'nullptr', 'static_assert', 'thread_local', 'true', 'typeof', 'typeof_unqual'}
+
+CPP98_KEYWORDS = {'and', 'and_eq', 'asm', 'auto', 'bitand', 'bitor', 'bool', 'break', 'case', 'catch', 'char', 'class', 'compl', 'const', 'const_cast', 'continue', 'default', 'delete', 'do', 'double', 'dynamic_cast', 'else', 'enum', 'explicit', 'export', 'extern', 'false', 'float', 'for', 'friend', 'goto', 'if', 'inline', 'int', 'long', 'mutable', 'namespace', 'new', 'not', 'not_eq', 'operator', 'or', 'or_eq', 'private', 'protected', 'public', 'register', 'reinterpret_cast', 'return', 'short', 'signed', 'sizeof', 'static', 'static_cast', 'struct', 'switch', 'template', 'this', 'throw', 'true', 'try', 'typedef', 'typeid', 'typename', 'union', 'unsigned', 'using', 'virtual', 'void', 'volatile', 'wchar_t', 'while', 'xor', 'xor_eq'}
+CPP11_KEYWORDS = CPP98_KEYWORDS | {'alignas', 'alignof', 'char16_t', 'char32_t', 'constexpr', 'decltype', 'noexcept', 'nullptr', 'static_assert', 'thread_local'}
+CPP20_KEYWORDS = CPP11_KEYWORDS | {'char8_t', 'co_await', 'co_return', 'co_yield', 'concept', 'consteval', 'constinit', 'requires'}
+CPP26_KEYWORDS = CPP20_KEYWORDS | {'contract_assert'}
+
+
+def ids():
+    return ('MISRA12_20.4', 'MISRA23_20.4', 'CPP_P018')
+
+
+def name(id):
+    return {
+        'MISRA12_20.4': '''Published Standards/MISRA C 2012/\
+20.4 Keyword Macros''',
+        'MISRA23_20.4': '''Published Standards/MISRA C 2023/\
+20.4 Keyword Macros''',
+        'CPP_P018': '''All Checks/Language Specific/C and C++/Preprocessor/\
+Keyword Macros''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA12_20.4': [
+            'Preprocessor',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+        ],
+        'MISRA23_20.4': [
+            'Preprocessor',
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+        ],
+        'CPP_P018': [
+            'Preprocessor',
+            'Language: C',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    match id:
+        case 'MISRA12_20.4' | 'MISRA23_20.4': return '''\
+<p><b>Title</b></p>
+
+<p>A macro shall not be defined with the same name as a keyword.</p>
+
+<p><b>Amplification</b></p>
+
+<p>
+This rule applies to all keywords, including those that implement language extensions.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Using macros to change the meaning of keywords can be confusing. The behaviour is undefined if a
+standard header is included while a macro is defined with the same name as a keyword.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+The following example is non-compliant because it alters the behaviour of the <i>int</i> keyword. Including
+a standard header in the presence of this macro results in undefined behaviour.
+</p>
+
+<pre><code language="C++">\
+#define int some_other_type
+#include &lt;stdlib.h&gt;\
+</code></pre>
+
+<p>
+The following example shows that it is non-compliant to redefine the keyword <i>while</i> but it is compliant
+to define a macro that expands to statements.
+</p>
+
+<pre><code language="C++">\
+#define while( E ) for ( ; ( E ) ; )  /* Non-compliant - redefined while  */
+#define unless( E ) if ( ! ( E ) )    /* Compliant                        */
+
+#define seq( S1, S2 ) do { \\
+   S1; S2; } while ( false )          /* Compliant                        */
+#define compound( S ) { S; }          /* Compliant                        */\
+</code></pre>
+
+<p>
+The following example is only compliant with C90.
+</p>
+
+<pre><code language="C++">\
+/* Remove inline if compiling for C90 */
+#define inline\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>
+Rule 21.1
+</p>
+'''
+        case 'CPP_P018': return '''\
+<p><b>Title</b></p>
+
+<p>A macro shall not be defined with the same name as a keyword.</p>
+
+<p><b>Amplification</b></p>
+
+<p>
+This rule applies to all keywords, including those that implement language extensions.
+</p>
+
+<p><b>Rationale</b></p>
+
+<p>
+Using macros to change the meaning of keywords can be confusing. The behaviour is undefined if a
+standard header is included while a macro is defined with the same name as a keyword.
+</p>
+
+<p><b>Example</b></p>
+
+<p>
+The following example is non-compliant because it alters the behaviour of the <i>int</i> keyword. Including
+a standard header in the presence of this macro results in undefined behaviour.
+</p>
+
+<pre><code language="C++">\
+#define int some_other_type
+#include &lt;stdlib.h&gt;\
+</code></pre>
+
+<p>
+The following example shows that it is non-compliant to redefine the keyword <i>while</i> but it is compliant
+to define a macro that expands to statements.
+</p>
+
+<pre><code language="C++">\
+#define while( E ) for ( ; ( E ) ; )  /* Non-compliant - redefined while  */
+#define unless( E ) if ( ! ( E ) )    /* Compliant                        */
+
+#define seq( S1, S2 ) do { \\
+   S1; S2; } while ( false )          /* Compliant                        */
+#define compound( S ) { S; }          /* Compliant                        */\
+</code></pre>
+
+<p>
+The following example is only compliant with C90.
+</p>
+
+<pre><code language="C++">\
+/* Remove inline if compiling for C90 */
+#define inline\
+</code></pre>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return True
+
+
+def test_global() -> bool:
+    return False
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+def define_options(check: Check):
+    check.options().choice('c_version', 'C version', ['C89 or C95', 'C99', 'C11 or C17', 'C23'], 'C23')
+    check.options().choice('cpp_version', 'C++ version', ['C++98', 'C++11, C++14, or C++17', 'C++20 or C++23', 'C++26'], 'C++26')
+
+
+def check(check: Check, file: Ent):
+    match check.options().lookup('c_version'):
+        case 'C89 or C95':
+            c_keywords = C89_KEYWORDS
+        case 'C99':
+            c_keywords = C99_KEYWORDS
+        case 'C11 or C17':
+            c_keywords = C11_KEYWORDS
+        case _:
+            c_keywords = C23_KEYWORDS
+
+    match check.options().lookup('cpp_version'):
+        case 'C++98':
+            cpp_keywords = CPP98_KEYWORDS
+        case 'C++11, C++14, or C++17':
+            cpp_keywords = CPP11_KEYWORDS
+        case 'C++20 or C++23':
+            cpp_keywords = CPP20_KEYWORDS
+        case _:
+            cpp_keywords = CPP26_KEYWORDS
+
+    is_cpp = file.kind().check('C++')
+
+    for ref in file.filerefs('Define', 'Macro'):
+        ent = ref.ent()
+
+        name = ent.name()
+
+        if is_cpp:
+            if name not in cpp_keywords:
+                continue
+        else:
+            if name not in c_keywords:
+                continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, name)
