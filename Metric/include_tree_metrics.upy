@@ -109,11 +109,11 @@ def calculate_metric(metric_id, und_cache, ent):
         elif metric_id == "IncludeByNodes":
             result = len(unique_nodes)
         elif metric_id == "IncludeSumCyclomatic":
-            result = sum_metric(unique_nodes, "Cyclomatic")
+            result = sum_metric(unique_nodes, "SumCyclomatic")
         elif metric_id == "IncludeCountLineCode":
             result = sum_metric(unique_nodes, "CountLineCode")
         elif metric_id == "IncludeBySumCyclomatic":
-            result = sum_metric(unique_nodes, "Cyclomatic")
+            result = sum_metric(unique_nodes, "SumCyclomatic")
         elif metric_id == "IncludeByCountLineCode":
             result = sum_metric(unique_nodes, "CountLineCode")
         else:
@@ -164,11 +164,11 @@ def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
         # Check cache for this entity's depth
         cached_depth = und_cache.value(key=cache_key, ent=ent)
         if cached_depth is not None:
-            return current_depth + cached_depth
+            return current_depth + cached_depth, False
 
         # Check for cycles
         if ent in visited_in_path:
-            return current_depth - 1
+            return current_depth - 1, True
 
         visited_in_path.add(ent)
 
@@ -179,30 +179,34 @@ def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
             visited_in_path.remove(ent)
             # Cache: this entity has depth 0 from itself
             und_cache.insert(0, key=cache_key, ent=ent)
-            return current_depth
+            return current_depth, False
 
         max_child_depth = current_depth
+        had_cycle = False
         for ref in refs:
-            child_depth = depth_recursive(ref.ent(), current_depth + 1)
+            child_depth, child_cycle = depth_recursive(ref.ent(), current_depth + 1)
             max_child_depth = max(max_child_depth, child_depth)
+            had_cycle = had_cycle or child_cycle
 
         visited_in_path.remove(ent)
 
-        # Cache the depth from this entity
-        depth_from_here = max_child_depth - current_depth
-        und_cache.insert(depth_from_here, key=cache_key, ent=ent)
+        # Only cache if no cycle interfered (a cycle could make the depth artificially low)
+        if not had_cycle:
+            depth_from_here = max_child_depth - current_depth
+            und_cache.insert(depth_from_here, key=cache_key, ent=ent)
 
-        return max_child_depth
+        return max_child_depth, had_cycle
 
     if include_self:
         # For include direction, depth starts at 0 for self
-        return depth_recursive(start_ent, 0)
+        result, _ = depth_recursive(start_ent, 0)
+        return result
     else:
         # For includeby direction, start from children at depth 1
         max_depth = 0
         refs = start_ent.refs(ref_type) if ref_type == "includeby" else start_ent.filerefs(ref_type)
         for ref in refs:
-            depth = depth_recursive(ref.ent(), 1)
+            depth, _ = depth_recursive(ref.ent(), 1)
             max_depth = max(max_depth, depth)
         return max_depth
 
