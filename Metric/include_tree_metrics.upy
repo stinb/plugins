@@ -1,5 +1,6 @@
 import und_lib.kind_util as kind_util
 import understand
+import sys
 
 def ids():
     return [
@@ -153,10 +154,69 @@ def collect_tree_nodes(start_ent, ref_type, include_self):
 
     return visited
 
+# Find entities that are part of a cycle in the graph
+def find_cycle_members(adj):
+    index_counter = [0]
+    stack = []
+    lowlinks = {}
+    node_index = {}
+    on_stack = set()
+    cycle_members = set()
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(old_limit, len(adj) + 100))
+
+    def strongconnect(v):
+        node_index[v] = index_counter[0]
+        lowlinks[v] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+        for w in adj.get(v, []):
+            if w not in node_index:
+                strongconnect(w)
+                lowlinks[v] = min(lowlinks[v], lowlinks[w])
+            elif w in on_stack:
+                lowlinks[v] = min(lowlinks[v], node_index[w])
+        if lowlinks[v] == node_index[v]:
+            scc = []
+            while True:
+                w = stack.pop()
+                on_stack.remove(w)
+                scc.append(w)
+                if w == v:
+                    break
+            if len(scc) > 1:
+                cycle_members.update(scc)
+
+    for v in adj:
+        if v not in node_index:
+            strongconnect(v)
+
+    sys.setrecursionlimit(old_limit)
+    return cycle_members
+
 # Calculate maximum depth of tree
 def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
     # Build a cache key specific to this ref_type to avoid collision
     cache_key = f"depth_{ref_type}"
+
+    # Pre-cache all refs into a dict to avoid repeated database queries
+    refs_map = {}
+    to_collect = [start_ent]
+    collected = set()
+    while to_collect:
+        cur = to_collect.pop()
+        if cur in collected:
+            continue
+        collected.add(cur)
+        children = [r.ent() for r in (cur.refs(ref_type) if ref_type == "includeby" else cur.filerefs(ref_type))]
+        refs_map[cur] = children
+        for child in children:
+            if child not in collected:
+                to_collect.append(child)
+
+    # Find cycle members so we only skip caching for those
+    cycle_members = find_cycle_members(refs_map)
 
     visited_in_path = set()
 
@@ -164,50 +224,41 @@ def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
         # Check cache for this entity's depth
         cached_depth = und_cache.value(key=cache_key, ent=ent)
         if cached_depth is not None:
-            return current_depth + cached_depth, False
+            return current_depth + cached_depth
 
         # Check for cycles
         if ent in visited_in_path:
-            return current_depth - 1, True
+            return current_depth - 1
 
         visited_in_path.add(ent)
 
-        # Get children
-        refs = ent.refs(ref_type) if ref_type == "includeby" else ent.filerefs(ref_type)
+        # Get children from pre-cached refs
+        children = refs_map.get(ent, [])
 
-        if not refs:
+        if not children:
             visited_in_path.remove(ent)
-            # Cache: this entity has depth 0 from itself
             und_cache.insert(0, key=cache_key, ent=ent)
-            return current_depth, False
+            return current_depth
 
         max_child_depth = current_depth
-        had_cycle = False
-        for ref in refs:
-            child_depth, child_cycle = depth_recursive(ref.ent(), current_depth + 1)
-            max_child_depth = max(max_child_depth, child_depth)
-            had_cycle = had_cycle or child_cycle
+        for child in children:
+            max_child_depth = max(max_child_depth, depth_recursive(child, current_depth + 1))
 
         visited_in_path.remove(ent)
 
-        # Only cache if no cycle interfered (a cycle could make the depth artificially low)
-        if not had_cycle:
+        # Only cache if not a cycle member (cycle members' depths are context-dependent)
+        if ent not in cycle_members:
             depth_from_here = max_child_depth - current_depth
             und_cache.insert(depth_from_here, key=cache_key, ent=ent)
 
-        return max_child_depth, had_cycle
+        return max_child_depth
 
     if include_self:
-        # For include direction, depth starts at 0 for self
-        result, _ = depth_recursive(start_ent, 0)
-        return result
+        return depth_recursive(start_ent, 0)
     else:
-        # For includeby direction, start from children at depth 1
         max_depth = 0
-        refs = start_ent.refs(ref_type) if ref_type == "includeby" else start_ent.filerefs(ref_type)
-        for ref in refs:
-            depth, _ = depth_recursive(ref.ent(), 1)
-            max_depth = max(max_depth, depth)
+        for child in refs_map.get(start_ent, []):
+            max_depth = max(max_depth, depth_recursive(child, 1))
         return max_depth
 
 # Sum a specific metric across all entities
