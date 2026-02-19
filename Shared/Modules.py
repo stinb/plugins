@@ -607,12 +607,36 @@ def buildTranslationUnit(fileEnt, translationUnitSet):
 
 # Classes
 
-# Given an entity, see if it is a constructor, even if it's in a namespace
-def isConstructor(ent):
+# See if it is a constructor, even if it's in a namespace
+def isConstructor(ent: Ent) -> bool:
     name = re.escape(ent.name())
     if re.search(f'\\b{name}::{name}$', ent.longname()):
         return True
     return False
+
+
+# Whether the entity is a C++ copy constructor as defined in
+# https://en.cppreference.com/w/cpp/language/copy_constructor.html
+def is_cpp_copy_constructor(ent: Ent) -> bool:
+    parent = ent.parent()
+    parameters = ent.ents('Declare, Define', 'Parameter')
+
+    # Require constructor, parent, at least 1 parameters
+    if not parent or not parameters or not ent.kind().check('C Member Function') \
+    or ent.name() != parent.name():
+        return False
+
+    # First parameter must be a reference to the parent type
+    first = parameters[0]
+    t = first.freetext('UnderlyingType') or ''
+    if not re.search(rf'^(const )?(volatile )?{parent.longname()}(<.*>)? &', t):
+        return False
+
+    # If only 1 parameter, require no default value
+    if len(parameters) == 1:
+        return first.value() == None
+
+    return True
 
 
 # Libraries
@@ -620,7 +644,7 @@ def isConstructor(ent):
 
 # Whether the entity is a pointer to a FILE
 def isFilePointer(ent: Ent) -> bool:
-    t = ent.freetext('UnderlyingType')
+    t = ent.freetext('UnderlyingType') or ''
     t = re.sub(r'\b(const|restrict|volatile)\s*', '', t)
     return t in ('_iobuf *', '_IO_FILE *', '__sFILE *')
 
