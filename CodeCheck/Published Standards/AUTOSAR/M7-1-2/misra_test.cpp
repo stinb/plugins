@@ -23,6 +23,30 @@ auto f4(std::vector<int32_t> &x) // UndCC_Violation
 {
     return x.cbegin(); // Const member function
 }
+// Passing to function with non-const pointer parameter
+void memory_u32_cpy(void *dst, const void *src, int size);
+void read_only(const void *src, int size);
+
+int f5(int8_t *const p_payload) // UndCC_Valid - passed to non-const pointer param
+{
+    memory_u32_cpy(p_payload, nullptr, 10);
+    return 0;
+}
+
+int f6(int8_t *p_data) // UndCC_Violation - passed only to const pointer param
+{
+    read_only(p_data, 10);
+    return 0;
+}
+
+void nested_call_helper(int *dst, int val);
+int f7(int *p,  // UndCC_Valid - passed to non-const pointer param
+       int *q)  // UndCC_Violation - not modified, only dereferenced
+{
+    nested_call_helper(p, *q);
+    return 0;
+}
+
 template <typename T>
 struct A
 {
