@@ -1,0 +1,128 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Robby Bennett
+# 2026-02-20
+
+
+import re
+
+from understand import Check, Ent
+from Modules import isConstructor, is_cpp_copy_constructor
+
+
+ERR1 = 'Copy constructor %1 calls something other than its base classes'
+ERR2 = 'Copy constructor %1 modifies something other than its non-static members'
+
+
+def ids():
+    return ('MISRA08_12-8-1', 'CPP_C008')
+
+
+def name(id):
+    return {
+        'MISRA08_12-8-1': '''Published Standards/MISRA-C++ 2008/\
+12-8-1 Side Effects in Copy Constructors''',
+        'CPP_C008': '''All Checks/Language Specific/C and C++/Constructors/\
+Side Effects in Copy Constructors''',
+    }.get(id)
+
+
+def tags(id):
+    return {
+        'MISRA08_12-8-1': [
+            'Constructors',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+        ],
+        'CPP_C008': [
+            'Constructors',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Title</b></p>
+
+<p>A copy constructor shall only initialize its base classes
+and the non-static members of the class of which it is a
+member.</p>
+
+<p><b>Rationale</b></p>
+
+<p>If a compiler implementation detects that a call to a copy constructor is redundant, then it is
+permitted to omit that call, even if the copy constructor has a side effect other than to construct a
+copy of the object. This is called <i>copy elision</i>.</p>
+
+<p>It is therefore important to ensure that a copy constructor does not modify the program state as the
+number of such modifications may be indeterminate.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+class A
+{
+public:
+   A ( A const & rhs )
+   : m_i ( rhs.m_i )
+   {
+      ++m_static;   // Non-compliant
+   }
+
+private:
+          int32_t m_i;
+   static int32_t m_static;
+};
+
+int32_t A::m_static = 0;
+
+A f ( )
+{
+   return A ( );
+}
+
+void b ( )
+{
+   A a = f ( );
+}\
+</code></pre>
+
+<p>The value that <code>m_static</code> has after the call to <code>b( )</code> is <i>implementation-defined</i>.</p>
+
+<p><b>Developer's Notes</b></p>
+
+<p>Side effects of modified non-constant parameters are not detected. Calls to constructors with side-effects may have undetected side effects. Calls to non-constructors may not have side effects.</p>
+'''
+
+
+def test_entity(file: Ent) -> bool:
+    return file.file_type() == 'C++'
+
+
+def test_global() -> bool:
+    return False
+
+
+def test_language(language: str) -> bool:
+    return language == 'C++'
+
+
+def check(check: Check, file: Ent):
+    for define in file.filerefs('Define', 'Member Function'):
+        ctor = define.ent()
+        ctor_name = ctor.name()
+
+        if not is_cpp_copy_constructor(ctor):
+            continue
+
+        # Calls besides constructors
+        for call in ctor.refs('Call', 'Function'):
+            called = call.ent()
+            if isConstructor(called):
+                continue
+            check.violation(called, call.file(), call.line(), call.column(), ERR1, ctor_name)
+
+        # Direct side effects
+        for modify in ctor.refs('Assign, Modify, Set', 'Static, Global'):
+            check.violation(modify.ent(), modify.file(), modify.line(), modify.column(), ERR2, ctor_name)
