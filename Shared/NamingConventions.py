@@ -45,7 +45,7 @@ def detailed_description(variables):
     return ''.join(desc)
 
 
-def _plural(string):
+def _plural(string: str) -> str:
     string, replaced = re.subn('y$', 'ies', string)
     if replaced:
         return string
@@ -213,25 +213,25 @@ def checkNamingRules(options, kindStr, variables, name):
         return _NAME_ERROR + ''.join(errors)
 
 
-def _kindComparator(a, b):
+def _kindComparatorFn(a, b):
     a = check.options().lookup(f'{a}Precedence')
     b = check.options().lookup(f'{b}Precedence')
     return a - b
-_kindComparator = functools.cmp_to_key(_kindComparator)
+_kindComparator = functools.cmp_to_key(_kindComparatorFn)
 
 
-def _commaSplit(string):
+def _commaSplit(string: str) -> list[str]:
     return list(filter(None, string.split(',')))
 
 
-def _intOrDefault(string, default):
+def _intOrDefault(string: str, default: int) -> int:
     try:
         return int(string)
     except:
         return default
 
 
-def _alterRegexp(regExp):
+def _alterRegexp(regExp: str) -> tuple[str, int]:
     return re.subn(r'^!', '', regExp.strip())
 
 

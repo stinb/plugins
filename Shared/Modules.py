@@ -15,7 +15,7 @@ from understand import CFGraph, CFNode, Ent, Lexeme, Ref
 
 # Find corresponding closing curly brace or parenthesis of given opening curly
 # brace or parenthesis
-def findClose(lexeme):
+def findClose(lexeme: Lexeme | None) -> Lexeme | None:
     count = 0
     if not lexeme:
         return lexeme
@@ -44,7 +44,7 @@ def findClose(lexeme):
 
 # Find corresponding closing curly brace or parenthesis of given opening curly
 # brace or parenthesis
-def findOpen(lexeme):
+def findOpen(lexeme: Lexeme | None) -> Lexeme | None:
     count = 0
     if not lexeme:
         return lexeme
@@ -71,21 +71,21 @@ def findOpen(lexeme):
 
 # Given a node/lexeme, node/lexeme, and another node/lexeme
 # See if the order of the parameters is really the order
-def lexemeBetweenNodes(node1, lexeme, node2):
+def lexemeBetweenNodes(node1: CFNode, lexeme: Lexeme, node2: CFNode) -> bool:
     # Make sure both nodes have position information
     if node1.line_begin() == None or node2.line_begin() == None:
         return False
 
     # Make sure the order is node1, lexeme
-    if lexeme.line_begin() < node1.line_begin():
+    if lexeme.line_begin() < node1.line_begin(): # type: ignore
         return False
-    if lexeme.line_begin() == node1.line_begin() and lexeme.column_begin() <= node1.column_begin():
+    if lexeme.line_begin() == node1.line_begin() and lexeme.column_begin() <= node1.column_begin(): # type: ignore
         return False
 
     # Make sure the order is lexeme, node2
-    if lexeme.line_begin() > node2.line_begin():
+    if lexeme.line_begin() > node2.line_begin(): # type: ignore
         return False
-    if lexeme.line_begin() == node2.line_begin() and lexeme.column_begin() >= node2.column_begin():
+    if lexeme.line_begin() == node2.line_begin() and lexeme.column_begin() >= node2.column_begin(): # type: ignore
         return False
 
     return True
@@ -94,8 +94,8 @@ def lexemeBetweenNodes(node1, lexeme, node2):
 # Given a CFGraph, get a dictionary:
     # Key: a CFNode
     # Value: the next sibling CFNode
-def nextSiblingDictionary(cfg):
-    result = {}
+def nextSiblingDictionary(cfg: CFGraph | None) -> dict[CFNode, CFNode]:
+    result: dict[CFNode, CFNode] = {}
 
     if not cfg:
         return result
@@ -170,21 +170,21 @@ def refBeforeRef(cfg: CFGraph, refA: Ref, refB: Ref) -> bool:
 
 # Given a node/lexeme, ref, and another node/lexeme
 # See if the order of the parameters is really the order
-def refBetweenNodes(node1, ref, node2):
+def refBetweenNodes(node1: CFNode, ref: Ref, node2: CFNode) -> bool:
     # Make sure both nodes have position information
     if node1.line_begin() == None or node2.line_begin() == None:
         return False
 
     # Make sure the order is node1, ref
-    if ref.line() < node1.line_begin():
+    if ref.line() < node1.line_begin(): # type: ignore
         return False
-    if ref.line() == node1.line_begin() and ref.column() <= node1.column_begin():
+    if ref.line() == node1.line_begin() and ref.column() <= node1.column_begin(): # type: ignore
         return False
 
     # Make sure the order is ref, node2
-    if ref.line() > node2.line_begin():
+    if ref.line() > node2.line_begin(): # type: ignore
         return False
-    if ref.line() == node2.line_begin() and ref.column() >= node2.column_begin():
+    if ref.line() == node2.line_begin() and ref.column() >= node2.column_begin(): # type: ignore
         return False
 
     return True
@@ -198,11 +198,11 @@ def refInNode(ref: Ref, node: CFNode) -> bool:
     if nodeLineBegin == None:
         return False
     nodeLineEnd = node.line_end()
-    if refLine < nodeLineBegin or refLine > nodeLineEnd:
+    if refLine < nodeLineBegin or refLine > nodeLineEnd: # type: ignore
         return False
-    if refLine == nodeLineBegin and refColumn < node.column_begin():
+    if refLine == nodeLineBegin and refColumn < node.column_begin(): # type: ignore
         return False
-    if refLine == nodeLineEnd and refColumn > node.column_end():
+    if refLine == nodeLineEnd and refColumn > node.column_end(): # type: ignore
         return False
     return True
 
@@ -211,7 +211,7 @@ def refInNode(ref: Ref, node: CFNode) -> bool:
 
 # Given 3 refs
 # See if the order of the refs is really the order
-def refBetweenRefs(ref1, ref2, ref3):
+def refBetweenRefs(ref1: Ref, ref2: Ref, ref3: Ref) -> bool:
     # Make sure the files are the same
     if ref1.file() != ref2.file() or ref1.file() != ref3.file():
         return False
@@ -231,30 +231,30 @@ def refBetweenRefs(ref1, ref2, ref3):
     return True
 
 # Comparator for list.sort(key=refComparatorSameFile)
-def refComparatorSameFile(a, b):
+def refComparatorSameFileFn(a: Ref, b: Ref) -> int:
     return a.line() - b.line() or a.column() - b.column()
-refComparatorSameFile = functools.cmp_to_key(refComparatorSameFile)
+refComparatorSameFile = functools.cmp_to_key(refComparatorSameFileFn)
 
 
 
 # Lexemes
 
 # Given 2 lexemes, see if the first is before the second
-def lexemeBeforeLexeme(lex1, lex2):
+def lexemeBeforeLexeme(lex1: Lexeme, lex2: Lexeme) -> bool:
     return lex1.line_begin() < lex2.line_begin() or \
         (lex1.line_begin() == lex2.line_begin() and lex1.column_begin() < lex2.column_begin())
 
 # Given a lexeme & position, see if it is before the position
-def lexemeBefore(lex, line, column):
+def lexemeBefore(lex: Lexeme, line: int, column: int) -> bool:
     return lex.line_begin() < line or \
         (lex.line_begin() == line and lex.column_begin() < column)
 
 # Given a lexeme & position, see if it is at the position
-def lexemeEquals(lex, line, column):
+def lexemeEquals(lex: Lexeme, line: int, column: int) -> bool:
     return lex.line_begin() == line and lex.column_begin() == column
 
 # Given a lexeme & position, see if it is after the position
-def lexemeAfter(lex, line, column):
+def lexemeAfter(lex: Lexeme, line: int, column: int) -> bool:
     return lex.line_begin() > line or \
         (lex.line_begin() == line and lex.column_begin() > column)
 
@@ -375,7 +375,7 @@ def searchContents(ent, pattern, flags=0, removeComments=True, removeStrings=Tru
 # Strings
 
 # Given a string, remove all double-quote and single-quote string literals
-def removeStringLiterals(string):
+def removeStringLiterals(string: str) -> str:
     result = []
 
     quoteType = 0
@@ -436,10 +436,11 @@ def typeOfAssignment(lex):
     return lex.ent().type()
 
 # Get the type of a given function/method parameter index number
-def typeOfParameter(function, i):
+def typeOfParameter(function: Ent, i: int) -> str | None:
     parameters = function.ents('Define', 'Parameter')
     if len(parameters) > i:
         return parameters[i].type()
+    return None
 
 
 
@@ -558,30 +559,31 @@ def cParseIntLiteral(string: str) -> int | None:
                 return int(match[1], base)
             except:
                 return None
+    return None
 
 # Given a declaration reference, return the width of a bit-field object or None
-def cGetBitFieldWidth(ref):
+def cGetBitFieldWidth(ref: Ref) -> int | None:
     # Only objects may be bit fields
     if not ref.ent().kind().check('Object'):
-        return
+        return None
 
     # Get lexeme
     lexer = ref.file().lexer(False)
     if not lexer:
-        return
+        return None
     lex = lexer.lexeme(ref.line(), ref.column())
     if not lex:
-        return
+        return None
 
     # Match :
     lex = lex.next(True, True)
     if not lex or lex.text() != ':':
-        return
+        return None
 
     # Match anything
     lex = lex.next(True, True)
     if not lex:
-        return
+        return None
 
     return cParseIntLiteral(lex.text())
 
@@ -590,7 +592,7 @@ def cGetBitFieldWidth(ref):
 # Files
 
 # Given an ent and a set, build the translation unit of includes of a file
-def buildTranslationUnit(fileEnt, translationUnitSet):
+def buildTranslationUnit(fileEnt: Ent, translationUnitSet: set[Ent]):
     translationUnitSet.add(fileEnt)
     for includeRef in fileEnt.filerefs('Include'):
         includeEnt = includeRef.ent()
@@ -651,7 +653,7 @@ def isFilePointer(ent: Ent) -> bool:
 
 # Given a long string like "std::anything::cout" and a string like "cout"
 # Returns true if the ent longname is something like "std::cout" or "std::anything::cout"
-def stringIsStd(wholeString, lastPart):
+def stringIsStd(wholeString: str, lastPart: str) -> bool:
     nameParts = wholeString.split('::')
     return nameParts[0] == 'std' and nameParts[-1] == lastPart
 
@@ -666,7 +668,7 @@ def stringIsStd(wholeString, lastPart):
 # Classes & Interfaces
 
 # Given an ent and id, see there's an ancestor with the given id
-def javaAncestorOfIdExists(ent, id):
+def javaAncestorOfIdExists(ent: Ent, id: int) -> bool:
     # Base case: object already cached
     if not ent:
         return False
@@ -685,7 +687,7 @@ def javaAncestorOfIdExists(ent, id):
 
 # Given an ent, regular expression, and a dictionary, see there's an ancestor
 # with the given longname
-def javaAncestorOfLongnameExists(ent, regex, translationUnitCache):
+def javaAncestorOfLongnameExists(ent: Ent, regex: str | re.Pattern, translationUnitCache: dict[str, bool]) -> bool:
     # Key for the entity in the dictionary
     key = ent.uniquename()
 
@@ -831,7 +833,7 @@ def javaThisEscapesConstructor(ent, check=None, errors=None):
 
 # Given an entity class, see if it is immutable (defined by SEI CERT)
 # https://wiki.sei.cmu.edu/confluence/display/java/Rule+BB.+Glossary
-def javaImmutableClass(ent):
+def javaImmutableClass(ent: Ent) -> bool:
     # Exception for String
     if ent.longname() == 'java.lang.String':
         return True
@@ -866,7 +868,7 @@ JAVA_NUMBER_TYPES = {
 }
 
 # Remove separators & suffix from a Java number literal
-def javaSimplifyNumberLiteral(text):
+def javaSimplifyNumberLiteral(text: str) -> str:
     # Remove separators & long suffix
     text = re.sub('_|l|L', '', text)
     # If it's not hex, remove float & double suffix
@@ -876,7 +878,7 @@ def javaSimplifyNumberLiteral(text):
     return text
 
 # Get type of a Java number literal
-def javaLiteralNumberType(text):
+def javaLiteralNumberType(text: str) -> str | None:
     # Remove separators
     text = re.sub('_', '', text)
     # Get type
@@ -884,9 +886,10 @@ def javaLiteralNumberType(text):
         pattern = JAVA_NUMBER_TYPES[numType]
         if re.match(pattern, text, re.IGNORECASE):
             return numType
+    return None
 
 # Convert a Java number literal from a string into a number
-def javaLiteralToNumber(text):
+def javaLiteralToNumber(text: str) -> int | float | None:
     text = javaSimplifyNumberLiteral(text)
     # Binary
     if re.match(JAVA_NUMBER_SYSTEMS['bin'], text, re.IGNORECASE):
@@ -900,6 +903,7 @@ def javaLiteralToNumber(text):
     # Float with f suffix removed or double
     if re.match(JAVA_NUMBER_TYPES['double'], text):
         return float(text)
+    return None
 
 # Get the value of an identifier or literal, if it has only 1 value
 def javaValueOfLexeme(lex):
