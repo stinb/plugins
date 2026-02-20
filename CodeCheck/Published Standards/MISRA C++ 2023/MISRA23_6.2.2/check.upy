@@ -1,0 +1,232 @@
+ERR1 = "Declaration is different from file %1 line %2"
+
+
+def ids():
+    return ('MISRA23_6.2.2')
+
+
+def name(id):
+    return {
+        'MISRA23_6.2.2': """Published Standards/MISRA C++ 2023/6.2.2 \
+All declarations of a variable or function shall have the same type""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_6.2.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_6.2.2': """
+<p><b>Amplification</b></p>
+<p>Two variable declarations with the same name refer to the same variable if they have the same scope.
+Two function declarations with the same name refer to the same function if they have the same
+scope and have equivalent parameter declarations (see [over.dcl]/1). Declarations of variables in the
+global scope and declarations of variables and functions with C linkage that have the same identifier
+declare a single entity (note there is no overloading in C).</p>
+<p>For the purposes of this rule:</p>
+<p>1. An array declared with an unknown bound has the same type as an array declared with the
+same element type and a known bound; and</p>
+<p>2. A pointer to an incomplete type has the same type as a pointer to the complete type.</p>
+<p>The following restrictions apply:</p>
+<p>1. When several declarations of the same entity exist, they shall have the same type;</p>
+<p>2. All declarations of a function declared with the [[noreturn]] attribute shall have that attribute
+(see [dcl.attr.noreturn]).</p>
+<p>Note: functions with C linkage are always distinct from functions with C++ linkage.</p>
+
+<p><b>Rationale</b></p>
+<p>It is undefined behaviour if the declarations of a variable or function in two diCerent translation units
+do not have the same type.</p>
+<p>While attributes are not part of a function type, inconsistent use of the [[noreturn]] attribute
+results in an ill-formed (no diagnostic required) program.</p>
+
+<p><b>Example</b></p>
+<p>All the declarations of f3 in the following files conflict with each other and are non-compliant.</p>
+<pre><code language="C++">// File a.cpp
+typedef int32_t myint;
+extern int32_t a; // Non-compliant - see b.cpp
+extern int32_t b []; // Compliant
+extern char c; // Non-compliant - see b.cpp
+extern int32_t d; // Compliant
+extern myint e; // Compliant
+int32_t f1(); // Non-compliant - see b.cpp
+int32_t f2( int32_t ); // Compliant
+extern "C" int32_t f3( int32_t ); // Non-compliant
+int32_t f4(); // Non-compliant - see b.cpp
+
+// File b.cpp
+extern int64_t a; // Non-compliant - see a.cpp
+extern int32_t b [ 5 ]; // Compliant
+int16_t c; // Non-compliant - see a.cpp
+int32_t d { 1 }; // Compliant
+int32_t e; // Compliant
+char f1(); // Non-compliant - see a.cpp
+char f2( char ); // Compliant - not the same function as
+// int32_t f2( int32_t )
+extern "C" int32_t f3( char ); // Non-compliant
+int32_t f4() noexcept; // Non-compliant - see a.cpp
+// Different exception specification
+
+// File c.cpp
+extern "C" int32_t f3; // Non-compliant
+
+// File d.cpp
+int32_t f3; // Non-compliant
+</code></pre>
+
+<p><b>Developer's Note:</b><br>
+<p>Due to limitations, this check may not flag a function that is redeclared as an object and vice versa.
+This check may also falsely flag multi-line declarations.</p>
+""",
+    }[id]
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check("code file, header file")
+
+
+def test_global():
+    return False
+
+
+def get_typed_ref(ref):
+    ent_type = None
+    typed_refs = {}
+
+    for type_ref in ref.ent().refs("Typed ~TemplateArgument"):
+        if type_ref.file().id() in typed_refs:
+            typed_refs[type_ref.file().id()].append(type_ref)
+        else:
+            typed_refs[type_ref.file().id()] = [type_ref]
+
+        if type_ref.file().id() == ref.file().id() and type_ref.line() == ref.line():
+            if not type_ref.ent().kind().check("Unresolved"):
+                ent, type = get_ent_type(type_ref.ent())
+                ent_type = ent.name() if ent else str(type)
+            else:
+                ent_type = type_ref.ent().name()
+
+    return ent_type, typed_refs
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def get_attr(ref, func_name):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), 1)
+    lex = lex.next(True, True) if lex.token() in [
+        "Whitespace", "Indent"] else lex
+    on_brack = 0
+    attr = ""
+
+    while lex and lex.text() != ";":
+        if lex.text() in "([{<":
+            on_brack += 1
+        elif lex.text() in ")]}>":
+            on_brack -= 1
+        elif lex.text() == func_name and lex.next(True, True).text() == "=":
+            break
+        elif on_brack or lex.text() in [func_name, "extern", "override"]:
+            pass
+        else:
+            attr += lex.text()
+
+        lex = lex.next(True, True)
+
+    return attr
+
+
+def get_redec_type(ref, typed_refs):
+    for type_ref in typed_refs[ref.file().id()]:
+        if type_ref.line() == ref.line():
+            if not type_ref.ent().kind().check("Unresolved"):
+                ent, type = get_ent_type(type_ref.ent())
+                return ent.name() if ent else str(type)
+            else:
+                return type_ref.ent().name()
+
+
+def on_macro(ref):
+    lex = ref.file().lexer().lexeme(ref.line(), ref.column())
+
+    return lex and lex.ent() and lex.ent().kind().check("Macro")
+
+
+def check(check, file):
+    for func_ref in file.filerefs("Declare ~Using ~Implicit", "Function ~Macro"):
+        if func_ref.ent().freetext("DefinedInMacro") or on_macro(func_ref):
+            continue
+
+        dec_attr = get_attr(func_ref, func_ref.ent().name())
+        dec_type, typed_refs = get_typed_ref(func_ref)
+
+        for redec_ref in func_ref.ent().refs("Declarein ~Using ~Implicit"):
+            if (redec_ref.file().id() == file.id()
+                    and redec_ref.line() == func_ref.line()):
+                continue
+
+            redec_type = None
+
+            if redec_ref.file().id() in typed_refs:
+                redec_type = get_redec_type(redec_ref, typed_refs)
+
+            if ((dec_type and not redec_type)
+                    or (redec_type and not dec_type)
+                    or (dec_type and redec_type and dec_type != redec_type)):
+                check.violation(func_ref.ent(), redec_ref.file(),
+                                redec_ref.line(), redec_ref.column(),
+                                ERR1, file.longname(), func_ref.line())
+            else:
+                redec_attr = get_attr(redec_ref, func_ref.ent().name())
+
+                if dec_attr != redec_attr:
+                    check.violation(func_ref.ent(), redec_ref.file(),
+                                    redec_ref.line(), redec_ref.column(),
+                                    ERR1, file.longname(), func_ref.line())
+
+    for obj_ref in file.filerefs("Declare ~Using ~Implicit, Define", "Object ~TemplateParameter"):
+        if obj_ref.ent().freetext("DefinedInMacro") or on_macro(obj_ref):
+            continue
+
+        dec_type, typed_refs = get_typed_ref(obj_ref)
+
+        for redec_ref in obj_ref.ent().refs("Declarein ~Using ~Implicit, Definein"):
+            if (redec_ref.file().id() == file.id()
+                    and redec_ref.line() == obj_ref.line()):
+                continue
+
+            redec_type = None
+
+            if redec_ref.file().id() in typed_refs:
+                redec_type = get_redec_type(redec_ref, typed_refs)
+
+            if ((dec_type and not redec_type)
+                    or (redec_type and not dec_type)
+                    or (dec_type and redec_type and dec_type != redec_type)):
+                check.violation(obj_ref.ent(), redec_ref.file(),
+                                redec_ref.line(), redec_ref.column(),
+                                ERR1, file.longname(), obj_ref.line())
