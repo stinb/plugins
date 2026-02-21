@@ -236,7 +236,7 @@ def check_shift(check, file, operator_lex, op):
 
     if prevLex and leftEnt:
         info = get_type_info(leftEnt)
-        if info['is_small_unsigned'] and not is_nonnegative_constant(prevLex, leftEnt):
+        if info['is_numeric'] and info['is_small_unsigned'] and not is_nonnegative_constant(prevLex, leftEnt):
             check.violation(leftEnt, file, operator_lex.line_begin(),
                           operator_lex.column_begin(), ERR1)
 
@@ -247,7 +247,7 @@ def check_unary(check, file, operator_lex, op):
 
     if nextLex and rightEnt:
         info = get_type_info(rightEnt)
-        if info['is_small_unsigned'] and not is_nonnegative_constant(nextLex, rightEnt):
+        if info['is_numeric'] and info['is_small_unsigned'] and not is_nonnegative_constant(nextLex, rightEnt):
             check.violation(rightEnt, file, operator_lex.line_begin(),
                           operator_lex.column_begin(), ERR1)
 
@@ -436,6 +436,11 @@ def get_original_type(operand_lex, operand_ent):
     # handle entities
     if operand_ent:
         info = get_type_info(operand_ent)
+
+        # skip non-numeric types (pointers, classes, etc.)
+        if not info['is_numeric']:
+            return {'signed': None, 'category': None, 'type': 'unknown'}
+
         if info['is_floating']:
             return {'signed': None, 'category': 'floating',
                     'type': str(operand_ent.type()) if operand_ent.type() else 'float'}
@@ -459,6 +464,10 @@ def compute_promoted_type(operand_lex, operand_ent):
     if operand_ent:
         info = get_type_info(operand_ent)
 
+        # skip non-numeric types (pointers, classes, etc.)
+        if not info['is_numeric']:
+            return {'signed': None, 'category': None, 'type': 'unknown'}
+
         # floating types don't undergo integral promotion
         if info['is_floating']:
             return {'signed': None, 'category': 'floating',
@@ -469,9 +478,8 @@ def compute_promoted_type(operand_lex, operand_ent):
             return {'signed': True, 'category': 'integral', 'type': 'int'}
 
         # other types remain unchanged
-        category = 'floating' if info['is_floating'] else 'integral'
         return {'signed': info['is_signed'] if info['is_signed'] is not None else (not info['is_unsigned']),
-                'category': category,
+                'category': 'integral',
                 'type': str(operand_ent.type()) if operand_ent.type() else 'unknown'}
 
     return {'signed': None, 'category': None, 'type': 'unknown'}
@@ -525,11 +533,15 @@ def check_conversion(check, file, operator_lex, operand_lex, operand_ent,
 def get_type_info(ent):
     if not ent:
         return {'type_str': '', 'is_signed': None, 'is_unsigned': False,
-                'is_floating': False, 'is_small_unsigned': False}
+                'is_floating': False, 'is_small_unsigned': False, 'is_numeric': False}
 
     ent_type = str(ent.type()).lower() if ent.type() else ""
     underlying_type = str(ent.freetext("UnderlyingType")).lower() if ent.freetext("UnderlyingType") else ""
     type_str = ent_type + " " + underlying_type
+
+    # Detect non-numeric types: pointers and class/template types
+    is_pointer = '*' in ent_type or '*' in underlying_type
+    is_template = '<' in ent_type
 
     is_unsigned = any(u in type_str for u in ['unsigned', 'uint'])
     is_floating = any(f in type_str for f in ['float', 'double'])
@@ -543,12 +555,17 @@ def get_type_info(ent):
     elif 'int' in ent_type and 'unsigned' not in type_str and 'uint' not in type_str:
         is_signed = True
 
+    # Type is numeric only if positively identified and not a pointer/template
+    is_numeric = (not is_pointer and not is_template and
+                  (is_signed is not None or is_unsigned or is_floating))
+
     return {
         'type_str': type_str,
         'is_signed': is_signed,
         'is_unsigned': is_unsigned,
         'is_floating': is_floating,
-        'is_small_unsigned': is_small_unsigned
+        'is_small_unsigned': is_small_unsigned,
+        'is_numeric': is_numeric
     }
 
 

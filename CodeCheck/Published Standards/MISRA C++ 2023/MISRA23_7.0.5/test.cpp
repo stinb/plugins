@@ -145,5 +145,32 @@ void test_rule_7_0_5()
     auto r41 = s32 + (s32 - s32);     // UndCC_Valid - all signed, no conversion
 }
 
+// Pointer comparisons - rule does not apply to non-numeric types
+struct opaque_cntr_t { int x; };
+void test_pointer_comparisons()
+{
+    opaque_cntr_t *opaque_cntr = nullptr;
+    if (opaque_cntr == nullptr) {}            // UndCC_Valid - pointer comparison
+    if (opaque_cntr != nullptr) {}            // UndCC_Valid - pointer comparison
+
+    int *ptr = nullptr;
+    if (ptr == nullptr) {}                    // UndCC_Valid - pointer comparison
+
+    const char *name = "test";
+    if (name != nullptr) {}                   // UndCC_Valid - pointer comparison
+
+    char *filtbuf = nullptr;
+    int len = 10;
+    if (filtbuf + len != nullptr) {}          // UndCC_Valid - pointer arithmetic
+}
+
+// Class and template types - rule does not apply
+#include <vector>
+void test_class_types()
+{
+    std::vector<int> v;
+    auto sz = v.size();                       // UndCC_Valid - not a numeric conversion issue
+}
+
 int32_t get_signed_value() { return 0; }
 uint32_t get_unsigned_value() { return 0; }
