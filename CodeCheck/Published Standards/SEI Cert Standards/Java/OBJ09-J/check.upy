@@ -1,6 +1,8 @@
 # This script is designed to run with Understand - CodeCheck
 # Micah Morgan - 3/31/2022
 
+from understand import Check, Ent, Lexeme, Ref
+
 ERR1 = 'Do not compare class names'
 
 ERR2 = 'Do not compare class namesm - via variable'
@@ -24,9 +26,6 @@ def name(id):
         'JAVA_OBJ09': "All Checks/Language Specific/Java/Object Orientation/" + DEF_NAME,
     }[id]
 
-
-
-
 def tags(id):
     return {
         'OBJ09-J': [
@@ -44,10 +43,6 @@ def tags(id):
         ],
     }.get(id)
 
-# The short description of the check
-def description():
-    return DEF_NAME
-
 # The long description of the check
 def detailed_description():
     return """
@@ -64,20 +59,20 @@ def detailed_description():
 <p><b>Developer's Notes</b></p><p>Variables and parameters that are not final cannot have their values guaranteed at the time of comparison so they cannot be flagged. An option is available to flag these, but it may lead to false positives.</p>
 """
 
-def test_entity(file):
+def test_entity(file: Ent) -> bool:
     return file.kind().check('Java File')
 
-def test_global():
+def test_global() -> bool:
     return False
 
-def test_language(language):
+def test_language(language: str) -> bool:
     return language == 'Java'
 
 # Options for the check
-def define_options(check):
+def define_options(check: Check):
     check.option().checkbox("poten", "Check for potential variables and parameters", False)
 
-def check(check, file):
+def check(check: Check, file: Ent):
 
     pot = check.option().lookup('poten')
 
@@ -111,7 +106,7 @@ def check(check, file):
                 if dParam[0] > -1:
                     if "Unknown" not in dParam[1].kindname():#need to check that it isnt a built in
                         params = get_params(dParam[1].ref())
-                        p = params[dParam[0]]
+                        p = params[dParam[0]] if params else ("", None)
                         if "final" in p[0] or pot:
                             compare = False
                             for useofpar in p[1].ent().refs("Useby ~Use"):
@@ -122,7 +117,7 @@ def check(check, file):
                                 pm(ERR3, check, var.ent(), var.file(), var.line(), var.column())
 
                 #variable stuff
-                varr = is_variable(var, eLex, check)
+                varr = is_variable(var, eLex)
                 if varr:
                     varEnt = varr.ent()
                     isOk =  (pot and "Variable" in varEnt.kindname()) or ("Final" in varEnt.kindname() and "Variable" in varEnt.kindname())
@@ -148,12 +143,13 @@ def check(check, file):
                                             pm(ERR4, check, varEnt, useof.file(), useof.line(), useof.column())
 
 
-def is_variable(ref, eLex, check):
-    varEnt = None
-    lexer = ref.file().lexer()
-    if lexer is None:
+def is_variable(ref: Ref, eLex: Lexeme) -> Lexeme | None:
+    file = ref.file()
+    if file.file_type() == None:
         return None
+    lexer = file.lexer()
 
+    varEnt = None
     pCount = 0
     lexemeR = lexer.lexeme(ref.line(), ref.column())
 
@@ -178,17 +174,17 @@ def is_variable(ref, eLex, check):
 
 
 
-def is_class(e):
+def is_class(e: Ent | None) -> bool:
     if e is None:
         return False
-    if "Class" in e.kindname():
-        return True
+    return "Class" in e.kindname()
 
 #returns -1 if not, else returns param (index, user)
-def passed_as_param(ref):
-    lexer = ref.file().lexer()
-    if lexer is None:
-        return False
+def passed_as_param(ref: Ref) -> tuple[int, Ent | None]:
+    file = ref.file()
+    if file.file_type() == None:
+        return (-1, None)
+    lexer = file.lexer()
 
     #get the lexemes to the left and right
     lexeme = lexer.lexeme(ref.line(), ref.column())
@@ -271,10 +267,11 @@ def passed_as_param(ref):
 
     return (index,user)
 
-def is_compared(ref, eLex):
-    lexer = ref.file().lexer()
-    if lexer is None:
+def is_compared(ref: Ref, eLex: Lexeme | None):
+    file = ref.file()
+    if file.file_type() == None:
         return False
+    lexer = file.lexer()
 
     lexemeE = lexer.lexeme(ref.line(), ref.column())
 
@@ -320,11 +317,11 @@ def is_compared(ref, eLex):
     return False
 
 #checks to the left and right for operations
-def var_is_compared(ref):
-
-    lexer = ref.file().lexer()
-    if lexer is None:
+def var_is_compared(ref: Ref) -> bool:
+    file = ref.file()
+    if file.file_type() == None:
         return False
+    lexer = file.lexer()
 
     #get the lexemes to the left and right
     lexeme = lexer.lexeme(ref.line(), ref.column())
@@ -358,17 +355,18 @@ def var_is_compared(ref):
 
     return True
 
-def get_caller_ent_order(ref):
-    lexer = ref.file().lexer()
-    if lexer is None:
-        return None
+def get_caller_ent_order(ref: Ref) -> tuple[Lexeme | None, list[str]]:
+    file = ref.file()
+    if file.file_type() == None:
+        return (None, [])
+    lexer = file.lexer()
 
     lexeme = lexer.lexeme(ref.line(), ref.column())
     lastLexeme = lexeme
 
     pCount = 0
     badText = ["(", "return", "{", "}"]
-    strOrder = []
+    strOrder: list[str] = []
     ct = ""
     while lexeme and lexeme.token() != "Operator" and not (pCount == 0 and lexeme.text() in badText):
 
@@ -391,12 +389,13 @@ def get_caller_ent_order(ref):
     return (lastLexeme, strOrder)
 
 # get the types of a param since we cant get final via api
-def get_params(ref):
+def get_params(ref: Ref) -> list[tuple[str, Lexeme]]:
+    file = ref.file()
+    if file.file_type() == None:
+        return []
+    lexer = file.lexer()
 
-    par = []
-    if not ref.file() or not ref.file().lexer():
-        return
-    lexer = ref.file().lexer()
+    par: list[tuple[str, Lexeme]] = []
 
     if lexer is None:
         return par
@@ -451,5 +450,5 @@ def get_params(ref):
 
 
 
-def pm(s, check, ent = None, file = None, line = -1, col = -1):
+def pm(s: str, check: Check, ent: Ent | None = None, file: Ent | None = None, line: int = -1, col: int = -1):
     check.violation(ent, file, line, col, str(s))
