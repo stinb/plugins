@@ -268,6 +268,8 @@ def check_ternary(check, file, question_lex):
             depth += 1
         elif scanLex.text() in [')', '}', ']']:
             depth -= 1
+            if depth < 0:
+                break  # exited the ternary's containing scope
 
         # skip nested ternary
         elif scanLex.text() == '?' and depth == 0:
@@ -280,7 +282,7 @@ def check_ternary(check, file, question_lex):
             continue
 
         # statement terminator
-        elif scanLex.text() in [';', ',', ')'] and depth == 0:
+        elif scanLex.text() in [';', ','] and depth == 0:
             break
 
         # collect operand entities or literals
@@ -313,6 +315,41 @@ def check_ternary(check, file, question_lex):
                         true_original, true_final)
         check_conversion(check, file, question_lex, false_lex, false_ent,
                         false_original, false_final)
+
+
+# detects C-style cast pattern (TYPE)operand before an operand lexeme
+# handles member access chains: (TYPE)obj->member, (TYPE)obj.member
+def has_c_style_cast(operand_lex):
+    if not operand_lex:
+        return False
+
+    # walk backward past member access chains: obj->member, obj.member, ns::name
+    scan_back = operand_lex.previous(ignore_whitespace=True, ignore_comments=True)
+    while scan_back and scan_back.text() in ['->', '.', '::']:
+        scan_back = scan_back.previous(ignore_whitespace=True, ignore_comments=True)  # skip to obj
+        if scan_back:
+            scan_back = scan_back.previous(ignore_whitespace=True, ignore_comments=True)  # skip past obj
+
+    close_paren = scan_back
+    if not close_paren or close_paren.text() != ')':
+        return False
+
+    # scan backward to find matching opening paren
+    scan = close_paren.previous(ignore_whitespace=True, ignore_comments=True)
+    while scan:
+        if scan.text() == '(':
+            # found opening paren - check if preceded by operator/keyword/delimiter
+            # (a cast context) rather than an identifier (a function call)
+            before = scan.previous(ignore_whitespace=True, ignore_comments=True)
+            if before and (before.ent() or before.token() in ["Number", "Literal"]
+                          or before.text() in [')', ']']):
+                return False  # function call or subexpression, not a cast
+            return True
+        if scan.text() in [';', '{', '}']:
+            return False
+        scan = scan.previous(ignore_whitespace=True, ignore_comments=True)
+
+    return False
 
 
 # returns the left operand lexeme and entity for a binary operator
@@ -372,6 +409,9 @@ def get_left_operand(operator_lex):
 
     # check if operand is an identifier/entity
     if prevLex.ent():
+        # check for C-style cast: (TYPE)operand
+        if has_c_style_cast(prevLex):
+            return (prevLex, None)  # skip type analysis, cast makes type explicit
         return (prevLex, prevLex.ent())
 
     # check if operand is a literal
@@ -425,11 +465,25 @@ def get_right_operand(operator_lex):
     return (None, None)
 
 
+# checks if a numeric literal is a floating-point literal
+def is_float_literal(text):
+    text = text.lower()
+    is_hex = text.startswith('0x') or text.startswith('0X')
+    if '.' in text:
+        return True
+    if not is_hex and (text.endswith('f') or text.rstrip('fl').endswith('e')):
+        return True
+    return False
+
+
 # returns the original type of an operand before any conversions
 def get_original_type(operand_lex, operand_ent):
     # handle literals
     if not operand_ent and operand_lex and operand_lex.token() in ["Number", "Literal"]:
-        is_unsigned = 'u' in operand_lex.text().lower()
+        text = operand_lex.text().lower()
+        if is_float_literal(text):
+            return {'signed': None, 'category': 'floating', 'type': 'float literal'}
+        is_unsigned = 'u' in text
         return {'signed': not is_unsigned, 'category': 'integral',
                 'type': 'unsigned literal' if is_unsigned else 'signed literal'}
 
@@ -456,7 +510,10 @@ def get_original_type(operand_lex, operand_ent):
 def compute_promoted_type(operand_lex, operand_ent):
     # handle literals
     if not operand_ent and operand_lex and operand_lex.token() in ["Number", "Literal"]:
-        is_unsigned = 'u' in operand_lex.text().lower()
+        text = operand_lex.text().lower()
+        if is_float_literal(text):
+            return {'signed': None, 'category': 'floating', 'type': 'float literal'}
+        is_unsigned = 'u' in text
         return {'signed': not is_unsigned, 'category': 'integral',
                 'type': 'unsigned int' if is_unsigned else 'int'}
 
@@ -536,6 +593,14 @@ def get_type_info(ent):
                 'is_floating': False, 'is_small_unsigned': False, 'is_numeric': False}
 
     ent_type = str(ent.type()).lower() if ent.type() else ""
+
+    # For function entities, extract just the return type (before first '(')
+    # to avoid false pointer detection from parameter types like "int(const char *)"
+    if ent.kind().check('function'):
+        paren_idx = ent_type.find('(')
+        if paren_idx > 0:
+            ent_type = ent_type[:paren_idx].strip()
+
     underlying_type = str(ent.freetext("UnderlyingType")).lower() if ent.freetext("UnderlyingType") else ""
     type_str = ent_type + " " + underlying_type
 
@@ -552,7 +617,9 @@ def get_type_info(ent):
         is_signed = False
     elif any(s in type_str for s in ['int8_t', 'int16_t', 'int32_t', 'int64_t', 'signed']):
         is_signed = True
-    elif 'int' in ent_type and 'unsigned' not in type_str and 'uint' not in type_str:
+    elif any(s in type_str for s in ['long', 'short']):
+        is_signed = True
+    elif 'int' in type_str and 'unsigned' not in type_str and 'uint' not in type_str:
         is_signed = True
 
     # Type is numeric only if positively identified and not a pointer/template

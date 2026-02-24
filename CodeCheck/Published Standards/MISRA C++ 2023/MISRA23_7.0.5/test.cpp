@@ -172,5 +172,67 @@ void test_class_types()
     auto sz = v.size();                       // UndCC_Valid - not a numeric conversion issue
 }
 
+// C-style cast makes conversion explicit - no implicit UAC
+void test_c_style_casts()
+{
+    int index = 5;
+    size_t nbItem = 10;
+    if ((size_t)index >= nbItem) {}           // UndCC_Valid - explicit cast to size_t
+
+    uint32_t u32 = 100;
+    if ((int32_t)u32 > 0) {}                  // UndCC_Valid - explicit cast to int32_t
+
+    int32_t s32 = 50;
+    auto r = (uint32_t)s32 + u32;             // UndCC_Valid - explicit cast to uint32_t
+}
+
+// C-style cast on member access chains
+struct cache_info { unsigned long numentries; unsigned long maxentries; unsigned long fetches; unsigned long hits; };
+void test_cast_member_access()
+{
+    cache_info cache = {10, 100, 50, 25};
+    double pct = (double)cache.numentries / (double)cache.maxentries; // UndCC_Valid - explicit casts
+}
+
+// Ternary inside function call arguments
+void take_int(int x);
+void test_ternary_in_funcall()
+{
+    int32_t a = 1, b = 2;
+    bool cond = true;
+    take_int(cond ? a : b);               // UndCC_Valid - both signed int, same type
+}
+
+// Float literals should be recognized as floating, not integral
+void test_float_literals()
+{
+    uint32_t u32 = 100;
+    auto r1 = u32 * 100.0;               // UndCC_Violation - u32 → double (type category change)
+    auto r2 = u32 + 1.0f;                // UndCC_Violation - u32 → float (type category change)
+}
+
+// Hex literals ending in 'f' are NOT float literals
+void test_hex_literals()
+{
+    uint8_t u8 = 0xFF;
+    int32_t s32 = 10;
+    auto r1 = s32 & 0xF;                 // UndCC_Valid - hex literal, both signed int
+    auto r2 = s32 & 0x3f;                // UndCC_Valid - hex literal, both signed int
+    auto r3 = s32 & 0x3ff;               // UndCC_Valid - hex literal, both signed int
+    auto r4 = u8 & 0xF;                  // UndCC_Violation - u8 promotes to signed int
+}
+
+// Function return types with pointer parameters
+int atoi_wrapper(const char *str);
+long strtol_wrapper(const char *str, char **endptr, int base);
+void test_function_return_types()
+{
+    int32_t x = 10;
+    if (atoi_wrapper("5") != x) {}            // UndCC_Valid - both signed int
+    if (strtol_wrapper("5", nullptr, 10) > x) {} // UndCC_Valid - both signed
+}
+
 int32_t get_signed_value() { return 0; }
 uint32_t get_unsigned_value() { return 0; }
+int atoi_wrapper(const char *str) { return 0; }
+long strtol_wrapper(const char *str, char **endptr, int base) { return 0; }
