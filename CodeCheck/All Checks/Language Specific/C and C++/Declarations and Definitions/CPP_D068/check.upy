@@ -1,9 +1,11 @@
 # This script is designed to run with Understand - CodeCheck
 # Written by Robby Bennett
-# 11-22-21
+# 2021-11-22
 
 
 import re
+
+from understand import Check, Ent, Ref
 
 
 ERR1 = 'Equivalent to the implicitly defined copy constructor'
@@ -23,9 +25,6 @@ def name(id):
     }[id]
 
 
-
-
-
 def tags(id):
     return {
         'A12-7-1': [
@@ -40,6 +39,7 @@ def tags(id):
             'Declarations and Definitions',
         ],
     }.get(id)
+
 
 def detailed_description():
     return '''
@@ -141,6 +141,11 @@ class E // Compliant - special member functions definitions are not needed as
 • C++ Core Guidelines [11]: C.80: Use =default if you have to be explicit about using the default semantics.
 </p>
 
+<p><b>Developer's Notes</b></p>
+
+<p>The example states that a constructor that fails to initialize non-static
+data members is non-compliant. This is likely to be a violation of A12-1-1
+rather than A12-7-1. An option is provided for this functionality.</p>
 '''
 
 
@@ -156,11 +161,15 @@ def test_global():
     return False
 
 
-def equal(ref1, ref2):
+def define_options(check: Check):
+    check.options().checkbox('check_init', 'Check that constructors initialize members', False)
+
+
+def equal(ref1: Ref, ref2: Ref) -> bool:
     return ref1.line() == ref2.line() and ref1.column() == ref2.column()
 
 
-def emptyFunction(ent):
+def emptyFunction(ent: Ent):
     contents = ent.contents()
 
     # Remove any comments and whitespace
@@ -173,12 +182,16 @@ def emptyFunction(ent):
         return True
     return False
 
-def check(check, file):
+
+def check(check: Check, file: Ent):
+    check_init = check.options().lookup('check_init')
 
     # Public member functions
     for funRef in file.filerefs('Define', 'Public Member Function'):
         funEnt = funRef.ent()
         classEnt = funEnt.parent()
+        if not classEnt:
+            continue
 
         # Non-default constructor or deconstructor
         if re.match(r'^(|\~)' + classEnt.name(), funEnt.name()) and 'Class' in classEnt.kindname():
@@ -199,7 +212,7 @@ def check(check, file):
                     check.violation(funEnt, file, funRef.line(), funRef.column(), ERR3)
 
             # Members are not initialized
-            elif funEnt.name() == classEnt.name():
+            elif funEnt.name() == classEnt.name() and check_init:
                 # Count the members not initialized by the class
                 notInitByClass = 0
                 for member in classEnt.ents('Define', 'Member Object ~Const'):

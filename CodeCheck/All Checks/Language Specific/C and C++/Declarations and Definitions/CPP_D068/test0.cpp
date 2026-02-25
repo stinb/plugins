@@ -13,14 +13,14 @@ public:
     // defaulted.
     A(const A& oth) // UndCC_Violation
     : x(oth.x),
-    y(oth.y) 
+    y(oth.y)
              // defined copy constructor
     {
     }
     A(A&& oth) // UndCC_Violation
     : x(std::move(oth.x)),
     y(std::move(
-    oth.y)) 
+    oth.y))
             // defined move constructor
     {
     }
@@ -35,7 +35,7 @@ private:
 class B
 {
 public:
-    B() {} // UndCC_Violation - x and y are not initialized
+    B() {} // UndCC_Violation(check_init) - x and y are not initialized
            // should be replaced with: B() : x{0}, y{0} {}
     B(std::int32_t first, std::int32_t second) : x(first), y(second) {} // UndCC_Valid
     B(const B&) =
