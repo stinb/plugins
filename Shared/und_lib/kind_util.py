@@ -13,6 +13,7 @@ FUNCTION_KIND_STR_WITH_UNRESOLVED=("ada entry, ada function, ada procedure, ada 
   "jovial subroutine,"
   "pascal compunit, pascal function, pascal procedure,"
   "python function,"
+  "rust function,"
   "vhdl procedure, vhdl function, vhdl process, vhdl architecture,"
   "web ~class function, web method")
 FUNCTION_KIND_STR=("ada entry ~unresolved, ada function ~unresolved, ada procedure ~unresolved, ada protected ~unresolved, ada task ~unresolved,"
@@ -23,6 +24,7 @@ FUNCTION_KIND_STR=("ada entry ~unresolved, ada function ~unresolved, ada procedu
   "jovial subroutine ~unresolved,"
   "pascal compunit ~unresolved, pascal function ~unresolved, pascal procedure ~unresolved,"
   "python function ~unresolved,"
+  "rust function ~unresolved,"
   "vhdl procedure ~unresolved, vhdl function ~unresolved, vhdl process ~unresolved, vhdl architecture ~unresolved,"
   "web ~class function ~unresolved, web method ~unresolved")
 FUNCTION_LIKE_KIND_STR = FUNCTION_KIND_STR + ", web javascript function class ~unresolved"
