@@ -4,7 +4,7 @@ This directory contains MCP (Model Context Protocol) servers that provide access
 
 ## Setup Instructions
 
-For detailed setup instructions, see the [official documentation](https://scitools.freshdesk.com/support/solutions/articles/70000680031). The [directions](https://scitools.freshdesk.com/support/solutions/articles/70000582855-api-tutorial-1-getting-started-with-the-python-api) for setting up a custom python installation with the Understand API may also be useful because the `upython` executable shipped with Understand does not include FastMCP. 
+For detailed setup instructions, see the [official documentation](https://scitools.freshdesk.com/support/solutions/articles/70000680031). The [directions](https://scitools.freshdesk.com/support/solutions/articles/70000582855-api-tutorial-1-getting-started-with-the-python-api) for setting up a custom python installation with the Understand API may also be useful because the `upython` executable shipped with Understand does not include FastMCP.
 
 ### Quick Setup
 
@@ -53,3 +53,13 @@ This directory contains two MCP servers:
 - Best for: LLM use cases, smaller context windows, common workflows (finding entities, getting source, analyzing references)
 
 **Recommendation**: Start with `mcp_server_for_understand_llm_optimized.py` for most LLM use cases. Use `mcp_server_for_understand_comprehensive.py` when you need specific API features not available in the optimized version.
+
+## Recommended plugins
+
+If the `mcp_server_for_understand_llm_optimized.py` server is used with older Understand builds, the following plugins may need to be installed for full functionality. The table below shows the earliest build that ships with the required plugin version.
+
+| Plugin (path) | Build | Description |
+|---------------|-------|-------------|
+| [Metric/arch_metrics.upy](https://github.com/stinb/plugins/blob/main/Metric/arch_metrics.upy) | 1246 | Entity/children counts (direct and recursive), depth; used by `get_architecture_details` key metrics. |
+| [Metric/arch_depends.upy](https://github.com/stinb/plugins/blob/main/Metric/arch_depends.upy) | 1245 | Dependency counts and refs (in/out, direct/major); used by `get_architecture_details` key metrics. |
+| [Metric/arch_percent.upy](https://github.com/stinb/plugins/blob/main/Metric/arch_percent.upy) | 1246 | Percent of root/parent (entities and code lines); used by `get_architecture_details` key metrics. |

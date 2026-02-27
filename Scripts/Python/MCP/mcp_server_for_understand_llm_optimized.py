@@ -111,6 +111,136 @@ def _build_no_source_error(ent_id: int, ent) -> str:
     return base + example
 
 
+def _key_ent_file_stem(ent) -> str:
+    name = (ent.name() or "").strip()
+    if "." in name:
+        return name.rsplit(".", 1)[0].lower()
+    return name.lower()
+
+
+def _key_ent_incoming_depends_count(entities_list: list) -> dict:
+    """For each entity, count how many others in the list depend on it (via depends())."""
+    entity_set = set(entities_list)
+    incoming = {}
+    for ent in entity_set:
+        try:
+            for to_ent in ent.depends().keys():
+                if to_ent in entity_set and to_ent is not ent:
+                    incoming[to_ent] = incoming.get(to_ent, 0) + 1
+        except Exception:
+            pass
+    return incoming
+
+
+def _key_ent_group_by_stem(arch, recursive: bool = False) -> dict:
+    """Group entities by stem (name without extension). recursive=False uses only direct entities."""
+    groups = {}
+    try:
+        for e in arch.ents(recursive):
+            try:
+                stem = _key_ent_file_stem(e)
+                if not stem:
+                    continue
+                groups.setdefault(stem, []).append(e)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return groups
+
+
+def _key_entities_ranked_header(arch, recursive: bool = False) -> list:
+    """Rank entities: preferred (header file kind) from each stem first, then rest. Stems ordered by exact name match
+    to arch, then sum incoming dependency count, then ascending CountLineCode. Returns list of entities."""
+    groups = _key_ent_group_by_stem(arch, recursive=recursive)
+    if not groups:
+        return []
+    all_entities = [e for entities in groups.values() for e in entities]
+    incoming_count = _key_ent_incoming_depends_count(all_entities)
+    arch_lower = (arch.name() or "").lower()
+
+    def lines(ent):
+        try:
+            return ent.metric("CountLineCode") or 0
+        except Exception:
+            return 0
+
+    def chosen_lines_for_stem(entities):
+        preferred = [e for e in entities if e.kind().check("header file")]
+        candidates = preferred if preferred else entities
+        return min(lines(e) for e in candidates)
+
+    def sort_key(item):
+        name, entities = item
+        exact_match = 1 if name == arch_lower else 0
+        sum_inc = sum(incoming_count.get(e, 0) for e in entities)
+        chosen_lines = chosen_lines_for_stem(entities)
+        return (exact_match, sum_inc, -chosen_lines, name)
+
+    sorted_stems = sorted(groups.items(), key=sort_key, reverse=True)
+    selected = []
+    unselected = []
+    for _stem, entities in sorted_stems:
+        preferred = [e for e in entities if e.kind().check("header file")]
+        chosen = min(preferred, key=lines) if preferred else min(entities, key=lines)
+        for e in entities:
+            if e is chosen:
+                selected.append(e)
+            else:
+                unselected.append(e)
+    return selected + unselected
+
+
+def _arch_has_direct_non_unparsed_entities(arch) -> bool:
+    """True if this architecture has at least one direct entity that is not unparsed."""
+    for ent in arch.ents(False):
+        try:
+            if not ent.kind().check("unparsed"):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _get_architecture_children_bfs(arch, max_results: int) -> tuple:
+    """Return a limited list of descendant architectures (children, grandchildren, ...) via BFS.
+    Prefer nodes that have direct non-unparsed entities (like get_top_level_dirs2). Each node
+    appears at most once. May return more than max_results when a single node has many children
+    (see lines 226-234). Returns (list of understand.Arch, depth_reached: int)."""
+    if max_results <= 0:
+        return []
+    initial_arch = arch
+    top = []
+    current_level = []
+    next_level = [arch]
+    depth = -1  # So it goes to 0 on first iteration when "arch" becomes current_level/top.
+    while (next_level and (len(top) + len(next_level)) < max_results):
+        depth += 1
+        to_visit = next_level
+        current_level = []
+        next_level = []
+        for arch in to_visit:
+            if _arch_has_direct_non_unparsed_entities(arch):
+                top.append(arch)
+            else:
+                current_level.append(arch)
+            next_level.extend(list(arch.children()))
+    top.extend(current_level)
+    if len(top) == 1 and top[0].children():
+        # If there's only one arch in the list because it has more children
+        # than max results, return all it's children and limit to max results
+        # in the caller based on the sorting metric.
+        top.extend(list(top[0].children()))
+        depth += 1
+        if not _arch_has_direct_non_unparsed_entities(top[0]):
+            top.pop(0)
+    if initial_arch in top and (len(top) == 1 or not _arch_has_direct_non_unparsed_entities(initial_arch)):
+        # Don't return the initial arch as a child unless it has direct entities and
+        # there are other children reported
+        top.remove(initial_arch)
+    return top, depth
+
+
 def paginate_results(items: list, max_results: int, cursor: Optional[str]) -> tuple:
     """
     Apply pagination to a list of items.
@@ -1433,7 +1563,7 @@ def list_entities(
 @mcp.tool(name="list_architectures_summary")
 def list_architectures_summary() -> dict:
     """
-    List root architectures in the project.
+    List root architectures in the project. An architecture is a hierarchical grouping of entities.
 
     Returns: list of root architecture names. Most projects have only 1-3 root architectures.
 
@@ -1493,36 +1623,84 @@ def directory_to_architecture(
 
     return {"arch_longname": arch_longname}
 
+# Key metrics always included in get_architecture_details (compact and non-compact).
+# CountArchChildren/CountArchEnts = direct; CountArchChildrenRecursive/CountArchEntsRecursive = subtree (from arch_metrics.upy).
+KEY_METRICS_ALWAYS = [
+    "CountArchEnts",
+    "CountArchEntsRecursive",
+    "CountArchChildren",
+    "CountArchChildrenRecursive",
+    "CountLineCode",
+    "PercentOfRootCodeLines",
+    "CountDepRefsIn",
+    "CountDepRefsOut",
+]
+
+# Additional key metrics when compact=False (size, structure, complexity, percentages).
+KEY_METRICS_WHEN_NOT_COMPACT = [
+    "CountLine",
+    "CountDeclFile",
+    "CountDeclFunction",
+    "CountDeclClass",
+    "CountDeclSubprogram",  # Ada, Basic, Fortran, Jovial, Pascal (instead of CountDeclFunction)
+    "SumCyclomatic",
+    "PercentOfRootEntities",
+    "PercentOfParentCodeLines",
+    "RatioCommentToCode",
+    "CountDepsIn",
+    "CountDepsOut",
+    "ArchMaxChildDepth",  # max depth of subtree (shape: deep vs shallow; CountArchChildrenRecursive is in KEY_METRICS_ALWAYS)
+]
+
+# When compact=True, limit entity_percentages_by_kind to this many kinds (by percentage descending).
+ENTITY_KIND_TOP_N_COMPACT = 10
+
+# Max descendant architectures to list in get_architecture_details (BFS, may include grandchildren).
+CHILDREN_MAX_COMPACT = 10
+CHILDREN_MAX_NOT_COMPACT = 25
+
+# Max sorted_entities (direct entities, ranked by _key_entities_ranked_header logic) to list.
+SORTED_ENTITIES_MAX_COMPACT = 5
+SORTED_ENTITIES_MAX_NOT_COMPACT = 15
+
+
 @mcp.tool(name="get_architecture_details")
 def get_architecture_details(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get details for. Use list_architectures_summary to discover root architecture names.")],
+    compact: Annotated[bool, Field(description="If True (default), returns shorter lists.")] = True,
 ) -> dict:
     """
-    Get detailed information about a specific architecture including entity counts by kind.
+    Get details for an architecture (structure and contents).
 
-    Returns: architecture details including longname, children count, total entity count,
-    and entity_counts_by_kind (breakdown of direct members by kind, e.g., File, Class, Function).
+    Returns:
+    - key_metrics: such as direct and recursive counts of entities and child architectures.
+      Most architecture metrics are subtree aggregates.
+    - descendant_architectures: a BFS list of descendant architectures ordered by percent_code_lines.
+    - sorted_entities: first N (N depends on compact) of the architecture's direct entities (total
+      count is key_metrics.CountArchEnts), ordered by incoming dependencies (header preferred).
+    - entity_percentages_by_kind: percent of direct entities by kind (omitted if none)
+    - is_root: whether this is a root architecture
 
-    Note: entity_counts_by_kind shows only direct members. For Directory Structure, this means
-    files only (not functions inside those files). To find nested entities like functions within
-    a folder, use list_entities with kindstring parameter and arch_name, or use find_entities_by_metric with arch_name parameter.
+    Each of the list fields will be omitted if empty, and each uses the compact parameter to determine
+    maximum results shown.
 
-    Use this to understand the structure and contents of an architecture:
-    - See how many child architectures exist
-    - Understand what types of entities are directly assigned
+    Note: most architecture's direct entities are files. To find nested entities like functions within
+    a folder, use list_entities with kindstring and arch_name, or find_entities_by_metric with arch_name.
 
-    Workflow for exploring architecture hierarchy:
+    Workflow:
     1. list_architectures_summary() → discover root architectures
-    2. get_architecture_details(arch_name) → see child count and entity breakdown
-    3. get_architecture_children(arch_name) → navigate deeper into hierarchy
-    4. list_entities(arch_name=arch_name) → get direct members (no kindstring = direct members only)
+    2. get_architecture_details(arch_name) → determine architecture structure and contents
 
-    Workflow for "key functions in src/":
-    1. get_architecture_details("Directory Structure/src") → see it contains files
-    2. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", arch_name="Directory Structure/src") → find functions by metric
-    3. list_entities(kindstring="Function", arch_name="Directory Structure/src") → list functions (expanded)
+    Follow-up for descendant_architectures (child_longname from each item's longname):
+    - get_architecture_details(arch_name=child_longname) → details for a shown child
+    - get_architecture_children(arch_name=arch_name) → more direct children than shown
+    - get_architecture_intersection(source_arch_name=arch_name, group_by_arch_name=arch_name) → more descendants than shown
 
-    Note: The longname format is "parent/child" or just "name" for root architectures.
+    Follow-up for sorted_entities (entity_id from each item):
+    - get_entity_details(ent_id=entity_id) → details for a shown entity
+    - get_entity_source(ent_id=entity_id) → source for a shown entity
+    - list_entities(arch_name=arch_name) → more direct entities than shown
+    - find_entities_by_metric(metric_id=..., arch_name=arch_name) → more entities by metric (e.g. complexity)
     """
     database = require_db()
 
@@ -1530,26 +1708,98 @@ def get_architecture_details(
     if arch is None:
         return {"error": architecture_not_found_error(database, arch_name)}
 
-    children = arch.children()
     entities = arch.ents(False)
 
-    # Count entities by kind (use filterable kind names to ensure
-    # the returned strings work correctly with kindstring filters)
-    entity_counts_by_kind = {}
-    for ent in entities:
-        kind_name = get_filterable_kind_name(ent)
-        entity_counts_by_kind[kind_name] = entity_counts_by_kind.get(kind_name, 0) + 1
+    # Percent of direct entities by kind (omit if no direct entities)
+    entity_percentages_by_kind = {}
+    entity_percentages_by_kind_note = ""
+    if entities:
+        counts_by_kind = {}
+        for ent in entities:
+            kind_name = get_filterable_kind_name(ent)
+            counts_by_kind[kind_name] = counts_by_kind.get(kind_name, 0) + 1
+        total = len(entities)
+        sorted_pct = sorted(counts_by_kind.items(), key=lambda x: -x[1])
+        num_kinds = len(sorted_pct)
+        if compact:
+            sorted_pct = sorted_pct[:ENTITY_KIND_TOP_N_COMPACT]
+            if num_kinds > ENTITY_KIND_TOP_N_COMPACT:
+                entity_percentages_by_kind_note = f"Truncated: showing top {ENTITY_KIND_TOP_N_COMPACT} of {num_kinds} entity kinds by percentage."
+        entity_percentages_by_kind = {k: round(100.0 * c / total, 2) for k, c in sorted_pct}
 
-    # Sort by count descending
-    sorted_counts = dict(sorted(entity_counts_by_kind.items(), key=lambda x: -x[1]))
+    # Key metrics: always-on list, plus optional list when not compact
+    metric_ids = list(KEY_METRICS_ALWAYS)
+    if not compact:
+        metric_ids = metric_ids + list(KEY_METRICS_WHEN_NOT_COMPACT)
 
-    return {
-        "longname": arch.longname(),
-        "child_count": len(children),
-        "entity_count": len(entities),
-        "entity_counts_by_kind": sorted_counts,
+    key_metrics = {}
+    try:
+        if metric_ids:
+            metric_values = arch.metric(metric_ids)
+            if not isinstance(metric_values, dict):
+                metric_values = {metric_ids[0]: metric_values}
+            for mid in metric_ids:
+                value = metric_values.get(mid) if isinstance(metric_values, dict) else None
+                if value is not None:
+                    key_metrics[mid] = value
+    except Exception:
+        pass
+
+    # Relevance-ordered list of descendant archs (not necessarily direct children), sorted by percent of this arch's code lines, trimmed to max_results
+    descendant_list = []
+    descendant_architectures_note = ""
+    try:
+        arch_loc = arch.metric("CountLineCode")
+        arch_loc = int(arch_loc) if arch_loc is not None else 0
+        max_depth = arch.metric("ArchMaxChildDepth") or 0
+        max_descendants = CHILDREN_MAX_COMPACT if compact else CHILDREN_MAX_NOT_COMPACT
+        descendant_archs, depth = _get_architecture_children_bfs(arch, max_descendants)
+        if descendant_archs and arch_loc > 0:
+            parts = []
+            if max_depth > 0:
+                parts.append(f"Expanded to depth {depth} of {max_depth}")
+            if len(descendant_archs) > max_descendants:
+                parts.append(f"Truncated: showing {max_descendants} of {len(descendant_archs)} descendant architectures")
+            if parts:
+                descendant_architectures_note = ". ".join(parts)
+            pairs = []
+            for child in descendant_archs:
+                c_loc = child.metric("CountLineCode")
+                c_loc = int(c_loc) if c_loc is not None else 0
+                pct = round(100.0 * c_loc / arch_loc, 2)
+                pairs.append((child.longname(), pct))
+            pairs.sort(key=lambda x: -x[1])
+            pairs = pairs[:max_descendants]
+            descendant_list = [{"longname": ln, "percent_code_lines": pct} for ln, pct in pairs]
+    except Exception:
+        pass
+
+    result = {
         "is_root": arch.parent() is None,
+        "key_metrics": key_metrics,
     }
+    if entity_percentages_by_kind:
+        result["entity_percentages_by_kind"] = entity_percentages_by_kind
+        if entity_percentages_by_kind_note:
+            result["entity_percentages_by_kind_note"] = entity_percentages_by_kind_note
+    if descendant_list:
+        result["descendant_architectures"] = descendant_list
+        if descendant_architectures_note:
+            result["descendant_architectures_note"] = descendant_architectures_note
+
+    # Sorted entities: direct entities, ranked by _key_entities_ranked_header (header preferred, stem match, incoming deps, size)
+    sorted_entities_list = []
+    try:
+        ranked = _key_entities_ranked_header(arch, recursive=False)
+        max_sorted = SORTED_ENTITIES_MAX_COMPACT if compact else SORTED_ENTITIES_MAX_NOT_COMPACT
+        for ent in ranked[:max_sorted]:
+            sorted_entities_list.append({"entity_id": ent.id(), "name": ent.name() or ""})
+    except Exception:
+        pass
+    if sorted_entities_list:
+        result["sorted_entities"] = sorted_entities_list
+
+    return result
 
 @mcp.tool(name="get_architectures_for_entity")
 def get_architectures_for_entity(
