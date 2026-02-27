@@ -1,4 +1,6 @@
 ERR1 = "A parameter shall be passed by reference if it can't be NULL."
+NULL = ["NULL", "nullptr", "0"]
+COMP_OP = ["==", "!="]
 
 
 # The ID for the check
@@ -9,7 +11,7 @@ def ids():
 # The short name of the check
 def name(id):
     return {
-        "A8-4-10": "Published Standards/AUTOSAR/A parameter shall be passed by reference if it can't be NULL", \
+        "A8-4-10": "Published Standards/AUTOSAR/A parameter shall be passed by reference if it can't be NULL",
         "CPP_P052": "All Checks/Language Specific/C and C++/Pointers/A parameter shall be passed by reference if it can't be NULL",
     }[id]
 
@@ -95,10 +97,9 @@ int32_t Sum(const std::vector&lt;int32_t&gt; &v)
 </p>
 
 <p><b>Developer's Notes</b></p>
-
-<p>
-This check will flag the function that uses a non-optional parameter passed as a pointer.
-</p>
+<p>This check assumes that if a parameter is null checked then it can be NULL.</p>
+<p>This also assumes that a parameter is intended to be a pointer 
+if it is assigned to another object or passed to another function.</p>
 '''
 
 
@@ -115,33 +116,51 @@ def test_language(language):
     return language == 'C++'
 
 
+def is_null_checked(ref, lexer):
+    lex = lexer.lexeme(ref.line(), ref.column())
+    prev_lex = lex.previous(True, True)
+    next_lex = lex.next(True, True)
+
+    if prev_lex.text() == "!":
+        return True
+    elif prev_lex.text() == "(" and next_lex.text() == ")":
+        prev_lex = prev_lex.previous(True, True)
+
+        if prev_lex.text() == "if":
+            return True
+    elif prev_lex.text() in COMP_OP:
+        prev_lex = prev_lex.previous(True, True)
+
+        if prev_lex.text() in NULL:
+            return True
+    elif next_lex.text() in COMP_OP:
+        next_lex = next_lex.next(True, True)
+
+        if next_lex.text() in NULL:
+            return True
+
+    return False
+
+
 def check(check, file):
-    lexer = file.lexer(False, 8, False, False)
+    lexer = file.lexer(lookup_ents=False)
 
-    if lexer:
-        for func_ref in file.filerefs("Define", "Function ~Lambda ~Macro"):
-            for param_ref in func_ref.ent().refs("Define", "Parameter"):
-                param_type = param_ref.ent().type()
+    for func_ref in file.filerefs("Define", "Function ~Lambda ~Macro"):
+        if func_ref.ent().freetext("DefinedInMacro"):
+            continue
 
-                if ((param_type is not None) and ("*" in param_type)):
-                    compliant = False
-                    is_optional = False
-                    lex = lexer.lexeme(param_ref.line(), param_ref.column())
-                    paren = 1
+        for param_ref in func_ref.ent().refs("Define", "Parameter"):
+            utype = str(param_ref.ent().freetext("UnderlyingType"))
+            can_be_null = False
 
-                    while lex and lex.text() != "," and paren:
-                        if lex.text() == ")" and lex.token() == "Punctuation":
-                            paren -= 1
-                        elif lex.text() == "(" and lex.token() == "Punctuation":
-                            paren += 1
-                        elif lex.text() == "=" and lex.token() == "Operator":
-                            is_optional = True
-                        elif is_optional and lex.text() == "NULL" and lex.token() == "Identifier":
-                            compliant = True
-                            break
+            if not utype.endswith("*") or param_ref.ent().ref("Assignby"):
+                continue
 
-                        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+            for use_ref in param_ref.ent().refs("Useby"):
+                if is_null_checked(use_ref, lexer):
+                    can_be_null = True
+                    break
 
-                    if not compliant:
-                        check.violation(param_ref.ent(), file, func_ref.line(), func_ref.column(), ERR1)
-                        break
+            if not can_be_null:
+                check.violation(param_ref.ent(), file,
+                                param_ref.line(), param_ref.column(), ERR1)

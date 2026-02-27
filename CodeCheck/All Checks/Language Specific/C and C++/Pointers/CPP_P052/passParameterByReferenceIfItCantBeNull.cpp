@@ -6,19 +6,13 @@
 #include <stdexcept>
 
 // non-optional parameter passed by pointer
-int32_t Sum(const std::vector<int32_t> *v )         // UNDCC_Violation
-{
-    return std::accumulate(v->begin(), v->end(), 0);
-}
-
-// optional parameter passed by pointer
-int32_t Sum_1(const std::vector<int32_t> *v = NULL) // UNDCC_Valid
+int32_t Sum(const std::vector<int32_t> *v) // UNDCC_Violation
 {
     return std::accumulate(v->begin(), v->end(), 0);
 }
 
 // non-optional parameter passed by reference
-int32_t Sum(const std::vector<int32_t> &v)          // UNDCC_Valid
+int32_t Sum(const std::vector<int32_t> &v) // UNDCC_Valid
 {
     return std::accumulate(v.begin(), v.end(), 0);
 }
