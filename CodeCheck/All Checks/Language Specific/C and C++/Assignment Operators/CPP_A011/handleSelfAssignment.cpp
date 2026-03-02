@@ -1,13 +1,9 @@
 // $Id: A12-8-5.cpp 271773 2017-03-23 13:16:53Z piotr.tanski $
-#include <cstdint>
-#include <stdexcept>
-#include <exception>
-#include <utility>
 
 struct A
 {
-    std::int32_t number;
-    std::int32_t *ptr;
+    int number;
+    int *ptr;
     // Implementation
 };
 
@@ -25,7 +21,7 @@ public:
             aPtr = new A(*oth.aPtr); // If this is the self-copy case, then
             // the oth.a_ptr is already deleted
         }
-        catch (std::exception& e)
+        catch (...)
         {
             aPtr = nullptr;
         }
@@ -34,7 +30,7 @@ public:
     }
 
 private:
-    std::int16_t i = 0;
+    short i = 0;
     A *aPtr = nullptr;
 };
 
@@ -57,7 +53,7 @@ public:
     {
         if (this != &oth)
         {
-            A *tmpPtr = new A{std::move(*oth.aPtr)};
+            A *tmpPtr = new A(*oth.aPtr);
 
             i = oth.i;
             delete aPtr;
@@ -67,6 +63,6 @@ public:
     }
 
 private:
-    std::int16_t i = 0;
+    short i = 0;
     A *aPtr = nullptr;
 };

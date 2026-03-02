@@ -1,9 +1,12 @@
+import re
+
 ERR1 = 'Self-assignment is not handled correctly.'
+ERR2 = 'User-provided copy/move assignment operator does not handle self-assignment.'
 
 
 # The ID for the check
 def ids():
-    return ('A12-8-5', 'CPP_A011')
+    return ('A12-8-5', 'CPP_A011', 'MISRA23_15.8.1')
 
 
 # The short name of the check
@@ -11,10 +14,8 @@ def name(id):
     return {
         'A12-8-5': 'Published Standards/AUTOSAR/A copy assignment and a move assignment operators shall handle self-assignment.',
         'CPP_A011': 'All Checks/Language Specific/C and C++/Assignment Operators/A copy assignment and a move assignment operators shall handle self-assignment.',
+        'MISRA23_15.8.1': 'Published Standards/MISRA C++ 2023/15.8.1 User-provided copy assignment operators and move assignment operators shall handle self-assignment',
     }[id]
-
-
-
 
 
 def tags(id):
@@ -24,17 +25,22 @@ def tags(id):
             'Standard: AUTOSAR',
             'Category: Required',
             'Automation: Automated',
-            'Assignment Operators'
+            'Assignment Operators',
         ],
         'CPP_A011': [
             'Language: C++',
             'Assignment Operators',
         ],
+        'MISRA23_15.8.1': [
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Assignment Operators',
+        ],
     }.get(id)
 
-# The long description of the check
-def detailed_description():
-    return """
+
+AUTOSAR_DESCRIPTION = """\
 <p><b>Rule</b></p>
 <p>A copy assignment and a move assignment operators shall handle
 self-assignment.</p>
@@ -118,8 +124,122 @@ A* aPtr = nullptr;
 </code></pre>
 <p><b>See also</b></p>
 <p>• SEI CERT C++ [10]: OOP54-CPP Gracefully handle self-assignment.</p>
-<p>• C++ Core Guidelines [11]: C.62: Make copy assignment safe for self-assignment.</p>
-"""
+<p>• C++ Core Guidelines [11]: C.62: Make copy assignment safe for self-assignment.</p>"""
+
+MISRA_DESCRIPTION = """\
+<p><b>Amplification</b></p>
+<p>Types supporting copy assignment shall satisfy the CopyAssignable requirement.</p>
+<p>Types supporting move assignment shall satisfy the MoveAssignable requirement.</p>
+<p>Additionally, in the case of self-assignment, user-provided copy assignment operators \
+and move assignment operators shall:</p>
+<ul>
+<li>Not have undefined behaviour; and</li>
+<li>Not leak any resources; and</li>
+<li>Preserve the value of the self-assigned object.</li>
+</ul>
+<p>Note: what constitutes the value of an object depends on a class's design, and is \
+usually related to the semantics of the equality operator.</p>
+<p><b>Rationale</b></p>
+<p>Class designs that require user-provided copy assignment operators or move assignment \
+operators can be avoided when it is possible to use a manager class (see Rule 15.0.1), \
+such as smart pointers and the containers provided by the C++ Standard Library. However, \
+when implementing a manager class, care needs to be taken when defining user-provided \
+copy assignment operators and move assignment operators.</p>
+<p>Naïve implementations, particularly in the presence of self-assignment, can lead to \
+undefined behaviour, resource leaks, performance issues and unintended violations of \
+the object's semantics. Self-assignment is rarely intentional, but it is often hard to \
+spot when it occurs — for example, when manipulating overlapping ranges of objects.</p>
+<p>This directive extends the CopyAssignable and MoveAssignable requirements to all types \
+supporting these assignments, and additionally requires that the state of the object is \
+preserved after a self-assignment. This is done to ensure that the behaviour is \
+predictable and that no resources are leaked.</p>
+<p>Well-known idioms, such as copy-and-swap, may help when complying with this directive. \
+However, as there is no one-solution-fits-all, this directive does not recommend a \
+specific idiom.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">#include &lt;algorithm&gt;
+#include &lt;cstddef&gt;
+
+class Vector {
+public:
+  // Non-compliant copy assignment — deletes without guard
+  Vector &amp; operator=( Vector const &amp; other )
+  {
+    delete[] data;                     // Destroys own data
+    sz = other.sz;
+    data = new double[ sz ];
+    std::copy( other.data, other.data + sz, data );   // UB on self-assign
+    return *this;
+  }
+
+  // Compliant copy assignment — identity guard
+  Vector &amp; operator=( Vector const &amp; other )
+  {
+    if ( this != &amp;other )
+    {
+      double * tmp = new double[ other.sz ];
+      std::copy( other.data, other.data + other.sz, tmp );
+      delete[] data;
+      data = tmp;
+      sz   = other.sz;
+    }
+    return *this;
+  }
+
+  // Compliant copy assignment — copy-and-swap
+  Vector &amp; operator=( Vector const &amp; other )
+  {
+    Vector tmp( other );
+    swap( tmp );
+    return *this;
+  }
+
+  // Non-compliant move assignment — resources released on self-assign
+  Vector &amp; operator=( Vector &amp;&amp; other ) noexcept
+  {
+    delete[] data;
+    data = other.data;
+    sz   = other.sz;
+    other.data = nullptr;              // Nullifies own data on self-assign
+    other.sz   = 0;
+    return *this;
+  }
+
+  // Compliant move assignment — move-and-swap
+  Vector &amp; operator=( Vector &amp;&amp; other ) noexcept
+  {
+    Vector tmp( std::move( other ) );
+    swap( tmp );
+    return *this;
+  }
+
+private:
+  double * data = nullptr;
+  std::size_t sz = 0;
+
+  void swap( Vector &amp; other ) noexcept
+  {
+    std::swap( data, other.data );
+    std::swap( sz, other.sz );
+  }
+};
+</code></pre>"""
+
+
+# The long description of the check
+def detailed_description(id):
+    if id == 'MISRA23_15.8.1':
+        return MISRA_DESCRIPTION
+    return AUTOSAR_DESCRIPTION
+
+
+def define_options(check):
+    broad = check.id() == 'MISRA23_15.8.1'
+    check.options().checkbox(
+        'broad',
+        'Flag all user-provided copy/move operator= without self-assignment handling',
+        broad,
+    )
 
 
 # Tests the type of file
@@ -135,12 +255,83 @@ def test_language(language):
     return language == 'C++'
 
 
-def check(check, file):
-    lexer = file.lexer(lookup_ents=False)
+def _is_copy_or_move_assign(func_ent):
+    """Check if a member function is a copy or move assignment operator."""
+    if func_ent.name() != "operator=":
+        return False
 
-    if not lexer:
-        return
+    parent = func_ent.parent()
+    if not parent:
+        return False
 
+    class_name = parent.name()
+    params = func_ent.parameters(False)
+    if not params:
+        return False
+
+    # Copy: const ClassName & or ClassName const &
+    if re.search(r'(?:const\s+' + re.escape(class_name) + r'\s*&|'
+                 + re.escape(class_name) + r'\s+const\s*&)', params):
+        return True
+
+    # Move: ClassName &&
+    if re.search(re.escape(class_name) + r'\s*&&', params):
+        return True
+
+    return False
+
+
+def _has_self_assignment_guard(lexer, func_ref, end_ref):
+    """Walk lexemes looking for self-assignment protection patterns."""
+    lex = lexer.lexeme(func_ref.line(), func_ref.column())
+    if not lex:
+        return False
+
+    end_line = end_ref.line()
+
+    while lex and lex.line_begin() <= end_line:
+        text = lex.text()
+
+        # Check for identity guard: this != &param or this == &param
+        if text == "this":
+            nxt = lex.next(ignore_whitespace=True, ignore_comments=True)
+            if nxt and nxt.text() in ("!=", "=="):
+                return True
+
+        # Check for swap idiom: any identifier named "swap"
+        if text == "swap" and lex.token() == "Identifier":
+            return True
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return False
+
+
+def _is_defaulted_or_deleted(lexer, func_ref, end_ref):
+    """Check if an operator= is defaulted or deleted (not user-provided)."""
+    lex = lexer.lexeme(func_ref.line(), func_ref.column())
+    if not lex:
+        return False
+
+    # Walk until we find { (user-provided body) or default/delete keyword
+    end_line = end_ref.line() if end_ref else func_ref.line() + 50
+
+    while lex and lex.line_begin() <= end_line:
+        text = lex.text()
+
+        if text == "{":
+            return False
+
+        if text in ("default", "delete") and lex.token() == "Keyword":
+            return True
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return False
+
+
+def _check_narrow(check_obj, file, lexer):
+    """Original narrow detection: flag delete-then-use without guard."""
     for func_ref in file.filerefs("Define", "Member Function"):
         end_ref = func_ref.ent().ref("End, Endby")
         on_delete = False
@@ -177,5 +368,39 @@ def check(check, file):
         if deleted_obj and self_assignment:
             for deleted in deleted_obj:
                 if deleted in self_assignment and deleted_obj[deleted] < self_assignment[deleted]:
-                    check.violation(func_ref.ent(), file,
-                                    func_ref.line(), func_ref.column(), ERR1)
+                    check_obj.violation(func_ref.ent(), file,
+                                        func_ref.line(), func_ref.column(), ERR1)
+
+
+def _check_broad(check_obj, file, lexer):
+    """Broad detection: flag all user-provided copy/move operator= without guard."""
+    for func_ref in file.filerefs("Define", "Member Function"):
+        func_ent = func_ref.ent()
+
+        if not _is_copy_or_move_assign(func_ent):
+            continue
+
+        end_ref = func_ent.ref("End, Endby")
+        if not end_ref:
+            continue
+
+        if _is_defaulted_or_deleted(lexer, func_ref, end_ref):
+            continue
+
+        if not _has_self_assignment_guard(lexer, func_ref, end_ref):
+            check_obj.violation(func_ent, file,
+                                func_ref.line(), func_ref.column(), ERR2)
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    broad_mode = check.options().lookup('broad')
+
+    if broad_mode:
+        _check_broad(check, file, lexer)
+    else:
+        _check_narrow(check, file, lexer)
