@@ -1,0 +1,704 @@
+import re
+import understand
+
+
+#
+# Mermaid Butterfly Compare iReport
+#
+# This iReport mirrors the logic of the classic Butterfly Compare graph
+# well enough for human consumption on GitHub while emitting Mermaid
+# flowchart syntax instead of DOT.  It preserves comparison coloring by
+# assigning node classes for added/removed/changed/unknown entities and
+# edge classes for added/removed/both references.
+#
+# Node classes (for LLM‑friendliness and user customization):
+#   entBoth     – entity present and unchanged in both versions
+#   entChanged  – entity present in both, but contents differ
+#   entAdded    – entity only in the current database
+#   entRemoved  – entity only in the comparison database
+#   entUnknown  – unresolved/unknown/undefined entities
+#
+# Edge classes:
+#   refBoth     – reference present in both versions
+#   refAdded    – reference only in current version
+#   refRemoved  – reference only in comparison version
+#
+# For edges, Mermaid supports both index‑based styling (linkStyle) and
+# explicit edge IDs (e.g., e1@A-->B with later 'class e1 refAdded').
+# This iReport uses explicit edge IDs because they are stable even if
+# additional edges are inserted later, and they make it easier for
+# humans and tools (including LLMs) to reason about and restyle specific
+# edges without having to recompute link indices.
+#
+
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Mermaid Graph\\Butterfly Compare"
+
+
+def description():
+  """
+  Optional, the description to display in the plugin manager.
+  """
+  return '''Create Mermaid input for a Butterfly Compare Graph
+
+  <p>Mermaid is a web-based graph tool. Mermaid input is text, so it's
+  recommended to export this interactive report as a text file which can
+  then be used directly with Mermaid.</p>
+
+  <p>This version preserves comparison coloring by using Mermaid
+  <code>classDef</code> classes for entities and references, so that
+  added/removed/changed items remain visually distinct and easy to
+  restyle.</p>
+
+  <br>
+  <img src=".doc/mermaid_butterfly_compare.png"/>
+  '''
+
+
+def tags():
+  """
+  Optional, the tags to display in the plugin manager
+  """
+  return [
+    'Target: Functions',
+    'Target: Classes',
+    'Target: Files',
+    'Language: Any',
+    'Comparison',
+    'Mermaid Graph',
+  ]
+
+
+# Colors and comparison status codes are kept consistent with
+# Graph/butterfly_compare.upy.
+colors = ("#4e8cb9", "#afd870", "#e45721", "#8f8f8f")
+kBoth = -1
+kMod = 0
+kNew = 1
+kOld = 2
+kUnknown = 3
+
+# Index helpers for kind definitions
+kEntKind = 0
+kForwardName = 1
+kForwardKind = 2
+kReverseName = 3
+kReverseKind = 4
+
+
+# These kind definitions are copied from Graph/butterfly_compare.upy so the
+# forward/inverse relationships match the classic Butterfly graphs.
+kKinds = [
+  [("ada entry, ada function, ada package, ada procedure, ada protected, ada task,"
+    "assembly label,"
+    "basic method,"
+    "c function,"
+    "cobol program,"
+    "csharp method,"
+    "fortran block data, fortran function, fortran interface, fortran program, fortran subroutine,"
+    "java method,"
+    "jovial file, jovial subroutine,"
+    "pascal compunit, pascal function, pascal procedure,"
+    "php function,"
+    "rust function,"
+    "vhdl procedure, vhdl function, vhdl process, vhdl architecture"),
+   "Calls",
+   ("ada call ~dispatch,"
+    "ada with,"
+    "assembly call,"
+    "basic call, basic use ptr,"
+    "c call, c use ptr,"
+    "cobol call,"
+    "csharp call, csharp use ptr,"
+    "fortran call,"
+    "java call,"
+    "jovial call, jovial asm use,"
+    "pascal call,"
+    "php call,"
+    "rust call,"
+    "vhdl call"),
+   "Called By",
+   ("ada callby,"
+    "ada withby,"
+    "assembly callby,"
+    "basic callby, basic useby ptr,"
+    "c callby ~inactive, c useby ptr,"
+    "cobol callby,"
+    "csharp callby, csharp useby ptr,"
+    "fortran callby,"
+    "java callby,"
+    "jovial callby, jovial asm useby,"
+    "pascal callby,"
+    "php callby,"
+    "rust callby,"
+    "vhdl callby")
+  ],
+  ["basic class, basic struct,csharp class, csharp struct,c class, c struct, c union",
+   "Derive",
+   "derive",
+   "Base",
+   "base"
+  ],
+  ["pascal class, pascal interface,java class ~anonymous, java interface",
+   "Extended By",
+   "derive,extendby ~implicit",
+   "Extends",
+   "derivefrom,extend ~implicit"
+  ],
+  ["ada type",
+   "Derive",
+   "derive",
+   "Derive From",
+   "derivefrom"
+  ],
+  ["c file, fortran file, pascal file",
+   "Include",
+   "include ~inactive",
+   "Includeby",
+   "includeby ~inactive"
+  ],
+  ["vhdl entity,vhdl architecture,vhdl package,vhdl configuration",
+   "Use",
+   "vhdl use name",
+   "Useby",
+   "vhdl useby name"
+  ],
+  ["cobol paragraph, cobol section",
+   "Perform",
+   "cobol perform,cobol goto",
+   "Performby",
+   "cobol performby,cobol gotoby",
+  ]
+]
+
+
+def test_entity(entity):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  for kindDef in kKinds:
+    if entity.kind().check(kindDef[kEntKind]):
+      return True
+  return False
+
+
+def _kinds_for(entity):
+  for kindDef in kKinds:
+    if entity.kind().check(kindDef[kEntKind]):
+      return {
+        "forwardName": kindDef[kForwardName],
+        "forwardKind": kindDef[kForwardKind],
+        "reverseName": kindDef[kReverseName],
+        "reverseKind": kindDef[kReverseKind],
+      }
+  # Fallback – should not normally happen because of test_entity()
+  return {
+    "forwardName": "Forward",
+    "forwardKind": "",
+    "reverseName": "Reverse",
+    "reverseKind": "",
+  }
+
+
+def init(report, entity):
+  """
+  Optional method, define options that can be changed by the user
+  """
+  kinds = _kinds_for(entity)
+  report.options().integer(
+    kinds["forwardName"] + " Depth",
+    kinds["forwardName"] + " Depth",
+    3, 0, 10
+  )
+  report.options().integer(
+    kinds["reverseName"] + " Depth",
+    kinds["reverseName"] + " Depth",
+    3, 0, 10
+  )
+  report.options().choice(
+    "Name",
+    "Name",
+    ["Shortname", "Fullname", "None (Overview Mode)"],
+    "Shortname"
+  )
+  report.options().choice(
+    "File Name",
+    "File Name",
+    ["Shortname", "Fullname", "Relative", "None"],
+    "None"
+  )
+  report.options().checkbox("Unresolved", "Unresolved", True)
+  report.options().checkbox("Intrinsic", "Intrinsic", True)
+
+  # Support virtual calls for call graphs, mirroring Butterfly and
+  # Butterfly Compare classic graphs.
+  if kinds["forwardName"] == "Calls":
+    report.options().checkbox("Virtual Calls", "Virtual Calls", False)
+
+  # How to treat textual modifications when deciding "changed" vs "unchanged".
+  report.options().choice(
+    "Modified Entities",
+    "Modified Entities",
+    ["Ignore comments/spaces/newlines", "Include all modifications"],
+    "Ignore comments/spaces/newlines"
+  )
+
+  # Whether to filter edges based on comparison status.
+  report.options().choice(
+    "Show Version Differences",
+    "Show Version Differences",
+    ["Both", "Added Only", "Removed Only"],
+    "Both"
+  )
+
+
+def generate(report, entity, pageId):
+  """
+  Required, generate the report
+  """
+  db = report.db()
+  cmp_db = db.comparison_db() if db else None
+  if not cmp_db:
+    report.print("%% No comparison database is loaded; Mermaid Butterfly Compare graph is empty.\n")
+    return
+
+  kinds = _kinds_for(entity)
+
+  # Header and diagram start
+  report.print("%% Copy the text or export the interactive report as text\n")
+  report.print("%% Butterfly Compare Graph for Mermaid generated by Understand\n")
+  report.print("flowchart LR\n")
+
+  # Define styling classes for entities and references so the semantic
+  # meaning of colors is explicit.
+  report.print("  %% Node classes for comparison status\n")
+  report.print("  classDef entBoth fill:#ffffff,stroke:#333,stroke-width:1px;\n")
+  report.print("  classDef entChanged fill:{0},stroke:#333,stroke-width:1px;\n".format(colors[kMod]))
+  report.print("  classDef entAdded fill:{0},stroke:#333,stroke-width:1px;\n".format(colors[kNew]))
+  report.print("  classDef entRemoved fill:{0},stroke:#333,stroke-width:1px;\n".format(colors[kOld]))
+  report.print("  classDef entUnknown fill:{0},stroke:#333,stroke-width:1px;\n".format(colors[kUnknown]))
+
+  report.print("  %% Edge classes for comparison status\n")
+  report.print("  classDef refBoth stroke:#333,stroke-width:1px,color:#333;\n")
+  report.print("  classDef refAdded stroke:{0},stroke-width:2px,color:{0};\n".format(colors[kNew]))
+  report.print("  classDef refRemoved stroke:{0},stroke-width:2px,color:{0};\n".format(colors[kOld]))
+
+  # Maps for Mermaid node ids and comparison status
+  # entId may be a real uniquename or a synthetic "virtual" id containing
+  # a ref-kind prefix and a newline (mirroring Butterfly-Compare).
+  node_ids = {}        # entId -> mermaid node id (e.g., node0)
+  node_status = {}     # entId -> comparison status (kBoth/kMod/kNew/kOld/kUnknown)
+  edge_specs = []      # list of (edge_id, tail, head, status)
+
+  # Initial node (same uniquename in both dbs when possible)
+  initid = entity.uniquename()
+  # Entity maps reused across traversals, same pattern as classic
+  # Butterfly Compare.
+  cur_ents = {initid: entity}
+  cmp_ents = {initid: cmp_db.lookup_uniquename(initid)}
+
+  # Forward and reverse traversals (Butterfly structure)
+  fdepth = int(report.options().lookup(kinds["forwardName"] + " Depth"))
+  rdepth = int(report.options().lookup(kinds["reverseName"] + " Depth"))
+
+  _draw_tree_compare(
+    report,
+    db,
+    cmp_db,
+    cur_ents,
+    cmp_ents,
+    initid,
+    kinds["forwardKind"],
+    True,
+    fdepth,
+    node_ids,
+    node_status,
+    edge_specs
+  )
+
+  _draw_tree_compare(
+    report,
+    db,
+    cmp_db,
+    cur_ents,
+    cmp_ents,
+    initid,
+    kinds["reverseKind"],
+    False,
+    rdepth,
+    node_ids,
+    node_status,
+    edge_specs
+  )
+
+  # Emit Mermaid nodes
+  for ent_id, mermaid_id in node_ids.items():
+    _emit_node(report, db, cmp_db, entid=ent_id, mermaid_id=mermaid_id)
+
+  # Emit Mermaid edges (with explicit edge IDs for styling)
+  for idx, spec in enumerate(edge_specs):
+    edge_id, tail, head, status = spec
+    # Edge line with ID placed between tail and arrow, e.g.
+    #   tail e0@--> head
+    # which matches Mermaid's syntax for attaching IDs to edges.
+    report.print("  {tail} {eid}@--> {head}\n".format(
+      eid=edge_id, tail=tail, head=head))
+
+  # Attach classes to nodes and edges after they are declared
+  for ent_id, mermaid_id in node_ids.items():
+    status = node_status.get(ent_id, kBoth)
+    cls = "entBoth"
+    if status == kMod:
+      cls = "entChanged"
+    elif status == kNew:
+      cls = "entAdded"
+    elif status == kOld:
+      cls = "entRemoved"
+    elif status == kUnknown:
+      cls = "entUnknown"
+    report.print("  class {node} {cls};\n".format(node=mermaid_id, cls=cls))
+
+  for edge_id, _, _, status in edge_specs:
+    if status == kNew:
+      cls = "refAdded"
+    elif status == kOld:
+      cls = "refRemoved"
+    else:
+      cls = "refBoth"
+    report.print("  class {eid} {cls};\n".format(eid=edge_id, cls=cls))
+
+
+def _draw_tree_compare(report, db, cmp_db, cur_ents, cmp_ents,
+                       initid, kindstr, forward, depth,
+                       node_ids, node_status, edge_specs):
+  """
+  Breadth-first traversal for either the forward or reverse side of
+  the butterfly, computing comparison-aware children from both
+  databases and recording node/edge statuses.
+  """
+  if depth == 0:
+    # Still need to ensure the starting node exists
+    _ensure_node_status(report, db, cmp_db, initid, node_ids, node_status)
+    return
+
+  blockStatus = kMod  # "no blocking" marker; we never actually filter on kMod
+  show = report.options().lookup("Show Version Differences")
+  if show == "Added Only":
+    blockStatus = kOld
+  elif show == "Removed Only":
+    blockStatus = kNew
+
+  visited = set()
+  curLevel = [initid]
+
+  while curLevel and depth != 0:
+    nextLevel = []
+    for entid in curLevel:
+      if entid in visited:
+        continue
+      visited.add(entid)
+
+      _ensure_node_status(report, db, cmp_db, entid, node_ids, node_status)
+      edges = _children(report, db, cmp_db, entid, kindstr, cur_ents, cmp_ents, forward)
+
+      for childid, status in edges.items():
+        if status == blockStatus:
+          continue
+
+        nextLevel.append(childid)
+
+        _ensure_node_status(report, db, cmp_db, childid, node_ids, node_status)
+
+        tail_ent = entid if forward else childid
+        head_ent = childid if forward else entid
+
+        tail = _node_id_for(report, db, cmp_db, tail_ent, node_ids, node_status)
+        head = _node_id_for(report, db, cmp_db, head_ent, node_ids, node_status)
+
+        edge_id = "e{0}".format(len(edge_specs))
+        edge_specs.append((edge_id, tail, head, status))
+
+    curLevel = nextLevel
+    if depth > 0:
+      depth -= 1
+
+
+def _id_for_ref(report, ref):
+  """
+  Port of idForRef() from Graph/butterfly_compare.upy, adapted to the
+  iReport API and option names. Handles filtering and virtual-call
+  rewriting of reference targets.
+  """
+  # Filtering options
+  if ((not report.options().lookup("Unresolved") and
+       ref.ent().kind().check("unresolved,unknown,undefined")) or
+      (not report.options().lookup("Intrinsic") and
+       ref.ent().kind().check("intrinsic"))):
+    return ""
+
+  # Virtual nodes for the forward direction
+  id_val = ref.ent().uniquename()
+  virtual = report.options().lookup("Virtual Calls")
+  if virtual is not None and ref.kind().check("call"):
+    kindstr = "overriddenby, overrideby"
+    if virtual and (ref.kind().check("virtual") or len(ref.ent().refs(kindstr))):
+      id_val = kindstr + "\n" + id_val
+    if not virtual and ref.kind().check("virtual"):
+      id_val = ""  # Edge not shown
+  return id_val
+
+
+def _id_to_ent_map(report, ent, selfid, kindstr):
+  """
+  Port of idToEntMap() from Graph/butterfly_compare.upy.
+  """
+  result = dict()
+
+  # Virtual -> self edge
+  if selfid:
+    if "\n" not in selfid:
+      # Forward always shown
+      result[selfid] = ent
+    else:
+      # Reverse shown if edges exist
+      for ref in ent.refs(selfid.split("\n")[0]):
+        if len(ref.ent().refs("java callby, callby virtual")):
+          result[selfid] = ent
+          break
+
+  # Reference edges
+  for ref in ent.refs(kindstr, unique=True):
+    id_val = _id_for_ref(report, ref)
+    if id_val:
+      result[id_val] = ref.ent()
+  return result
+
+
+def _children(report, db, cmp_db, entid, kindstr, cur_ents, cmp_ents, forward):
+  """
+  Port of children() from Graph/butterfly_compare.upy, adapted for use
+  in this Mermaid iReport. Returns a dict: childId -> status, where
+  childId may represent a real entity uniquename or a synthetic virtual
+  node (kindStr + "\\n" + uniquename).
+  """
+  childrendict = dict()
+
+  # Handle Virtual Calls option
+  selfid = None
+  skipSelf = False
+  virtual = report.options().lookup("Virtual Calls")
+
+  if "\n" in entid:
+    # This node represents a "Virtual" node in the DOT graph; we use the
+    # same convention here and treat the part before the newline as the
+    # ref kind string.
+    kindstr = entid.split("\n")[0]
+    if forward:
+      # Forward: draw edge from "Virtual" to initial entity
+      selfid = entid.split("\n")[0]
+    else:
+      # Reverse uses grandchildren instead of children for edges
+      skipSelf = True
+  elif not forward and virtual:
+    # Detect the presence of a "Virtual" node for this current node in
+    # the reverse tree
+    selfid = "overrides,override" + "\n" + entid
+
+  # Current edges
+  cur_ent = cur_ents.get(entid)
+  if cur_ent:
+    for childid, childent in _id_to_ent_map(report, cur_ent, selfid, kindstr).items():
+      cur_ents[childid] = childent
+      childrendict[childid] = kNew
+
+  # Comparison edges
+  cmp_ent = cmp_ents.get(entid)
+  if cmp_ent:
+    for childid, childent in _id_to_ent_map(report, cmp_ent, selfid, kindstr).items():
+      cmp_ents[childid] = childent
+      status = childrendict.get(childid, kOld)
+      if status == kNew:
+        status = kBoth
+      childrendict[childid] = status
+
+  # Ensure cur_ents and cmp_ents stay in sync with IDs (including virtual)
+  for childid in list(childrendict.keys()):
+    uniquename = childid.split("\n")[-1]
+    if childid not in cur_ents:
+      cur_ents[childid] = db.lookup_uniquename(uniquename)
+    if childid not in cmp_ents:
+      cmp_ents[childid] = cmp_db.lookup_uniquename(uniquename)
+
+  # Virtual callby nodes: use grandchildren instead of direct children
+  if skipSelf:
+    grandchildren = dict()
+    for childid, childstatus in childrendict.items():
+      for grandchild, gstatus in _children(
+          report, db, cmp_db, childid,
+          "java callby, callby virtual", cur_ents, cmp_ents, forward).items():
+        # Preserve childstatus (status of edge from this ent to virtual)
+        grandchildren[grandchild] = childstatus
+    childrendict = grandchildren
+
+  return childrendict
+
+
+def _ensure_node_status(report, db, cmp_db, entid, node_ids, node_status):
+  """
+  Make sure the node has a Mermaid id and an assigned comparison status.
+  """
+  if entid in node_status:
+    return
+  # Virtual nodes (synthetic "Virtual" groupings for calls) are always
+  # treated as "both" for comparison purposes.
+  if "\n" in entid:
+    status = kBoth
+    node_status[entid] = status
+    _node_id_for(report, db, cmp_db, entid, node_ids, node_status)
+    return
+
+  cur_ent = db.lookup_uniquename(entid)
+  cmp_ent = cmp_db.lookup_uniquename(entid)
+
+  status = kBoth
+
+  ent = cur_ent or cmp_ent
+  if ent is None:
+    status = kUnknown
+  elif ent.kind().check("unresolved, unknown, undefined"):
+    status = kUnknown
+  elif cur_ent and cmp_ent:
+    status = _contents_status(report, cur_ent, cmp_ent)
+  elif cur_ent and not cmp_ent:
+    status = kNew
+  elif cmp_ent and not cur_ent:
+    status = kOld
+
+  node_status[entid] = status
+
+  # Allocate a Mermaid node id if needed
+  _node_id_for(report, db, cmp_db, entid, node_ids, node_status)
+
+
+def _node_id_for(report, db, cmp_db, entid, node_ids, node_status):
+  """
+  Get or allocate a Mermaid node id (nodeN) for the entity unikey.
+  """
+  if entid in node_ids:
+    return node_ids[entid]
+  node_id = "node{0}".format(len(node_ids))
+  node_ids[entid] = node_id
+  return node_id
+
+
+def _emit_node(report, db, cmp_db, entid, mermaid_id):
+  """
+  Emit a single Mermaid node line for the given entity id.
+  """
+  # Virtual nodes (synthetic) are rendered as a bold "Virtual" text
+  # node, mirroring the classic Butterfly graphs.
+  if "\n" in entid:
+    label = "Virtual"
+    shape = "shape: text,"
+    report.print("  {id}@{{ {shape} label: \"{label}\"}}\n".format(
+      id=mermaid_id, shape=shape, label=label))
+    return
+
+  cur_ent = db.lookup_uniquename(entid)
+  cmp_ent = cmp_db.lookup_uniquename(entid)
+  ent = cur_ent or cmp_ent
+  if not ent:
+    # Should not occur, but guard against it.
+    label = entid
+    shape = ""
+  else:
+    label = ""
+
+    # Name option
+    nameopt = report.options().lookup("Name")
+    if nameopt == "Fullname":
+      label += ent.longname()
+    elif nameopt == "Shortname":
+      label += ent.name()
+
+    # Filename option
+    filenameopt = report.options().lookup("File Name")
+    if filenameopt != "None" and not ent.kind().check("file"):
+      defref = ent.ref("definein,declarein")
+      if defref:
+        if filenameopt == "Relative":
+          label += "\n" + defref.file().relname()
+        elif filenameopt == "Fullname":
+          label += "\n" + defref.file().longname()
+        else:
+          label += "\n" + defref.file().name()
+
+    if not label:
+      label = ent.name()
+
+    label = label.replace("\"", "#quot;")
+
+    shape = ""
+    if ent.kind().check("unresolved, unknown, undefined"):
+      # Mermaid hexagon is a close visual match for the octagon used by
+      # the classic graph for unresolved entities.
+      shape = "shape: \"hexagon\","
+
+  report.print("  {id}@{{ {shape} label: \"{label}\"}}\n".format(
+    id=mermaid_id, shape=shape, label=label))
+
+
+# Comment/whitespace removal mirrors Graph/butterfly_compare.upy to make
+# "Ignore comments/spaces/newlines" behave similarly.
+kDashDashComments = re.compile(r"\-\-.*?\n")  # -- style comments
+kSlashSlashComments = re.compile(r"\/\/.*?\n")  # // style comments
+kSlashStarComments = re.compile(r"\/\*.*?\*\/", re.DOTALL)  # /* */ style comments
+kExclamationComments = re.compile(r"\!.*?\n")  # ! style comments
+kFirstCharComments = re.compile(r"^[cC*dD].*?\n")  # (c,C,*,d,D) first character comments
+kQuoteComments = re.compile(r"\".*?\"")  # " " style comments
+kPercentComments = re.compile(r"\%.*?\%")  # % % style comments
+kParenStarComments = re.compile(r"\(\*.*?\*\)")  # (* *) style comments
+kCurlyBraceComments = re.compile(r"\{.*?\}")  # { } style comments
+kHtmlComments = re.compile(r"\<\!\-\-.*?\-\-\>")  # <!-- --> style comments
+kWhitespace = re.compile(r"[\s\r\n]+")
+
+kLangComments = {
+  "Ada": [kDashDashComments],
+  "C++": [kSlashSlashComments, kSlashStarComments],
+  "C#": [kSlashSlashComments, kSlashStarComments],
+  "Fortran": [kExclamationComments, kFirstCharComments],
+  "Java": [kSlashSlashComments, kSlashStarComments],
+  "Jovial": [kQuoteComments, kPercentComments],
+  "Pascal": [kSlashSlashComments, kParenStarComments, kCurlyBraceComments],
+  "PL/M": [kSlashSlashComments, kSlashStarComments],
+  "Rust": [kSlashSlashComments],
+  "VHDL": [kDashDashComments],
+  "Web": [kHtmlComments, kSlashSlashComments, kSlashStarComments],
+}
+
+
+def _contents_status(report, cur_ent, cmp_ent):
+  """
+  Determine if two entities' contents are effectively the same or
+  different, optionally ignoring comments/whitespace.
+  """
+  cur_contents = cur_ent.contents()
+  cmp_contents = cmp_ent.contents()
+
+  if report.options().lookup("Modified Entities") == "Ignore comments/spaces/newlines":
+    to_remove = []
+    to_remove += kLangComments.get(cur_ent.language(), [])
+    to_remove.append(kWhitespace)
+
+    for pattern in to_remove:
+      cur_contents = re.sub(pattern, "", cur_contents)
+      cmp_contents = re.sub(pattern, "", cmp_contents)
+
+  if cur_contents == cmp_contents:
+    return kBoth
+  return kMod
+

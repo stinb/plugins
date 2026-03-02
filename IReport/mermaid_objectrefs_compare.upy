@@ -1,0 +1,415 @@
+import re
+import understand
+
+
+#
+# Mermaid Object References Compare iReport
+#
+# This iReport mirrors the classic Object References Compare graph but
+# emits Mermaid flowchart syntax instead of DOT.  It preserves the
+# comparison semantics by assigning node classes for added/removed/
+# changed entities and using explicit edge IDs plus classes to identify
+# different reference directions and comparison statuses.
+#
+# Node classes:
+#   entBoth     – entity in both versions with unchanged contents
+#   entChanged  – entity in both versions whose contents changed
+#   entAdded    – entity only in the current database
+#   entRemoved  – entity only in the comparison database
+#
+# Edge classes:
+#   refUseBy        – use-by reference (blue)
+#   refSetBy        – set-by reference (green)
+#   refModifyBy     – modify-by reference (orange)
+#   refDefDeclare   – define/declare reference (gray)
+#   refInactive     – inactive reference (gray text)
+#
+# As with the Butterfly Compare iReport, we choose Mermaid’s explicit
+# edge IDs (e.g., e1@A-->B with 'class e1 refUseBy') rather than
+# index-based linkStyle because IDs are stable even if the graph is
+# edited later and are easier for humans and LLMs to reason about and
+# customize.
+#
+
+
+# Status codes parallel Graph/ObjectReferences_compare.upy
+colors = ("#4e8cb9", "#afd870", "#e45721")
+kBoth = -1
+kMod = 0
+kNew = 1
+kOld = 2
+
+
+# Comment/whitespace removal to detect "changed" entities
+kDashDashComments = re.compile(r"\-\-.*?\n")  # -- style comments
+kSlashSlashComments = re.compile(r"\/\/.*?\n")  # // style comments
+kSlashStarComments = re.compile(r"\/\*.*?\*\/", re.DOTALL)  # /* */ style comments
+kExclamationComments = re.compile(r"\!.*?\n")  # ! style comments
+kFirstCharComments = re.compile(r"^[cC*dD].*?\n")  # (c,C,*,d,D) first character comments
+kQuoteComments = re.compile(r"\".*?\"")  # " " style comments
+kPercentComments = re.compile(r"\%.*?\%")  # % % style comments
+kParenStarComments = re.compile(r"\(\*.*?\*\)")  # (* *) style comments
+kCurlyBraceComments = re.compile(r"\{.*?\}")  # { } style comments
+kHtmlComments = re.compile(r"\<\!\-\-.*?\-\-\>")  # <!-- --> style comments
+kWhitespace = re.compile(r"[\s\r\n]+")
+
+kLangComments = {
+  "Ada": [kDashDashComments],
+  "C++": [kSlashSlashComments, kSlashStarComments],
+  "C#": [kSlashSlashComments, kSlashStarComments],
+  "Fortran": [kExclamationComments, kFirstCharComments],
+  "Java": [kSlashSlashComments, kSlashStarComments],
+  "Jovial": [kQuoteComments, kPercentComments],
+  "Pascal": [kSlashSlashComments, kParenStarComments, kCurlyBraceComments],
+  "PL/M": [kSlashSlashComments, kSlashStarComments],
+  "Rust": [kSlashSlashComments],
+  "VHDL": [kDashDashComments],
+  "Web": [kHtmlComments, kSlashSlashComments, kSlashStarComments],
+}
+
+
+def name():
+  """
+  Required, the name of the ireport.
+  """
+  return "Mermaid Graph\\Object References Compare"
+
+
+def description():
+  """
+  Optional, the description to display in the plugin manager.
+  """
+  return '''Create Mermaid input for an Object References Compare Graph
+
+  <p>Mermaid is a web-based graph tool. Mermaid input is text, so it's
+  recommended to export this interactive report as a text file which can
+  then be used directly with Mermaid.</p>
+
+  <p>This version preserves comparison semantics by assigning classes to
+  nodes and edges, keeping added/removed/changed entities and different
+  reference types visually distinct and easy to restyle.</p>
+
+  <br>
+  <img src=".doc/mermaid_objectrefs_compare.png"/>
+  '''
+
+
+def tags():
+  """
+  Optional, the tags to display in the plugin manager
+  """
+  return [
+    'Target: Objects',
+    'Language: Any',
+    'Comparison',
+    'Mermaid Graph',
+  ]
+
+
+def test_entity(entity):
+  """
+  Optional method, return true if report is valid for the entity
+  """
+  return entity.kind().check("Object, Macro, Variable, Field, Property")
+
+
+def init(report, entity):
+  """
+  Optional method, define options that can be changed by the user
+  """
+  report.options().choice(
+    "Layout",
+    "Layout",
+    ["Horizontal", "Vertical"],
+    "Vertical"
+  )
+  report.options().checkbox("Type", "Type", False)
+  report.options().choice(
+    "References",
+    "References",
+    ["Simple", "All"],
+    "All"
+  )
+  report.options().checkbox_vert(
+    "Reference Kinds",
+    "Reference Kinds",
+    ["Define/Declare", "Set", "Use", "Modify"],
+    ["Set", "Use", "Modify"]
+  )
+
+  report.options().choice(
+    "Modified Entities",
+    "Modified Entities",
+    ["Ignore comments/spaces/newlines", "Include all modifications"],
+    "Ignore comments/spaces/newlines"
+  )
+
+
+def generate(report, entity, pageId):
+  """
+  Required, generate the report
+  """
+  db = report.db()
+  cmp_db = db.comparison_db() if db else None
+  if not cmp_db:
+    report.print("%% No comparison database is loaded; Mermaid Object References Compare graph is empty.\n")
+    return
+
+  # Diagram header
+  report.print("%% Copy the text or export the interactive report as text\n")
+  report.print("%% Object References Compare Graph for Mermaid generated by Understand\n")
+
+  if report.options().lookup("Layout") == "Horizontal":
+    report.print("flowchart LR\n")
+  else:
+    report.print("flowchart TB\n")
+
+  # Define node and edge classes
+  report.print("  %% Node classes for comparison status\n")
+  report.print("  classDef entBoth fill:#ffffff,stroke:#333,stroke-width:1px;\n")
+  report.print("  classDef entChanged fill:{0},stroke:#333,stroke-width:1px;\n".format(colors[kMod]))
+  report.print("  classDef entAdded fill:{0},stroke:#333,stroke-width:1px;\n".format(colors[kNew]))
+  report.print("  classDef entRemoved fill:{0},stroke:#333,stroke-width:1px;\n".format(colors[kOld]))
+
+  report.print("  %% Edge classes for reference kinds and inactive status\n")
+  report.print("  classDef refUseBy stroke:#4e8cb9,stroke-width:2px,color:#4e8cb9;\n")
+  report.print("  classDef refSetBy stroke:#569f38,stroke-width:2px,color:#569f38;\n")
+  report.print("  classDef refModifyBy stroke:#e45721,stroke-width:2px,color:#e45721;\n")
+  report.print("  classDef refDefDeclare stroke:#8f8f8f,stroke-width:2px,color:#8f8f8f;\n")
+  report.print("  classDef refInactive stroke:#8f8f8f,stroke-width:1px,color:#8f8f8f;\n")
+
+  # Build refs and comparison status following Graph/ObjectReferences_compare.upy
+  uniq = (report.options().lookup("References") == "Simple")
+  refkinds = report.options().lookup("Reference Kinds")
+  opt = [  # Define, Set, Modify, Use
+    "Define/Declare" in refkinds,
+    "Set" in refkinds,
+    "Modify" in refkinds,
+    "Use" in refkinds
+  ]
+
+  ent_status = {}   # ent.uniquename() -> kBoth/kMod/kNew/kOld
+  nodes = {}        # ent.uniquename() -> mermaid node id
+  edges = []        # (edge_id, tail, head, kindname, ref_class)
+
+  # Starting entity might be new or modified
+  cmp_ent = cmp_db.lookup_uniquename(entity.uniquename())
+  start_status = kNew
+  if cmp_ent:
+    start_status = _contents_status(report, entity, cmp_ent)
+  ent_status[entity.uniquename()] = start_status
+
+  # Collect current refs
+  cur_refs = {}
+  cur_ents = {}
+  for ref in _object_refs(entity, opt, uniq):
+    key = _reference_key(ref)
+    cur_refs[key] = ref
+    cur_ents[ref.ent().uniquename()] = ref.ent()
+    ent_status[ref.ent().uniquename()] = kNew
+
+  # Collect comparison refs
+  cmp_refs = {}
+  cmp_ents = {}
+  for ref in _object_refs(cmp_ent, opt, uniq):
+    key = _reference_key(ref)
+    cmp_refs[key] = ref
+    ekey = ref.ent().uniquename()
+    cmp_ents[ekey] = ref.ent()
+    status = ent_status.get(ekey, kOld)
+    if status == kNew:
+      status = _contents_status(report, cur_ents.get(ekey), ref.ent())
+    ent_status[ekey] = status
+
+  # Emit starting node (object graphed) first so it appears near the center
+  start_id = _ensure_node(report, entity, nodes)
+
+  # Build edges for refs (union of ref keys)
+  all_keys = set(cur_refs.keys()) | set(cmp_refs.keys())
+  for ref_key in sorted(all_keys):
+    ref = cur_refs.get(ref_key, cmp_refs.get(ref_key))
+    refent = ref.ent()
+    ent_key = refent.uniquename()
+
+    # Node for referenced entity
+    refnode = _ensure_node(report, refent, nodes)
+
+    # Track comparison status for node
+    if ent_key not in ent_status:
+      ent_status[ent_key] = kBoth
+
+    # Determine direction: use-by edges go from object to user;
+    # others go from user/defining entity to object (match classic graph).
+    if ref.kind().check("UseBy, TypedBy"):
+      tail = start_id
+      head = refnode
+    else:
+      tail = refnode
+      head = start_id
+
+    # Edge styling class
+    ref_class = "refUseBy"
+    kindname = ref.kindname()
+    kind_lower = kindname.lower()
+    if "set" in kind_lower:
+      ref_class = "refSetBy"
+    if "modify" in kind_lower:
+      ref_class = "refModifyBy"
+    if "define" in kind_lower or "declare" in kind_lower:
+      ref_class = "refDefDeclare"
+    if ref.kind().check("Inactive"):
+      ref_class = "refInactive"
+
+    edge_id = "e{0}".format(len(edges))
+    edges.append((edge_id, tail, head, kindname if not uniq else "", ref_class))
+
+  # Emit all nodes (they may not all have been printed above if only in cmp db)
+  for ent_key in sorted(ent_status.keys()):
+    ent = db.lookup_uniquename(ent_key) or cmp_db.lookup_uniquename(ent_key)
+    if not ent:
+      continue
+    _ensure_node(report, ent, nodes)
+
+  # Emit edge lines with IDs; Mermaid expects the edge ID between the
+  # tail node and the arrow, e.g.:
+  #   tail e0@--> head
+  for edge_id, tail, head, kindname, _ref_class in edges:
+    label = ""
+    if kindname and report.options().lookup("References") == "All":
+      label = "|{0}|".format(kindname)
+    report.print("  {tail} {eid}@-->{label}{head}\n".format(
+      eid=edge_id, tail=tail, label=label, head=head))
+
+  # Attach node classes for comparison status
+  for ent_key, node_id in nodes.items():
+    status = ent_status.get(ent_key, kBoth)
+    cls = "entBoth"
+    if status == kMod:
+      cls = "entChanged"
+    elif status == kNew:
+      cls = "entAdded"
+    elif status == kOld:
+      cls = "entRemoved"
+    report.print("  class {node} {cls};\n".format(node=node_id, cls=cls))
+
+  # Attach edge classes for reference kinds
+  for edge_id, _tail, _head, _kindname, ref_class in edges:
+    report.print("  class {eid} {cls};\n".format(eid=edge_id, cls=ref_class))
+
+
+def _ensure_node(report, ent, nodes):
+  """
+  Ensure there is a Mermaid node definition for the given entity and
+  return its node id.
+  """
+  key = ent.uniquename()
+  if key in nodes:
+    return nodes[key]
+
+  label = ""
+
+  # Optional type prefix
+  if (report.options().lookup("Type") and
+      ent.kind().check("Object, Variable, Field, Property")):
+    etype = ent.type()
+    if not etype:
+      etype = "unknown"
+    label += etype + "\n"
+
+  # Name option
+  nameopt = "Shortname"
+  if hasattr(report.options(), "lookup"):
+    nameopt = report.options().lookup("Name") if "Name" in dir(report.options()) else "Shortname"
+
+  # The Object References compare graph is centered on an "object", so we
+  # always show at least the short name.
+  if nameopt == "Fullname":
+    label += ent.longname()
+
+  # Fallback if label still empty
+  if not label:
+    label += ent.name()
+
+  # Filename option
+  filename = "None"
+  if hasattr(report.options(), "lookup"):
+    filename = report.options().lookup("Filename") if "Filename" in dir(report.options()) else "None"
+
+  if filename != "None" and not ent.kind().check("file"):
+    defref = ent.ref("definein,declarein")
+    if defref:
+      if filename == "Relative":
+        label += "\n" + defref.file().relname()
+      elif filename == "Fullname":
+        label += "\n" + defref.file().longname()
+      else:
+        label += "\n" + defref.file().name()
+
+  label = label.replace("\"", "#quot;")
+
+  # Shape: unresolved/object variables get special shapes, matching the
+  # non-compare Mermaid object refs graph.
+  shape = ""
+  if ent.kind().check("unresolved, unknown, undefined"):
+    shape = "shape: \"hexagon\","
+  elif ent.kind().check("Object, Variable, Field, Property"):
+    shape = "shape: \"stadium\","
+
+  node_id = "node{0}".format(len(nodes))
+  nodes[key] = node_id
+
+  report.print("  {id}@{{ {shape} label: \"{label}\"}}\n".format(
+    id=node_id, shape=shape, label=label))
+
+  return node_id
+
+
+def _object_refs(entity, opt, uniq):
+  """
+  Mirror Graph/ObjectReferences_compare.upy object_refs().
+  opt is [Define, Set, Modify, Use]
+  """
+  refs = []
+  if not entity:
+    return refs
+  if opt[0]:
+    refs += entity.refs("Definein,Declarein", unique=uniq)
+  if opt[1]:
+    refs += entity.refs("SetBy Init", unique=uniq)
+    refs += entity.refs("SetBy ~Init, Modifyby", unique=uniq)
+  if opt[2]:
+    refs += entity.refs("Modifyby", unique=uniq)
+  if opt[3]:
+    refs += entity.refs("UseBy Return", unique=uniq)
+    refs += entity.refs("UseBy ~Return", unique=uniq)
+  return refs
+
+
+def _reference_key(ref):
+  """
+  Mirror Graph/ObjectReferences_compare.upy reference_key().
+  """
+  return ref.ent().uniquename() + ref.kind().longname()
+
+
+def _contents_status(report, cur_ent, cmp_ent):
+  """
+  Comparison-aware contents check, matching the semantics of the
+  classic Object References Compare graph.
+  """
+  cur_contents = cur_ent.contents()
+  cmp_contents = cmp_ent.contents()
+
+  if report.options().lookup("Modified Entities") == "Ignore comments/spaces/newlines":
+    to_remove = []
+    to_remove += kLangComments.get(cur_ent.language(), [])
+    to_remove.append(kWhitespace)
+
+    for pattern in to_remove:
+      cur_contents = re.sub(pattern, "", cur_contents)
+      cmp_contents = re.sub(pattern, "", cmp_contents)
+
+  if cur_contents == cmp_contents:
+    return kBoth
+  return kMod
+
