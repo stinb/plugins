@@ -5,7 +5,13 @@ import os
 import re
 import sys
 from typing import Annotated, List, Literal, Optional, Union
-from pydantic import Field
+from pydantic import BeforeValidator, Field
+
+def _coerce_number_to_str(v):
+    """Coerce int/float to str for strict-schema str params (e.g. min_value, max_value)."""
+    if isinstance(v, (int, float)):
+        return str(v)
+    return v
 
 # Add DLL directory if specified in environment variable (for Windows)
 if "UNDERSTAND_DLL_DIR" in os.environ:
@@ -241,7 +247,7 @@ def _get_architecture_children_bfs(arch, max_results: int) -> tuple:
     return top, depth
 
 
-def paginate_results(items: list, max_results: int, cursor: Optional[str]) -> tuple:
+def paginate_results(items: list, max_results: int, cursor: str = "") -> tuple:
     """
     Apply pagination to a list of items.
     Returns: (paginated_items, total_count, truncated, next_cursor_or_none)
@@ -259,7 +265,7 @@ def paginate_results(items: list, max_results: int, cursor: Optional[str]) -> tu
 
     return paginated, total_count, truncated, next_cursor
 
-def filter_entities_by_name_pattern(entities, name_pattern: Optional[str]):
+def filter_entities_by_name_pattern(entities, name_pattern: str = ""):
     """
     Filter entities by name pattern (simple substring matching, case-insensitive).
 
@@ -280,7 +286,7 @@ def filter_entities_by_name_pattern(entities, name_pattern: Optional[str]):
         # Handle both lists and iterators
         return [ent for ent in entities if pattern_lower in ent.name().lower()]
 
-def expand_containers_in_entity(ent: understand.Ent, kindstring: Optional[str] = None) -> set:
+def expand_containers_in_entity(ent: understand.Ent, kindstring: str = "") -> set:
     """
     Expand containers in an entity to find entities matching kindstring.
 
@@ -374,9 +380,9 @@ def architecture_not_found_error(database: understand.Db, arch_name: str) -> str
 
 def get_entities_by_scope(
     database: understand.Db,
-    ent_id: Optional[int] = None,
-    arch_name: Optional[str] = None,
-    kindstring: Optional[str] = None,
+    ent_id: int = 0,
+    arch_name: str = "",
+    kindstring: str = "",
 ) -> tuple[List, Optional[str]]:
     """
     Get entities based on entity scope, architecture scope, or both.
@@ -481,9 +487,9 @@ def expand_containers_in_architecture(arch: understand.Arch, kindstring: str, re
 @mcp.tool(name="lookup_entity_id")
 def lookup_entity_id(
     name: Annotated[str, Field(description="The name or regex pattern to search for in the Understand database.")],
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to narrow the search (e.g., 'Function', 'File', 'Class').")] = None,
+    kindstring: Annotated[str, Field(description="Entity kind filter to narrow the search (e.g., 'Function', 'File', 'Class'). Use empty string or omit for no filter.", default="")] = "",
     max_results: Annotated[int, Field(description="Maximum number of results to return. Default is 10 to keep responses concise.", ge=1, le=50)] = 10,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     Find entities by name (starting point for most workflows).
@@ -540,7 +546,7 @@ def lookup_entity_id(
 @mcp.tool(name="get_entity_details")
 def get_entity_details(
     ent_id: Annotated[int, Field(description="The entity ID to get full details for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand and cannot be guessed. You must discover the correct entity ID first using lookup_entity_id(name='...') or list_entities(...). Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
-) -> Optional[dict]:
+) -> dict:
     """
     Get complete details about an entity including location and relationships.
 
@@ -561,7 +567,7 @@ def get_entity_details(
     """
     ent = require_db().ent_from_id(ent_id)
     if ent is None:
-        return None
+        raise ValueError(f"Entity with id {ent_id} not found")
 
     result = {
         "longname": ent.longname(),
@@ -609,8 +615,8 @@ def get_entity_details(
 @mcp.tool(name="get_entity_source")
 def get_entity_source(
     ent_id: Annotated[int, Field(description="The entity ID to get source code for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand and cannot be guessed. You must discover the correct entity ID first using lookup_entity_id(name='...') or list_entities(kindstring='File', name_pattern='...'). Do not assume entity IDs are sequential (e.g., 1, 2, 3) or reuse IDs from unrelated entities.", ge=1)],
-    start_line: Annotated[Optional[Union[int, str]], Field(description="Optional start line number (1-based, relative to the entity's content). Line 1 is the first line of the entity. If specified, only returns code from this line onwards. Accepts numeric or string values.")] = None,
-    end_line: Annotated[Optional[Union[int, str]], Field(description="Optional end line number (1-based, relative to the entity's content). If specified with start_line, returns only the specified line range. Accepts numeric or string values.")] = None,
+    start_line: Annotated[int, Field(description="Start line number (1-based). Use 0 or omit for full range. If specified, only returns code from this line onwards.", default=0)] = 0,
+    end_line: Annotated[int, Field(description="End line number (1-based). Use 0 or omit for full range. If specified with start_line, returns only the specified line range.", default=0)] = 0,
     max_length: Annotated[int, Field(description="Maximum length of source code to return in characters. Default is 5000 to avoid filling the context window. Response will be truncated if longer.", ge=100, le=50000)] = 5000,
 ) -> dict:
     """
@@ -636,12 +642,7 @@ def get_entity_source(
 
     Tip: Use start_line and end_line parameters to get only the code section you need.
     """
-    # Coerce parameters to correct types (handle string inputs from LLMs)
-    if start_line is not None:
-        start_line = int(start_line)
-    if end_line is not None:
-        end_line = int(end_line)
-
+    # 0 = full range (lines are 1-based; entity IDs are >= 1)
     ent = require_db().ent_from_id(ent_id)
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
@@ -657,13 +658,13 @@ def get_entity_source(
     lines = source_code.split('\n')
     total_lines = len(lines)
 
-    # Determine line range
-    if start_line is None:
+    # Determine line range (0 = full range)
+    if not start_line:
         actual_start_line = 1
     else:
         actual_start_line = max(1, min(start_line, total_lines))
 
-    if end_line is None:
+    if not end_line:
         actual_end_line = total_lines
     else:
         actual_end_line = max(actual_start_line, min(end_line, total_lines))
@@ -761,7 +762,7 @@ def get_entity_references_summary(
 @mcp.tool(name="get_entity_references_by_file")
 def get_entity_references_by_file(
     ent_id: Annotated[int, Field(description="The entity ID to get references grouped by file for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
-    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string to filter references before grouping by file. Note: This filters based on how the entity references things, not how things reference the entity. For example, filtering by 'Type' on a class will show files where the class has Type references, not files that use the class as a type.")] = None,
+    refkindstring: Annotated[str, Field(description="Reference kind filter to filter references before grouping by file. Use empty string or omit for no filter. Note: This filters based on how the entity references things, not how things reference the entity. For example, filtering by 'Type' on a class will show files where the class has Type references, not files that use the class as a type.", default="")] = "",
     compact: Annotated[bool, Field(description="If True (default), returns only file_id and count. If False, includes file path.")] = True,
 ) -> dict:
     """
@@ -823,12 +824,12 @@ def get_entity_references_by_file(
 @mcp.tool(name="get_entity_references")
 def get_entity_references(
     ent_id: Annotated[int, Field(description="The entity ID to get references for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
-    refkindstring: Annotated[Optional[str], Field(description="Optional reference kind filter string. Filters by the TYPE OF RELATIONSHIP (e.g., 'C Call', 'C Use', 'C Define', 'C Set'). Use forward kinds (e.g., 'call', 'definein', 'use', 'set') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated. IMPORTANT: This filters by reference relationship type, NOT by entity kind. To filter by entity kind (e.g., Parameter, Function), use entkindstring instead.")] = None,
-    entkindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to filter by the KIND OF ENTITY being referenced (e.g., 'Function', 'Parameter', 'Variable', 'Class', 'Local Object'). This filters by what type of entity is referenced, not how it's referenced. Can be used alone without refkindstring. Example: entkindstring='Parameter' to list parameter entities of a function.")] = None,
-    file_id: Annotated[Optional[Union[int, str]], Field(description="Optional file entity ID to filter references to only those occurring in a specific file.")] = None,
+    refkindstring: Annotated[str, Field(description="Reference kind filter by TYPE OF RELATIONSHIP (e.g., 'C Call', 'C Use', 'C Define', 'C Set'). Use empty string or omit for no filter. Use forward kinds (e.g., 'call', 'definein', 'use', 'set') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated. IMPORTANT: This filters by reference relationship type, NOT by entity kind. To filter by entity kind (e.g., Parameter, Function), use entkindstring instead.", default="")] = "",
+    entkindstring: Annotated[str, Field(description="Entity kind filter by the KIND OF ENTITY being referenced (e.g., 'Function', 'Parameter', 'Variable', 'Class', 'Local Object'). Use empty string or omit for no filter. This filters by what type of entity is referenced, not how it's referenced. Can be used alone without refkindstring. Example: entkindstring='Parameter' to list parameter entities of a function.", default="")] = "",
+    file_id: Annotated[int, Field(description="File entity ID to filter references. Use 0 or omit for all files.", default=0)] = 0,
     unique: Annotated[bool, Field(description="If True, return only the first matching reference to each unique entity. Useful to avoid duplicates when the same entity is referenced multiple times. Can be used alone without other filters.")] = False,
     max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 10 to keep responses concise.", ge=1, le=200)] = 10,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     Get detailed reference information for an entity with flexible filtering.
@@ -869,10 +870,7 @@ def get_entity_references(
     Each reference includes file_id so you can directly call get_entity_source without lookups.
     Supports pagination: use next_cursor from response to get more results.
     """
-    # Coerce file_id to correct type (handle string inputs from LLMs)
-    if file_id is not None:
-        file_id = int(file_id)
-
+    # 0 = no file filter (entity IDs are >= 1)
     ent = require_db().ent_from_id(ent_id)
     if ent is None:
         raise ValueError(f"Entity with id {ent_id} not found")
@@ -881,7 +879,7 @@ def get_entity_references(
     refs = ent.refs(refkindstring=refkindstring, entkindstring=entkindstring, unique=unique)
 
     # Filter by file_id if specified
-    if file_id is not None:
+    if file_id:
         refs = [ref for ref in refs if ref.file() and ref.file().id() == file_id]
 
     # Apply pagination
@@ -926,11 +924,11 @@ def get_entity_references(
 
 @mcp.tool(name="list_metrics_summary")
 def list_metrics_summary(
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter string to list only metrics applicable to specific entity kinds (e.g., 'Function', 'File', 'Class').")] = None,
+    kindstring: Annotated[str, Field(description="Entity kind filter to list only metrics applicable to specific entity kinds (e.g., 'Function', 'File', 'Class'). Use empty string or omit for all metrics.", default="")] = "",
     include_disabled: Annotated[bool, Field(description="If True, returns all known metrics (enabled and disabled). If False (default), returns only enabled metrics. Note: metric values can be calculated even if metrics are disabled, but enabling controls visibility in the UI.")] = False,
     max_results: Annotated[int, Field(description="Maximum number of metrics to return. Default is 20 to keep responses concise. Use get_metric_details for specific metrics when descriptions are needed.", ge=1, le=500)] = 20,
     compact: Annotated[bool, Field(description="If True (default), returns only metric IDs. If False, includes metric names.")] = True,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     List available metrics without descriptions (efficient metric discovery).
@@ -958,7 +956,7 @@ def list_metrics_summary(
     database = require_db()
 
     # Get list of available metrics (filter=True returns only enabled, filter=False returns all)
-    if kindstring is None:
+    if not kindstring:
         all_metric_ids = understand.Metric.list(db=database, filter=not include_disabled)
     else:
         all_metric_ids = understand.Metric.list(kindstring, db=database, filter=not include_disabled)
@@ -1177,15 +1175,15 @@ def get_project_overview() -> dict:
 @mcp.tool(name="find_entities_by_metric")
 def find_entities_by_metric(
     metric_id: Annotated[str, Field(description="The metric ID to filter by (e.g., 'Cyclomatic', 'CountLine', 'MaxNesting').")],
-    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide or within ent_id. If provided, filters to entities within that architecture (expanding containers to find nested entities). Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.")] = None,
-    ent_id: Annotated[Optional[int], Field(description="Optional entity ID to search within (e.g., file, class, package). If provided, finds entities within this entity (expanding containers as needed). If kindstring is provided, filters to entities of that kind; if not provided, returns the entity itself and all its children. Can be combined with arch_name to filter results by architecture.")] = None,
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class').")] = None,
-    min_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional minimum metric value. Entities with metric values >= min_value will be returned.")] = None,
-    max_value: Annotated[Optional[Union[float, int, str]], Field(description="Optional maximum metric value. Entities with metric values <= max_value will be returned.")] = None,
+    arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit for project-wide or ent_id scope. If provided, filters to entities within that architecture (expanding containers to find nested entities). Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.", default="")] = "",
+    ent_id: Annotated[int, Field(description="Entity ID to search within (e.g., file, class, package). Use 0 or omit for project/arch scope. If provided, finds entities within this entity (expanding containers as needed). Can be combined with arch_name.", default=0)] = 0,
+    kindstring: Annotated[str, Field(description="Entity kind filter (e.g., 'Function', 'File', 'Class'). Use empty string or omit for no filter.", default="")] = "",
+    min_value: Annotated[str, BeforeValidator(_coerce_number_to_str), Field(description="Minimum metric value. Use empty string or omit for no minimum. Otherwise a number as string (e.g. '10' or '3.14'). Accepts number or string. Entities with metric values >= min_value will be returned.", default="")] = "",
+    max_value: Annotated[str, BeforeValidator(_coerce_number_to_str), Field(description="Maximum metric value. Use empty string or omit for no maximum. Otherwise a number as string (e.g. '100' or '5.5'). Accepts number or string. Entities with metric values <= max_value will be returned.", default="")] = "",
     order_by: Annotated[Literal["asc", "desc"], Field(description="Sort order: 'desc' for highest values first, 'asc' for lowest values first.")] = "desc",
-    name_pattern: Annotated[Optional[str], Field(description="Optional name pattern to filter entities. Only entities whose names contain this substring (case-insensitive) are included. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'.")] = None,
+    name_pattern: Annotated[str, Field(description="Name pattern to filter entities (case-insensitive substring). Use empty string or omit for no filter. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'.", default="")] = "",
     max_results: Annotated[int, Field(description="Maximum number of results to return. Default is 10 to keep responses concise.", ge=1, le=200)] = 10,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     Find entities filtered and sorted by metric values. Can search project-wide, within a specific architecture, or within a specific entity.
@@ -1214,11 +1212,19 @@ def find_entities_by_metric(
     4. find_entities_by_metric(metric_id="Cyclomatic", kindstring="Function", ent_id=<file_id>) → find top entities in a specific file
     5. get_entity_details(ent_id) → get details about specific entities
     """
-    # Coerce parameters to correct types (handle string inputs from LLMs)
-    if min_value is not None:
-        min_value = float(min_value)
-    if max_value is not None:
-        max_value = float(max_value)
+    # Parse min_value/max_value: empty string = no filter, else must be convertible to float
+    min_float = None
+    if min_value:
+        try:
+            min_float = float(min_value)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"min_value must be a number or empty string, got {min_value!r}") from e
+    max_float = None
+    if max_value:
+        try:
+            max_float = float(max_value)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"max_value must be a number or empty string, got {max_value!r}") from e
 
     database = require_db()
 
@@ -1237,9 +1243,9 @@ def find_entities_by_metric(
             value = ent.metric(metric_id)
             # Filter by min/max if specified
             if value is not None:
-                if min_value is not None and value < min_value:
+                if min_float is not None and value < min_float:
                     continue
-                if max_value is not None and value > max_value:
+                if max_float is not None and value > max_float:
                     continue
 
                 entity_metrics.append({
@@ -1323,11 +1329,11 @@ def get_project_violations_summary() -> dict:
 
 @mcp.tool(name="get_project_violations")
 def get_project_violations(
-    check_id: Annotated[Optional[str], Field(description="Optional violation check ID to filter by specific rule/check (e.g., 'MISRA_C_2012_8.4', 'UND_WARNING', 'CERT_C_2012_STR31_C'). Use get_project_violations_summary to see available check IDs.")] = None,
-    file_path: Annotated[Optional[str], Field(description="Optional file path filter. Can be absolute path, relative path, or filename. Matches if the violation's file path contains this string. Note: violations store absolute file paths, and violations can exist outside of project files.")] = None,
+    check_id: Annotated[str, Field(description="Violation check ID to filter by specific rule/check (e.g., 'MISRA_C_2012_8.4', 'UND_WARNING', 'CERT_C_2012_STR31_C'). Use empty string or omit for all checks. Use get_project_violations_summary to see available check IDs.", default="")] = "",
+    file_path: Annotated[str, Field(description="File path filter (substring match). Use empty string or omit for all files. Can be absolute path, relative path, or filename. Note: violations store absolute file paths, and violations can exist outside of project files.", default="")] = "",
     include_entity_info: Annotated[bool, Field(description="If True, resolves entity information for violations that have entity uniquenames. This adds minimal latency (~0.07ms per lookup, ~7ms for 100 violations) and is useful for violations like 'function too long' where you need the function entity ID. Default is False. Not all violations have entity information (some are for code regions rather than specific entities).")] = False,
     max_results: Annotated[int, Field(description="Maximum number of violations to return. Default is 20 to keep responses concise.", ge=1, le=500)] = 20,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     Get detailed violations for the project with location information.
@@ -1474,13 +1480,13 @@ def get_project_metrics(
 
 @mcp.tool(name="list_entities")
 def list_entities(
-    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide or within ent_id. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.")] = None,
-    ent_id: Annotated[Optional[int], Field(description="Optional entity ID to search within (e.g., file, class, package). If provided, finds entities within this entity (expanding containers as needed). If kindstring is provided, expands containers to find nested entities. Can be combined with arch_name to filter results by architecture.")] = None,
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'Function', 'File', 'Class', 'Method'). If provided and arch_name or ent_id is provided, expands containers to find nested entities. If not provided and arch_name or ent_id is provided, returns direct members only (no expansion).")] = None,
-    name_pattern: Annotated[Optional[str], Field(description="Optional name pattern to filter entities. Only entities whose names contain this substring (case-insensitive) are included. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'.")] = None,
+    arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit for project-wide or ent_id scope. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.", default="")] = "",
+    ent_id: Annotated[int, Field(description="Entity ID to search within (e.g., file, class, package). Use 0 or omit for project/arch scope. If provided, finds entities within this entity. Can be combined with arch_name.", default=0)] = 0,
+    kindstring: Annotated[str, Field(description="Entity kind filter (e.g., 'Function', 'File', 'Class', 'Method'). Use empty string or omit for direct members only. If provided with arch_name or ent_id, expands containers to find nested entities.", default="")] = "",
+    name_pattern: Annotated[str, Field(description="Name pattern to filter entities (case-insensitive substring). Use empty string or omit for no filter. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'.", default="")] = "",
     max_results: Annotated[int, Field(description="Maximum number of entities to return. Default is 20 to keep responses concise.", ge=1, le=500)] = 20,
     compact: Annotated[bool, Field(description="If True (default), returns id, name, kind only. If False, includes longname.")] = True,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     List entities. Can search project-wide, within a specific architecture, within a specific entity, or combine entity and architecture filters.
@@ -1849,7 +1855,7 @@ def get_architectures_for_entity(
 def get_architecture_children(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get children for. Use list_architectures_summary to discover root architecture names.")],
     max_results: Annotated[int, Field(description="Maximum number of child architectures to return. Default is 30.", ge=1, le=500)] = 30,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     Get child architectures of a parent architecture (navigate hierarchy).
@@ -1991,7 +1997,7 @@ def get_architecture_intersection(
     source_arch_name: Annotated[str, Field(description="Longname of the source architecture to get entities from (e.g., 'Git Owner/Jason Haslam', 'Key Functions').")],
     group_by_arch_name: Annotated[str, Field(description="Longname of the architecture to group entities by (e.g., 'Directory Structure', 'Git Owner'). Defaults to 'Directory Structure' if not specified.", default="Directory Structure")] = "Directory Structure",
     recursive: Annotated[bool, Field(description="If True, includes entities from child architectures of source_arch_name and groups by all children (recursive) of group_by_arch_name. If False, only direct entities and direct children. Default is True.", default=True)] = True,
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class') to filter entities before grouping. If provided, automatically expands containers in source_arch to find nested entities matching the kindstring.")] = None,
+    kindstring: Annotated[str, Field(description="Entity kind filter (e.g., 'File', 'Function', 'Class') to filter entities before grouping. Use empty string or omit for no filter. If provided, automatically expands containers in source_arch to find nested entities matching the kindstring.", default="")] = "",
     max_results: Annotated[int, Field(description="Maximum number of groups to return. Groups are sorted by count (descending). Default is 50.", ge=1, le=500, default=50)] = 50,
     compact: Annotated[bool, Field(description="If True (default), returns only group_name, count, and percentage. If False, includes sample_entities for each group.")] = True,
 ) -> dict:
@@ -2103,10 +2109,10 @@ def get_architecture_intersection(
 @mcp.tool(name="get_entities_grouped_by_pattern")
 def get_entities_grouped_by_pattern(
     pattern: Annotated[str, Field(description="Regular expression pattern to match entity names. Can include capture groups for grouping. Use (?i) prefix for case-insensitive matching.")],
-    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, searches project-wide. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures.")] = None,
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class').")] = None,
+    arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit for project-wide. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures.", default="")] = "",
+    kindstring: Annotated[str, Field(description="Entity kind filter (e.g., 'File', 'Function', 'Class'). Use empty string or omit for no filter.", default="")] = "",
     group_by: Annotated[Literal["match", "group"], Field(description="How to group: 'match' groups by full match, 'group' uses capture groups. Default is 'match'.", default="match")] = "match",
-    group_index: Annotated[Optional[int], Field(description="If group_by='group', which capture group to use (1-indexed). If not specified, uses all groups as tuple key.", ge=1)] = None,
+    group_index: Annotated[int, Field(description="If group_by='group', which capture group to use (1-indexed). Use 0 or omit to use all groups as tuple key.", ge=0, default=0)] = 0,
     recursive: Annotated[bool, Field(description="If True and arch_name is provided, includes entities from child architectures. Default is True.", default=True)] = True,
     max_results: Annotated[int, Field(description="Maximum number of groups to return. Groups are sorted by count (descending). Default is 50.", ge=1, le=500, default=50)] = 50,
     compact: Annotated[bool, Field(description="If True (default), returns only group, count, and percentage. If False, includes sample_entities for each group.")] = True,
@@ -2345,9 +2351,9 @@ MAX_ENTITIES_FOR_NAME_ANALYSIS = 10000
 
 @mcp.tool(name="get_entity_name_parts_frequency")
 def get_entity_name_parts_frequency(
-    arch_name: Annotated[Optional[str], Field(description="Optional architecture longname. If not provided, analyzes all entities in the database (project-wide). Use list_architectures_summary to discover available architectures.")] = None,
-    kindstring: Annotated[Optional[str], Field(description="Optional entity kind filter (e.g., 'File', 'Function', 'Class').")] = None,
-    name_pattern: Annotated[Optional[str], Field(description="Optional name pattern to filter entities. Only entities whose names contain this substring (case-insensitive) are included. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'. Use this to discover words that co-occur with a specific pattern (e.g., 'What words appear with parser?').")] = None,
+    arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit to analyze all entities in the database (project-wide). Use list_architectures_summary to discover available architectures.", default="")] = "",
+    kindstring: Annotated[str, Field(description="Entity kind filter (e.g., 'File', 'Function', 'Class'). Use empty string or omit for no filter.", default="")] = "",
+    name_pattern: Annotated[str, Field(description="Name pattern to filter entities (case-insensitive substring). Use empty string or omit for no filter. Example: 'parser' matches 'parseMarkdown', 'cmark_parser', 'ParserTest'. Use this to discover words that co-occur with a specific pattern (e.g., 'What words appear with parser?').", default="")] = "",
     min_word_length: Annotated[int, Field(description="Minimum word length to include. Default is 2.", ge=1, default=2)] = 2,
     recursive: Annotated[bool, Field(description="If True and arch_name is provided, includes entities from child architectures. Default is True.", default=True)] = True,
     max_results: Annotated[int, Field(description="Maximum number of words to return. Default is 50.", ge=1, le=200, default=50)] = 50,
@@ -2465,7 +2471,7 @@ def get_architecture_dependencies(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get dependencies for. Use list_architectures_summary to discover root architecture names.")],
     forward: Annotated[bool, Field(description="If True, returns what this architecture depends on (outgoing). If False, returns what depends on this architecture (incoming). Default is True.")] = True,
     max_results: Annotated[int, Field(description="Maximum number of dependent architectures to return. Default is 50.", ge=1, le=200)] = 50,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     Get architectures that have dependencies with this architecture (layer 1 of 3).
@@ -2590,9 +2596,9 @@ def get_architecture_dependency_references(
     arch_name: Annotated[str, Field(description="Longname of the source architecture.")],
     other_arch_name: Annotated[str, Field(description="Longname of the target architecture.")],
     forward: Annotated[bool, Field(description="If True, shows references from arch_name to other_arch_name. If False, shows references from other_arch_name to arch_name. Default is True.")] = True,
-    ref_kindstring: Annotated[Optional[str], Field(description="Optional reference kind filter. Use values from get_architecture_dependency_summary output (e.g., 'C Use', 'C Set', 'C Call', 'C Include'). Generic filters like 'Call' also work but may match multiple language-specific kinds. If not provided, returns all reference kinds.")] = None,
+    ref_kindstring: Annotated[str, Field(description="Reference kind filter. Use empty string or omit for all reference kinds. Use values from get_architecture_dependency_summary output (e.g., 'C Use', 'C Set', 'C Call', 'C Include'). Generic filters like 'Call' also work but may match multiple language-specific kinds.", default="")] = "",
     max_results: Annotated[int, Field(description="Maximum number of references to return. Default is 50.", ge=1, le=200)] = 50,
-    cursor: Annotated[Optional[str], Field(description="Pagination cursor from previous response to get next page of results.")] = None,
+    cursor: Annotated[str, Field(description="Pagination cursor from previous response to get next page of results.", default="")] = "",
 ) -> dict:
     """
     Get the actual references between two architectures (layer 3 of 3).
