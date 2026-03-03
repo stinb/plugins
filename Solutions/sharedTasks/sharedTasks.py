@@ -7,8 +7,9 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+import Modules
 import understand
-from understand import Arch, Db, Ent, Ref
+from understand import Arch, CFNode, Db, Ent, Ref
 
 
 class DictResult(Enum):
@@ -23,7 +24,7 @@ class DbCache:
         self.entRefCache: dict[str, Ref | DictResult] = dict()
 
     # Call ent.ents
-    def entEnts(self, ent: Ent, refKind: str | None = None, entKind: str | None = None) -> list[Ent]:
+    def entEnts(self, ent: Ent, refKind: str = '', entKind: str = '') -> list[Ent]:
         key: str = f'{ent.id()} "{refKind}" "{entKind}"'
         value: list[Ent] | None = self.entEntsCache.get(key)
         if value == None:
@@ -33,16 +34,16 @@ class DbCache:
         return value
 
     # Call ent.ref
-    def entRef(self, ent: Ent, refKind: str | None = None, entKind: str | None = None) -> Ref | None:
-        key: str = f'{ent.id()} "{refKind}" "{entKind}"'
+    def entRef(self, ent: Ent, refKind: str = '', entKind: str = '') -> Ref | None:
+        key = f'{ent.id()} "{refKind}" "{entKind}"'
         value: Ref | DictResult = self.entRefCache.get(key, DictResult.NotInDict)
         if value == DictResult.NotInDict:
-            value = ent.ref(refKind, entKind)
-            if value == None:
+            ref = ent.ref(refKind, entKind)
+            if ref == None:
                 self.entRefCache[key] = DictResult.NotInDb
                 return None
-            self.entRefCache[key] = value
-            return value
+            self.entRefCache[key] = ref
+            return ref
         elif value == DictResult.NotInDb:
             return None
         return value
@@ -120,7 +121,7 @@ def checkIsCallable(ent: Ent) -> bool:
     return False
 
 
-def refComparator(a: Ref, b: Ref) -> int:
+def refComparatorFn(a: Ref, b: Ref) -> int:
     aLine = a.line()
     bLine = b.line()
     if aLine < bLine:
@@ -134,13 +135,13 @@ def refComparator(a: Ref, b: Ref) -> int:
     if aColumn > bColumn:
         return 1
     return 0
-refComparator = functools.cmp_to_key(refComparator)
+refComparator = functools.cmp_to_key(refComparatorFn)
 
 
 def refStr(ref: Ref) -> str:
     if ref.isforward():
-        return f'{ref.scope().id()} {ref.kind().longname()} {ref.ent().id()} {ref.line()} {ref.column()}'
-    return f'{ref.ent().id()} {ref.kind().inv().longname()} {ref.scope().id()} {ref.line()} {ref.column()}'
+        return f'{ref.scope().id()} {ref.kind().longname()} {ref.ent().id()} {ref.file().id()} {ref.line()} {ref.column()}'
+    return f'{ref.ent().id()} {ref.kind().inv().longname()} {ref.scope().id()} {ref.file().id()} {ref.line()} {ref.column()}'
 
 
 def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
@@ -153,7 +154,7 @@ def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
             return ent.name()
         optionValue = options[MEMBER_FUNCTIONS]
         if optionValue == 'Longer name':
-            return getLongerName(ent, ent.parent())
+            return getLongerName(ent)
         elif optionValue == 'Long name':
             return ent.longname()
         else:
@@ -169,7 +170,7 @@ def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
     return result
 
 
-def getLongerName(ent: Ent, parentEnt: Ent) -> str:
+def getLongerName(ent: Ent) -> str:
     longname = ent.longname()
 
     parent = ent.parent()
@@ -199,7 +200,7 @@ def getFnRefKinds(options: dict[str, str | bool] | None = None) -> str:
 def getFnOrObjRefs(
         cache: DbCache,
         function: Ent,
-        enableDisableFunctions: dict,
+        enableDisableFunctions: dict[Ent, dict[str, bool | Ent]],
         options: dict[str, str | bool] | None = None) -> list[Ref]:
 
     refKinds = getFnRefKinds(options)
@@ -290,69 +291,6 @@ def globalObjRefs(cache: DbCache, function: Ent, options: dict[str, str | bool] 
 
     result.sort(key=refComparator)
     return result
-
-
-def checkControlledFunction(
-        cache: DbCache,
-        outerFunction: Ent,
-        enableDisableFunctions: dict,
-        controlledFunctions: set[Ent],
-        interruptDisabledRefs: set[str],
-        options: dict[str, str | bool] | None = None):
-
-    # Base case: already checked
-    if outerFunction in controlledFunctions:
-        return
-    controlledFunctions.add(outerFunction)
-
-    # Function call or global object modify/set/use
-    for ref in getFnOrObjRefs(cache, outerFunction, enableDisableFunctions, options):
-        ent = ref.ent()
-
-        # Recurse for each function called, ignoring enable/disable functions
-        if ent.kind().check('Function'):
-            if ent not in enableDisableFunctions and ent not in controlledFunctions:
-                interruptDisabledRefs.add(refStr(ref))
-                checkControlledFunction(cache, ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
-
-        # Global object ref
-        elif ent.kind().check(OBJ_ENT_KINDS):
-            interruptDisabledRefs.add(refStr(ref))
-
-
-def checkFunctionForInterruptControl(
-        cache: DbCache,
-        outerFunction: Ent,
-        enableDisableFunctions: dict,
-        controlledFunctions: set[Ent],
-        interruptDisabledRefs: set[str],
-        options: dict[str, str | bool] | None = None):
-
-    # Disable functions that are making the code interrupt-protected
-    interruptDisabledFunctions = set() # { ent, ...  }
-
-    # Function call or global object modify/set/use
-    for ref in getFnOrObjRefs(cache, outerFunction, enableDisableFunctions, options):
-        ent = ref.ent()
-
-        # Add/remove the disable outerFunction
-        if ent in enableDisableFunctions:
-            if enableDisableFunctions[ent]['disable']:
-                disable = ent
-                interruptDisabledFunctions.add(ent)
-            else:
-                disable = enableDisableFunctions[ent]['other']
-                interruptDisabledFunctions.discard(disable)
-
-        # Recurse for each function called in an interrupt-protected area,
-        # ignoring enable/disable functions
-        elif ent.kind().check('Function') and len(interruptDisabledFunctions) and ent not in controlledFunctions:
-            interruptDisabledRefs.add(refStr(ref))
-            checkControlledFunction(cache, ent, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
-
-        # Global object ref with interrupt disabled
-        elif not ent.kind().check('Function') and len(interruptDisabledFunctions):
-            interruptDisabledRefs.add(refStr(ref))
 
 
 def getEdgeInfo(
@@ -508,9 +446,9 @@ def filterIncomingEdges(
         filterIncomingEdges(incoming, outgoing, edgeInfo, scope, options)
 
 
-def parseArch(arch: Arch) -> (dict, dict, set[str]):
-    tasks = dict() # { ent: integer, ... }
-    enableDisableFunctions = dict() # { ent: { 'disable': boolean, 'other': ent }, ... }
+def parseArch(arch: Arch) -> tuple[dict[Ent, dict[str, str]], dict[Ent, dict[str, bool | Ent]], set[str]]:
+    tasks: dict[Ent, dict[str, str]] = dict()
+    enableDisableFunctions: dict[Ent, dict[str, bool | Ent]] = dict() # inner dict is {'disable': bool, 'other': Ent}
     foundFields = set()
 
     # Parse the architecture
@@ -567,11 +505,11 @@ def parseArch(arch: Arch) -> (dict, dict, set[str]):
 def buildEdgeInfo(
         db: Db,
         arch: Arch,
-        options: dict[str, str | bool]) -> (dict, dict, set[str], set[str], set[str]):
+        options: dict[str, str | bool]) -> tuple[dict, dict, dict, set[str], set[str]]:
 
     # Setup data for getEdgeInfo
     cache: DbCache = DbCache()
-    visited = set()   # { funKey, ... }
+    visited: set[str] = set() # strings are constructed like `funKey``
     incoming = dict() # { ent: set, ... }
     outgoing = dict() # { ent: set, ... }
     edgeInfo = dict() # { edgeKey: {
@@ -596,7 +534,28 @@ def buildEdgeInfo(
             if ent.kind().check(OBJ_ENT_KINDS):
                 filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
 
-    interruptDisabledRefs = findInterruptDisabledRefs(db, cache, enableDisableFunctions, options)
+    # Traverse with the new implementation to find interrupt-disabled references
+    disable_fns: set[Ent] = set()
+    enable_fns: set[Ent] = set()
+    for ent, value in enableDisableFunctions.items():
+        if value['disable']:
+            disable_fns.add(ent)
+        else:
+            enable_fns.add(ent)
+    traversal_options = TraversalOptions(
+        called_by_depth = None,
+        disable_fns = disable_fns,
+        enable_fns = enable_fns,
+        function_instances = bool(options[FUNCTION_INSTANCES]),
+        overrides = bool(options[OVERRIDES]),
+        unresolved = True,
+    )
+    objects: list[Ent] = []
+    for edge_obj in edgeInfo.values():
+        ent = edge_obj['ent']
+        if ent.kind().check(OBJ_ENT_KINDS):
+            objects.append(ent)
+    interruptDisabledRefs = find_interrupt_disabled_refs(traversal_options, objects)
 
     # Decide whether the nodes are shared
     sharedObjects: dict[Ent, bool] = dict()
@@ -647,28 +606,225 @@ def buildEdgeInfo(
     return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
 
 
-def findInterruptDisabledRefs(
-        db: Db,
-        cache: DbCache,
-        enableDisableFunctions: dict,
-        options: dict[str, str | bool] | None = None) -> set[str]:
-
-    # Setup data for checkFunctionForInterruptControl
-    controlledFunctions = set()   # { ent, ... }
-    interruptDisabledRefs = set() # { str(ref), ... }
-
-    # See which refs are interrupt-protected
-    for fun in db.ents():
-        if not checkIsCallable(fun):
-            continue
-        checkFunctionForInterruptControl(cache, fun, enableDisableFunctions, controlledFunctions, interruptDisabledRefs, options)
-
-    return interruptDisabledRefs
-
-
 def checkIsFunctionPointer(ent: Ent) -> bool:
     if not ent.kind().check('Parameter, Object'):
         return False
     t = ent.freetext('UnderlyingType')
-    t = re.sub(r'\b(const|restrict|volatile)\s*', '', t)
+    t = re.sub(r'\b(const|restrict|volatile)\s*', '', t or '')
     return bool(re.search(r'\(\*+\)\(', t))
+
+
+# ------------------
+# New implementation
+# ------------------
+
+
+FN_REF_KIND = (
+    'ada call,'
+    'c call ~inactive, c use ptr ~inactive,'
+    'cobol call,'
+    'csharp call, csharp use ptr,'
+    'fortran call,'
+    'java call,'
+    'jovial call, jovial asm use,'
+    'pascal call,'
+    'vhdl call,'
+    'php call')
+
+FN_REF_KIND_INVERSE = (
+    'ada callby,'
+    'c callby ~inactive, c useby ptr ~inactive,'
+    'cobol callby,'
+    'csharp callby, csharp useby ptr,'
+    'fortran callby,'
+    'java callby,'
+    'jovial callby, jovial asm useby,'
+    'pascal callby,'
+    'vhdl callby,'
+    'php callby')
+
+OBJ_REF_KIND_INVERSE = 'setby, useby, modifyby, definein'
+
+
+@dataclass
+class TraversedEdge:
+    ref: Ref # ent is tail/source, scope is head/destination
+    interrupt_protected: bool # Interrupts are disabled before this reference, drawn with dashes
+
+
+@dataclass
+class TraversedNode:
+    incoming: list[TraversedEdge]
+    outgoing: list[TraversedEdge]
+
+
+@dataclass
+class TraversalOptions:
+    called_by_depth: int | None
+    disable_fns: set[Ent]
+    enable_fns: set[Ent]
+    function_instances: bool
+    overrides: bool
+    unresolved: bool
+
+
+# Get references (transformed by refStr) that are interrupt-protected
+def find_interrupt_disabled_refs(options: TraversalOptions, global_objects: list[Ent]) -> set[str]:
+    result: set[str] = set()
+    traversal = traverse_by_many_objects(options, global_objects)
+    for node in traversal.values():
+        for edge in node.incoming:
+            if not edge.interrupt_protected:
+                continue
+            result.add(refStr(edge.ref))
+    return result
+
+
+def is_directly_interrupt_protected(disable_fns: set[Ent], enable_fns: set[Ent], fn_with_ref: Ent, ref: Ref) -> bool:
+    # Get all interrupt disables and interrupt enables in this function
+    disable_refs: list[Ref] = []
+    enable_refs: list[Ref] = []
+    for call in fn_with_ref.refs(FN_REF_KIND):
+        called = call.ent()
+        if called in disable_fns:
+            disable_refs.append(call)
+        elif called in enable_fns:
+            enable_refs.append(call)
+    if not disable_refs:
+        return False
+
+    cfg = fn_with_ref.control_flow_graph()
+    if not cfg:
+        return False
+    nodes = cfg.nodes()
+
+    # Find the enable nodes
+    enable_nodes: set[CFNode] = set()
+    for enable_ref in enable_refs:
+        enable_node = ref_to_node(nodes, enable_ref)
+        if enable_node:
+            enable_nodes.add(enable_node)
+
+    stack: list[CFNode] = []
+    seen: set[CFNode] = set()
+
+    # For each interrupt disable, see if the reference is after it
+    for disable_ref in disable_refs:
+        disable_node = ref_to_node(nodes, disable_ref)
+        if not disable_node:
+            continue
+
+        stack.clear()
+        stack.append(disable_node)
+        seen.clear()
+        seen.add(disable_node)
+        while stack:
+            node = stack.pop()
+            # Skip if interrupts are enabled
+            if node in enable_nodes:
+                continue
+            # Found it
+            if Modules.refInNode(ref, node):
+                return True
+            # Recurse
+            for child in node.children():
+                if child in seen:
+                    continue
+                seen.add(child)
+                stack.append(child)
+
+    return False
+
+
+def ref_to_node(nodes: list[CFNode], ref: Ref) -> CFNode | None:
+    for node in nodes:
+        if Modules.refInNode(ref, node):
+            return node
+    return None
+
+
+def traverse_by_object(options: TraversalOptions, global_object: Ent) -> dict[Ent, TraversedNode]:
+    return traverse_by_many_objects(options, [global_object])
+
+
+def traverse_by_many_objects(options: TraversalOptions, global_objects: list[Ent]) -> dict[Ent, TraversedNode]:
+    result: dict[Ent, TraversedNode] = dict()
+
+    fn_ref_kind = FN_REF_KIND_INVERSE
+    if options.function_instances:
+        fn_ref_kind += ', instance'
+    if options.overrides:
+        fn_ref_kind += ', overrides'
+
+    depth = options.called_by_depth if options.called_by_depth != None else -2
+    ent_kind = '' if options.unresolved else '~unresolved ~unknown ~undefined'
+
+    global_object_set = set(global_objects)
+    current_level = global_objects.copy()
+    visited = set()
+
+    directly_interrupt_protected: list[Ref] = []
+
+    while current_level and depth != -1:
+        next_level = []
+        # Each destination
+        for head_ent in current_level:
+            # Avoid visiting head nodes multiple times
+            if head_ent in visited:
+                continue
+            visited.add(head_ent)
+
+            incoming_for_head: list[TraversedEdge] = []
+
+            # Get references
+            if head_ent in global_object_set:
+                refs = head_ent.refs(OBJ_REF_KIND_INVERSE, ent_kind, False)
+            else:
+                refs = head_ent.refs(fn_ref_kind, ent_kind, False)
+
+            # Each source
+            for ref in refs:
+                protected = is_directly_interrupt_protected(options.disable_fns, options.enable_fns, ref.ent(), ref)
+                if protected:
+                    directly_interrupt_protected.append(ref)
+
+                tail_ent = ref.ent()
+                edge = TraversedEdge(ref, protected)
+                incoming_for_head.append(edge)
+                next_level.append(tail_ent)
+
+                # Add outgoing edge
+                node = result.get(tail_ent)
+                if not node:
+                    result[tail_ent] = TraversedNode([], [edge])
+                else:
+                    node.outgoing.append(edge)
+
+            # Add incoming edges in one batch
+            if incoming_for_head:
+                node = result.get(head_ent)
+                if not node:
+                    result[head_ent] = TraversedNode(incoming_for_head, [])
+                else:
+                    node.incoming += incoming_for_head
+
+        # End of loop over current level
+        current_level = next_level
+        if depth >= 0:
+            depth -= 1
+
+    # Traverse the structure and mark references as interrupt-protected
+    to_visit = []
+    for ref in directly_interrupt_protected:
+        to_visit.append(ref.scope())
+    while to_visit:
+        tail = result[to_visit.pop()]
+        if any(not edge.interrupt_protected for edge in tail.incoming):
+            continue
+        for edge in tail.outgoing:
+            if edge.interrupt_protected:
+                continue
+            edge.interrupt_protected = True
+            to_visit.append(edge.ref.scope())
+
+    return result
