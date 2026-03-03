@@ -2670,6 +2670,11 @@ def get_architecture_dependency_references(
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MCP server for Understand database')
     parser.add_argument('database', type=str, help='Path to the Understand database (.und file)')
+    parser.add_argument('--transport', type=str, choices=['stdio', 'sse'], default='stdio',
+                        help='Transport to use (stdio or sse)')
+    parser.add_argument('--host', type=str, default='127.0.0.1',
+                        help='Host for SSE transport (use 0.0.0.0 for remote access)')
+    parser.add_argument('--port', type=int, default=8000, help='Port for SSE transport')
     args = parser.parse_args()
 
     # Open the Understand database and store it in the module-level variable
@@ -2684,9 +2689,15 @@ if __name__ == '__main__':
         exit(1)
 
     try:
-        mcp.run(transport="stdio")
-    except:
-        print("Failed to run MCP server.", file=sys.stderr)
+        if args.transport == "sse":
+            print(f"Starting MCP server on {args.host}:{args.port}", file=sys.stderr)
+            mcp.settings.host = args.host
+            mcp.settings.port = args.port
+            mcp.run(transport="sse")
+        else:
+            mcp.run(transport="stdio")
+    except Exception as e:
+        print(f"Failed to run MCP server: {e}", file=sys.stderr)
     finally:
         if db:
             db.close()
