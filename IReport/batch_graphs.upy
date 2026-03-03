@@ -1,0 +1,303 @@
+import understand
+import os
+
+
+GRAPH_TYPES = [
+    "Butterfly", "Calls", "Called By", "Class Invocation",
+    "Control Flow", "Data Members", "Declaration",
+    "Declaration File", "Declared In", "Depends On",
+    "Depended On By", "Include", "Parent Declaration",
+    "UML Class Diagram", "Ada Calls and Calledby"
+]
+MAX_SIZE = 100
+FILE_NAMES = {}
+
+
+def name():
+    """
+    Required, the name of the ireport.
+    """
+    return "Batch Generate Graphs"
+
+
+def description():
+    return """Generate graphs for many entities in the project.
+  <p>This report generates graphs of the selected type for many entities at once.  The graphs will be saved as image files in the specified directory along with an html index so they can be viewed easily.
+  <br><br><img src=".doc/batch_graphs.png">"""
+
+
+def test_global(db):
+    """
+    Optional method, return true for project level reports
+    """
+    return True
+
+
+def support_abort():
+    """
+    Optional method, return True if this report can be aborted.
+
+    Use report.is_aborted() to check if an abort has been requested
+    """
+    return True
+
+
+def pages(report, target):
+    """
+    Optional method for multi-page reports.
+
+    A report can have multiple pages which each become their own html
+    page, or are concantenated together in a pdf export. Implement this
+    function to return all the pageIds that belong to this report. The
+    pageId is used to construct links, and is not shown to the user.
+    """
+    return []
+
+
+def get_archs(report):
+    arch_list_strings = ["None"]
+    db = report.db()
+    root_arches = db.root_archs()
+
+    for arch in root_arches:
+        arch_list_strings.append(arch.longname())
+
+    return arch_list_strings
+
+
+# Report Options
+def init(report, target):
+    """
+    Optional method, define options that can be changed by the user
+    """
+    report.options().label(
+        "intro",
+        "This generates all of the graphs of the specified type and saves them to the selected folder. "
+        "It will also create an index.html file to browse the images. This can take some time to run."
+    )
+    report.options().choice("graph", "Graph type:",
+                            GRAPH_TYPES, GRAPH_TYPES[0])
+    report.options().choice("type", "Image Type:",
+                            ["jpg", "png", "svg", "vdx"], "jpg")
+    report.options().choice('chosen_arch',
+                            'Choose which architecture to generate graphs from (None if entire project)', get_archs(report), "None")
+    report.options().text("output_dir", "Save Directory:", os.getcwd())
+    report.options().text("options", "Option String:", "")
+    report.options().label(
+        "optioninst",
+        "The format of the options string is 'first option=value 1;second option=value 2'. "
+        "The valid names and values are the same as appear in that graphs right click menu.\n\n"
+        "Some example options string:\n"
+        "Layout=Crossing; name=Fullname;Level=All Levels\n"
+        "Display Preceding Comments=On;Display Entity Name=On"
+    )
+
+
+def make_file_name(report, ent):
+    ext = report.options().lookup("type")
+    max_length = MAX_SIZE - len(ext) - 1
+    print_name = ""
+
+    if ent.kind().check("File"):
+        print_name = f"{ent.name()}.{ext}"
+    else:
+        def_ref = ent.ref("Definein, Declarein Body")
+        file_name = def_ref.file().name() if def_ref else ""
+        print_name = f"{file_name}{ent.longname()}.{ext}"
+
+    if len(print_name) > MAX_SIZE:
+        print_name = print_name[:max_length] + f".{ext}"
+
+    print_name = print_name.replace(":", ".")
+    print_name = print_name.replace("\\", "_")
+    print_name = print_name.replace("/", "_")
+    print_name = print_name.replace("<", "_")
+    print_name = print_name.replace(">", "_")
+
+    FILE_NAMES[print_name] = FILE_NAMES.get(print_name, 0) + 1
+
+    if FILE_NAMES[print_name] > 1:
+        n = FILE_NAMES[print_name] - 1
+        print_name = print_name[:max_length - 2] + f"_{n}.{ext}"
+
+    return print_name
+
+
+def get_dec_ref(ent):
+    if not ent:
+        return []
+
+    dec_refs = []
+    language = str(ent.language()).lower()
+
+    if "ada" in language:
+        dec_order = [
+            "declarein ~spec ~body ~instance ~formal ~incomplete ~private ~stub",
+            "spec declarein",
+            "body declarein",
+            "instance declarein",
+            "formal declarein",
+            "incomplete declarein",
+            "private declarein",
+            "stub declarein"
+        ]
+
+        for dec in dec_order:
+            dec_refs = ent.refs(dec)
+
+            if dec_refs:
+                break
+    else:
+        dec_refs = ent.refs("definein")
+
+        if not dec_refs:
+            dec_refs = ent.refs("declarein")
+
+    if dec_refs:
+        return dec_refs[0]
+
+    return 0
+
+
+def write_TOC(directory, graphics, report):
+    index = f"{directory}/index.html"
+    startview = f"{directory}/startview.html"
+    toc = f"{directory}/toc.html"
+
+    with open(index, "w") as f:
+        f.write(f"<HTML><HEAD><TITLE>{directory}</TITLE>\n")
+        f.write("</HEAD>\n")
+        f.write('<FRAMESET COLS="20%,*">\n')
+        f.write('<FRAME SRC="toc.html" NAME="toc">\n')
+        f.write('<FRAME SRC="startview.html" NAME="view">\n')
+        f.write("</FRAMESET>\n</HTML>\n")
+
+    with open(startview, "w") as f:
+        f.write(" <HTML><HEAD></HEAD><BODY>\n")
+        f.write("<BR><BR><BR>Select an entity view from the list to the left")
+        f.write("</BODY></HTML>\n")
+
+    def sort_key(key):
+        ent = graphics[key]["ent"]
+
+        if ent.kind().check("file"):
+            return ent.name()
+        return ent.longname()
+
+    with open(toc, "w") as f:
+        f.write("<HTML><HEAD><TITLE>Table of Contents</TITLE>\n</HEAD>\n<BODY>\n")
+        f.write("<TABLE COLS=3>\n")
+
+        for graph_key in sorted(graphics.keys(), key=sort_key):
+            ent = graphics[graph_key]["ent"]
+            name = ent.name() if ent.kind().check("file") else ent.longname()
+
+            f.write("<TR>")
+            f.write(f"<TD COLSPAN=3>{name}")
+
+            dec_ref = get_dec_ref(ent)
+
+            if dec_ref:
+                dec_file = dec_ref.ent().relname()
+
+                if dec_file:
+                    f.write(f" ({dec_file})")
+            else:
+                report.print(f"No declaration reference for {name}\n")
+
+            f.write("<TD></TR>\n")
+
+            file = graphics[graph_key]["file_name"]
+            view = graphics[graph_key]["graph"]
+
+            f.write("<TR><TD></TD><TD></TD><TD NOWRAP>")
+            f.write(
+                f'<A HREF="{file}" TARGET=view '
+                f'onClick=\'window.status="{view} : {name} "; '
+                f'parent.document.title="{view} : {name} "; return true;\'>{view}'
+            )
+            f.write("</TD></TR>\n")
+
+        f.write("</TABLE>\n</BODY></HTML>")
+
+    return index
+
+
+# Report generation
+def generate(report, target, pageId):
+    """
+    Required, generate the report
+
+    The pageId parameter is optional. It will be an empty string the first
+    time a report is generated. On subsequent generations, it can be any
+    value returned from pages() or provided as a pageId to report.pagelink()
+    or report.breadcrumbs() functions.
+    """
+    ents = []
+    ent_ctr = 0
+    chosen_arch = report.options().lookup("chosen_arch")
+    output_dir = report.options().lookup("output_dir")
+    graph = report.options().lookup("graph")
+    skip_kinds = []
+    graphics = {}
+
+    if chosen_arch == "None":
+        ents = target.ents()
+    else:
+        arch = target.lookup_arch(chosen_arch)
+        ents = arch.ents(True)
+
+    report.print(f"Saving graph images for entities to {output_dir}\n")
+    os.makedirs(output_dir, exist_ok=True)
+
+    def sort_key(e):
+        if e.kind().check("file"):
+            return e.name()
+        return e.longname()
+
+    for ent in sorted(ents, key=sort_key):
+        if report.is_aborted():
+            report.print(f"Aborted!\n")
+
+        ent_ctr += 1
+
+        if ent.library() == "Standard" or ent.kind().longname() in skip_kinds:
+            continue
+
+        prcntg = int((ent_ctr / len(ents)) * 100)
+        report.progress(prcntg, f"{prcntg}% complete")
+
+        file_name = make_file_name(report, ent)
+        option = report.options().lookup("options")
+
+        while True:
+            try:
+                ent.draw(graph, f"{output_dir}/{file_name}", option)
+
+                report.print(
+                    f"Saving {graph} graph for '{ent.name()}' to {file_name}\n")
+
+                graphics[ent.id()] = {
+                    "ent": ent,
+                    "file_name": file_name,
+                    "graph": graph
+                }
+                break
+            except understand.UnderstandError as err:
+                err = str(err).lower()
+
+                if "unknown option" in err:
+                    option = ""
+                    report.print(
+                        f"Ignoring option string for {ent.kindname()}s\n")
+                    continue
+                else:
+                    report.print(
+                        f"Graph could not be created for '{ent.name()}' - {err}\n")
+                    break
+
+    report.progress(100, "100% Complete")
+    write_TOC(output_dir, graphics, report)
+
+    report.print(
+        f"\nFinished. You can view the graphs at {output_dir}/index.html\n\n")
