@@ -5,6 +5,7 @@ ERR1 = '#include directive should only be preceeded by other preprocessor direct
 def ids():
     return ('M16-0-1', 'CPP_PR040')
 
+
 def name(id):
     return {
         'M16-0-1': """\
@@ -14,10 +15,6 @@ All Checks/Language Specific/C and C++/Preprocessor/#include Directives Not \
 Grouped Together"""
 
     }[id]
-
-
-
-
 
 
 def tags(id):
@@ -36,6 +33,7 @@ def tags(id):
             'Preprocessor',
         ],
     }.get(id)
+
 
 # The long description of the check
 def detailed_description():
@@ -68,12 +66,41 @@ def test_language(language):
     return language == 'C++'
 
 
+def define_options(check):
+    check.options().checkbox(
+        'ignore_extc', "Ignore include directives in extern 'C' blocks", False)
+
+
+def skip_extern(lex):
+    lex = lex.next(True, True)
+
+    if lex.next(True, True).text() == "{":
+        on_block = 0
+
+        while lex:
+            if lex.text() == "{":
+                on_block += 1
+            elif lex.text() == "}":
+                on_block -= 1
+
+                if not on_block:
+                    return lex
+
+            lex = lex.next(True, True)
+    else:
+        while lex.text() != ";":
+            lex = lex.next(True, True)
+
+    return lex
+
+
 def check(check, file):
     def check_violation(_lex):
         check.violation(None, file, _lex.line_begin(),
                         _lex.column_begin(), ERR1)
 
     lexer = file.lexer(True, 8, False, False)
+    ignore_extc = check.options().lookup('ignore_extc')
 
     if not lexer:
         return
@@ -81,7 +108,10 @@ def check(check, file):
     lex = lexer.first()
 
     while lex:
-        if lex.text() == "include" and lex.token() == "Preprocessor":
+        if (ignore_extc and lex.text() == "extern"
+                and lex.next(True, True).text() == '"C"'):
+            lex = skip_extern(lex)
+        elif lex.text() == "include" and lex.token() == "Preprocessor":
             lex_prev = lexer.lexeme(lex.line_begin() - 1, 1)
             lex_next = lexer.lexeme(lex.line_end() + 1, 1)
             end_preprocessor = False
