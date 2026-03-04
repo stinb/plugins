@@ -18,9 +18,6 @@ def name(id):
     }[id]
 
 
-
-
-
 def tags(id):
     return {
         'A7-1-2': [
@@ -39,6 +36,8 @@ def tags(id):
     }.get(id)
 
 # The long description of the check
+
+
 def detailed_description():
     return '''
 <p><b>Rationale</b></p>
@@ -107,6 +106,9 @@ class A
 <p>
 • C++ Core Guidelines [11]: Con.5: Use constexpr for values that can be computed at compile time.
 </p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check can only flag const objects initialized with a string literal or other literal value.</p>
 '''
 
 
@@ -123,6 +125,19 @@ def test_language(language):
     return language == 'C++'
 
 
+def is_constexpr(ent):
+    return str(ent.freetext("AdditionalKinds")) == "Constexpr"
+
+
+def is_const(ent):
+    return str(ent.freetext("UnderlyingType")).startswith("const")
+
+
+def is_stdstring(ent):
+    return "std::basic_string<char, std::char_traits<char>, " \
+        "std::allocator<char>>" in str(ent.freetext("UnderlyingType"))
+
+
 def check(check, file):
     lexer = file.lexer(lookup_ents=False)
 
@@ -130,27 +145,43 @@ def check(check, file):
         return
 
     for obj_ref in file.filerefs("Set Init", "Object"):
-        modifies = obj_ref.ent().refs( 'Setby ~init, Modifyby, Addr Useby' )
-        if modifies:
-            continue
-        constexpr = False
-        value = obj_ref.ent().value()
-        type_ref = obj_ref.ent().ref("Typed")
-        is_macro = True if obj_ref.ent().freetext("DefinedInMacro") else False
+        obj_ent = obj_ref.ent()
 
-        if is_macro or (type_ref and type_ref.ent().kind().check("Class, Struct")):
+        if obj_ent.freetext("DefinedInMacro") or is_stdstring(
+                obj_ent) or is_constexpr(obj_ent) or not is_const(obj_ent):
             continue
 
-        if value:
-            lex = lexer.lexeme(obj_ref.line(), 1)
+        lex = lexer.lexeme(obj_ref.line(), obj_ref.column())
 
-            while lex and (lex.text() != obj_ref.ent().name()):
-                if lex.text() == "constexpr" and lex.token() == "Keyword":
-                    constexpr = True
+        if lex.next(True, True).text() != "=":
+            continue
 
-                lex = lex.next(ignore_whitespace=True,
-                               ignore_comments=True)
+        on_bracket = 0
+        on_assign = False
+        non_compliant = False
 
-            if not constexpr:
-                check.violation(obj_ref.ent(), file,
-                                obj_ref.line(), obj_ref.column(), ERR1)
+        while lex:
+            if on_assign:
+                if lex.token() in ["Literal", "String"]:
+                    non_compliant = True
+                elif lex.token() == "Identifier":
+                    non_compliant = False
+                    break
+
+            if lex.text() in "({[":
+                on_bracket += 1
+            elif lex.text() in "]})":
+                on_bracket -= 1
+
+                if on_bracket < 0:
+                    break
+            elif lex.text() == "=":
+                on_assign = True
+            elif lex.text() in ";,":
+                break
+
+            lex = lex.next(True, True)
+
+        if non_compliant:
+            check.violation(obj_ent, file, obj_ref.line(),
+                            obj_ref.column(), ERR1)
