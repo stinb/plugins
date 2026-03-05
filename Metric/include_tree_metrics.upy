@@ -154,14 +154,15 @@ def collect_tree_nodes(start_ent, ref_type, include_self):
 
     return visited
 
-# Find entities that are part of a cycle in the graph
-def find_cycle_members(adj):
+# Find strongly connected components using Tarjan's algorithm.
+# Returns SCCs in reverse topological order (sinks first).
+def find_sccs(adj):
     index_counter = [0]
     stack = []
     lowlinks = {}
     node_index = {}
     on_stack = set()
-    cycle_members = set()
+    sccs = []
     old_limit = sys.getrecursionlimit()
     sys.setrecursionlimit(max(old_limit, len(adj) + 100))
 
@@ -185,19 +186,19 @@ def find_cycle_members(adj):
                 scc.append(w)
                 if w == v:
                     break
-            if len(scc) > 1:
-                cycle_members.update(scc)
+            sccs.append(scc)
 
     for v in adj:
         if v not in node_index:
             strongconnect(v)
 
     sys.setrecursionlimit(old_limit)
-    return cycle_members
+    return sccs
 
-# Calculate maximum depth of tree
+# Calculate maximum depth of tree.
+# Uses topological ordering so non-cycle nodes are O(1) each.
+# Only cycle members require DFS.
 def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
-    # Build a cache key specific to this ref_type to avoid collision
     cache_key = f"depth_{ref_type}"
 
     # Pre-cache all refs into a dict to avoid repeated database queries
@@ -215,51 +216,58 @@ def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
             if child not in collected:
                 to_collect.append(child)
 
-    # Find cycle members so we only skip caching for those
-    cycle_members = find_cycle_members(refs_map)
+    # SCCs are returned in reverse topological order (sinks first),
+    # so we can compute depths bottom-up by iterating in order
+    sccs = find_sccs(refs_map)
 
-    visited_in_path = set()
+    depth_from = {}
 
-    def depth_recursive(ent, current_depth):
-        # Check cache for this entity's depth
-        cached_depth = und_cache.value(key=cache_key, ent=ent)
-        if cached_depth is not None:
-            return current_depth + cached_depth
+    for scc in sccs:
+        if len(scc) == 1:
+            node = scc[0]
+            # Check und_cache from a previous calculate_max_depth call
+            cached = und_cache.value(key=cache_key, ent=node)
+            if cached is not None:
+                depth_from[node] = cached
+                continue
+            max_d = 0
+            for child in refs_map.get(node, []):
+                if child == node:
+                    continue  # self-loop
+                if child in depth_from:
+                    max_d = max(max_d, depth_from[child] + 1)
+            depth_from[node] = max_d
+            und_cache.insert(max_d, key=cache_key, ent=node)
+        else:
+            # Multi-node cycle: DFS for longest simple path within the cycle
+            scc_set = set(scc)
 
-        # Check for cycles
-        if ent in visited_in_path:
-            return current_depth - 1
+            # Max depth reachable by leaving the cycle (already computed)
+            exit_depth = {}
+            for node in scc:
+                max_exit = 0
+                for child in refs_map.get(node, []):
+                    if child not in scc_set and child in depth_from:
+                        max_exit = max(max_exit, depth_from[child] + 1)
+                exit_depth[node] = max_exit
 
-        visited_in_path.add(ent)
+            def scc_depth(node, visited):
+                best = exit_depth[node]
+                visited.add(node)
+                for child in refs_map.get(node, []):
+                    if child in scc_set and child not in visited:
+                        best = max(best, scc_depth(child, visited) + 1)
+                visited.remove(node)
+                return best
 
-        # Get children from pre-cached refs
-        children = refs_map.get(ent, [])
+            for node in scc:
+                cached = und_cache.value(key=cache_key, ent=node)
+                if cached is not None:
+                    depth_from[node] = cached
+                else:
+                    depth_from[node] = scc_depth(node, set())
 
-        if not children:
-            visited_in_path.remove(ent)
-            und_cache.insert(0, key=cache_key, ent=ent)
-            return current_depth
-
-        max_child_depth = current_depth
-        for child in children:
-            max_child_depth = max(max_child_depth, depth_recursive(child, current_depth + 1))
-
-        visited_in_path.remove(ent)
-
-        # Only cache if not a cycle member (cycle members' depths are context-dependent)
-        if ent not in cycle_members:
-            depth_from_here = max_child_depth - current_depth
-            und_cache.insert(depth_from_here, key=cache_key, ent=ent)
-
-        return max_child_depth
-
-    if include_self:
-        return depth_recursive(start_ent, 0)
-    else:
-        max_depth = 0
-        for child in refs_map.get(start_ent, []):
-            max_depth = max(max_depth, depth_recursive(child, 1))
-        return max_depth
+    return depth_from.get(start_ent, 0)
 
 # Sum a specific metric across all entities
 def sum_metric(entities, metric_name):
