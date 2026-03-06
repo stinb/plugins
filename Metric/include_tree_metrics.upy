@@ -1,6 +1,5 @@
 import und_lib.kind_util as kind_util
 import understand
-import sys
 
 def ids():
     return [
@@ -99,23 +98,18 @@ def calculate_metric(metric_id, und_cache, ent):
         include_self = True
 
     # Calculate the requested metric
-    if metric_id == "IncludeDepth" or metric_id == "IncludeByDepth":
+    suffix = metric_id.replace("IncludeBy", "").replace("Include", "")
+
+    if suffix == "Depth":
         result = calculate_max_depth(ent, ref_type, include_self, und_cache)
     else:
-        # Collect unique nodes in the tree
         unique_nodes = collect_tree_nodes(ent, ref_type, include_self)
 
-        if metric_id == "IncludeNodes":
+        if suffix == "Nodes":
             result = len(unique_nodes)
-        elif metric_id == "IncludeByNodes":
-            result = len(unique_nodes)
-        elif metric_id == "IncludeSumCyclomatic":
+        elif suffix == "SumCyclomatic":
             result = sum_metric(unique_nodes, "SumCyclomatic")
-        elif metric_id == "IncludeCountLineCode":
-            result = sum_metric(unique_nodes, "CountLineCode")
-        elif metric_id == "IncludeBySumCyclomatic":
-            result = sum_metric(unique_nodes, "SumCyclomatic")
-        elif metric_id == "IncludeByCountLineCode":
+        elif suffix == "CountLineCode":
             result = sum_metric(unique_nodes, "CountLineCode")
         else:
             result = None
@@ -126,6 +120,9 @@ def calculate_metric(metric_id, und_cache, ent):
 
     return result
 
+def get_refs(ent, ref_type):
+    return ent.refs(ref_type) if ref_type == "includeby" else ent.filerefs(ref_type)
+
 # Traverse the tree and collect all unique nodes
 def collect_tree_nodes(start_ent, ref_type, include_self):
     visited = set()
@@ -134,9 +131,7 @@ def collect_tree_nodes(start_ent, ref_type, include_self):
     if include_self:
         to_visit.append(start_ent)
     else:
-        # Start with direct references, not including self
-        refs = start_ent.refs(ref_type) if ref_type == "includeby" else start_ent.filerefs(ref_type)
-        for ref in refs:
+        for ref in get_refs(start_ent, ref_type):
             to_visit.append(ref.ent())
 
     while to_visit:
@@ -145,129 +140,49 @@ def collect_tree_nodes(start_ent, ref_type, include_self):
             continue
         visited.add(current)
 
-        # Add children to visit
-        refs = current.refs(ref_type) if ref_type == "includeby" else current.filerefs(ref_type)
-        for ref in refs:
+        for ref in get_refs(current, ref_type):
             child = ref.ent()
             if child not in visited:
                 to_visit.append(child)
 
     return visited
 
-# Find strongly connected components using Tarjan's algorithm.
-# Returns SCCs in reverse topological order (sinks first).
-def find_sccs(adj):
-    index_counter = [0]
-    stack = []
-    lowlinks = {}
-    node_index = {}
-    on_stack = set()
-    sccs = []
-    old_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(max(old_limit, len(adj) + 100))
-
-    def strongconnect(v):
-        node_index[v] = index_counter[0]
-        lowlinks[v] = index_counter[0]
-        index_counter[0] += 1
-        stack.append(v)
-        on_stack.add(v)
-        for w in adj.get(v, []):
-            if w not in node_index:
-                strongconnect(w)
-                lowlinks[v] = min(lowlinks[v], lowlinks[w])
-            elif w in on_stack:
-                lowlinks[v] = min(lowlinks[v], node_index[w])
-        if lowlinks[v] == node_index[v]:
-            scc = []
-            while True:
-                w = stack.pop()
-                on_stack.remove(w)
-                scc.append(w)
-                if w == v:
-                    break
-            sccs.append(scc)
-
-    for v in adj:
-        if v not in node_index:
-            strongconnect(v)
-
-    sys.setrecursionlimit(old_limit)
-    return sccs
-
-# Calculate maximum depth of tree.
-# Uses topological ordering so non-cycle nodes are O(1) each.
-# Only cycle members require DFS.
+# Calculate maximum depth of tree, returning -1 for recursive/cyclic paths.
 def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
-    cache_key = f"depth_{ref_type}"
+    visited = set()
 
-    # Pre-cache all refs into a dict to avoid repeated database queries
-    refs_map = {}
-    to_collect = [start_ent]
-    collected = set()
-    while to_collect:
-        cur = to_collect.pop()
-        if cur in collected:
-            continue
-        collected.add(cur)
-        children = [r.ent() for r in (cur.refs(ref_type) if ref_type == "includeby" else cur.filerefs(ref_type))]
-        refs_map[cur] = children
-        for child in children:
-            if child not in collected:
-                to_collect.append(child)
+    def depth(ent):
+        cached_value = und_cache.value(key="depth", ent=ent)
+        if cached_value is not None:
+            return cached_value
 
-    # SCCs are returned in reverse topological order (sinks first),
-    # so we can compute depths bottom-up by iterating in order
-    sccs = find_sccs(refs_map)
+        if ent in visited:
+            return -1
+        visited.add(ent)
 
-    depth_from = {}
+        refs = get_refs(ent, ref_type)
+        max_d = -1
+        for ref in refs:
+            d = depth(ref.ent())
+            if d == -1:
+                und_cache.insert(-1, key="depth", ent=ent)
+                return -1
+            max_d = max(max_d, d)
 
-    for scc in sccs:
-        if len(scc) == 1:
-            node = scc[0]
-            # Check und_cache from a previous calculate_max_depth call
-            cached = und_cache.value(key=cache_key, ent=node)
-            if cached is not None:
-                depth_from[node] = cached
-                continue
-            max_d = 0
-            for child in refs_map.get(node, []):
-                if child == node:
-                    continue  # self-loop
-                if child in depth_from:
-                    max_d = max(max_d, depth_from[child] + 1)
-            depth_from[node] = max_d
-            und_cache.insert(max_d, key=cache_key, ent=node)
-        else:
-            # Multi-node cycle: DFS for longest simple path within the cycle
-            scc_set = set(scc)
+        result = max_d + 1
+        und_cache.insert(result, key="depth", ent=ent)
+        return result
 
-            # Max depth reachable by leaving the cycle (already computed)
-            exit_depth = {}
-            for node in scc:
-                max_exit = 0
-                for child in refs_map.get(node, []):
-                    if child not in scc_set and child in depth_from:
-                        max_exit = max(max_exit, depth_from[child] + 1)
-                exit_depth[node] = max_exit
-
-            def scc_depth(node, visited):
-                best = exit_depth[node]
-                visited.add(node)
-                for child in refs_map.get(node, []):
-                    if child in scc_set and child not in visited:
-                        best = max(best, scc_depth(child, visited) + 1)
-                visited.remove(node)
-                return best
-
-            for node in scc:
-                cached = und_cache.value(key=cache_key, ent=node)
-                if cached is not None:
-                    depth_from[node] = cached
-                else:
-                    depth_from[node] = scc_depth(node, set())
-
-    return depth_from.get(start_ent, 0)
+    if include_self:
+        return depth(start_ent)
+    else:
+        max_d = -1
+        for ref in get_refs(start_ent, ref_type):
+            d = depth(ref.ent())
+            if d == -1:
+                return -1
+            max_d = max(max_d, d)
+        return max_d + 1 if max_d >= 0 else 0
 
 # Sum a specific metric across all entities
 def sum_metric(entities, metric_name):
