@@ -1,0 +1,257 @@
+ERR1 = 'Object is assigned to an overlapping object'
+
+
+# The ID for the check
+def ids():
+    return ('M0-2-1', 'CPP_T046', 'MISRA23_8.18.1')
+
+
+def name(id):
+    return {
+        'M0-2-1': """\
+Published Standards/AUTOSAR/Assigning Object to an Overlapping Object""",
+        'CPP_T046': """\
+All Checks/Language Specific/C and C++/Types/Assigning Object to an Overlapping Object""",
+        'MISRA23_8.18.1': """Published Standards/MISRA C++ 2023/8.18.1 \
+An object or subobject must not be copied to an overlapping object""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'M0-2-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Types',
+        ],
+        'CPP_T046': [
+            'Language: C',
+            'Language: C++',
+            'Types',
+        ],
+        'MISRA23_8.18.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Mandatory',
+            'Expressions',
+        ]
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return {
+        'MISRA23_8.18.1': """
+<p><b>Amplification</b></p>
+<p>This rule applies when:</p>
+<p>● A member of a union is copied to a different member of the same union; or</p>
+<p>● A slice of an array is copied to an overlapping slice of the same array using memcpy.</p>
+
+<p><b>Rationale</b></p>
+<p>Copying between members of the same union object may result in undefined behaviour.</p>
+<p>If part of an array is to be copied to another part of the same array (e.g. when moving elements 1 to
+10 to elements 0 to 9), then std::memcpy may overwrite an element before it has been copied, as
+there is no guarantee of the order in which they are copied. By contrast, std::memmove is guaranteed
+to handle the overlap appropriately.</p>
+
+<p><b>Example</b></p>
+<p>The use of unions in the following example is a violation of Rule 12.3.1.</p>
+<pre><code language="C++">void f1( void )
+{
+    union
+    {
+        int16_t i;
+        int32_t j;
+    } a = { 0 };
+
+    a.i = a.i; // Rule does not apply - same member
+    a.j = a.i; // Non-compliant
+}
+void f2( std::array< int16_t, 20 > & a )
+{
+    memcpy ( &a[ 0 ], &a[ 1 ], 10u * sizeof ( a[ 0 ] ) ); // Non-compliant
+    memmove( &a[ 0 ], &a[ 1 ], 10u * sizeof ( a[ 0 ] ) ); // Rule does not apply
+    memcpy ( &a[ 1 ], &a[ 0 ], 10u * sizeof ( a[ 0 ] ) ); // Non-compliant
+    memmove( &a[ 1 ], &a[ 0 ], 10u * sizeof ( a[ 0 ] ) ); // Rule does not apply
+    memcpy ( &a[ 0 ], &a[ 5 ], 5u * sizeof ( a[ 0 ] ) ); // Compliant - no overlap
+}</code></pre>
+
+<p><b>Developer's Note:</b><br>
+<p>This check automatically flags memcpy calls that use the same array as both the source and destination.</p>
+""",
+        'M0-2-1': """
+<p><b>Rule</b></p>
+<p>An object shall not be assigned to an overlapping
+object.</p>
+<p><b>Rationale</b></p>
+<p>Assigning between objects that have an overlap in their physical storage leads to undefined
+behaviour.</p>
+<p><b>Developer's Note:</b><br>
+<p>This check can only evalute simple assignment expressions.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">struct s
+{
+ int16_t m1 [ 32 ];
+};
+struct t
+{
+ int32_t m2;
+ struct s m3;
+};
+void fn ( )
+{
+ union // Breaks Rule 9-5-1
+ {
+ struct s u1;
+ struct t u2;
+ } a;
+ a.u2.m3 = a.u1; // Non-compliant
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>Rule 9-5-1</p>
+""",
+        'CPP_T046': """
+<p><b>Rule</b></p>
+<p>An object shall not be assigned to an overlapping
+object.</p>
+<p><b>Rationale</b></p>
+<p>Assigning between objects that have an overlap in their physical storage leads to undefined
+behaviour.</p>
+<p><b>Developer's Note:</b><br>
+<p>This check can only evalute simple assignment expressions.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">struct s
+{
+ int16_t m1 [ 32 ];
+};
+struct t
+{
+ int32_t m2;
+ struct s m3;
+};
+void fn ( )
+{
+ union // Breaks Rule 9-5-1
+ {
+ struct s u1;
+ struct t u2;
+ } a;
+ a.u2.m3 = a.u1; // Non-compliant
+}
+</code></pre>
+<p><b>See also</b></p>
+<p>Rule 9-5-1</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def define_options(check):
+    check.options().checkbox('check_memcpy',
+                             'Check memcpy calls using the same array as both source and destination',
+                             check.id() == 'MISRA23_8.18.1')
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
+        typed_ref = typed_ref.ent().ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
+def get_membs(ent):
+    members = []
+
+    for mem_ref in ent.refs("Define", "Member Object"):
+        members.append(mem_ref.ent())
+        etype, _ = get_ent_type(mem_ref.ent())
+
+        if etype and etype.kind().check("Struct Type, Class Type"):
+            members.extend(get_membs(etype))
+
+    return members
+
+
+def check(check, file):
+    check_memcpy = check.options().lookup('check_memcpy')
+
+    for union_ref in file.filerefs("Define", "Union Type"):
+        members = get_membs(union_ref.ent())
+        members = list(set(members))
+
+        for memb in members:
+            for ass_ref in memb.refs("Assign"):
+                if ass_ref.ent().id() == memb.id():
+                    continue
+
+                def_ref = ass_ref.ent().ref("Definein")
+
+                if def_ref and def_ref.ent().id() == union_ref.ent().id():
+                    check.violation(memb, ass_ref.file(),
+                                    ass_ref.line(), ass_ref.column(), ERR1)
+
+    if not check_memcpy:
+        return
+
+    lexer = file.lexer()
+
+    for call_ref in file.filerefs("Call", "Function ~Lambda ~Macro ~Template"):
+        if call_ref.ent().name() != "memcpy":
+            continue
+
+        lex = lexer.lexeme(call_ref.line(), call_ref.column())
+        on_param = 0
+        param = 0
+        arr_dest = None
+
+        while lex:
+            if lex.text() == "(":
+                on_param += 1
+            elif lex.text() == ")":
+                on_param -= 1
+
+                if not on_param:
+                    break
+            elif on_param == 1 and lex.text() == ",":
+                param += 1
+
+                if param > 0 and not arr_dest:
+                    break
+            elif on_param == 1 and param == 0 and lex.ent():
+                utype = str(lex.ent().freetext("UnderlyingType"))
+
+                if "std::array" not in utype:
+                    break
+
+                arr_dest = lex.ent()
+            elif on_param == 1 and param == 1 and lex.ent():
+                if lex.ent().id() == arr_dest.id():
+                    check.violation(
+                        arr_dest, file, call_ref.line(), call_ref.column(), ERR1)
+                break
+
+            lex = lex.next(True, True)
