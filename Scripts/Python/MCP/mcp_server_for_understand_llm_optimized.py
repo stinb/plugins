@@ -1,5 +1,8 @@
 import argparse
+import asyncio
 import base64
+import functools
+import inspect
 import json
 import os
 import re
@@ -19,6 +22,8 @@ if "UNDERSTAND_DLL_DIR" in os.environ:
 
 import understand
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # Define MCP server instance
 mcp = FastMCP("UNDERSTAND_MCP")
@@ -26,11 +31,88 @@ mcp = FastMCP("UNDERSTAND_MCP")
 # Global variable to store the opened database
 db = None
 
+# Draining for admin release/open: allow concurrent reads, block release until no active tool calls
+_db_condition = asyncio.Condition()
+_db_active_requests = 0
+_db_closing = False
+
+
+def with_db_draining(fn):
+    """Decorator: block new tool calls when db is closing; track active calls so release can wait for drain."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        global _db_active_requests, _db_closing
+        async with _db_condition:
+            if _db_closing:
+                raise RuntimeError("Database is being reloaded; please retry in a moment.")
+            _db_active_requests += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            async with _db_condition:
+                _db_active_requests -= 1
+                _db_condition.notify_all()
+    wrapper.__signature__ = inspect.signature(fn)
+    return wrapper
+
+
 def require_db() -> understand.Db:
     """Ensure the database is open and return it."""
     if db is None:
         raise RuntimeError("Database is not open")
     return db
+
+
+# Admin endpoints (used when running in SSE mode; Understand GUI calls these to release/open DB)
+@mcp.custom_route("/admin/release", methods=["POST"], include_in_schema=False)
+async def admin_release(request: Request):
+    """Release the database so it can be updated. Waits for in-flight tool calls to finish, then closes."""
+    global db, _db_closing
+    async with _db_condition:
+        _db_closing = True
+        await _db_condition.wait_for(lambda: _db_active_requests == 0)
+        if db is not None:
+            try:
+                db.close()
+            finally:
+                db = None
+        _db_closing = False
+    return JSONResponse({"status": "released"})
+
+
+@mcp.custom_route("/admin/open", methods=["POST"], include_in_schema=False)
+async def admin_open(request: Request):
+    """Open an Understand database. Body must be JSON with required key database_path (full path to .und)."""
+    global db, _db_closing
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    path = body.get("database_path") if isinstance(body, dict) else None
+    if not path or not isinstance(path, str):
+        return JSONResponse({"error": "Missing or invalid database_path"}, status_code=400)
+    path = path.strip()
+    if not path:
+        return JSONResponse({"error": "database_path cannot be empty"}, status_code=400)
+    async with _db_condition:
+        _db_closing = True
+        await _db_condition.wait_for(lambda: _db_active_requests == 0)
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+            db = None
+        _db_closing = False
+    try:
+        new_db = understand.open(path)
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to open database: {e}"}, status_code=500)
+    if not new_db:
+        return JSONResponse({"error": f"Failed to open database: {path}"}, status_code=500)
+    db = new_db
+    return JSONResponse({"status": "opened", "database_path": path})
+
 
 def get_filterable_kind_name(ent) -> str:
     """
@@ -485,6 +567,7 @@ def expand_containers_in_architecture(arch: understand.Arch, kindstring: str, re
     return matching_entities
 
 @mcp.tool(name="lookup_entity_id")
+@with_db_draining
 def lookup_entity_id(
     name: Annotated[str, Field(description="The name or regex pattern to search for in the Understand database.")],
     kindstring: Annotated[str, Field(description="Entity kind filter to narrow the search (e.g., 'Function', 'File', 'Class'). Use empty string or omit for no filter.", default="")] = "",
@@ -544,6 +627,7 @@ def lookup_entity_id(
     return response
 
 @mcp.tool(name="get_entity_details")
+@with_db_draining
 def get_entity_details(
     ent_id: Annotated[int, Field(description="The entity ID to get full details for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand and cannot be guessed. You must discover the correct entity ID first using lookup_entity_id(name='...') or list_entities(...). Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
 ) -> dict:
@@ -613,6 +697,7 @@ def get_entity_details(
     return result
 
 @mcp.tool(name="get_entity_source")
+@with_db_draining
 def get_entity_source(
     ent_id: Annotated[int, Field(description="The entity ID to get source code for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand and cannot be guessed. You must discover the correct entity ID first using lookup_entity_id(name='...') or list_entities(kindstring='File', name_pattern='...'). Do not assume entity IDs are sequential (e.g., 1, 2, 3) or reuse IDs from unrelated entities.", ge=1)],
     start_line: Annotated[int, Field(description="Start line number (1-based). Use 0 or omit for full range. If specified, only returns code from this line onwards.", default=0)] = 0,
@@ -699,6 +784,7 @@ def get_entity_source(
     }
 
 @mcp.tool(name="get_entity_references_summary")
+@with_db_draining
 def get_entity_references_summary(
     ent_id: Annotated[int, Field(description="The entity ID to get a summary of references for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
 ) -> dict:
@@ -760,6 +846,7 @@ def get_entity_references_summary(
     }
 
 @mcp.tool(name="get_entity_references_by_file")
+@with_db_draining
 def get_entity_references_by_file(
     ent_id: Annotated[int, Field(description="The entity ID to get references grouped by file for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
     refkindstring: Annotated[str, Field(description="Reference kind filter to filter references before grouping by file. Use empty string or omit for no filter. Note: This filters based on how the entity references things, not how things reference the entity. For example, filtering by 'Type' on a class will show files where the class has Type references, not files that use the class as a type.", default="")] = "",
@@ -822,6 +909,7 @@ def get_entity_references_by_file(
     }
 
 @mcp.tool(name="get_entity_references")
+@with_db_draining
 def get_entity_references(
     ent_id: Annotated[int, Field(description="The entity ID to get references for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
     refkindstring: Annotated[str, Field(description="Reference kind filter by TYPE OF RELATIONSHIP (e.g., 'C Call', 'C Use', 'C Define', 'C Set'). Use empty string or omit for no filter. Use forward kinds (e.g., 'call', 'definein', 'use', 'set') for forward references, or reverse kinds (e.g., 'callby', 'useby', 'setby') for reverse references. Multiple kinds can be comma-separated. IMPORTANT: This filters by reference relationship type, NOT by entity kind. To filter by entity kind (e.g., Parameter, Function), use entkindstring instead.", default="")] = "",
@@ -923,6 +1011,7 @@ def get_entity_references(
     return response
 
 @mcp.tool(name="list_metrics_summary")
+@with_db_draining
 def list_metrics_summary(
     kindstring: Annotated[str, Field(description="Entity kind filter to list only metrics applicable to specific entity kinds (e.g., 'Function', 'File', 'Class'). Use empty string or omit for all metrics.", default="")] = "",
     include_disabled: Annotated[bool, Field(description="If True, returns all known metrics (enabled and disabled). If False (default), returns only enabled metrics. Note: metric values can be calculated even if metrics are disabled, but enabling controls visibility in the UI.")] = False,
@@ -990,6 +1079,7 @@ def list_metrics_summary(
     return response
 
 @mcp.tool(name="get_metric_details")
+@with_db_draining
 def get_metric_details(
     metric_ids: Annotated[List[str], Field(description="List of metric IDs to get full details for, including descriptions.")],
 ) -> List[dict]:
@@ -1035,6 +1125,7 @@ def get_metric_details(
     return results
 
 @mcp.tool(name="get_entity_metrics")
+@with_db_draining
 def get_entity_metrics(
     ent_id: Annotated[int, Field(description="The entity ID to get metrics for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
     metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available metrics for the entity. Note: metric values can be calculated even if the metric is disabled (not visible in UI).", default=[])] = [],
@@ -1133,6 +1224,7 @@ def get_entity_metrics(
     }
 
 @mcp.tool(name="get_project_overview")
+@with_db_draining
 def get_project_overview() -> dict:
     """
     Get high-level project statistics and overview information.
@@ -1173,6 +1265,7 @@ def get_project_overview() -> dict:
     }
 
 @mcp.tool(name="find_entities_by_metric")
+@with_db_draining
 def find_entities_by_metric(
     metric_id: Annotated[str, Field(description="The metric ID to filter by (e.g., 'Cyclomatic', 'CountLine', 'MaxNesting').")],
     arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit for project-wide or ent_id scope. If provided, filters to entities within that architecture (expanding containers to find nested entities). Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.", default="")] = "",
@@ -1282,6 +1375,7 @@ def find_entities_by_metric(
     return response
 
 @mcp.tool(name="get_project_violations_summary")
+@with_db_draining
 def get_project_violations_summary() -> dict:
     """
     Get summary of all violations in the project grouped by check ID.
@@ -1328,6 +1422,7 @@ def get_project_violations_summary() -> dict:
     }
 
 @mcp.tool(name="get_project_violations")
+@with_db_draining
 def get_project_violations(
     check_id: Annotated[str, Field(description="Violation check ID to filter by specific rule/check (e.g., 'MISRA_C_2012_8.4', 'UND_WARNING', 'CERT_C_2012_STR31_C'). Use empty string or omit for all checks. Use get_project_violations_summary to see available check IDs.", default="")] = "",
     file_path: Annotated[str, Field(description="File path filter (substring match). Use empty string or omit for all files. Can be absolute path, relative path, or filename. Note: violations store absolute file paths, and violations can exist outside of project files.", default="")] = "",
@@ -1420,6 +1515,7 @@ def get_project_violations(
     return response
 
 @mcp.tool(name="get_project_metrics")
+@with_db_draining
 def get_project_metrics(
     metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available project-level metrics.")] = [],
 ) -> dict:
@@ -1479,6 +1575,7 @@ def get_project_metrics(
     }
 
 @mcp.tool(name="list_entities")
+@with_db_draining
 def list_entities(
     arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit for project-wide or ent_id scope. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures. Can be combined with ent_id to find entities in a file that also belong to a specific architecture.", default="")] = "",
     ent_id: Annotated[int, Field(description="Entity ID to search within (e.g., file, class, package). Use 0 or omit for project/arch scope. If provided, finds entities within this entity. Can be combined with arch_name.", default=0)] = 0,
@@ -1567,6 +1664,7 @@ def list_entities(
     return response
 
 @mcp.tool(name="list_architectures_summary")
+@with_db_draining
 def list_architectures_summary() -> dict:
     """
     List root architectures in the project. An architecture is a hierarchical grouping of entities.
@@ -1596,6 +1694,7 @@ def list_architectures_summary() -> dict:
     }
 
 @mcp.tool(name="directory_to_architecture")
+@with_db_draining
 def directory_to_architecture(
     directory_path: Annotated[str, Field(description="Full path to a directory to convert to an architecture longname.")],
 ) -> dict:
@@ -1671,6 +1770,7 @@ SORTED_ENTITIES_MAX_NOT_COMPACT = 15
 
 
 @mcp.tool(name="get_architecture_details")
+@with_db_draining
 def get_architecture_details(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get details for. Use list_architectures_summary to discover root architecture names.")],
     compact: Annotated[bool, Field(description="If True (default), returns shorter lists.")] = True,
@@ -1808,6 +1908,7 @@ def get_architecture_details(
     return result
 
 @mcp.tool(name="get_architectures_for_entity")
+@with_db_draining
 def get_architectures_for_entity(
     ent_id: Annotated[int, Field(description="The entity ID to find architectures for. IMPORTANT: Entity IDs are arbitrary numbers assigned by Understand. Use lookup_entity_id(name='...') first to discover the correct entity ID. Do not assume entity IDs are sequential or reuse IDs from unrelated entities.", ge=1)],
     implicit: Annotated[bool, Field(description="If True, also returns architectures that contain any of the entity's parents. Default is False.",)] = False,
@@ -1852,6 +1953,7 @@ def get_architectures_for_entity(
     }
 
 @mcp.tool(name="get_architecture_children")
+@with_db_draining
 def get_architecture_children(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get children for. Use list_architectures_summary to discover root architecture names.")],
     max_results: Annotated[int, Field(description="Maximum number of child architectures to return. Default is 30.", ge=1, le=500)] = 30,
@@ -1899,6 +2001,7 @@ def get_architecture_children(
     return response
 
 @mcp.tool(name="get_architecture_metrics")
+@with_db_draining
 def get_architecture_metrics(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get metrics for. Use list_architectures_summary to discover root architecture names.")],
     metric_ids: Annotated[List[str], Field(description="List of specific metric IDs to retrieve. Pass an empty list [] to return all available metrics for the architecture.", default=[])] = [],
@@ -1993,6 +2096,7 @@ def get_architecture_metrics(
     }
 
 @mcp.tool(name="get_architecture_intersection")
+@with_db_draining
 def get_architecture_intersection(
     source_arch_name: Annotated[str, Field(description="Longname of the source architecture to get entities from (e.g., 'Git Owner/Jason Haslam', 'Key Functions').")],
     group_by_arch_name: Annotated[str, Field(description="Longname of the architecture to group entities by (e.g., 'Directory Structure', 'Git Owner'). Defaults to 'Directory Structure' if not specified.", default="Directory Structure")] = "Directory Structure",
@@ -2107,6 +2211,7 @@ def get_architecture_intersection(
     }
 
 @mcp.tool(name="get_entities_grouped_by_pattern")
+@with_db_draining
 def get_entities_grouped_by_pattern(
     pattern: Annotated[str, Field(description="Regular expression pattern to match entity names. Can include capture groups for grouping. Use (?i) prefix for case-insensitive matching.")],
     arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit for project-wide. If provided, filters to entities within that architecture. Use list_architectures_summary to discover available architectures.", default="")] = "",
@@ -2350,6 +2455,7 @@ def tokenize_name(name: str, include_numbers: bool = True, numbers_as_separators
 MAX_ENTITIES_FOR_NAME_ANALYSIS = 10000
 
 @mcp.tool(name="get_entity_name_parts_frequency")
+@with_db_draining
 def get_entity_name_parts_frequency(
     arch_name: Annotated[str, Field(description="Architecture longname. Use empty string or omit to analyze all entities in the database (project-wide). Use list_architectures_summary to discover available architectures.", default="")] = "",
     kindstring: Annotated[str, Field(description="Entity kind filter (e.g., 'File', 'Function', 'Class'). Use empty string or omit for no filter.", default="")] = "",
@@ -2467,6 +2573,7 @@ def get_entity_name_parts_frequency(
     }
 
 @mcp.tool(name="get_architecture_dependencies")
+@with_db_draining
 def get_architecture_dependencies(
     arch_name: Annotated[str, Field(description="Longname of the architecture to get dependencies for. Use list_architectures_summary to discover root architecture names.")],
     forward: Annotated[bool, Field(description="If True, returns what this architecture depends on (outgoing). If False, returns what depends on this architecture (incoming). Default is True.")] = True,
@@ -2530,6 +2637,7 @@ def get_architecture_dependencies(
     return response
 
 @mcp.tool(name="get_architecture_dependency_summary")
+@with_db_draining
 def get_architecture_dependency_summary(
     arch_name: Annotated[str, Field(description="Longname of the source architecture.")],
     other_arch_name: Annotated[str, Field(description="Longname of the target architecture to get dependency details for.")],
@@ -2592,6 +2700,7 @@ def get_architecture_dependency_summary(
     }
 
 @mcp.tool(name="get_architecture_dependency_references")
+@with_db_draining
 def get_architecture_dependency_references(
     arch_name: Annotated[str, Field(description="Longname of the source architecture.")],
     other_arch_name: Annotated[str, Field(description="Longname of the target architecture.")],
