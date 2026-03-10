@@ -152,9 +152,16 @@ def refBeforeRef(cfg: CFGraph, refA: Ref, refB: Ref) -> bool:
     if not nodeA:
         return False
 
-    # Find a node afterward with ref B
-    stack: list[CFNode] = [nodeA]
+    # Check if refB is in the same node as refA — only count it if refB is
+    # actually after refA by line/column position within the node
+    if refInNode(refB, nodeA) and refAfterRef(refA, refB):
+        return True
+
+    # Search child nodes reachable from nodeA
     seen: set[CFNode] = {nodeA}
+    stack: list[CFNode] = list(nodeA.children())
+    for child in stack:
+        seen.add(child)
     while stack:
         node = stack.pop()
         if refInNode(refB, node):
@@ -165,6 +172,15 @@ def refBeforeRef(cfg: CFGraph, refA: Ref, refB: Ref) -> bool:
             seen.add(child)
             stack.append(child)
 
+    return False
+
+
+# Whether refB comes strictly after refA by line/column
+def refAfterRef(refA: Ref, refB: Ref) -> bool:
+    if refB.line() > refA.line():
+        return True
+    if refB.line() == refA.line() and refB.column() > refA.column():
+        return True
     return False
 
 

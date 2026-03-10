@@ -1,0 +1,420 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-03-06
+
+
+from Modules import refBeforeRef
+from understand import CFGraph, Ent, Ref
+
+
+ERR1 = 'Object accessed after delete'
+ERR2 = 'Object accessed after explicit destructor call'
+ERR3 = 'Non-active union member accessed'
+
+
+def ids():
+    return ('MISRA23_6.8.1', 'CPP_M024')
+
+
+def name(id):
+    return {
+        'MISRA23_6.8.1': '''Published Standards/MISRA C++ 2023/\
+6.8.1 An object shall not be accessed outside of its lifetime''',
+        'CPP_M024': '''All Checks/Language Specific/C and C++/Memory Allocation/\
+An object shall not be accessed outside of its lifetime''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_6.8.1': [
+            'Memory Allocation',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+        ],
+        'CPP_M024': [
+            'Memory Allocation',
+            'Language: C++',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Amplification</b></p>
+
+<p>Technically, a C++ object does not exist outside of its lifetime. However, for
+the purposes of this rule, a violation occurs whenever a memory location that
+does not contain a live object of an appropriate type is accessed.</p>
+
+<p><b>Rationale</b></p>
+
+<p>It is undefined behaviour to access an object before it has been initialized or
+after its lifetime has ended (even if the memory occupied by the object has not
+been released).</p>
+
+<p>It is possible to refer to an object before its lifetime has begun, for example,
+by referring to a non-active member of a union.</p>
+
+<p>Compliance with the rules cross-referenced by this rule helps to prevent lifetime
+violations.</p>
+
+<p><b>Example</b></p>
+
+<pre><code language="C++">\
+// Pattern 1: Use after delete
+void f() {
+  int *pi = new int{42};
+  delete pi;
+  int x = *pi;  // Non-compliant
+}
+
+// Pattern 2: Use after explicit destructor call
+struct X { void doSomething(); };
+void h(X *px) {
+  px->~X();
+  px->doSomething();  // Non-compliant
+}
+
+// Pattern 3: Non-active union member
+union u { int a; short b[2]; };
+short g() {
+  u o;
+  o.a = 42;
+  return o.b[0];  // Non-compliant - b is not the active member
+}\
+</code></pre>
+
+<p><b>See also</b></p>
+
+<p>Rule 6.7.2, Rule 6.8.2, Rule 6.8.3, Rule 6.8.4, Rule 9.5.2, Rule 12.3.1,
+Rule 18.3.3</p>
+
+<p><b>Developer's Notes</b></p>
+
+<p>This check detects simple, intra-function lifetime violations: use after delete,
+use after explicit destructor call, and non-active union member access.</p>
+
+<p>Cross-function and cross-file lifetime violations are not detected. Cases
+involving aliasing (e.g., two pointers to the same object, only one deleted) are
+not detected. Violations through branches are handled via CFG reachability
+analysis, but complex control flow may lead to false positives or false
+negatives. Dangling references to temporaries are not currently detected.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('Header File, Code File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    for fnRef in file.filerefs('Define', 'Function'):
+        fn = fnRef.ent()
+
+        cfg = fn.control_flow_graph()
+        if not cfg:
+            continue
+
+        checkUseAfterDelete(check, file, fn, cfg)
+        checkUseAfterDestructor(check, file, fn, cfg)
+        checkUnionMember(check, file, fn, cfg)
+
+
+def checkUseAfterDelete(check, file, fn, cfg):
+    # Find all calls to operator delete / operator delete[] in this function
+    deleteRefs = []
+    for ref in fn.refs('Call', 'Function'):
+        if ref.file() != file:
+            continue
+        entName = ref.ent().name()
+        if entName in ('operator delete', 'operator delete[]'):
+            deleteRefs.append(ref)
+
+    if not deleteRefs:
+        return
+
+    # For each delete call, find the entity being deleted via lexeme walk
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    for deleteRef in deleteRefs:
+        deletedEnt = getDeletedEntity(lexer, deleteRef)
+        if not deletedEnt:
+            continue
+
+        # Collect Set refs for the deleted entity (pointer reassignments),
+        # including Deref Set for double-pointer cases like *variable = new ...
+        setRefs = []
+        for ref in deletedEnt.refs('Setby, Modifyby, Deref Setby, Deref Modifyby', '~Unresolved'):
+            if ref.ent() == fn and ref.file() == file:
+                setRefs.append(ref)
+
+        # Only check dereference uses — plain Setby/Modifyby on the pointer
+        # itself is just reassignment, not accessing freed memory
+        for useRef in deletedEnt.refs('Useby, Deref Useby, Deref Setby, Deref Modifyby', '~Unresolved'):
+            if useRef.ent() != fn:
+                continue
+            if useRef.file() != file:
+                continue
+            # Skip refs on the same line as the delete (part of the delete expr)
+            if useRef.line() == deleteRef.line():
+                continue
+
+            if not refBeforeRef(cfg, deleteRef, useRef):
+                continue
+
+            # Skip if this ref is itself a reassignment (e.g., *variable = new)
+            # where the Deref Set appears in both use and set ref lists
+            isReassignment = False
+            for setRef in setRefs:
+                if setRef.line() == useRef.line() and \
+                   setRef.column() == useRef.column():
+                    isReassignment = True
+                    break
+            if isReassignment:
+                continue
+
+            # Skip if the pointer was reassigned between the delete and the use
+            reassigned = False
+            for setRef in setRefs:
+                if refBeforeRef(cfg, deleteRef, setRef) and \
+                   refBeforeRef(cfg, setRef, useRef):
+                    reassigned = True
+                    break
+            if not reassigned:
+                check.violation(deletedEnt, file, useRef.line(), useRef.column(), ERR1)
+
+
+def checkUseAfterDestructor(check, file, fn, cfg):
+    # Find explicit destructor calls in this function
+    dtorRefs = []
+    for ref in fn.refs('Call ~Implicit', 'Function'):
+        if ref.file() != file:
+            continue
+        if ref.ent().name().startswith('~'):
+            dtorRefs.append(ref)
+
+    if not dtorRefs:
+        return
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    for dtorRef in dtorRefs:
+        # Walk backward from the destructor call to find the object
+        objectEnt = getDestructorTarget(lexer, dtorRef)
+        if not objectEnt:
+            continue
+
+        # Find subsequent uses of the object in this function
+        for useRef in objectEnt.refs('Useby, Setby, Modifyby', '~Unresolved'):
+            if useRef.ent() != fn:
+                continue
+            if useRef.file() != file:
+                continue
+            # Skip the destructor call line itself
+            if useRef.line() == dtorRef.line():
+                continue
+
+            if refBeforeRef(cfg, dtorRef, useRef):
+                check.violation(objectEnt, file, useRef.line(), useRef.column(), ERR2)
+
+
+def checkUnionMember(check, file, fn, cfg):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    # Collect refs grouped by (union variable, member) pairs
+    # Key: (varEnt, memberEnt), Value: list of refs
+    varMemberRefs = {}
+
+    for ref in fn.refs('Use, Deref Use, Set, Deref Set, Modify, Return', 'Object'):
+        if ref.file() != file:
+            continue
+        member = ref.ent()
+        parent = member.parent()
+        if not parent or not parent.kind().check('Union'):
+            continue
+        varEnt = getUnionVariable(lexer, ref)
+        if not varEnt:
+            continue
+        key = (varEnt.id(), member)
+        if key not in varMemberRefs:
+            varMemberRefs[key] = []
+        varMemberRefs[key].append(ref)
+
+    # Group by union variable
+    varMembers = {}  # varEnt id -> set of member ents
+    for (varId, member) in varMemberRefs:
+        if varId not in varMembers:
+            varMembers[varId] = set()
+        varMembers[varId].add(member)
+
+    # For each union variable with multiple accessed members, check for violations
+    for varId, members in varMembers.items():
+        if len(members) < 2:
+            continue
+
+        # Get all set refs and use refs for each member on this variable
+        memberSetRefs = {}
+        memberUseRefs = {}
+
+        for member in members:
+            setRefs = []
+            useRefs = []
+            for ref in varMemberRefs.get((varId, member), []):
+                kind = ref.kind().longname()
+                if 'Set' in kind or 'Modify' in kind:
+                    setRefs.append(ref)
+                elif 'Use' in kind or 'Return' in kind:
+                    useRefs.append(ref)
+            memberSetRefs[member] = setRefs
+            memberUseRefs[member] = useRefs
+
+        # For each pair (memberA written, memberB read), check if A's write
+        # can reach B's read without an intervening write to B
+        for memberA in members:
+            for memberB in members:
+                if memberA == memberB:
+                    continue
+                for setRef in memberSetRefs.get(memberA, []):
+                    for useRef in memberUseRefs.get(memberB, []):
+                        if not refBeforeRef(cfg, setRef, useRef):
+                            continue
+                        # Check if there's an intervening write to memberB
+                        # that would make it the active member
+                        intervening = False
+                        for bSetRef in memberSetRefs.get(memberB, []):
+                            if refBeforeRef(cfg, setRef, bSetRef) and \
+                               refBeforeRef(cfg, bSetRef, useRef):
+                                intervening = True
+                                break
+                        if not intervening:
+                            check.violation(memberB, file, useRef.line(), useRef.column(), ERR3)
+
+
+def getDeletedEntity(lexer, deleteRef):
+    """Walk lexemes from the delete call to find the entity being deleted."""
+    lex = lexer.lexeme(deleteRef.line(), deleteRef.column())
+    if not lex:
+        return None
+
+    # The ref points to 'delete' keyword. Walk forward to find the entity.
+    lex = lex.next(True, True)
+
+    # Skip [] for delete[]
+    if lex and lex.text() == '[':
+        lex = lex.next(True, True)  # ]
+        if lex:
+            lex = lex.next(True, True)
+
+    # Walk forward looking for the entity being deleted
+    while lex and lex.text() != ';':
+        ent = lex.ent()
+        if ent and ent.kind().check('Object, Parameter'):
+            nextLex = lex.next(True, True)
+            # If followed by -> or ., this entity is used for member access,
+            # not the thing being deleted (e.g., delete obj->method())
+            if nextLex and nextLex.text() in ('->', '.'):
+                lex = nextLex.next(True, True)
+                continue
+            # If followed by [, the delete frees an array element, not the
+            # array itself — too imprecise to track (e.g., delete arr[i])
+            if nextLex and nextLex.text() == '[':
+                return None
+            return ent
+        # Skip over function call arguments to avoid grabbing args as the
+        # deleted entity (e.g., delete window(wid) should not track wid)
+        if lex.text() == '(':
+            depth = 1
+            lex = lex.next(True, True)
+            while lex and depth > 0:
+                if lex.text() == '(':
+                    depth += 1
+                elif lex.text() == ')':
+                    depth -= 1
+                lex = lex.next(True, True)
+            continue
+        lex = lex.next(True, True)
+
+    return None
+
+
+def getUnionVariable(lexer, memberRef):
+    """Walk backward from a union member access to find the union variable."""
+    lex = lexer.lexeme(memberRef.line(), memberRef.column())
+    if not lex:
+        return None
+
+    lex = lex.previous(True, True)
+
+    # Expect . or ->
+    if not lex or lex.text() not in ('.', '->'):
+        return None
+
+    lex = lex.previous(True, True)
+    if not lex:
+        return None
+
+    # Skip past ] for array subscript (e.g., arr[i].member)
+    if lex.text() == ']':
+        depth = 1
+        lex = lex.previous(True, True)
+        while lex and depth > 0:
+            if lex.text() == ']':
+                depth += 1
+            elif lex.text() == '[':
+                depth -= 1
+            if depth > 0:
+                lex = lex.previous(True, True)
+        if lex:
+            lex = lex.previous(True, True)
+
+    if not lex:
+        return None
+
+    ent = lex.ent()
+    if ent and ent.kind().check('Object, Parameter'):
+        return ent
+
+    return None
+
+
+def getDestructorTarget(lexer, dtorRef):
+    """Walk backward from destructor call to find the object being destroyed."""
+    lex = lexer.lexeme(dtorRef.line(), dtorRef.column())
+    if not lex:
+        return None
+
+    # Walk backward past the ~ClassName to find -> or . and then the object
+    lex = lex.previous(True, True)
+
+    # Skip the ~ if present (sometimes the ref points to ~X, sometimes to X)
+    if lex and lex.text() == '~':
+        lex = lex.previous(True, True)
+
+    # Expect -> or .
+    if not lex or lex.text() not in ('->', '.'):
+        return None
+
+    lex = lex.previous(True, True)
+    if not lex:
+        return None
+
+    ent = lex.ent()
+    if ent and ent.kind().check('Object, Parameter'):
+        return ent
+
+    return None
