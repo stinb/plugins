@@ -1,4 +1,11 @@
-#include <cstdint>
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef short int16_t;
+typedef unsigned short uint16_t;
+typedef int int32_t;
+typedef unsigned int uint32_t;
+typedef long long int64_t;
+typedef unsigned long long uint64_t;
 
 int32_t get_signed_value();
 uint32_t get_unsigned_value();
@@ -165,10 +172,10 @@ void test_pointer_comparisons()
 }
 
 // Class and template types - rule does not apply
-#include <vector>
+template<typename T> struct vector { unsigned long size(); };
 void test_class_types()
 {
-    std::vector<int> v;
+    vector<int> v;
     auto sz = v.size();                       // UndCC_Valid - not a numeric conversion issue
 }
 
@@ -176,8 +183,8 @@ void test_class_types()
 void test_c_style_casts()
 {
     int index = 5;
-    size_t nbItem = 10;
-    if ((size_t)index >= nbItem) {}           // UndCC_Valid - explicit cast to size_t
+    unsigned long nbItem = 10;
+    if ((unsigned long)index >= nbItem) {}    // UndCC_Valid - explicit cast to unsigned long
 
     uint32_t u32 = 100;
     if ((int32_t)u32 > 0) {}                  // UndCC_Valid - explicit cast to int32_t
