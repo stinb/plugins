@@ -2,6 +2,8 @@
 # Written by Jason Quinn
 # 12-30-2025
 
+import re
+
 ERR1 = "Integral promotion changed signedness of operand"
 ERR2 = "Usual arithmetic conversion changed signedness of operand"
 ERR3 = "Usual arithmetic conversion changed type category of operand"
@@ -645,13 +647,24 @@ def get_type_info(ent):
 
 # parses integer literal and checks if non-negative (for exception #1)
 def is_nonnegative_constant(operand_lex, operand_ent):
-    if not operand_lex or operand_lex.token() not in ["Number", "Literal"]:
-        return False
+    # check literal tokens directly
+    if operand_lex and operand_lex.token() in ["Number", "Literal"]:
+        return is_nonnegative_literal(operand_lex.text())
 
-    text = operand_lex.text().rstrip('LlUu')
+    # check macro entities whose definition is a non-negative integer constant
+    if operand_ent and operand_ent.kind().check('macro'):
+        value = operand_ent.value()
+        if value and is_macro_nonnegative_int(value):
+            return True
+
+    return False
+
+
+# checks if literal text represents a non-negative integer
+def is_nonnegative_literal(text):
+    text = text.rstrip('LlUu')
     if not text:
         return False
-
     try:
         if text.startswith('0x') or text.startswith('0X'):
             return int(text, 16) >= 0
@@ -665,6 +678,53 @@ def is_nonnegative_constant(operand_lex, operand_ent):
         return False
 
 
+# checks if a macro value is a non-negative integer constant expression
+# handles patterns like "32", "(int)(A + B)", "(unsigned char)5"
+def is_macro_nonnegative_int(value):
+    # strip outer whitespace
+    value = value.strip()
+    if not value:
+        return False
+
+    # strip C-style cast prefix: (int), (unsigned char), etc.
+    cast_pattern = re.compile(r'^\(\s*(?:(?:unsigned|signed)\s+)?(?:char|short|int|long(?:\s+long)?)\s*\)')
+    while cast_pattern.match(value):
+        value = cast_pattern.sub('', value, count=1).strip()
+
+    # strip outer parens
+    while value.startswith('(') and value.endswith(')'):
+        value = value[1:-1].strip()
+
+    # if it's a simple non-negative integer literal, accept it
+    try:
+        return int(value, 0) >= 0
+    except (ValueError, TypeError):
+        pass
+
+    # if it contains only safe tokens (digits, arithmetic ops, other macro names,
+    # parens, casts, whitespace), treat as non-negative integer constant expression
+    # reject anything with strings, pointers, function calls with complex args, etc.
+    safe_pattern = re.compile(
+        r'^[\s\d\+\-\*\/\%\(\)A-Za-z_xXbBaAbBcCdDeEfFlLuU]+$'
+    )
+    if not safe_pattern.match(value):
+        return False
+
+    # reject if it contains floating-point indicators
+    if '.' in value:
+        return False
+
+    # accept as likely non-negative integer constant expression
+    return True
+
+
 # checks if operand is a constant integral value (for exception #2)
 def is_constant_integral_value(operand_lex, operand_ent):
-    return operand_lex and operand_lex.token() in ["Number", "Literal"]
+    if operand_lex and operand_lex.token() in ["Number", "Literal"]:
+        return True
+    # macro entities with integral constant definitions
+    if operand_ent and operand_ent.kind().check('macro'):
+        value = operand_ent.value()
+        if value and is_macro_nonnegative_int(value):
+            return True
+    return False
