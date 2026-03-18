@@ -92,69 +92,59 @@ def test_global():
     return False
 
 
+def check_violation(ref, check):
+    lex = ref.file().lexer(lookup_ents=False).lexeme(ref.line(), ref.column())
+    next_lex = lex.next(True, True)
+    prev_lex = lex.previous(True, True)
+
+    if lex and lex.text() != ref.scope().name():
+        return
+
+    if ((next_lex.text() in ["==", "!=", "&&", "||", "?"] and prev_lex.text() != "&")
+        or (prev_lex.text() in ["==", "!=", "!", "&&", "||"])
+        or (next_lex.text() in INVALID_OPS or prev_lex.text() in
+            INVALID_OPS or prev_lex.text() == "<<")
+        or (prev_lex.text() == "(" and next_lex.text() == ")"
+            and prev_lex.previous(True, True).text() in ["if", "while"])):
+        check.violation(ref.scope(), ref.file(),
+                        ref.line(), ref.column(), ERR1)
+
+
 def check(check, file):
-    for func_ref in file.filerefs("Define, Declare ~Implicit ~Using", "Function ~Macro ~Template ~Explicit", True):
+    for obj_ref in file.filerefs("Define, Declare", "Object", True):
+        utype = str(obj_ref.ent().freetext("UnderlyingType"))
+
+        if utype != "(lambda)":
+            continue
+
+        for use_ref in obj_ref.ent().refs("Useby"):
+            check_violation(use_ref, check)
+
+    for func_ref in file.filerefs("Define, Declare ~Implicit ~Using",
+                                  "Function ~Macro ~Template ~Explicit", True):
         if str(func_ref.ent().name()).startswith("operator"):
             continue
-        
-        ass_refs = func_ref.ent().refs("Assignby ~Indirect")
 
-        ass_refs = {
-            f"{a.line()} {a.column()}": a
-            for a in ass_refs
-        }
-        
-        for ptr_ref in func_ref.ent().refs("Useby, Callby ~Inactive ~Implicit ~ObjC"):
-            compliant = False
-            ass_ref = ass_refs.get(f"{ptr_ref.line()} {ptr_ref.column()}")
-            lex = ptr_ref.file().lexer(lookup_ents=True).lexeme(ptr_ref.line(), ptr_ref.column())
-            lex_prev = lex.previous(True, True)
-            lex_next = lex.next(True, True)
+        for use_ref in func_ref.ent().refs("Useby Ptr"):
+            check_violation(use_ref, check)
 
-            while lex_prev and (lex_prev.text() == "::"):
-                while lex_prev.token() not in ["Whitespace"]:
-                    lex_prev = lex_prev.previous()
+        for ass_ref in func_ref.ent().refs("Assignby FunctionPtr"):
+            utype = str(ass_ref.ent().freetext("UnderlyingType"))
 
-                    if lex_prev.token() in ["Operator"] and (lex_prev.text() != "::"):
-                        break                
-
-            if lex_next and (lex_next.text() == "<"):
-                while lex_next.text() != ">":
-                    lex_next = lex_next.next(True, True)
-
-                    if lex_next.text() == ")":
-                        lex_next = lex
-                        break   
-                
-                lex_next = lex_next.next(True, True)
-
-            if ((lex and ((lex.text() in "({") or (lex.token() == "String") or (lex.ent() and lex.ent().kind().check("Macro"))))
-                or (lex_prev and (lex_prev.text() in ["&", ".", "->", ",", "="]))
-                or (lex_next and (lex_next.text() in "({="))
-                ):
-                continue
-            elif lex_prev and lex_next and lex_prev.text() in INVALID_OPS or lex_next.text() in INVALID_OPS:
-                check.violation(func_ref.ent(), ptr_ref.file(), ptr_ref.line(), ptr_ref.column(), ERR1)
-                continue      
-
-            if ass_ref:
-                ass_ent_type = str(ass_ref.ent().freetext("UnderlyingType"))
-                ass_lex = lex
-
-                if re.search(r".+ \*?\(\*.*\)\(.*\)", ass_ent_type) or ass_ref.ent().kind().check("Parameter"):
-                    continue                
-
-                while ass_lex and ass_lex.text() not in ["=", ";"]:
-                    if ass_lex.text() == "static_cast":
-                        compliant = True
-                        break
-
-                    ass_lex = ass_lex.previous(True, True)
-
-            if ((lex_prev and lex_next and (lex_prev.text() == "(") and (lex_next.text() == ")") and (lex_next.next(True,True).text() == "("))
-                or (lex_prev and (lex_prev.token() == "Operator") and lex_prev.text() in ["=","&",",","(",".","->"])
-                or (lex_next and (lex_next.token() == "Operator") and lex_next.text() in [";",",",".","->",")"])):
+            if re.search(r"\(\*.*\)\(.*\)$", utype):
                 continue
 
-            if not compliant:
-                check.violation(func_ref.ent(), ptr_ref.file(), ptr_ref.line(), ptr_ref.column(), ERR1)
+            lex = ass_ref.file().lexer(lookup_ents=False).lexeme(
+                ass_ref.line(), ass_ref.column())
+            static_cast = False
+
+            while lex and lex.text() not in [ass_ref.ent().name(), "="]:
+                if lex.text() == "static_cast":
+                    static_cast = True
+                    break
+
+                lex = lex.previous(True, True)
+
+            if not static_cast:
+                check.violation(ass_ref.scope(), ass_ref.file(),
+                                ass_ref.line(), ass_ref.column(), ERR1)
