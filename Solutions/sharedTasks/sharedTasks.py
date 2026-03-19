@@ -555,7 +555,14 @@ def buildEdgeInfo(
         ent = edge_obj['ent']
         if ent.kind().check(OBJ_ENT_KINDS):
             objects.append(ent)
-    interruptDisabledRefs = find_interrupt_disabled_refs(traversal_options, objects)
+
+    if options[REFERENCE] == 'All':
+        interruptDisabledRefs = find_interrupt_disabled_refs(traversal_options, objects)
+    else:
+        interruptDisabledRefs = set()
+        traversal = traverse_by_many_objects(traversal_options, objects)
+        for pair in find_interrupt_disabled_pairs_simple(traversal, objects):
+            interruptDisabledRefs.add(str(pair))
 
     # Decide whether the nodes are shared
     sharedObjects: dict[Ent, bool] = dict()
@@ -647,6 +654,18 @@ OBJ_REF_KIND_INVERSE = 'setby, useby, modifyby, definein'
 
 
 @dataclass
+class FnAndObj:
+    fn: Ent
+    obj: Ent
+
+    def __hash__(self):
+        return hash((self.fn, self.obj))
+
+    def __str__(self):
+        return f'{self.fn.id()} {self.obj.id()}'
+
+
+@dataclass
 class TraversedEdge:
     ref: Ref # ent is tail/source, scope is head/destination
     interrupt_protected: bool # Interrupts are disabled before this reference, drawn with dashes
@@ -666,6 +685,34 @@ class TraversalOptions:
     function_instances: bool
     overrides: bool
     unresolved: bool
+
+
+# See which function and object pairs are interrupt-protected
+def find_interrupt_disabled_pairs_simple(traversal: dict[Ent, TraversedNode], global_objects: list[Ent]) -> set[FnAndObj]:
+    pairs_protected: dict[FnAndObj, bool] = {}
+
+    to_visit: list[tuple[TraversedNode, bool]] = []
+
+    for obj in global_objects:
+        to_visit.clear()
+        to_visit.append((traversal[obj], False))
+        while to_visit:
+            (scope_node, protected) = to_visit.pop()
+            for edge in scope_node.incoming:
+                fn = edge.ref.ent()
+                fn_and_obj = FnAndObj(fn, obj)
+                pair_protected = protected or edge.interrupt_protected
+                if not pair_protected and pairs_protected.get(fn_and_obj):
+                    pairs_protected[fn_and_obj] = False
+                else:
+                    pairs_protected[fn_and_obj] = pair_protected
+                to_visit.append((traversal[fn], pair_protected))
+
+    result: set[FnAndObj] = set()
+    for pair, protected in pairs_protected.items():
+        if protected:
+            result.add(pair)
+    return result
 
 
 # Get references (transformed by refStr) that are interrupt-protected

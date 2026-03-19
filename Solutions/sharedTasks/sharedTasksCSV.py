@@ -60,6 +60,8 @@ def printFile(report: IReport, file: Ent):
 
 
 def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: list[str] | None, report: IReport | None):
+    simple = options[REFERENCE] = 'Simple'
+
     edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields = buildEdgeInfo(db, arch, options)
 
     # Sort the objects
@@ -119,8 +121,11 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
             edgeObj = edgeInfo[edgeKey]
 
             # Info for each column for all rows of the edge
-            protected = 'x' if refStr(edgeObj['ref']) in interruptDisabledRefs else '-'
             function = edgeObj['scope']
+            if str(FnAndObj(function, edgeObj['ent'])) in interruptDisabledRefs:
+                protected = 'x'
+            else:
+                protected = '-'
             functionName = getLongName(edgeObj['scope'], options)
             reference = []
             for kindname in edgeObj['kindnames']:
