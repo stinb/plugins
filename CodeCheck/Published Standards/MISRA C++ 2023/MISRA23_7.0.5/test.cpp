@@ -239,6 +239,21 @@ void test_function_return_types()
     if (strtol_wrapper("5", nullptr, 10) > x) {} // UndCC_Valid - both signed
 }
 
+// const and constexpr variables - exception #1 applies (signed constant → unsigned)
+static const int CONST_CHECKBOX_ID = 42;
+constexpr int CONSTEXPR_MAX_LEN = 259;
+void test_const_constexpr_constants()
+{
+    unsigned int id = 100;
+    unsigned long size = 500;
+
+    if (id == CONST_CHECKBOX_ID) {}           // UndCC_Valid - exception #1, signed const → unsigned
+    if (size > CONSTEXPR_MAX_LEN) {}          // UndCC_Valid - exception #1, signed constexpr → unsigned
+
+    int non_const_val = 10;
+    if (id == non_const_val) {}               // UndCC_Violation - non-const signed → unsigned
+}
+
 int32_t get_signed_value() { return 0; }
 uint32_t get_unsigned_value() { return 0; }
 int atoi_wrapper(const char *str) { return 0; }
