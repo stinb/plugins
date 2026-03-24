@@ -3,8 +3,6 @@
 //
 // Test cases based on examples from the MISRA C++ 2023 specification
 
-#include <cstdint>
-
 // Test: Unary and postfix operators with high-ranking operands
 struct S { int n; };
 
@@ -127,6 +125,23 @@ void test_complex_nested()
   x = a + (b * c) - d;          // UndCC_Valid - multiplicative expression properly parenthesized
   x = (a * b) + (c * d);        // UndCC_Valid - multiplicative expressions properly parenthesized
   x = (a + b) * (c - d);        // UndCC_Valid - explicit precedence override
+}
+
+// Test: Expressions inside macro expansions (issue #4717)
+// Macros like MAKELPARAM expand to binary operators that users cannot parenthesize
+#define MAKELONG(low, high) \
+  ((unsigned long)(((unsigned short)(low)) | ((unsigned long)((unsigned short)(high))) << 16))
+#define MAKELPARAM(l, h)  ((long)MAKELONG(l, h))
+
+void test_macro_expansions()
+{
+  int cursorrow = 0, cursorcol = 0;
+  int gridmenu = 0;
+  long lParam;
+  long wParam;
+
+  lParam = MAKELPARAM(cursorrow, cursorcol);   // UndCC_Valid - operators are inside macro
+  wParam = MAKELPARAM(gridmenu, 1);            // UndCC_Valid - operators are inside macro
 }
 
 // Note: Preprocessor conditionals (#if, etc.) are not analyzed by Clang AST checkers
