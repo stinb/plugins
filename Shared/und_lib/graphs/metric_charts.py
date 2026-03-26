@@ -15,13 +15,13 @@ import understand
 # - Note that Diff metrics will only appear if a database is passed
 #   in understand.Db.comparison_db() was called and returned a valid db.
 def list_function_metrics(db):
-  return understand.Metric.list(kind_util.FUNCTION_KIND_STR, db=db, filter=False)
+  return [m.id() for m in understand.Metric.list(kind_util.FUNCTION_KIND_STR, db=db, filter=False)]
 
 def list_class_metrics(db):
-  return understand.Metric.list(kind_util.CLASS_KIND_STR, db=db, filter=False)
+  return [m.id() for m in understand.Metric.list(kind_util.CLASS_KIND_STR, db=db, filter=False)]
 
 def list_file_metrics(db):
-  return understand.Metric.list(kind_util.FILE_KIND_STR, db=db, filter=False)
+  return [m.id() for m in understand.Metric.list(kind_util.FILE_KIND_STR, db=db, filter=False)]
 
 def list_arch_metrics(db):
   # There is no equivalent understand.Metric.list for architecture metrics,
