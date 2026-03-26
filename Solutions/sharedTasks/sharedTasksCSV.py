@@ -12,8 +12,7 @@ import re
 import sys
 
 import understand
-from understand import Arch, Db, Ent, IReport
-
+from understand import Arch, Db, Ent, ReportContext
 from sharedTasks import *
 
 
@@ -47,19 +46,19 @@ def entComparator(a: Ent, b: Ent) -> int:
 entComparator = functools.cmp_to_key(entComparator)
 
 
-def printEnt(report: IReport, ent: Ent, options: dict[str, str | bool]):
+def printEnt(report: ReportContext, ent: Ent, options: dict[str, str | bool]):
     report.entity(ent)
     report.print(getLongName(ent, options))
     report.entity()
 
 
-def printFile(report: IReport, file: Ent):
+def printFile(report: ReportContext, file: Ent):
     report.entity(file)
     report.print(file.relname())
     report.entity()
 
 
-def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: list[str] | None, report: IReport | None):
+def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: list[str] | None, report: ReportContext | None):
     simple = options[REFERENCE] = 'Simple'
 
     edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields = buildEdgeInfo(db, arch, options)
@@ -168,7 +167,7 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
                     lines.append(line)
 
 
-def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: IReport | None = None):
+def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: ReportContext | None = None):
     lines: list[str] | None = [] if options[AUTO_EXPORT] else None
 
     generateCSVRows(db, arch, options, lines, report)

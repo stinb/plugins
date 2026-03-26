@@ -16,36 +16,36 @@ from understand import Ent, Lexeme, Ref
 
 
 DEFAULT_ARGUMENT_VALUES: dict[str, int | bool] = {
-    # Check 1: COMF
+    # CheckContext 1: COMF
     'minimumCommentPercentage': 20,
-    # Check 2: PATH
+    # CheckContext 2: PATH
     'maximumPathsAllowed': 80,
-    # Check 4: vG
+    # CheckContext 4: vG
     'maximumComplexity': 20,
     'variant': 'modified',
-    # Check 5: CALLING
+    # CheckContext 5: CALLING
     'maximumCallingFunctions': 5,
-    # Check 6: CALLS
+    # CheckContext 6: CALLS
     'maximumCalls': 7,
-    # Check 7: PARAM
+    # CheckContext 7: PARAM
     'maximumNumberOfParameters': 5,
-    # Check 8: STMT
+    # CheckContext 8: STMT
     'maximumStatementsAllowed': 50,
-    # Check 9: LEVEL
+    # CheckContext 9: LEVEL
     'maximumCallLevel': 4,
     'skipRecursiveFunctions': False,
-    # Check 10: RETURN
+    # CheckContext 10: RETURN
     'ignoreConstructorsAndDestructors': False,
     'ignoreInactiveCode': False,
-    # Check 11: VOCF
+    # CheckContext 11: VOCF
     'maximumVocfLevel': 4,
-    # Check 13: SCHG
+    # CheckContext 13: SCHG
     'maximumChangedStatements': 100,
-    # Check 14: SDEL
+    # CheckContext 14: SDEL
     'maximumDeletedStatements': 100,
-    # Check 15: SNEW
+    # CheckContext 15: SNEW
     'maximumNewStatements': 100,
-    # Check 16: S
+    # CheckContext 16: S
     'minimumStabilityIndex': 0.5,
 }
 
@@ -673,7 +673,7 @@ if __name__ == '__main__':
     parser.add_argument('db', help='Specify Understand database. Example: upython hisMetricsCsv.py project/project.und')
     parser.add_argument('-csv', help='Specify CSV Name. Default is the timestamp. Example: upython hisMetricsCsv.py project/project.und -csv hisMetrics.csv')
 
-    # Check Arguments:
+    # CheckContext Arguments:
     parser.add_argument('-mcp', help='Minimum Comment Percentage. Default is 20. Example: upython hisMetricsCsv.py project/project.und -mcp 20')
     parser.add_argument('-mpa', help='Maximum Paths Allowed. Default is 80. Example: upython hisMetricsCsv.py project/project.und -mpa 70')
     parser.add_argument('-mco', help='Maximum Complexity. Default is 20. Example: upython hisMetricsCsv.py project/project.und -mco 15')
