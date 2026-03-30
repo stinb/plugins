@@ -1044,11 +1044,11 @@ def list_metrics_summary(
     """
     database = require_db()
 
-    # Get list of available metrics (filter=True returns only enabled, filter=False returns all)
+    # Get list of available metrics (enabled_only=True returns only enabled, False returns all)
     if not kindstring:
-        metric_objs = understand.Metric.list(db=database, filter=not include_disabled)
+        metric_objs = understand.Metric.list(db=database, enabled_only=not include_disabled)
     else:
-        metric_objs = understand.Metric.list(kindstring, db=database, filter=not include_disabled)
+        metric_objs = understand.Metric.list(kindstring, db=database, enabled_only=not include_disabled)
 
     all_metric_ids = [m.id() for m in metric_objs]
 

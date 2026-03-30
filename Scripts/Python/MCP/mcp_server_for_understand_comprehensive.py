@@ -602,9 +602,9 @@ def metric_list(
     
     # Handle different parameter combinations for understand.Metric.list
     if kindstring is None:
-        metric_ids = understand.Metric.list(db=db, filter=filter_enabled)
+        metric_ids = understand.Metric.list(db=db, enabled_only=filter_enabled)
     else:
-        metric_ids = understand.Metric.list(kindstring, db=db, filter=filter_enabled)
+        metric_ids = understand.Metric.list(kindstring, db=db, enabled_only=filter_enabled)
     
     return [asdict(metric_id_to_metric(metric_id)) for metric_id in metric_ids]
 

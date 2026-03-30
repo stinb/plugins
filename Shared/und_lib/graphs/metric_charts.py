@@ -3,7 +3,7 @@ import und_lib.graphs.und_colors as und_colors
 import understand
 
 # Metric list functions (requires build 1215 or later):
-# - Set filter to False to include disabled metrics because these charts are
+# - Set enabled_only to False to include disabled metrics because these charts are
 #   intended to be callable from iReports which may request metrics which
 #   aren't enabled.
 # - Provide a database so that metric plugins can be found by kindstring.
@@ -15,13 +15,13 @@ import understand
 # - Note that Diff metrics will only appear if a database is passed
 #   in understand.Db.comparison_db() was called and returned a valid db.
 def list_function_metrics(db):
-  return [m.id() for m in understand.Metric.list(kind_util.FUNCTION_KIND_STR, db=db, filter=False)]
+  return [m.id() for m in understand.Metric.list(kind_util.FUNCTION_KIND_STR, db=db, enabled_only=False)]
 
 def list_class_metrics(db):
-  return [m.id() for m in understand.Metric.list(kind_util.CLASS_KIND_STR, db=db, filter=False)]
+  return [m.id() for m in understand.Metric.list(kind_util.CLASS_KIND_STR, db=db, enabled_only=False)]
 
 def list_file_metrics(db):
-  return [m.id() for m in understand.Metric.list(kind_util.FILE_KIND_STR, db=db, filter=False)]
+  return [m.id() for m in understand.Metric.list(kind_util.FILE_KIND_STR, db=db, enabled_only=False)]
 
 def list_arch_metrics(db):
   # There is no equivalent understand.Metric.list for architecture metrics,
