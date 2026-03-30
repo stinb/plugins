@@ -1,0 +1,142 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3-27-26
+
+
+ERR1 = 'Tentative definition of "%1" in a header file'
+
+
+def ids():
+    return ('CPP_D077', 'MISRA25_8.18')
+
+
+def name(id):
+    return {
+        'CPP_D077': 'All Checks/Language Specific/C and C++/Declarations and Definitions/There shall be no tentative definitions in a header file',
+        'MISRA25_8.18': 'Published Standards/MISRA C 2025/8.18 There shall be no tentative definitions in a header file',
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_D077': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA25_8.18': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    desc = {
+        'CPP_D077': '''\
+<p><b>Rationale</b></p>
+<p>A tentative definition in a <i>header file</i> results in multiple instances
+of the object being created, in each source file that #includes that
+<i>header file</i>.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">/* module.h */
+int32_t i;          /* Non-compliant - tentative definition */
+extern int32_t j;   /* Compliant     - external declaration */
+
+/* module.c */
+#include "module.h"
+int32_t i;          /* Compliant - tentative definition - assume used later */
+int32_t j = 0;      /* Compliant - defining declaration */</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.4, Rule 8.5, Rule 8.6, Rule 8.8</p>
+''',
+        'MISRA25_8.18': '''\
+<p><b>Rationale</b></p>
+<p>A tentative definition in a <i>header file</i> results in multiple instances
+of the object being created, in each source file that #includes that
+<i>header file</i>.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">/* module.h */
+int32_t i;          /* Non-compliant - tentative definition */
+extern int32_t j;   /* Compliant     - external declaration */
+
+/* module.c */
+#include "module.h"
+int32_t i;          /* Compliant - tentative definition - assume used later */
+int32_t j = 0;      /* Compliant - defining declaration */</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.4, Rule 8.5, Rule 8.6, Rule 8.8</p>
+''',
+    }
+    return desc[id]
+
+
+def test_entity(file):
+    return file.kind().check('Header File')
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+
+    for ref in file.filerefs('Define, Declare', 'Global Object ~Unknown ~Unresolved'):
+        ent = ref.ent()
+
+        # Skip function entities that may be misclassified as objects
+        if ent.kind().check('Function'):
+            continue
+
+        # Lexeme scan: check for 'extern' keyword and '=' initializer
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False)
+        if not lexer:
+            continue
+
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex:
+            continue
+
+        has_extern = False
+        has_init = False
+        is_func_decl = False
+
+        # Scan forward from the variable name to find '=', '{', or '(' before ';'
+        scan = lex
+        while scan and scan.text() != ';':
+            if scan.text() in ('=', '{'):
+                has_init = True
+                break
+            if scan.text() == '(':
+                is_func_decl = True
+                break
+            scan = scan.next(True, True)
+
+        if has_init or is_func_decl:
+            continue
+
+        # Scan backward from the variable name to find 'extern'
+        scan = lex
+        while scan:
+            scan = scan.previous(True, True)
+            if not scan or scan.line_end() < ref.line() - 1:
+                break
+            if scan.text() == ';' or scan.text() == '}' or scan.text() == '{':
+                break
+            if scan.text() == 'extern':
+                has_extern = True
+                break
+
+        if has_extern:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
