@@ -1,0 +1,112 @@
+import re
+
+# Based literal: base#digits[.digits]#
+BASED_RE = re.compile(r'^\d+#([0-9a-fA-F_]+(?:\.[0-9a-fA-F_]+)?)#')
+LOWERCASE_HEX_RE = re.compile(r'[a-f]')
+
+ERR1 = 'Use uppercase "E" in scientific notation (found "%1")'
+ERR2 = 'Use uppercase letters for alphabetic digits in based literal (found "%1")'
+
+
+def ids():
+    return ('ADA95_3.1.2',)
+
+
+def name(id):
+    return {
+        'ADA95_3.1.2': 'Published Standards/Ada 95/3.1.2 Numbers',
+    }[id]
+
+
+def tags(id):
+    return {
+        'ADA95_3.1.2': [
+            'Language: Ada',
+            'Standard: Ada 95',
+            'Readability',
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        'ADA95_3.1.2': """\
+<p><b>Guideline</b></p>
+<p>&#8226; Represent numbers in a consistent fashion.</p>
+<p>&#8226; Represent literals in a radix appropriate to the problem.</p>
+<p>&#8226; Use underscores to separate digits the same way commas or periods would be used in
+normal text.</p>
+<p>&#8226; When using scientific notation, make the E consistently uppercase.</p>
+<p>&#8226; In an alternate base, represent the alphabetic characters in uppercase.</p>
+
+<p><b>Instantiation</b></p>
+<ul>
+<li>Decimal and octal numbers are grouped by threes beginning on the left side of the radix
+point and by fives beginning on the right side.</li>
+<li>The E is always capitalized in scientific notation.</li>
+<li>Hexadecimal numbers are grouped by fours beginning on either side of the radix point.</li>
+<li>Use uppercase for the alphabetic characters representing digits in bases above 10.</li>
+</ul>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">type Maximum_Samples    is range      1 .. 1_000_000;
+type Legal_Hex_Address  is range 16#0000# .. 16#FFFF#;
+type Legal_Octal_Address is range 8#000_000# .. 8#777_777#;
+
+Avogadro_Number : constant := 6.02216_9E+23;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Consistent use of uppercase or lowercase aids scanning for numbers. Underscores serve to group
+portions of numbers into familiar patterns. Consistency with common use in everyday contexts is
+a large part of readability.</p>
+
+<p><b>Developer's Note</b></p>
+<p>This check flags: (1) numeric literals using a lowercase <code>e</code> for scientific notation
+exponents; (2) based literals (e.g. <code>16#ff#</code>) containing lowercase alphabetic digits.
+Digit grouping with underscores cannot be enforced automatically.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Ada File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Ada'
+
+
+def _has_lowercase_exponent(text):
+    """Return True if the literal uses a lowercase 'e' as an exponent.
+    Strips based-literal digit sections (inside # #) before checking,
+    so that hex digits like 'beef' are not confused with an exponent 'e'."""
+    without_based_digits = re.sub(r'#[^#]*#', '##', text)
+    return bool(re.search(r'e[+\-]?\d', without_based_digits))
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    lex = lexer.first()
+
+    while lex:
+        if lex.token() == 'Literal':
+            literal_text = lex.text()
+
+            # Rule 1: uppercase E in scientific notation
+            if _has_lowercase_exponent(literal_text):
+                check.violation(None, file, lex.line_begin(), lex.column_begin(),
+                                ERR1, literal_text)
+
+            # Rule 2: uppercase alphabetic digits in based literals
+            based_match = BASED_RE.match(literal_text)
+            if based_match and LOWERCASE_HEX_RE.search(based_match.group(1)):
+                check.violation(None, file, lex.line_begin(), lex.column_begin(),
+                                ERR2, literal_text)
+
+        lex = lex.next()
