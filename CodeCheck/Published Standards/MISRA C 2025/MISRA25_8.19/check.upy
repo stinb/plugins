@@ -1,0 +1,191 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3-30-26
+
+
+ERR1 = 'External declaration of "%1" in a source file'
+
+
+def ids():
+    return ('CPP_D078', 'MISRA25_8.19')
+
+
+def name(id):
+    return {
+        'CPP_D078': 'All Checks/Language Specific/C and C++/Declarations and Definitions/There should be no external declarations in a source file',
+        'MISRA25_8.19': 'Published Standards/MISRA C 2025/8.19 There should be no external declarations in a source file',
+    }[id]
+
+
+def tags(id):
+    return {
+        'CPP_D078': [
+            'Language: C',
+            'Language: C++',
+            'Declarations and Definitions',
+        ],
+        'MISRA25_8.19': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    desc = {
+        'CPP_D078': '''\
+<p><b>Amplification</b></p>
+<p>For the purposes of this rule, the meaning of <i>source file</i> excludes
+<i>header files</i>.</p>
+<p>An non-defining external declaration of an object or function should only
+appear at file scope and in a <i>header file</i>.</p>
+
+<p><b>Rationale</b></p>
+<p>An external declaration in a <i>source file</i>, or especially at block scope
+within a function definition, breaks the modularity and encapsulation of the
+translation unit. A <i>header file</i>, declaring the external interface, should
+be used instead.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">/* module1.h */
+extern int32_t i;    /* Compliant     - an external declaration in a header file */
+
+/* module1.c */
+#include "module1.h"
+int32_t i = 0;       /* Defining declaration                                    */
+
+/* module2.c */
+extern int32_t i;    /* Non-compliant - external declaration in a source file    */
+...
+foo( i );            /* Some use of i                                            */
+
+/* module3.c */
+#include "module1.h" /* Compliant     - external declaration of i in header file */
+...
+foo( i );            /* Some use of i                                            */
+
+void uses_externs( void )
+{
+    extern bool flag;           /* Non-compliant - bringing flag into scope
+                                                   without a modular interface   */
+    extern void worker( flag ); /* Non-compliant - brings worker into scope
+                                                   without a modular interface   */
+    worker(flag);               /* Doing work across unrelated modules            */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.4, Rule 8.5, Rule 8.6</p>
+''',
+        'MISRA25_8.19': '''\
+<p><b>Amplification</b></p>
+<p>For the purposes of this rule, the meaning of <i>source file</i> excludes
+<i>header files</i>.</p>
+<p>An non-defining external declaration of an object or function should only
+appear at file scope and in a <i>header file</i>.</p>
+
+<p><b>Rationale</b></p>
+<p>An external declaration in a <i>source file</i>, or especially at block scope
+within a function definition, breaks the modularity and encapsulation of the
+translation unit. A <i>header file</i>, declaring the external interface, should
+be used instead.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">/* module1.h */
+extern int32_t i;    /* Compliant     - an external declaration in a header file */
+
+/* module1.c */
+#include "module1.h"
+int32_t i = 0;       /* Defining declaration                                    */
+
+/* module2.c */
+extern int32_t i;    /* Non-compliant - external declaration in a source file    */
+...
+foo( i );            /* Some use of i                                            */
+
+/* module3.c */
+#include "module1.h" /* Compliant     - external declaration of i in header file */
+...
+foo( i );            /* Some use of i                                            */
+
+void uses_externs( void )
+{
+    extern bool flag;           /* Non-compliant - bringing flag into scope
+                                                   without a modular interface   */
+    extern void worker( flag ); /* Non-compliant - brings worker into scope
+                                                   without a modular interface   */
+    worker(flag);               /* Doing work across unrelated modules            */
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 8.4, Rule 8.5, Rule 8.6</p>
+''',
+    }
+    return desc[id]
+
+
+def test_entity(file):
+    return file.kind().check('Code File')
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = None
+
+    # Check for extern object declarations in source files
+    for ref in file.filerefs('Declare', 'Object ~Unknown'):
+        ent = ref.ent()
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False)
+        if not lexer:
+            return
+
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex:
+            continue
+
+        # Scan backward for extern keyword
+        has_extern = False
+        scan = lex
+        while scan:
+            scan = scan.previous(True, True)
+            if not scan or scan.line_end() < ref.line() - 1:
+                break
+            if scan.text() in (';', '}', '{'):
+                break
+            if scan.text() == 'extern':
+                has_extern = True
+                break
+
+        if has_extern:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
+
+    # Build a set of (entity, line) pairs that have Call refs to detect
+    # implicit declarations at the point of first call
+    call_sites = set()
+    for ref in file.filerefs('Call', 'Function'):
+        call_sites.add((ref.ent().id(), ref.line()))
+
+    # Check for non-defining function declarations with external linkage
+    for ref in file.filerefs('Declare', 'Function ~Static ~Unknown'):
+        ent = ref.ent()
+
+        # Skip function definitions (only flag declarations)
+        if ref.kind().check('Define'):
+            continue
+
+        # Skip C++ member functions (not external declarations)
+        if ent.kind().check('Member'):
+            continue
+
+        # Skip implicit declarations at the point of first call
+        if (ent.id(), ref.line()) in call_sites:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
