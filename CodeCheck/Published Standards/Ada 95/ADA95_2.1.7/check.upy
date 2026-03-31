@@ -1,0 +1,138 @@
+import re
+
+# A separator line is an Ada comment consisting only of dashes, e.g.:
+#   ----------------------------------------------------------------
+DASH_RE = re.compile(r'^--[-]+$')
+
+ERR1 = 'Nested program unit "%1" is not preceded by a dash separator line'
+
+
+def ids():
+    return ('ADA95_2.1.7',)
+
+
+def name(id):
+    return {
+        'ADA95_2.1.7': 'Published Standards/Ada 95/2.1.7 Pagination',
+    }[id]
+
+
+def tags(id):
+    return {
+        'ADA95_2.1.7': [
+            'Language: Ada',
+            'Standard: Ada 95',
+            'Code Formatting',
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        'ADA95_2.1.7': """\
+<p><b>Guideline</b></p>
+<p>&#8226; Highlight the top of each package or task specification, the top of each program unit
+body, and the end statement of each program unit.</p>
+
+<p><b>Instantiation</b></p>
+<p>Specifically, it is recommended that you:</p>
+<ul>
+<li>Use file prologues, specification headers, and body headers to highlight those structures as
+recommended in Guideline 3.3.</li>
+<li>Use a line of dashes, beginning at the same column as the current indentation to highlight the
+definition of nested units embedded in a declarative part. Insert the line of dashes immediately
+before and immediately after the definition.</li>
+<li>If two dashed lines are adjacent, omit the longer of the two.</li>
+</ul>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">with Basic_Types;
+package body SPC_Numeric_Types is
+
+   ...
+
+   ----------------------------------------------------------------
+   function Max
+         (Left  : in    Basic_Types.Tiny_Integer;
+          Right : in    Basic_Types.Tiny_Integer)
+          return Basic_Types.Tiny_Integer is
+   begin
+      if Right &lt; Left then
+         return Left;
+      else
+         return Right;
+      end if;
+   end Max;
+
+   ----------------------------------------------------------------
+   function Min
+         (Left  : in    Basic_Types.Tiny_Integer;
+          Right : in    Basic_Types.Tiny_Integer)
+          return Basic_Types.Tiny_Integer is
+   begin
+      ...
+   end Min;
+
+   ----------------------------------------------------------------
+
+end SPC_Numeric_Types;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>It is easy to overlook parts of program units that are not visible on the current page or screen.
+By clearly marking the program's logical page boundaries (e.g., with a dashed line), you enable a
+reader to quickly check whether all of a program unit is visible. Such pagination also makes it
+easier to scan a large file quickly, looking for a particular program unit.</p>
+
+<p><b>Automation notes</b></p>
+<p>The guidelines in this section are easily enforced with an automatic code formatter.</p>
+
+<p><b>Developer's Note</b></p>
+<p>This check flags nested subprogram (function or procedure) bodies that are not immediately
+preceded by a dash separator comment line (e.g., <code>----...</code>). Blank lines between the
+separator and the subprogram header are permitted. Top-level library-unit subprograms are not
+checked; they are handled by file prologues per Guideline 3.3.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Ada File')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Ada'
+
+
+def _is_dash_separator(text):
+    return bool(DASH_RE.match(text.strip()))
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for body_ref in file.filerefs('Declare Body', 'Function, Procedure'):
+        subprogram_ent = body_ref.ent()
+
+        # Only check units nested inside another program unit (not library-level).
+        # Library-level units use file headers per Guideline 3.3.
+        parent_ent = subprogram_ent.parent()
+        if not parent_ent or parent_ent.kind().check('File'):
+            continue
+
+        # Walk backward from the ref position to start of its line
+        lex = lexer.lexeme(body_ref.line(), body_ref.column())
+        while lex and lex.token() != 'Newline':
+            lex = lex.previous()
+
+        # Skip blank lines
+        while lex and lex.token() in ('Whitespace', 'Newline'):
+            lex = lex.previous()
+
+        # Check if the previous non-blank line is a dash separator comment
+        if not lex or lex.token() != 'Comment' or not _is_dash_separator(lex.text()):
+            check.violation(subprogram_ent, file, body_ref.line(), body_ref.column(), ERR1, subprogram_ent.name())
