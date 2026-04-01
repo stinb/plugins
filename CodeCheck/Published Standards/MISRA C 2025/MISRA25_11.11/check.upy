@@ -1,0 +1,235 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 3/31/26
+
+ERR1 = 'Pointer shall not be implicitly compared to NULL'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA25_11.11', 'CPP_P067')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA25_11.11': 'Published Standards/MISRA C 2025/'\
+            '11.11 Pointers shall not be implicitly compared to NULL',
+        'CPP_P067': 'All Checks/Language Specific/C and C++/Pointers/'\
+            'Pointers shall not be implicitly compared to NULL',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA25_11.11': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Pointers',
+        ],
+        'CPP_P067': [
+            'Language: C',
+            'Language: C++',
+            'Pointers',
+        ],
+    }.get(id)
+
+
+# The long description of the check
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>Expressions of pointer type shall not be implicitly compared to NULL (or zero).</p>
+<p>Implicit comparison to NULL occurs when an expression of pointer type is:</p>
+<ul>
+<li>converted to <i>bool</i></li>
+<li>used as the operand of logical operator ( <code>!</code>, <code>&amp;&amp;</code>, <code>||</code> )</li>
+<li>used as the first operand of conditional operator ( <code>?</code> )</li>
+<li>used as the controlling expression of an <i>if</i> statement or an iteration statement (<i>while</i>, <i>do</i>, <i>for</i>)</li>
+</ul>
+<p><b>Rationale</b></p>
+<p>An expression of essentially Boolean type shall always be used where an operand is interpreted as a Boolean value.</p>
+<p><b>Example</b></p>
+<pre><code language="C">uint32_t *ptr;
+
+(bool)( ptr != NULL );          /* Compliant                              */
+(bool)( ptr );                  /* Non-compliant - implicit test for zero
+                                 * - this also violates R.11.4            */
+
+if ( ptr != NULL ) { ... }      /* Compliant - explicit test for Null     */
+if ( ptr != 0   ) { ... }      /* Compliant - explicit test for zero
+                                 * - however, this violates R.11.9        */
+
+if ( !ptr           ) { ... }   /* Non-compliant - implicit test for zero */
+if ( ptr &amp;&amp; *ptr == 1 ) { ... } /* Non-compliant - implicit test for zero */
+
+/* The following non-compliant example also violate Rule 14.4             */
+
+if ( ptr            ) { ... }   /* Non-compliant - implicit test for zero */
+</code></pre>
+<p><b>See also</b></p>
+<p>Rule 11.4, Rule 11.9, Rule 14.4</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+COMPARISON_OPS = frozenset(['==', '!=', '<', '>', '<=', '>='])
+CONTROL_KEYWORDS = frozenset(['if', 'while'])
+
+
+def is_pointer(ent):
+    """Check if an entity has a pointer type."""
+    if not ent:
+        return False
+    t = ent.type()
+    if not t:
+        return False
+    return '*' in str(t)
+
+
+def skip_parens_back(lex):
+    """Skip backward through consecutive open parens."""
+    while lex and lex.text() == '(':
+        lex = lex.previous(True, True)
+    return lex
+
+
+def skip_parens_fwd(lex):
+    """Skip forward through consecutive close parens."""
+    while lex and lex.text() == ')':
+        lex = lex.next(True, True)
+    return lex
+
+
+def is_for_condition(semi_lex):
+    """Given a ';' lexeme, check if it is the first ; inside a for(...)."""
+    temp = semi_lex.previous(True, True)
+    depth = 0
+    while temp:
+        t = temp.text()
+        if t == ')':
+            depth += 1
+        elif t == '(':
+            if depth == 0:
+                kw = temp.previous(True, True)
+                return bool(kw and kw.text() == 'for')
+            depth -= 1
+        elif t == ';' and depth == 0:
+            return False
+        elif t in ('{', '}') and depth == 0:
+            return False
+        temp = temp.previous(True, True)
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    for lex in lexer.lexemes():
+        ent = lex.ent()
+        if not ent or not is_pointer(ent):
+            continue
+
+        prev = lex.previous(True, True)
+        nxt = lex.next(True, True)
+
+        # Skip dereferences and member access
+        if nxt and nxt.text() in ('->', '[', '.'):
+            continue
+        if prev and prev.text() in ('&', '->', '.', '['):
+            continue
+        if prev and prev.text() == '*':
+            # Distinguish dereference (*ptr) from multiplication (x * ptr).
+            # If the token before * could be a value (identifier, ), ], literal)
+            # then * is multiplication; otherwise it's dereference — skip it.
+            before_star = prev.previous(True, True)
+            is_multiply = (before_star and (
+                before_star.text() in (')', ']')
+                or before_star.ent()
+                or before_star.token() == 'Literal'
+            ))
+            if not is_multiply:
+                continue
+
+        # Skip function calls (function pointer invocation)
+        if nxt and nxt.text() == '(':
+            continue
+
+        # Skip if being assigned to (ptr = ...)
+        if nxt and nxt.text() == '=':
+            continue
+
+        # Skip if adjacent to comparison operator
+        if prev and prev.text() in COMPARISON_OPS:
+            continue
+        if nxt and nxt.text() in COMPARISON_OPS:
+            continue
+
+        # Get effective prev looking through grouping parens
+        eff_prev = skip_parens_back(prev) if prev else None
+
+        # Get effective next - only skip through ) if wrapped in grouping
+        # parens, not function call parens like func(ptr)
+        eff_nxt = nxt
+        if nxt and nxt.text() == ')' and prev and prev.text() == '(':
+            before_paren = prev.previous(True, True)
+            if not (before_paren and before_paren.ent()):
+                eff_nxt = skip_parens_fwd(nxt)
+
+        # Skip if comparison through parens
+        if eff_prev and eff_prev.text() in COMPARISON_OPS:
+            continue
+        if eff_nxt and eff_nxt.text() in COMPARISON_OPS:
+            continue
+
+        # Check boolean contexts
+        in_boolean = False
+
+        # !ptr or !(ptr)
+        if eff_prev and eff_prev.text() == '!':
+            in_boolean = True
+
+        # Operand of && or ||
+        if not in_boolean and eff_prev and eff_prev.text() in ('&&', '||'):
+            in_boolean = True
+        if not in_boolean and eff_nxt and eff_nxt.text() in ('&&', '||'):
+            in_boolean = True
+
+        # Ternary condition: ptr ? ...
+        if not in_boolean and eff_nxt and eff_nxt.text() == '?':
+            in_boolean = True
+
+        # Controlling expression of if/while/do...while
+        if not in_boolean and eff_prev and eff_prev.text() in CONTROL_KEYWORDS:
+            in_boolean = True
+
+        # (bool)(ptr) or (_Bool)(ptr) cast
+        if not in_boolean and eff_prev and eff_prev.text() == ')':
+            cast_type = eff_prev.previous(True, True)
+            if cast_type and cast_type.text() in ('bool', '_Bool'):
+                in_boolean = True
+
+        # for condition: for (...; ptr; ...)
+        if not in_boolean and eff_prev and eff_prev.text() == ';':
+            if is_for_condition(eff_prev):
+                in_boolean = True
+
+        if in_boolean:
+            check.violation(ent, file, lex.line_begin(),
+                            lex.column_begin(), ERR1)
