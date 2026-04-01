@@ -1,6 +1,17 @@
-#include <cstdint>
-#include <array>
-#include <cstring>
+typedef short int16_t;
+typedef int int32_t;
+typedef unsigned long size_t;
+
+namespace std {
+    template<typename T, size_t N>
+    struct array {
+        T data[N];
+        T& operator[](size_t i) { return data[i]; }
+    };
+}
+
+void *memcpy(void *dest, const void *src, size_t n);
+void *memmove(void *dest, const void *src, size_t n);
 
 void f1(void)
 {
