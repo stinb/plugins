@@ -1044,11 +1044,13 @@ def list_metrics_summary(
     """
     database = require_db()
 
-    # Get list of available metrics (filter=True returns only enabled, filter=False returns all)
+    # Get list of available metrics (enabled_only=True returns only enabled, False returns all)
     if not kindstring:
-        all_metric_ids = understand.Metric.list(db=database, filter=not include_disabled)
+        metric_objs = understand.Metric.list(db=database, enabled_only=not include_disabled)
     else:
-        all_metric_ids = understand.Metric.list(kindstring, db=database, filter=not include_disabled)
+        metric_objs = understand.Metric.list(kindstring, db=database, enabled_only=not include_disabled)
+
+    all_metric_ids = [m.id() for m in metric_objs]
 
     # Apply pagination
     paginated_ids, total_count, truncated, next_cursor = paginate_results(list(all_metric_ids), max_results, cursor)
@@ -1060,7 +1062,7 @@ def list_metrics_summary(
         metrics = []
         for metric_id in paginated_ids:
             try:
-                metric_name = understand.Metric.name(metric_id)
+                metric_name = understand.Metric.lookup(metric_id).name()
                 metrics.append({
                     "id": metric_id,
                     "name": metric_name,
@@ -1107,8 +1109,8 @@ def get_metric_details(
 
     for metric_id in metric_ids:
         try:
-            metric_name = understand.Metric.name(metric_id)
-            metric_description = understand.Metric.description(metric_id)
+            metric_name = understand.Metric.lookup(metric_id).name()
+            metric_description = understand.Metric.lookup(metric_id).description()
 
             results.append({
                 "id": metric_id,
@@ -1172,7 +1174,7 @@ def get_entity_metrics(
                 results[metric_id] = value
             else:
                 try:
-                    metric_name = understand.Metric.name(metric_id)
+                    metric_name = understand.Metric.lookup(metric_id).name()
                     results[metric_id] = {
                         "name": metric_name,
                         "value": value,
@@ -1190,7 +1192,7 @@ def get_entity_metrics(
                 if compact:
                     results[metric_ids[0]] = metric_value
                 else:
-                    metric_name = understand.Metric.name(metric_ids[0])
+                    metric_name = understand.Metric.lookup(metric_ids[0]).name()
                     results[metric_ids[0]] = {
                         "name": metric_name,
                         "value": metric_value,
@@ -1208,7 +1210,7 @@ def get_entity_metrics(
                     results[metric_id] = value
                 else:
                     try:
-                        metric_name = understand.Metric.name(metric_id)
+                        metric_name = understand.Metric.lookup(metric_id).name()
                         results[metric_id] = {
                             "name": metric_name,
                             "value": value,
@@ -1556,7 +1558,7 @@ def get_project_metrics(
     results = {}
     for metric_id in available_metric_ids:
         try:
-            metric_name = understand.Metric.name(metric_id)
+            metric_name = understand.Metric.lookup(metric_id).name()
             value = metric_values.get(metric_id) if isinstance(metric_values, dict) else metric_values
             results[metric_id] = {
                 "name": metric_name,
@@ -2047,7 +2049,7 @@ def get_architecture_metrics(
 
         for metric_id in available_metric_ids:
             try:
-                metric_name = understand.Metric.name(metric_id)
+                metric_name = understand.Metric.lookup(metric_id).name()
                 value = metric_values.get(metric_id)
                 results[metric_id] = {
                     "name": metric_name,
@@ -2063,7 +2065,7 @@ def get_architecture_metrics(
         if len(metric_ids) == 1:
             try:
                 metric_value = arch.metric(metric_ids[0])
-                metric_name = understand.Metric.name(metric_ids[0])
+                metric_name = understand.Metric.lookup(metric_ids[0]).name()
                 results[metric_ids[0]] = {
                     "name": metric_name,
                     "value": metric_value,
@@ -2077,7 +2079,7 @@ def get_architecture_metrics(
 
             for metric_id in metric_ids:
                 try:
-                    metric_name = understand.Metric.name(metric_id)
+                    metric_name = understand.Metric.lookup(metric_id).name()
                     value = metric_values.get(metric_id)
                     results[metric_id] = {
                         "name": metric_name,

@@ -159,12 +159,14 @@ def atn_to_atn(atn: understand.Atn) -> Atn:
         text=atn.text()
     )
 
-def metric_id_to_metric(metric_id: str) -> Metric:
-    """Convert a metric ID to a Metric dataclass."""
+def metric_id_to_metric(metric_id: str | understand.Metric) -> Metric:
+    """Convert a metric ID (str) or understand.Metric to a Metric dataclass."""
+    metric_obj = metric_id if isinstance(metric_id, understand.Metric) else understand.Metric.lookup(metric_id)
+    metric_id_str = metric_obj.id() if metric_obj else str(metric_id)
     return Metric(
-        id=metric_id,
-        name=understand.Metric.name(metric_id),
-        description=understand.Metric.description(metric_id)
+        id=str(metric_id_str),
+        name=metric_obj.name() if metric_obj else str(metric_id_str),
+        description=metric_obj.description() if metric_obj else "",
     )
 
 def lexeme_to_lexeme(lexeme: understand.Lexeme) -> Lexeme:
@@ -600,9 +602,9 @@ def metric_list(
     
     # Handle different parameter combinations for understand.Metric.list
     if kindstring is None:
-        metric_ids = understand.Metric.list(db=db, filter=filter_enabled)
+        metric_ids = understand.Metric.list(db=db, enabled_only=filter_enabled)
     else:
-        metric_ids = understand.Metric.list(kindstring, db=db, filter=filter_enabled)
+        metric_ids = understand.Metric.list(kindstring, db=db, enabled_only=filter_enabled)
     
     return [asdict(metric_id_to_metric(metric_id)) for metric_id in metric_ids]
 
