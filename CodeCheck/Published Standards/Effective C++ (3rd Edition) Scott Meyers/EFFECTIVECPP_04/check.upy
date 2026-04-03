@@ -80,6 +80,63 @@ def test_global():
 def test_language(language):
     return language == 'C++'
 
+
+def has_explicit_init(lexer, line, col):
+    """Check if the declaration has explicit initialization syntax (=, {, or
+    () after the variable name. Scans forward through balanced parens and
+    brackets to handle function pointers and array declarations."""
+    lexeme = lexer.lexeme(line, col)
+    if not lexeme:
+        return False
+    lex = lexeme.next(ignore_whitespace=True, ignore_comments=True)
+    depth = 0
+    while lex:
+        text = lex.text()
+        if text in ('(', '['):
+            depth += 1
+        elif text in (')', ']'):
+            depth -= 1
+        elif depth == 0:
+            if text == '=':
+                return True
+            if text == '{':
+                return True
+            if text == ';':
+                return False
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    return False
+
+
+def has_nontrivial_constructor(ent):
+    """Check if the object's type has a user-defined constructor, meaning
+    default construction actually initializes the object."""
+    typed_ref = ent.ref('Typed')
+    if not typed_ref:
+        return False
+    type_ent = typed_ref.ent()
+    if not type_ent:
+        return False
+    # Follow typedef to the underlying struct/class
+    if type_ent.kind().check('Typedef'):
+        typed_ref2 = type_ent.ref('Typed')
+        if typed_ref2:
+            type_ent = typed_ref2.ent()
+    # Class types typically have meaningful constructors. Struct types are
+    # typically POD types without constructors (especially C-style structs).
+    # For external/library types (Qt, STL), constructor refs may not be in
+    # the database, so checking the Class vs Struct distinction is the most
+    # reliable heuristic.
+    if type_ent.kind().check('Class'):
+        return True
+    # For structs, check if the type defines or declares any constructors
+    # (functions named the same as the struct)
+    type_name = type_ent.name()
+    for member_ref in type_ent.refs('Define, Declare', 'Function'):
+        if member_ref.ent().name() == type_name:
+            return True
+    return False
+
+
 def check(check, file):
     lexer = None
     refs = file.filerefs('Define, Declare', 'Object ~unknown ~unresolved ~TemplateParameter ~Global', True)
@@ -87,7 +144,9 @@ def check(check, file):
         return
 
     for ref in refs:
-        if not ref.ent().ref('init'):
+        ent = ref.ent()
+
+        if not ent.ref('init'):
             if not lexer:
                 lexer = file.lexer()
 
@@ -97,6 +156,25 @@ def check(check, file):
 
             if lexeme and lexeme.text() == 'catch':
                 continue
-            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1, ref.ent().name())
-
-
+            check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
+        else:
+            # The C++ parser may add phantom Init refs for implicit default
+            # construction of POD types. Use the lexer to verify there is
+            # actual initializer syntax in the source code. Only applies to
+            # local objects — member init refs come from usage sites.
+            if not ent.kind().check('Local Object'):
+                continue
+            if not lexer:
+                lexer = file.lexer()
+            # Skip macro-expanded entities — the variable name won't appear
+            # at its reported position, and initialization may be inside
+            # the macro where the lexer can't see it
+            lexeme = lexer.lexeme(ref.line(), ref.column())
+            if not lexeme or lexeme.text() != ent.name():
+                continue
+            if not has_explicit_init(lexer, ref.line(), ref.column()):
+                # Type has a user-defined constructor, so the implicit default
+                # construction is meaningful (e.g. std::string, std::vector)
+                if has_nontrivial_constructor(ent):
+                    continue
+                check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
