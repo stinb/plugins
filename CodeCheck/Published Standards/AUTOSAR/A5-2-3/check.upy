@@ -356,11 +356,20 @@ def test_entity(file):
 def test_global():
     return False
 
+
 def define_options(check):
     atomic = False
     if check.id() in ('MISRA23_11.8', 'MISRA25_11.8'):
         atomic = True
     check.option().checkbox('atomic', 'Check if _Atomic was removed.', atomic)
+
+
+def on_macro(ref, on_scope=False):
+    lexer = ref.file().lexer(lookup_ents=False)
+    lex = lexer.lexeme(ref.line(), ref.column())
+    ref_ent = ref.scope() if on_scope else ref.ent()
+
+    return lex.text() != ref_ent.name()
 
 
 def check(check, file):
@@ -371,7 +380,7 @@ def check(check, file):
         fromEnt = toRef.scope()
         toEnt = toRef.ent()
 
-        if not fromEnt or not toEnt:
+        if not fromEnt or not toEnt or on_macro(toRef, True):
             continue
 
         # Ensure that ent.type isn't None
@@ -399,7 +408,8 @@ def check(check, file):
 
         # See if _Atomic is removed
         if check.option().lookup('atomic') and re.search(r'_Atomic', fromType) and not re.search(r'_Atomic', toType):
-            check.violation(toEnt, file, toRef.line(), toRef.column(), ERR3, fromEnt.name())
+            check.violation(toEnt, file, toRef.line(),
+                            toRef.column(), ERR3, fromEnt.name())
 
         # Get the lexeme
         if not lexer:
@@ -416,14 +426,16 @@ def check(check, file):
 
         if cast:
             if removedConst:
-                check.violation(toEnt, file, toRef.line(), toRef.column(), ERR1, fromEnt.name())
+                check.violation(toEnt, file, toRef.line(),
+                                toRef.column(), ERR1, fromEnt.name())
             if removedVolatile:
-                check.violation(toEnt, file, toRef.line(), toRef.column(), ERR2, fromEnt.name())
+                check.violation(toEnt, file, toRef.line(),
+                                toRef.column(), ERR2, fromEnt.name())
 
     # Cast on the left side of =
     for ref in file.filerefs('Deref Set'):
         ent = ref.ent()
-        if not ent:
+        if not ent or on_macro(ref):
             continue
 
         # Starts with const
@@ -437,6 +449,8 @@ def check(check, file):
             # See if there was a cast
             while lexeme and lexeme.text() != ';':
                 if lexeme.text() == 'const_cast':
-                    check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
+                    check.violation(ent, file, ref.line(),
+                                    ref.column(), ERR1, ent.name())
                     break
-                lexeme = lexeme.previous(ignore_whitespace=True, ignore_comments=True)
+                lexeme = lexeme.previous(
+                    ignore_whitespace=True, ignore_comments=True)
