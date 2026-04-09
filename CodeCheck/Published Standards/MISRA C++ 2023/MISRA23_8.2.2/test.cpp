@@ -36,3 +36,8 @@ void f2(int32_t x)
     auto j = int8_t{42}; // Rule does not apply - use of curly braces
     auto k = int8_t(x);  // UndCC_Violation - does not construct an object
 } // of class type
+
+// Function pointer typedefs — not casts, should not be flagged
+typedef bool (*fnCallback)();                  // UndCC_Valid
+typedef void (*fnHandler)(int);                // UndCC_Valid
+using fnShouldAppsUseDarkMode = bool (*)();    // UndCC_Valid
