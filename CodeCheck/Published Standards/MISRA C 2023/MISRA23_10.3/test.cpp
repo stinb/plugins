@@ -1,5 +1,7 @@
-#include <cstdint>
-#include <complex.h>
+typedef unsigned char uint8_t;
+typedef signed char int8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
 int main() {
   enum enuma { A1, A2, A3 } ena;
   enum enumb { B1, B2, B3 } enb;
