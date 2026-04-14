@@ -66,3 +66,12 @@ void func6(void) {
   }
 }
 
+/* Issue #4766 - Cast to void* should not trigger 10.3 */
+void foo(void *p);
+void func7(void) {
+  char buf[2];
+  foo((void*)&buf[0]);       // UndCC_Valid - pointer cast, not arithmetic
+  char *p1 = &buf[0];       // UndCC_Valid
+  void *p2 = (void*)&buf[0]; // UndCC_Valid - pointer cast, not arithmetic
+}
+

@@ -1,0 +1,260 @@
+ERR1 = 'Begin of %1 body should have a comment repeating the unit name'
+
+BODY_KINDS = "Package, Function, Procedure"
+
+# Keywords after which 'is' does NOT start a body's declarative part
+NON_BODY_IS_PREV_KW = frozenset(["type", "subtype", "case"])
+
+# Keywords that open block constructs requiring a matching 'end'
+BLOCK_OPENERS = frozenset(["loop", "if", "case", "select", "record"])
+
+
+def ids():
+    return ("ADA95_3.3.7",)
+
+
+def name(id):
+    return {
+        "ADA95_3.3.7": "Published Standards/Ada 95/3.3.7 Marker Comments",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_3.3.7": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Comments",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_3.3.7": """\
+<p><b>Guideline</b></p>
+<p>&#8226; Use pagination markers to mark program unit boundaries (see Guideline 2.1.7).</p>
+<p>&#8226; Repeat the unit name in a comment to mark the begin of a package body, subprogram body,
+task body, or block if the begin is preceded by declarations.</p>
+<p>&#8226; For long or heavily nested if and case statements, mark the end of the statement with a
+comment summarizing the condition governing the statement.</p>
+<p>&#8226; For long or heavily nested if statements, mark the else part with a comment summarizing
+the conditions governing this portion of the statement.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">if    A_Found then
+   ...
+elsif B_Found then
+   ...
+else  -- A and B were both not found
+   ...
+   if Count = Max then
+      ...
+   end if;
+   ...
+end if;  -- A_Found
+------------------------------------------------------------------------
+package body Abstract_Strings is
+   ...
+   ---------------------------------------------------------------------
+   procedure Concatenate (...) is
+   begin
+      ...
+   end Concatenate;
+   ---------------------------------------------------------------------
+   ...
+begin  -- Abstract_Strings
+   ...
+end Abstract_Strings;
+------------------------------------------------------------------------
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Marker comments emphasize the structure of code and make it easier to scan. They can be lines
+that separate sections of code or descriptive tags for a construct. They help the reader resolve
+questions about the current position in the code. This is more important for large units than for
+small ones. A short marker comment fits on the same line as the reserved word with which it is
+associated. Thus, it adds information without clutter.</p>
+<p>The if, elsif, else, and end if of an if statement are often separated by long sequences of
+statements, sometimes involving other if statements. As shown in the first example, marker comments
+emphasize the association of the keywords of the same statement over a great visual distance. Marker
+comments are not necessary with the block statement and loop statement because the syntax of these
+statements allows them to be named with the name repeated at the end. Using these names is better
+than using marker comments because the compiler verifies that the names at the beginning and end
+match.</p>
+<p>The sequence of statements of a package body is often very far from the first line of the
+package. Many subprogram bodies, each containing many begin lines, may occur first. As shown in the
+second example, the marker comment emphasizes the association of the begin with the package.</p>
+
+<p><b>Notes</b></p>
+<p>Repeating names and noting conditional expressions clutters the code if overdone. It is visual
+distance, especially page breaks, that makes marker comments beneficial.</p>
+
+<p><b>Developer's Note</b></p>
+<p>This check enforces guideline 2 only: it flags a <code>begin</code> that is preceded by
+declarations but lacks a trailing comment repeating the enclosing unit name (e.g.,
+<code>begin  -- Package_Name</code>). The following guidelines cannot be automated:</p>
+<p>&#8226; Guideline 1 (pagination markers) — no standard format for separator lines is defined,
+and their placement depends on visual judgment.</p>
+<p>&#8226; Guidelines 3 and 4 (marking <code>end if</code> and <code>else</code> with condition
+summaries) — "long or heavily nested" is subjective, and verifying that the comment accurately
+summarizes the governing condition requires natural language understanding.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    if not lexer:
+        return
+
+    for body_ref in file.filerefs("Declare Body", BODY_KINDS, True):
+        body_ent = body_ref.ent()
+        body_name = str(body_ent.name())
+
+        contents = str(body_ent.contents())
+        if contents and "begin" not in contents.lower():
+            continue
+
+        begin_lex = _find_body_begin(lexer, body_ref.line())
+        if begin_lex is None:
+            continue
+
+        # Find the first non-parameter declaration after the body's opening line.
+        # ~Parameter excludes parameters from multi-line signatures, which would
+        # otherwise appear between body_ref.line() and begin_lex.line_begin().
+        first_decl = min(
+            (r for r in body_ent.refs("Declare", "~Parameter") if r.line() > body_ref.line()),
+            key=lambda r: r.line(),
+            default=None,
+        )
+        if not first_decl or first_decl.line() >= begin_lex.line_begin():
+            continue
+
+        if not _has_name_comment(lexer, begin_lex.line_begin(), body_name):
+            check.violation(
+                body_ent,
+                file,
+                begin_lex.line_begin(),
+                begin_lex.column_begin(),
+                ERR1,
+                body_name,
+            )
+
+
+def _find_body_begin(lexer, start_line):
+    """Find the 'begin' that opens the body's statement part, starting from start_line."""
+    lex = lexer.lexeme(start_line, 1)
+    if not lex:
+        return None
+
+    # Skip to the 'is' that opens the body's declarative part
+    while lex:
+        if lex.token() == "Keyword" and str(lex.text()).lower() == "is":
+            lex = lex.next(True, True)
+            break
+        lex = lex.next(True, True)
+
+    if lex is None:
+        return None
+
+    # Scan from after the outer 'is', tracking nesting depth.
+    #
+    # stack entries:
+    #   'is'     — inside a nested body's declarative part
+    #   'begin'  — inside a nested body's or block's statement part
+    #   'record' / 'loop' / 'if' / 'case' / 'select' — inside a matching construct
+    #
+    # When the stack is empty and we see 'begin', that is the outer body's begin.
+    stack = []
+    prev_kw = None
+
+    while lex:
+        text = str(lex.text()).lower() if lex.token() == "Keyword" else None
+
+        if not text:
+            lex = lex.next(True, True)
+            continue
+
+        if text == "is":
+            peek = lex.next(True, True)
+            ptext = str(peek.text()).lower() if (peek and peek.token() == "Keyword") else None
+            if prev_kw in NON_BODY_IS_PREV_KW:
+                # 'type X is ...' or 'subtype X is ...' or 'case X is'
+                # Peek: if next keyword is a block opener (e.g. 'record'), push it.
+                if ptext in BLOCK_OPENERS:
+                    stack.append(ptext)
+                    lex = peek
+            elif ptext in ("new", "separate", "abstract", "null"):
+                # Generic instantiation, stub, abstract, or null body — no begin/end pair.
+                pass
+            else:
+                # 'procedure/function/package body X is' — real body declarative part.
+                stack.append("is")
+            prev_kw = text
+
+        elif text == "begin":
+            if stack and stack[-1] == "is":
+                # Nested body's begin: close declarative part, open statement part
+                stack.pop()
+                stack.append("begin")
+            elif not stack:
+                # Outer body's begin found
+                return lex
+            else:
+                # begin..end block inside statement context
+                stack.append("begin")
+            prev_kw = text
+
+        elif text in BLOCK_OPENERS:
+            if stack:
+                stack.append(text)
+            prev_kw = text
+
+        elif text == "end":
+            peek = lex.next(True, True)
+            if peek and peek.token() == "Keyword":
+                ptext = str(peek.text()).lower()
+                if ptext in BLOCK_OPENERS:
+                    # 'end record', 'end loop', 'end if', etc.
+                    if stack and stack[-1] == ptext:
+                        stack.pop()
+                    lex = peek.next(True, True)
+                    continue
+            # 'end;' or 'end Identifier;' — closes begin..end or nested body
+            if stack:
+                stack.pop()
+            prev_kw = text
+
+        elif text in (
+            "type", "subtype", "procedure", "function", "package",
+            "task", "protected", "generic", "return", "separate",
+        ):
+            prev_kw = text
+
+        lex = lex.next(True, True)
+
+    return None
+
+
+def _has_name_comment(lexer, line, name):
+    """Return True if the given line has a comment containing the unit name."""
+    lex = lexer.lexeme(line, 1)
+    name_lower = name.lower()
+    while lex and lex.line_begin() == line:
+        if lex.token() == "Comment" and name_lower in str(lex.text()).lower():
+            return True
+        lex = lex.next(False, False)
+    return False
