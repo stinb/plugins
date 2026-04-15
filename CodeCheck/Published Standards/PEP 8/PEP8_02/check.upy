@@ -1,0 +1,138 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 4-14-26
+
+
+import re
+
+
+ERR1 = 'Line exceeds %1 characters (%2 characters)'
+ERR2 = 'Comment/docstring line exceeds %1 characters (%2 characters)'
+
+
+def ids():
+    return ('PEP8_02', 'PYTH_05')
+
+
+def name(id):
+    return {
+        'PEP8_02': 'Published Standards/PEP 8/Maximum Line Length',
+        'PYTH_05': 'All Checks/Language Specific/Python/Styling/Maximum Line Length',
+    }[id]
+
+
+def tags(id):
+    return {
+        'PEP8_02': [
+            'Language: Python',
+            'Standard: PEP 8',
+            'Styling',
+        ],
+        'PYTH_05': [
+            'Language: Python',
+            'Styling',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    desc = {
+        'PEP8_02': '''\
+<p><b>Maximum Line Length</b></p>
+<p>Limit all lines to a maximum of 79 characters.</p>
+<p>For flowing long blocks of text with fewer structural restrictions
+(docstrings or comments), the line length should be limited to 72
+characters.</p>
+<p>Limiting the required editor window width makes it possible to have
+several files open side by side, and works well when using code review
+tools that present the two versions in adjacent columns.</p>
+<p>The default wrapping in most tools disrupts the visual structure of
+the code, making it more difficult to understand. The limits are chosen
+to avoid wrapping in editors with the window width set to 80, even if
+the tool places a marker glyph in the final column when wrapping lines.
+Some web based tools may not offer dynamic line wrapping at all.</p>
+<p>Some teams strongly prefer a longer line length. For code maintained
+exclusively or primarily by a team that can reach agreement on this
+issue, it is okay to increase the line length limit up to 99 characters,
+provided that comments and docstrings are still wrapped at 72
+characters.</p>
+<p>The Python standard library is conservative and requires limiting
+lines to 79 characters (and docstrings/comments to 72).</p>
+<p>Reference: <i>https://peps.python.org/pep-0008/#maximum-line-length</i></p>
+
+<p><b>Developer's Notes</b></p>
+<p>The maximum line length for code and the maximum line length for
+comments/docstrings are independently configurable. Lines that contain
+only a URL (optionally preceded by a comment marker) are excluded from
+the check, since URLs cannot be meaningfully split across lines.</p>
+''',
+    }
+
+    desc['PYTH_05'] = desc['PEP8_02']
+
+    return desc[id]
+
+
+def define_options(check):
+    check.options().integer('maxLineLength', 'Maximum line length for code', 79)
+    check.options().integer('maxDocLength', 'Maximum line length for comments and docstrings', 72)
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Python'
+
+
+def check(check, file):
+    contents = file.contents()
+    if not contents:
+        return
+
+    max_code = check.options().lookup('maxLineLength')
+    max_doc = check.options().lookup('maxDocLength')
+
+    # Build a set of lines inside triple-quoted strings (docstrings)
+    docstring_lines = set()
+    lexer = file.lexer(lookup_ents=False)
+    if lexer:
+        lex = lexer.first()
+        while lex:
+            if lex.token() == 'String':
+                text = lex.text()
+                if text.startswith('"""') or text.startswith("'''"):
+                    for ln in range(lex.line_begin(), lex.line_end() + 1):
+                        docstring_lines.add(ln)
+            lex = lex.next()
+
+    # URL-only line pattern (with optional leading whitespace and comment marker)
+    url_re = re.compile(r'^\s*#?\s*https?://\S+\s*$')
+
+    lines = contents.splitlines()
+    for line_num, line in enumerate(lines, 1):
+        length = len(line)
+
+        # Skip lines that are just a URL
+        if url_re.match(line):
+            continue
+
+        # A line is a doc/comment line if it's inside a docstring or is a
+        # comment-only line (no code before the #). Lines with code and an
+        # inline comment use the code limit.
+        is_doc = (line_num in docstring_lines
+                  or line.lstrip().startswith('#'))
+
+        if is_doc:
+            if length > max_doc:
+                check.violation(None, file, line_num, max_doc + 1,
+                                ERR2, str(max_doc), str(length))
+        else:
+            if length > max_code:
+                check.violation(None, file, line_num, max_code + 1,
+                                ERR1, str(max_code), str(length))
