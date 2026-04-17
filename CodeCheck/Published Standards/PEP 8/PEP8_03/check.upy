@@ -1,0 +1,279 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 4-16-26
+
+
+ERR1 = 'Line break should be placed before binary operator "%1", not after'
+ERR2 = 'Line break should be placed after binary operator "%1", not before'
+
+
+# Binary operators that may appear between operands on multiple lines.
+# Single-char operators that can also be unary (+, -, *, **) and the '@'
+# operator (which is also the decorator prefix) are disambiguated by
+# inspecting the preceding token. The walrus ':=' and the compound
+# keyword operators 'is not' / 'not in' are handled separately in
+# _binary_op because each is emitted as multiple tokens by the lexer.
+BINARY_OPS = {
+    '+', '-', '*', '/', '%', '**', '//', '@',
+    '&', '|', '^', '<<', '>>',
+    '<', '>', '<=', '>=', '==', '!=',
+}
+BINARY_KEYWORDS = {'and', 'or', 'in', 'is'}
+# Operators that can also appear as prefix/unary (so require prev token
+# to be an operand before we treat them as binary).
+POTENTIALLY_PREFIX = {'+', '-', '*', '**', '@'}
+
+
+def ids():
+    return ('PEP8_03', 'PYTH_06')
+
+
+def name(id):
+    return {
+        'PEP8_03': 'Published Standards/PEP 8/Line Break Before Binary Operator',
+        'PYTH_06': 'All Checks/Language Specific/Python/Styling/Line Break Before Binary Operator',
+    }[id]
+
+
+def tags(id):
+    return {
+        'PEP8_03': [
+            'Language: Python',
+            'Standard: PEP 8',
+            'Styling',
+        ],
+        'PYTH_06': [
+            'Language: Python',
+            'Styling',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    desc = {
+        'PEP8_03': '''\
+<p><b>Should a Line Break Before or After a Binary Operator?</b></p>
+<p>For decades the recommended style was to break after binary operators.
+But this can hurt readability in two ways: the operators tend to get
+scattered across different columns on the screen, and each operator is
+moved away from its operand and onto the previous line. Here, the eye
+has to do extra work to tell which items are added and which are
+subtracted:</p>
+<p>Wrong:</p>
+<pre><code language="Python"># Wrong:
+# operators sit far away from their operands
+income = (gross_wages +
+          taxable_interest +
+          (dividends - qualified_dividends) -
+          ira_deduction -
+          student_loan_interest)
+</code></pre>
+<p>To solve this readability problem, mathematicians and their publishers
+follow the opposite convention. Donald Knuth explains the traditional
+rule in his <i>Computers and Typesetting</i> series: "Although formulas
+within a paragraph always break after binary operations and relations,
+displayed formulas always break before binary operations".</p>
+<p>Following the tradition from mathematics usually results in more
+readable code:</p>
+<p>Correct:</p>
+<pre><code language="Python"># Correct:
+# easy to match operators with operands
+income = (gross_wages
+          + taxable_interest
+          + (dividends - qualified_dividends)
+          - ira_deduction
+          - student_loan_interest)
+</code></pre>
+<p>In Python code, it is permissible to break before or after a binary
+operator, as long as the convention is consistent locally. For new code
+Knuth's style is suggested.</p>
+<p>Reference: <i>https://peps.python.org/pep-0008/#should-a-line-break-before-or-after-a-binary-operator</i></p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check flags binary operators that appear on the wrong side of a
+line break inside a multi-line expression. The "Line break style"
+option selects which side of the operator the line break should be on
+(default is "Before", following Knuth's style and PEP 8's current
+recommendation). Binary operators include arithmetic, bitwise,
+comparison, and logical operators (<code>and</code>, <code>or</code>,
+<code>in</code>, <code>is</code>), the walrus operator
+(<code>:=</code>), and the matrix multiplication operator
+(<code>@</code>). The compound operators <code>is not</code> and
+<code>not in</code> are recognized as single operators. Unary uses of
+<code>+</code>, <code>-</code>, <code>*</code>, and <code>**</code>,
+and the decorator <code>@</code>, are not flagged.</p>
+''',
+    }
+
+    desc['PYTH_06'] = desc['PEP8_03']
+
+    return desc[id]
+
+
+def define_options(check):
+    check.options().choice('style', 'Line break style',
+                           ['Before', 'After'], 'Before')
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Python'
+
+
+def _is_operand(prev_token):
+    """Return True if prev_token is an operand (identifier/literal/closer).
+
+    Used to disambiguate ambiguous operators (+, -, *, **, @) which can
+    also appear as prefix/unary or as a decorator. A binary operator is
+    preceded by an operand; a prefix use is preceded by something else
+    (start of expression, another operator, a comma/colon, ...).
+    """
+    if prev_token is None:
+        return False
+    tok = prev_token.token()
+    text = prev_token.text()
+    if tok in ('Identifier', 'Literal', 'String'):
+        return True
+    if tok == 'Keyword' and text in ('None', 'True', 'False'):
+        return True
+    if text in (')', ']', '}'):
+        return True
+    return False
+
+
+_SKIP_TOKENS = ('Whitespace', 'Comment', 'Newline', 'Indent', 'Dedent',
+                'Continuation')
+
+
+def _meaningful(lex):
+    """Return the next non-whitespace, non-comment, non-newline token."""
+    while lex and lex.token() in _SKIP_TOKENS:
+        lex = lex.next()
+    return lex
+
+
+def _prev_meaningful(lex):
+    lex = lex.previous()
+    while lex and lex.token() in _SKIP_TOKENS:
+        lex = lex.previous()
+    return lex
+
+
+def _binary_op(lex):
+    """If lex starts a binary operator, return (start, end, text).
+
+    For compound operators ('is not', 'not in') end differs from start.
+    For everything else end == start. Returns None if lex does not
+    start a binary operator (e.g. unary +/-, a decorator @, a bare
+    'not' meaning logical negation, etc.).
+    """
+    tok = lex.token()
+    text = lex.text()
+
+    if tok == 'Keyword':
+        if text == 'is':
+            nxt = _meaningful(lex.next())
+            if nxt and nxt.token() == 'Keyword' and nxt.text() == 'not':
+                return (lex, nxt, 'is not')
+            return (lex, lex, 'is')
+        if text == 'not':
+            nxt = _meaningful(lex.next())
+            if nxt and nxt.token() == 'Keyword' and nxt.text() == 'in':
+                return (lex, nxt, 'not in')
+            return None  # bare 'not' is unary (logical negation)
+        if text in ('and', 'or', 'in'):
+            return (lex, lex, text)
+        return None
+
+    if tok in ('Operator', 'Punctuation'):
+        # Walrus ':=' is emitted as two adjacent tokens by the lexer.
+        if text == ':':
+            nxt = lex.next()
+            if (nxt and nxt.text() == '='
+                    and nxt.line_begin() == lex.line_begin()
+                    and nxt.column_begin() == lex.column_begin() + 1):
+                return (lex, nxt, ':=')
+            return None
+        if text in BINARY_OPS:
+            if text in POTENTIALLY_PREFIX:
+                if _is_operand(_prev_meaningful(lex)):
+                    return (lex, lex, text)
+                return None
+            return (lex, lex, text)
+
+    return None
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    if not lexer:
+        return
+
+    style = check.options().lookup('style')
+
+    # First pass: determine which lines are continuations of a multi-line
+    # expression (inside brackets or after an explicit backslash). The
+    # lexer emits a 'Continuation' token for a backslash line-joiner, so
+    # we use that rather than scanning raw text (which could be fooled
+    # by a literal backslash at the end of a string or comment).
+    continuation_of_prev = set()  # line numbers that continue previous line
+    has_continuation_next = set()  # line numbers whose expression continues
+
+    bracket_depth = 0
+    prev_line = 0
+    lex = lexer.first()
+    while lex:
+        cur_line = lex.line_begin()
+        if cur_line != prev_line and prev_line > 0 and bracket_depth > 0:
+            continuation_of_prev.add(cur_line)
+            has_continuation_next.add(prev_line)
+        text = lex.text()
+        if text in ('(', '[', '{'):
+            bracket_depth += 1
+        elif text in (')', ']', '}'):
+            bracket_depth = max(0, bracket_depth - 1)
+        if lex.token() == 'Continuation':
+            # Backslash line-joiner: this line continues onto the next.
+            has_continuation_next.add(cur_line)
+            continuation_of_prev.add(cur_line + 1)
+        prev_line = cur_line
+        lex = lex.next()
+
+    # Second pass: find binary operators and check their position.
+    lex = lexer.first()
+    while lex:
+        op = _binary_op(lex)
+        if op is None:
+            lex = lex.next()
+            continue
+
+        start, end, text = op
+        line = start.line_begin()
+        col = start.column_begin()
+        end_line = end.line_begin()
+
+        nxt = _meaningful(end.next())
+        prv = _prev_meaningful(start)
+        at_line_end = (nxt is None) or (nxt.line_begin() > end_line)
+        at_line_start = (prv is None) or (prv.line_begin() < line)
+
+        if style == 'Before':
+            # Violation: operator trails the line, break is after it.
+            if at_line_end and end_line in has_continuation_next:
+                check.violation(None, file, line, col, ERR1, text)
+        else:  # After
+            # Violation: operator leads a continuation line, break is
+            # before it.
+            if at_line_start and line in continuation_of_prev:
+                check.violation(None, file, line, col, ERR2, text)
+
+        # Advance past the end token so compound operators aren't
+        # rescanned from their second half.
+        lex = end.next()
