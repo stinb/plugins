@@ -1,0 +1,196 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 4-17-26
+
+
+ERR1 = 'Expected 2 blank lines before top-level definition, found %1'
+ERR2 = 'Expected 1 blank line before method definition, found %1'
+
+
+def ids():
+    return ('PEP8_04', 'PYTH_07')
+
+
+def name(id):
+    return {
+        'PEP8_04': 'Published Standards/PEP 8/Blank Lines',
+        'PYTH_07': 'All Checks/Language Specific/Python/Styling/Blank Lines',
+    }[id]
+
+
+def tags(id):
+    return {
+        'PEP8_04': [
+            'Language: Python',
+            'Standard: PEP 8',
+            'Styling',
+        ],
+        'PYTH_07': [
+            'Language: Python',
+            'Styling',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    desc = {
+        'PEP8_04': '''\
+<p><b>Blank Lines</b></p>
+<p>Surround top-level function and class definitions with two blank
+lines.</p>
+<p>Method definitions inside a class are surrounded by a single blank
+line.</p>
+<p>Extra blank lines may be used (sparingly) to separate groups of
+related functions. Blank lines may be omitted between a bunch of
+related one-liners (e.g. a set of dummy implementations).</p>
+<p>Use blank lines in functions, sparingly, to indicate logical
+sections.</p>
+<p>Python accepts the control-L (i.e. ^L) form feed character as
+whitespace; many tools treat these characters as page separators, so
+you may use them to separate pages of related sections of your file.
+Note, some editors and web-based code viewers may not recognize
+control-L as a form feed and will show another glyph in its place.</p>
+<p>Reference: <i>https://peps.python.org/pep-0008/#blank-lines</i></p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check enforces a minimum of two blank lines before every
+top-level function or class definition and a minimum of one blank line
+before every method (or class) defined directly inside a class. The
+guidance on using extra blank lines "sparingly" is subjective and is
+not enforced; having more than the minimum is not flagged. Attached
+decorators and the block of comments immediately preceding a
+definition are treated as part of the definition, so the blank lines
+are counted before the first such decorator or comment. Definitions
+nested inside a function are not checked, since PEP 8 does not specify
+blank-line requirements for them. Definitions that are the first item
+in their enclosing scope (i.e. immediately follow the enclosing class
+header or the start of the file) are not flagged.</p>
+''',
+    }
+
+    desc['PYTH_07'] = desc['PEP8_04']
+
+    return desc[id]
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Python'
+
+
+def _line_indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def check(check, file):
+    contents = file.contents()
+    if not contents:
+        return
+    lexer = file.lexer(lookup_ents=False)
+    if not lexer:
+        return
+
+    lines = contents.splitlines()
+
+    # line_kind[i] is the kind of line i (1-based). Multi-line string
+    # bodies get reclassified to 'code' below.
+    line_kind = [None]
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            line_kind.append('blank')
+        elif stripped[0] == '#':
+            line_kind.append('comment')
+        elif stripped[0] == '@':
+            line_kind.append('decorator')
+        else:
+            line_kind.append('code')
+
+    # Single lexer pass: collect def/class positions and mark every line
+    # that continues a previous logical line (bracketed continuation,
+    # multi-line string body, or backslash line-joiner).
+    definitions = []
+    continuation = set()
+    bracket_depth = 0
+    prev_line_no = 0
+    lex = lexer.first()
+    while lex:
+        cur_line = lex.line_begin()
+        if cur_line != prev_line_no and bracket_depth > 0:
+            continuation.add(cur_line)
+
+        if lex.token() == 'String' and lex.line_begin() != lex.line_end():
+            for ln in range(lex.line_begin() + 1, lex.line_end() + 1):
+                continuation.add(ln)
+                line_kind[ln] = 'code'
+        elif lex.token() == 'Continuation':
+            continuation.add(cur_line + 1)
+
+        text = lex.text()
+        if text in ('(', '[', '{'):
+            bracket_depth += 1
+        elif text in (')', ']', '}'):
+            bracket_depth = max(0, bracket_depth - 1)
+        elif (lex.token() == 'Keyword'
+                and text in ('def', 'class')
+                and bracket_depth == 0
+                and cur_line not in continuation):
+            definitions.append((cur_line, text))
+
+        prev_line_no = cur_line
+        lex = lex.next()
+
+    def stmt_start(i):
+        while i > 1 and i in continuation:
+            i -= 1
+        return i
+
+    scope_stack = []  # (indent, 'def' | 'class')
+    for def_line, kw in definitions:
+        indent = _line_indent(lines[def_line - 1])
+        def_col = indent + 1
+
+        while scope_stack and scope_stack[-1][0] >= indent:
+            scope_stack.pop()
+        inside_function = any(s[1] == 'def' for s in scope_stack)
+        enclosing_kind = scope_stack[-1][1] if scope_stack else 'module'
+        scope_stack.append((indent, kw))
+
+        if inside_function:
+            continue
+        required = 2 if enclosing_kind == 'module' else 1
+
+        # Walk back through attached decorators (possibly multi-line)
+        # and the contiguous block of attached comments.
+        i = def_line - 1
+        while i >= 1:
+            ls = stmt_start(i)
+            if (line_kind[ls] in ('decorator', 'comment')
+                    and _line_indent(lines[ls - 1]) == indent):
+                i = ls - 1
+            else:
+                break
+
+        blank_count = 0
+        while i >= 1 and line_kind[i] == 'blank':
+            blank_count += 1
+            i -= 1
+
+        if i < 1:
+            continue
+        # First item in an enclosing scope body: the predecessor sits at
+        # a lower indent (it's the enclosing class header or similar).
+        if _line_indent(lines[stmt_start(i) - 1]) < indent:
+            continue
+
+        if blank_count < required:
+            err = ERR1 if required == 2 else ERR2
+            check.violation(None, file, def_line, def_col,
+                            err, str(blank_count))
