@@ -1,6 +1,6 @@
 typedef short int16_t;
 typedef int int32_t;
-typedef unsigned long size_t;
+typedef __SIZE_TYPE__ size_t;
 
 namespace std {
     template<typename T, size_t N>
