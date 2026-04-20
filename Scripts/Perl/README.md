@@ -1,7 +1,10 @@
-# Getting Started with the Perl API
+> [!WARNING]
+> The Perl API is deprecated as of 2026 and will no longer be maintained. At some point in the future it will be removed from Understand
+
+# Getting Started with the Perl API 
 Understand includes a PERL API which allows you to directly query the Understand database. If you want to create your own report, or gather information in a manner that we didn’t foresee in Understand, you can access the information yourself via the API. The API can be accessed in several different ways: most of the scripts are designed to be run from Understand’s GUI on the currently opened database. They can also be run from the command line, and some plugins are designed to interact directly with Understand.
 
-You can access the latest version of the Perl API documentation from in Understand. Select Help -> Perl API Documentation
+You can access the latest version of the Perl API documentation in your Understand installation at `SciTools/bin/[OS]/Perl/STI/Understand.html`
 
 ## Run Scripts in Understand
 To run a script from inside of Understand, use Tools->Run a Command, configure any necessary parameters, and hit run. The resulting output can then be double-clicked to visit the referenced source.

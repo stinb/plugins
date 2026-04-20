@@ -1,0 +1,175 @@
+# Configuration pragmas that apply partition-wide.
+# Standard pragmas from ARM Annex L, plus GNAT implementation-defined configuration pragmas.
+CONFIG_PRAGMAS = frozenset({
+    # Standard Ada (ARM Annex L)
+    'assertion_policy',
+    'assume_no_invalid_values',
+    'default_storage_pool',
+    'detect_blocking',
+    'discard_names',
+    'locking_policy',
+    'normalize_scalars',
+    'partition_elaboration_policy',
+    'priority_specific_dispatching',
+    'profile',
+    'queuing_policy',
+    'restrictions',
+    'restriction_warnings',
+    'reviewable',
+    'suppress',
+    'task_dispatching_policy',
+    'unsuppress',
+    # GNAT implementation-defined
+    'ada_83',
+    'ada_95',
+    'ada_05',
+    'ada_2005',
+    'ada_12',
+    'ada_2012',
+    'ada_2022',
+    'aggregate_individually_assign',
+    'allow_integer_address',
+    'annotate',
+    'c_pass_by_copy',
+    'check_float_overflow',
+    'check_name',
+    'check_policy',
+    'component_alignment',
+    'convention_identifier',
+    'debug_policy',
+    'default_scalar_storage_order',
+    'disable_atomic_synchronization',
+    'elaboration_checks',
+    'eliminate',
+    'enable_atomic_synchronization',
+    'extend_system',
+    'extensions_allowed',
+    'external_name_casing',
+    'fast_math',
+    'favor_top_level',
+    'ignore_pragma',
+    'implicit_packing',
+    'initialize_scalars',
+    'interrupt_state',
+    'interrupts_system_by_default',
+    'license',
+    'no_component_reordering',
+    'no_heap_finalization',
+    'no_strict_aliasing',
+    'optimize_alignment',
+    'overflow_mode',
+    'overriding_renamings',
+    'persistent_bss',
+    'prefix_exception_messages',
+    'profile_warnings',
+    'rename_pragma',
+    'short_circuit_and_or',
+    'source_file_name',
+    'source_file_name_project',
+    'spark_mode',
+    'style_checks',
+    'suppress_exception_locations',
+    'unevaluated_use_of_old',
+    'use_vads_size',
+    'user_aspect_definition',
+    'validity_checks',
+    'warning_as_error',
+    'warnings',
+    'wide_character_encoding',
+})
+
+ERR1 = 'Configuration pragma %1 in package compilation unit'
+
+
+def ids():
+    return ('ADA95_4.1.2',)
+
+
+def name(id):
+    return {
+        'ADA95_4.1.2': 'Published Standards/Ada 95/4.1.2 Configuration Pragmas',
+    }[id]
+
+
+def tags(id):
+    return {
+        'ADA95_4.1.2': [
+            'Language: Ada',
+            'Standard: Ada 95',
+            'High-level Structure',
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        'ADA95_4.1.2': '''
+<p><b>Guideline</b></p>
+<p>&#8226; When possible, express configuration pragmas through compiler options or other means
+that do not require modifications to the source code.</p>
+<p>&#8226; When configuration pragmas must be placed in source code, consider isolating them to
+one compilation unit per partition; if specified, the main subprogram for the partition is
+recommended.</p>
+
+<p><b>Rationale</b></p>
+<p>Configuration pragmas select partition-wide or system-wide options, reflecting high-level
+software architecture decisions or application domain usage. Embedding them within reusable
+components can cause problems when those components are reused elsewhere, including compilation
+rejection or unexpected runtime behavior. Keeping all configuration pragmas in a single compilation
+unit makes them easier to locate and modify. Using compiler options instead avoids embedding these
+decisions in code entirely.</p>
+
+<p><b>Exceptions</b></p>
+<p>Certain pragmas (e.g., <code>pragma Suppress</code>) can be used in several forms, including as
+a configuration pragma. This guideline does not apply to such pragmas when they are not used as a
+configuration pragma.</p>
+
+<p><b>Automation Notes</b></p>
+<p>Guideline 1 (prefer compiler options over source pragmas) cannot be automated: a tool cannot
+determine whether a compiler option was used as an alternative.</p>
+<p>Guideline 2 is partially automated: configuration pragmas found before a <code>package</code>
+compilation unit are flagged. Configuration pragmas before a <code>procedure</code> or
+<code>function</code> are not flagged, as these could be the main subprogram of the partition.
+The main subprogram cannot be a package body, so any configuration pragma before a package is
+always a violation regardless of which unit is main.</p>
+<p>Note: <code>pragma Suppress</code> is included in the check. When used with an entity argument
+(non-configuration form), this may produce false positives.</p>
+''',
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check('Ada File')
+
+
+def check(check, file):
+    pkg_refs = file.filerefs('Declare, Declare Body', 'Package', True)
+    if not pkg_refs:
+        return
+
+    contents = file.contents()
+    if not contents or 'pragma' not in contents.lower():
+        return
+
+    first_pkg_line = min(r.line() for r in pkg_refs)
+
+    lexer = file.lexer(lookup_ents=False)
+    if not lexer:
+        return
+
+    lex = lexer.first()
+    while lex:
+        if lex.line_begin() >= first_pkg_line:
+            break
+
+        if lex.token() != 'Keyword' or lex.text().lower() != 'pragma':
+            lex = lex.next(True, True)
+            continue
+
+        pragma_line = lex.line_begin()
+        pragma_col = lex.column_begin()
+        name_lex = lex.next(True, True)
+        if name_lex and name_lex.token() == 'Identifier':
+            if name_lex.text().lower() in CONFIG_PRAGMAS:
+                check.violation(file, file, pragma_line, pragma_col, ERR1, name_lex.text())
+        lex = lex.next(True, True)
