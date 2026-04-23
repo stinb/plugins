@@ -1,0 +1,102 @@
+ERR1 = "Exit statement in nested loop should use a loop name"
+
+
+def ids():
+    return ("ADA95_5.1.3",)
+
+
+def name(id):
+    return {
+        "ADA95_5.1.3": "Published Standards/Ada 95/5.1.3 Exit Statements",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.1.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Syntax",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.1.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use loop names on all <code>exit</code> statements from nested loops.</p>
+
+<p><b>Example</b></p>
+<p>See the example in <a href="../s5/01#loop-names">Guideline 5.1.1</a>.</p>
+
+<p><b>Rationale</b></p>
+<p>An <code>exit</code> statement is an implicit <code>goto</code>. It should specify its source
+explicitly. When there is a nested loop structure and an <code>exit</code> statement is used, it can be
+difficult to determine which loop is being exited. Also, future changes that may introduce a nested loop
+are likely to introduce an error, with the <code>exit</code> accidentally exiting from the wrong loop.
+Naming loops and their exits alleviates this confusion. This guideline is also useful if nested loops
+are broken over a screen or page boundary.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    contents = str(file.contents()).lower()
+    loop_count = contents.count("loop")
+    if not loop_count:
+        return
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    loop_stack = []  # True if named, False if unnamed
+    prev_keyword = None
+    pending_label = False
+    seen = 0
+
+    lex = lexer.first()
+    while lex and seen < loop_count:
+        token = lex.token()
+
+        if token == "Identifier":
+            prev_keyword = None
+            lex = lex.next(True, True)
+            if lex and lex.token() == "Punctuation" and lex.text() == ":":
+                lex = lex.next(True, True)
+                if (
+                    lex
+                    and lex.token() == "Keyword"
+                    and lex.text().lower() in ("loop", "for", "while")
+                ):
+                    pending_label = True
+            continue
+
+        elif token == "Keyword":
+            text_lower = lex.text().lower()
+
+            if text_lower == "loop":
+                seen += 1
+                if prev_keyword == "end":
+                    if loop_stack:
+                        loop_stack.pop()
+                else:
+                    loop_stack.append(pending_label)
+                pending_label = False
+
+            elif text_lower == "exit":
+                if len(loop_stack) > 1:
+                    next_lex = lex.next(True, True)
+                    if not (next_lex and next_lex.token() == "Identifier"):
+                        check.violation(
+                            None, file, lex.line_begin(), lex.column_begin(), ERR1
+                        )
+
+            prev_keyword = text_lower
+
+        lex = lex.next(True, True)
