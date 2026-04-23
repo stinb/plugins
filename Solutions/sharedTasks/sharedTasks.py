@@ -564,23 +564,15 @@ def buildEdgeInfo(
         for pair in find_interrupt_disabled_pairs_simple(traversal, objects):
             interruptDisabledRefs.add(str(pair))
 
-    # Decide whether the nodes are shared
-    sharedObjects: dict[Ent, bool] = dict()
-    fromRootsFiltered = set()
+    # Decide whether each object is shared using lockset intersection:
+    # an object is shared iff reached from more than one task root AND no
+    # single lock is held on every access. Replaces the prior "any lock
+    # held = protected" heuristic which mistook different mutexes for
+    # equivalent protection (stinb/und-issues#680).
+    sharedObjects = classify_shared_objects(edgeInfo, tasks, enableDisableFunctions)
     for edgeObj in edgeInfo.values():
         ent = edgeObj['ent']
-        if ent not in sharedObjects:
-            # See how many root functions each node it's from
-            fromRootsFiltered.clear()
-            if ent.kind().check(OBJ_ENT_KINDS):
-                edgeKeys = incoming[ent] if ent in incoming else set()
-                for edgeKey in edgeKeys:
-                    info = edgeInfo[edgeKey]
-                    if not info['filtered'] and refStr(info['ref']) not in interruptDisabledRefs:
-                        fromRootsFiltered.update(info['from'])
-            sharedObjects[ent] = len(fromRootsFiltered) > 1
-        # Remember that it's shared
-        edgeObj['shared'] = sharedObjects[ent]
+        edgeObj['shared'] = sharedObjects.get(ent, False)
 
     # If shared only, then delete edges to non-shared objects
     if options[OBJECTS] == 'Shared only':
@@ -875,3 +867,234 @@ def traverse_by_many_objects(options: TraversalOptions, global_objects: list[Ent
             to_visit.append(edge.ref.scope())
 
     return result
+
+
+# ---------------
+# Lock-set analysis
+#
+# The binary "any disable called before this ref = protected" notion above
+# treats all lock/unlock calls as interchangeable. That's correct for
+# interrupt enable/disable pairs (one global gate) but wrong for mutexes,
+# where each mutex protects only code that locks the same mutex. The
+# helpers below identify each lock by (pair_id, mutex_arg_entity) so that
+# two threads holding different mutexes are no longer mistaken for
+# coordinated access. See stinb/und-issues#680.
+# ---------------
+
+
+def build_lock_maps(enable_disable_functions: dict[Ent, dict[str, bool | Ent]]):
+    """Turn the enableDisableFunctions dict from parseArch into:
+      pair_id_map: Ent -> int  (shared by a disable/enable pair)
+      acquire_fns: set of disable Ents
+      release_fns: set of enable Ents
+    """
+    pair_id_map: dict[Ent, int] = {}
+    acquire_fns: set[Ent] = set()
+    release_fns: set[Ent] = set()
+    next_id = 0
+    for fn, info in enable_disable_functions.items():
+        if fn in pair_id_map:
+            continue
+        other = info['other']
+        pair_id_map[fn] = next_id
+        pair_id_map[other] = next_id
+        next_id += 1
+        if info['disable']:
+            acquire_fns.add(fn)
+            release_fns.add(other)
+        else:
+            release_fns.add(fn)
+            acquire_fns.add(other)
+    return pair_id_map, acquire_fns, release_fns
+
+
+def extract_lock_arg(call_ref: Ref) -> Ent | None:
+    """Return the Object entity that is the first argument to a lock/unlock
+    call, identified as the unique Addr Use ref to an Object on the same
+    (caller, file, line). Returns None if zero or multiple candidates."""
+    caller = call_ref.scope()
+    fid = call_ref.file().id()
+    line = call_ref.line()
+    candidates = [r.ent() for r in caller.refs('Addr Use', 'Object')
+                  if r.file().id() == fid and r.line() == line]
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def lock_id_at_call(call_ref: Ref, pair_id_map: dict[Ent, int]):
+    """Build the lock_id tuple for a disable/enable call: (pair_id, arg_ent_id
+    or None). Returns None if the call's callee isn't a registered
+    disable/enable function."""
+    pair_id = pair_id_map.get(call_ref.ent())
+    if pair_id is None:
+        return None
+    arg = extract_lock_arg(call_ref)
+    return (pair_id, arg.id() if arg else None)
+
+
+def locks_held_at_ref_locally(fn: Ent, ref: Ref,
+                              pair_id_map: dict[Ent, int],
+                              acquire_fns: set[Ent],
+                              release_fns: set[Ent]) -> set:
+    """Within fn, the set of lock_ids that may be held at ref. For each
+    lock acquired in fn, DFS from the acquire node through the CFG; if
+    the ref is reachable without crossing a release of the same lock, the
+    lock is held. Mirrors is_directly_interrupt_protected but per-lock."""
+    cfg = fn.control_flow_graph()
+    if not cfg:
+        return set()
+    nodes = cfg.nodes()
+
+    acquires: list = []
+    releases: list = []
+    for call in fn.refs(FN_REF_KIND):
+        callee = call.ent()
+        if callee not in pair_id_map:
+            continue
+        lid = lock_id_at_call(call, pair_id_map)
+        if lid is None:
+            continue
+        node = ref_to_node(nodes, call)
+        if not node:
+            continue
+        if callee in acquire_fns:
+            acquires.append((lid, node))
+        elif callee in release_fns:
+            releases.append((lid, node))
+
+    if not acquires:
+        return set()
+
+    held: set = set()
+    stack: list = []
+    seen: set = set()
+    for (lid, acq_node) in acquires:
+        release_nodes = {n for (l, n) in releases if l == lid}
+        stack.clear()
+        stack.append(acq_node)
+        seen.clear()
+        seen.add(acq_node)
+        found = False
+        while stack:
+            node = stack.pop()
+            if node is not acq_node and node in release_nodes:
+                continue
+            if Modules.refInNode(ref, node):
+                found = True
+                break
+            for child in node.children():
+                if child in seen:
+                    continue
+                seen.add(child)
+                stack.append(child)
+        if found:
+            held.add(lid)
+    return held
+
+
+def compute_reachable_functions(tasks) -> set[Ent]:
+    """Forward call-graph reachability from the task roots."""
+    reachable: set[Ent] = set(tasks)
+    worklist = list(tasks)
+    while worklist:
+        fn = worklist.pop()
+        for call in fn.refs(FN_REF_KIND):
+            callee = call.ent()
+            if callee not in reachable:
+                reachable.add(callee)
+                worklist.append(callee)
+    return reachable
+
+
+_LOCKSET_TOP = object()  # sentinel for "no info yet"
+
+
+def compute_entry_locks(tasks: set[Ent],
+                        pair_id_map: dict[Ent, int],
+                        acquire_fns: set[Ent],
+                        release_fns: set[Ent]) -> dict[Ent, set]:
+    """For each function reachable from a task root, the set of lock_ids
+    guaranteed held on every entry (intersection over all reachable call
+    sites). Task roots have entry locks = empty. Fixpoint iteration
+    handles recursion in the call graph."""
+    reachable = compute_reachable_functions(tasks)
+    entry: dict = {fn: _LOCKSET_TOP for fn in reachable}
+    for t in tasks:
+        entry[t] = set()
+
+    changed = True
+    while changed:
+        changed = False
+        for fn in reachable:
+            if fn in tasks:
+                continue
+            new_in = _LOCKSET_TOP
+            for callby in fn.refs(FN_REF_KIND_INVERSE):
+                caller = callby.ent()
+                if caller not in reachable:
+                    continue
+                caller_in = entry[caller]
+                if caller_in is _LOCKSET_TOP:
+                    continue
+                locks_at_site = locks_held_at_ref_locally(
+                    caller, callby, pair_id_map, acquire_fns, release_fns)
+                contribution = caller_in | locks_at_site
+                new_in = contribution if new_in is _LOCKSET_TOP else (new_in & contribution)
+            if new_in is _LOCKSET_TOP:
+                continue
+            if entry[fn] is _LOCKSET_TOP or new_in != entry[fn]:
+                entry[fn] = new_in
+                changed = True
+
+    for fn, v in list(entry.items()):
+        if v is _LOCKSET_TOP:
+            entry[fn] = set()
+    return entry
+
+
+def effective_locks_for_ref(ref: Ref, entry_locks: dict[Ent, set],
+                            pair_id_map: dict[Ent, int],
+                            acquire_fns: set[Ent],
+                            release_fns: set[Ent]) -> set:
+    """Locks guaranteed held at ref: enclosing function's entry locks,
+    plus locks acquired locally before the ref in that function."""
+    fn = ref.scope()
+    fn_entry = entry_locks.get(fn, set())
+    local = locks_held_at_ref_locally(fn, ref, pair_id_map, acquire_fns, release_fns)
+    return fn_entry | local
+
+
+def classify_shared_objects(edge_info: dict, tasks: dict,
+                            enable_disable_functions: dict) -> dict[Ent, bool]:
+    """Decide per object whether it is shared, using lockset intersection.
+    An object is shared iff reached from more than one task root AND the
+    intersection of effective-lock-sets across all (unfiltered) accesses
+    to it is empty (no single lock is held on every access)."""
+    pair_id_map, acquire_fns, release_fns = build_lock_maps(enable_disable_functions)
+    entry_locks = compute_entry_locks(
+        set(tasks.keys()), pair_id_map, acquire_fns, release_fns)
+
+    per_obj_locks: dict = {}
+    for edge in edge_info.values():
+        ent = edge['ent']
+        if not ent.kind().check(OBJ_ENT_KINDS):
+            continue
+        if edge.get('filtered'):
+            continue
+        eff = effective_locks_for_ref(
+            edge['ref'], entry_locks, pair_id_map, acquire_fns, release_fns)
+        per_obj_locks.setdefault(ent, []).append((eff, edge['from']))
+
+    shared: dict[Ent, bool] = {}
+    for ent, records in per_obj_locks.items():
+        roots: set = set()
+        for (_, from_roots) in records:
+            roots |= from_roots
+        if len(roots) < 2:
+            shared[ent] = False
+            continue
+        lock_sets = [s for (s, _) in records]
+        intersection = set.intersection(*lock_sets) if lock_sets else set()
+        shared[ent] = len(intersection) == 0
+    return shared
