@@ -4,7 +4,6 @@ Create a Copyright and License architecture based on copyright and license comme
 import understand
 import os
 import re
-from pathlib import PurePath
 from pathlib import Path
 
 
@@ -33,78 +32,289 @@ def tags():
     'Language: Any',
   ]
 
-def build(arch, db):
-  lastRun={}
-  newLines=[]
-  changedFiles=[]
+def normalize_license_text(text):
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
 
-  #find the file path for the DB
-  db_path = db.name()
-  root_path = str(Path(db_path).parents[0])
+def clean_copyright_holder(text):
+    holder = re.sub(r"^\s*(\(c\)|©)?\s*", "", text, flags=re.IGNORECASE)
+    holder = re.sub(r"^\s*(?:\d{2,4}(?:\s*(?:-|/|,|and)\s*\d{2,4})*)\s*", "", holder, flags=re.IGNORECASE)
+    holder = re.sub(r"^\s*[,;:-]+\s*", "", holder)
+    holder = re.sub(r"^\s*by\s+", "", holder, flags=re.IGNORECASE)
+    holder = re.sub(r"<\S+@\S+\.\S+>", "", holder)
+    holder = re.sub(r"\(\S+@\S+\.\S+\)", "", holder)
+    holder = re.sub(r"<http\S+>", "", holder, flags=re.IGNORECASE)
+    holder = re.sub(r"\(http\S+\)", "", holder, flags=re.IGNORECASE)
+    holder = re.sub(r"http\S+", "", holder, flags=re.IGNORECASE)
+    holder = re.sub(r"All rights reserved", "", holder, flags=re.IGNORECASE)
+    holder = re.sub(r"\s*\((?:\d{2,4}(?:\s*(?:-|/|,|and)\s*\d{2,4})*)\)\s*$", "", holder, flags=re.IGNORECASE)
+    holder = re.sub(r"&\S+;", "", holder)
+    holder = re.sub(r"[\.,;'\"\s-]*$", "", holder)
+    return holder.strip()
 
-  #generate a dict() containing every file in the project where
-  #key = ent and value = a set() containing every license associated with that file
-  file_list = generate_file_list(db, root_path)
+def sanitize_arch_node_name(name):
+    # Prevent accidental hierarchy splits when holder text contains path separators.
+    cleaned = re.sub(r"[\\/]+", " ", name)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
+def strip_comment_prefix(line):
+    return re.sub(r"^\s*(?:/\*+|\*+/?|//+|#+|--+|;+)?\s*", "", line)
 
-  fileList = db.ents("file ~unknown ~unresolved")
+def normalize_comment_line(line):
+    normalized = strip_comment_prefix(line)
+    normalized = re.sub(r"\s*(?:--+|/\*+|\*+/)\s*$", "", normalized)
+    return normalized.strip()
 
+def comments_text_for_file(file):
+    # Primary source: Understand comment API.
+    comments = file.comments()
+    if comments is None:
+        base = ""
+    elif isinstance(comments, str):
+        base = comments
+    elif isinstance(comments, (list, tuple)):
+        base = "\n".join(str(c) for c in comments if c)
+    else:
+        # Some bindings may return a custom iterable/string-like type.
+        try:
+            base = "\n".join(str(c) for c in comments if c)
+        except TypeError:
+            base = str(comments)
 
-  #Loop through each file in the project
-  for i, file in enumerate(fileList):
+    # Fallback/augmentation: collect all lexer comment tokens only.
+    # This remains comment-only processing while capturing disjoint blocks
+    # that file.comments() may omit in some files.
+    token_comments = ""
+    try:
+        lexer = file.lexer(False, 8, False, False)
+        if lexer:
+            parts = [token.text() for token in lexer if token.token() == "Comment"]
+            token_comments = "\n".join(parts).strip()
+    except Exception:
+        token_comments = ""
 
+    if base and token_comments:
+        return base + "\n" + token_comments
+    return base or token_comments
 
-    fullpath = PurePath(file.longname())
-    parentDir = str(fullpath.parent)
-    fullpath=str(fullpath)
-    copyrightLicense = "None"
+def is_boilerplate_copyright_tail(text):
+    lowered = text.lower()
+    # Reject legal boilerplate phrasing, but allow attribution lines that may
+    # include "All rights reserved" after a real holder name.
+    boilerplate_prefixes = (
+        "notice",
+        "copyright notice",
+        "copyright holder",
+        "copyright holders",
+        "copyright owner",
+        "owner or",
+        "holders and",
+        "redistribution and use",
+        "this software is provided",
+        "software is provided",
+    )
+    stripped = lowered.strip()
+    return any(stripped.startswith(prefix) for prefix in boilerplate_prefixes)
 
-    result= re.search(r"copyright\s+([^\n]+)",file.comments(),flags=re.IGNORECASE)
+def is_reference_only_copyright(line, holder):
+    line_lower = line.lower()
+    holder_lower = holder.lower()
 
-    if(not result):
-     result= re.search(r"©\s+([^\n]+)",file.contents())
-    if(result):
-      copyrightLicense = result.group(1)
-      if copyrightLicense.startswith("law") or not re.search(r"\d|\(c\)|©", copyrightLicense):
-        copyrightLicense = "None"
-      else:
-        copyrightLicense = re.sub(r"^\(c\)",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"^[\s\d\-,]+",'', copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"^by",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"<\S+@\S+\.\S+>",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"\(\S+@\S+\.\S+\)",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"<http\S+>",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"\(http\S+\)",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"http\S+",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"/",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"All rights reserved",'',copyrightLicense,flags=re.IGNORECASE)
-        copyrightLicense = re.sub(r"&\S+;",'',copyrightLicense,flags=re.IGNORECASE) #HTML Special characters
-        copyrightLicense = re.sub(r"\d\d\d\d\s*,*\s*",'',copyrightLicense,flags=re.IGNORECASE) #years
+    # Ignore pointer text that references an external copyright notice.
+    if re.search(r"\bsee\s+copyright\b", line_lower):
+        return True
+    if re.search(r"\bcopyright\s+notice\s+(in|at|for|see)\b", line_lower):
+        return True
 
-        copyrightLicense = re.sub(r"-->*$",'',copyrightLicense,flags=re.IGNORECASE) #Strip trailing dashes
-        copyrightLicense = re.sub(r"[\.,;'\"\s]*$",'',copyrightLicense,flags=re.IGNORECASE) #strip Trailing punctuation
+    # Ignore generic non-holder fragments.
+    generic_fragments = {
+        "notice",
+        "notice in",
+        "notice at",
+        "all rights reserved",
+    }
+    if holder_lower in generic_fragments:
+        return True
 
+    return False
 
-        copyrightLicense = copyrightLicense.strip(' ')
-        if not copyrightLicense:
+def parse_spdx_expression_ids(expression):
+    # Parse potential SPDX IDs from an SPDX expression while skipping operators.
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9.+-]*", expression)
+    ignored = {"AND", "OR", "WITH", "NONE", "NOASSERTION"}
+    return [tok for tok in tokens if tok.upper() not in ignored]
+
+def build_license_matchers(license_whitelist):
+    matchers = []
+    for license in sorted(set(license_whitelist), key=len, reverse=True):
+        license_lower = license.lower()
+        boundary_pattern = re.compile(r"(?<![a-z0-9])" + re.escape(license_lower) + r"(?![a-z0-9])")
+        normalized = normalize_license_text(license)
+        matchers.append((license, boundary_pattern, normalized, len(normalized) >= 5))
+    return matchers
+
+def resolve_spdx_ids(spdx_ids, license_whitelist, license_matchers):
+    resolved = set()
+    whitelist_map = {license.lower(): license for license in license_whitelist}
+    normalized_map = {normalize_license_text(license): license for license in license_whitelist}
+
+    for spdx_id in spdx_ids:
+        lowered = spdx_id.lower()
+        if lowered in whitelist_map:
+            resolved.add(whitelist_map[lowered])
+            continue
+        normalized = normalize_license_text(spdx_id)
+        if normalized in normalized_map:
+            resolved.add(normalized_map[normalized])
+            continue
+        # Fallback for known variants that include punctuation differences.
+        resolved.update(find_licenses_in_text(spdx_id, license_matchers))
+    return resolved
+
+def extract_licenses_from_text(text, license_whitelist, license_matchers):
+    matches = set()
+    for line in text.splitlines():
+        line_lower = line.lower()
+        if "spdx-license-identifier:" in line_lower:
+            expression = re.split(r"spdx-license-identifier\s*:\s*", line, flags=re.IGNORECASE, maxsplit=1)[1]
+            spdx_ids = parse_spdx_expression_ids(expression)
+            matches.update(resolve_spdx_ids(spdx_ids, license_whitelist, license_matchers))
             continue
 
-        newLines.append(fullpath+"="+copyrightLicense)
+        # Context gate: reduce false positives from arbitrary prose.
+        has_license_context = (
+            "license" in line_lower
+            or "licence" in line_lower
+            or "licensed" in line_lower
+            or "copyright" in line_lower
+        )
+        if has_license_context:
+            matches.update(find_licenses_in_text(line, license_matchers))
+    return matches
 
-    if copyrightLicense != "None":
-      arch.map(file, "Copyrights/" + copyrightLicense)
-    else:
-      arch.map(file, "Copyrights/No Copyright")
-    #loop through the file list and add each file to it's respective license architecture
-    for license in file_list[file]:
-        if copyrightLicense == "None" and license == 'No License':
-            arch.map(file,"No License and No Copyright")
+def extract_copyright_holders(file):
+    holders = set()
+    comments = comments_text_for_file(file)
 
-        arch.map(file,"Licenses/" + str(license))
+    for line in comments.splitlines():
+        stripped_line = normalize_comment_line(line)
+        if not stripped_line:
+            continue
+        line_lower = stripped_line.lower()
+        if "spdx-filecopyrighttext:" in line_lower:
+            text = re.split(r"spdx-filecopyrighttext\s*:\s*", stripped_line, flags=re.IGNORECASE, maxsplit=1)[1]
+            cleaned = clean_copyright_holder(text)
+            if cleaned and not cleaned.lower().startswith("law"):
+                holders.add(cleaned)
+            continue
+
+        # Fast path for common attribution lines such as:
+        # "Copyright 1995 by IEEE. All rights reserved."
+        by_result = re.match(
+            r"^copyright\s*:?\s*(?:\(\s*c\s*\)|©)?\s*(?:(?:19|20)\d{2}(?:\s*[-,]\s*(?:19|20)\d{2})*\s+)?by\s+(.+?)(?:\.?\s*all rights reserved\.?)?$",
+            stripped_line,
+            flags=re.IGNORECASE,
+        )
+        if by_result:
+            cleaned = clean_copyright_holder(by_result.group(1))
+            if cleaned and not cleaned.lower().startswith("law") and not is_reference_only_copyright(stripped_line, cleaned):
+                holders.add(cleaned)
+            continue
+
+        result = re.match(r"^copyright\s*:?\s*(?:\(\s*c\s*\)|©)?\s*(.+)$", stripped_line, flags=re.IGNORECASE)
+        if result:
+            tail = result.group(1)
+            has_year = re.search(r"\b(?:19|20)\d{2}\b", tail) is not None
+            has_by_prefix = re.match(r"^\s*by\b", tail, flags=re.IGNORECASE) is not None
+            if is_boilerplate_copyright_tail(tail):
+                continue
+
+            cleaned = clean_copyright_holder(tail)
+            starter = re.match(r"^\s*([a-z]+)", cleaned.lower())
+            blocked_starters = {"notice", "holder", "holders", "owner", "owners"}
+            has_named_holder = bool(cleaned) and (starter is None or starter.group(1) not in blocked_starters)
+
+            if not has_year and not has_by_prefix and not has_named_holder:
+                continue
+
+            if cleaned and not cleaned.lower().startswith("law") and not is_reference_only_copyright(stripped_line, cleaned):
+                holders.add(cleaned)
+
+    if not holders and comments:
+        # Some parsers return wrapped/merged comment text; use a conservative
+        # block-level fallback for common attribution forms.
+        normalized_comments = "\n".join(normalize_comment_line(line) for line in comments.splitlines())
+        for match in re.finditer(
+            r"copyright\s*:?\s*(?:\(\s*c\s*\)|©)?\s*"
+            r"(?:(?:\d{2,4}(?:\s*(?:-|,|and)\s*\d{2,4})*)\s+)?"
+            r"(?:by\s+)?([^\n\.]{2,200})",
+            normalized_comments,
+            flags=re.IGNORECASE,
+        ):
+            cleaned = clean_copyright_holder(match.group(1))
+            if not cleaned:
+                continue
+            if cleaned.lower().startswith("law"):
+                continue
+            starter = re.match(r"^\s*([a-z]+)", cleaned.lower())
+            blocked_starters = {"notice", "holder", "holders", "owner", "owners"}
+            if starter and starter.group(1) in blocked_starters:
+                continue
+            if is_reference_only_copyright(normalized_comments, cleaned):
+                continue
+            holders.add(cleaned)
+
+    return holders
+
+def find_licenses_in_text(text, license_matchers):
+    line_lower = text.lower()
+    normalized_line = normalize_license_text(line_lower)
+    matches = set()
+
+    for license, boundary_pattern, normalized, use_normalized in license_matchers:
+        if boundary_pattern.search(line_lower):
+            matches.add(license)
+            continue
+        if use_normalized and normalized and normalized in normalized_line:
+            matches.add(license)
+
+    return matches
+
+def build(arch, db):
+    #find the file path for the DB
+    db_path = db.name()
+    root_path = str(Path(db_path).parents[0])
+
+    #generate a dict() containing every file in the project where
+    #key = ent and value = a set() containing every license associated with that file
+    file_list = generate_file_list(db, root_path)
+
+    fileList = db.ents("file ~unknown ~unresolved")
+
+    #Loop through each file in the project
+    for file in fileList:
+        copyright_holders = extract_copyright_holders(file)
+        if copyright_holders:
+            for holder in copyright_holders:
+                safe_holder = sanitize_arch_node_name(holder)
+                if safe_holder:
+                    arch.map(file, "Copyrights/" + safe_holder)
+        else:
+            arch.map(file, "Copyrights/No Copyright in File")
+
+        #loop through the file list and add each file to it's respective license architecture
+        for license in file_list[file]:
+            if not copyright_holders and license == "No License":
+                arch.map(file, "No License and No Copyright in File")
+
+            if license == "No License":
+                arch.map(file, "Licenses/No License")
+            else:
+                arch.map(file, "Licenses/" + str(license))
 
 def generate_file_list(db, root_path):
     #Possble licenses to search for, edit the array at the very bottom to update
     license_whitelist = generate_license_array()
+    license_matchers = build_license_matchers(license_whitelist)
 
     #create a dictionary containing every file's filepath in the project where
     #key = the file path and value = a set() containing every license associated with that file
@@ -122,19 +332,25 @@ def generate_file_list(db, root_path):
     #Check each file to see if it is part of a license
     for file in file_list:
         for license_path in license_files:
-            directory = os.path.dirname(license_path)
-            if directory in file.longname():
-                file_list[file].add(str(license_files[license_path]))
+            directory = os.path.normpath(os.path.dirname(license_path))
+            file_path = os.path.normpath(file.longname())
+            try:
+                in_directory = os.path.commonpath([file_path, directory]) == directory
+            except ValueError:
+                in_directory = False
+            if in_directory:
+                detected = license_files[license_path]
+                if isinstance(detected, (set, list, tuple)):
+                    for license in detected:
+                        file_list[file].add(str(license))
+                else:
+                    file_list[file].add(str(detected))
 
     #check each file to see if the comments mention a license
     for file in file_list:
-        comment = file.comments()
-        split_comments = comment.split("\n")
-        for line in split_comments:
-            if "license" in line:
-                for license in license_whitelist:
-                    if license in line:
-                        file_list[file].add(license)
+        file_text = file.comments() + "\n" + "\n".join(file.contents().splitlines()[:120])
+        for license in extract_licenses_from_text(file_text, license_whitelist, license_matchers):
+            file_list[file].add(license)
         if len(file_list[file]) == 0:
             file_list[file].add("No License")
     return file_list
@@ -143,7 +359,7 @@ def generate_file_list(db, root_path):
 #key = the os path to the license file and value = the name of the license
 def find_license_files(root_path, license_whitelist):
     license_files = {}
-    license_file_options = {"license", "readme", "copying"}
+    license_file_options = {"license", "readme", "copying", "notice"}
 
     for root, _, files in os.walk(root_path):
         # Filter files that contain any of the keywords in license_file_options
@@ -162,24 +378,22 @@ def find_license_files(root_path, license_whitelist):
 #searches the license file for potential licenses
 #returns the name of a license(str) if found otherwise returns false
 def license_file_name(path, whitelist):
+    license_matchers = build_license_matchers(whitelist)
     name = os.path.basename(path)
     if name.lower().endswith('.license'):
         base = Path(name).stem
         for license in whitelist:
             if base.lower() == license.lower():
-                return license
-        return base
+                return {license}
+        return {base}
 
-    if name.lower().startswith(('license','copying','build')) or name.lower().endswith(('.readme','build')):
-        file = open(path, 'r', encoding='utf-8', errors='replace')
-        list_lines = file.readlines()
-        for line in list_lines:
-            if 'license' in line:
-                for license in whitelist:
-                    if license in line:
-                        return license
-                    else:
-                        return False
+    if name.lower().startswith(('license', 'copying', 'notice')) or name.lower().endswith('.readme'):
+        with open(path, 'r', encoding='utf-8', errors='replace') as file:
+            text = file.read()
+        matches = extract_licenses_from_text(text, whitelist, license_matchers)
+        if matches:
+            return matches
+        return False
 
 
 
@@ -201,7 +415,7 @@ def generate_license_array():
         "Beerware", "Bitstream", "BitTorrent",
         "blessing", "Blue Oak", "Boehm-Demers-Weiser GC License",
         "Boehm-GC", "Boost Software", "Borceux",
-        "Brian Gladman", "BSD", "BSL",
+        "Brian Gladman", "BSD", "BSD 3-Clause", "BSL",
         "Business Source License", "BUSL", "bzip2 and libbzip2",
         "bzip2", "CAL", "Caldera",
         "Catharon", "CATOSL", "CC0",
