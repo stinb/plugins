@@ -47,3 +47,16 @@ uint16_t read_register(int addr, int size);
 void test_macro_with_nested_bitwise() {
     if ( (read_register(0x1234,1) & ( ID0 | ID1 ) ) != ( ID0 | ID1 ) ) { ; } // UndCC_Valid
 }
+
+typedef struct {
+    uint16_t IN_S;
+    uint16_t IN_D;
+} MO_t;
+
+#define MBX ((MO_t * const) 0x00410070U)
+
+void test_braceless_loop_body() {
+    uint16_t rv = 0;
+    while (rv == 0)
+        rv = MBX->IN_S & 0x1; // UndCC_Valid
+}
