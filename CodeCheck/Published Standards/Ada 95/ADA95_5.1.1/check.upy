@@ -1,0 +1,137 @@
+ERR1 = "Nested loop should have a name"
+ERR2 = "Loop containing an exit statement should have a name"
+
+
+def ids():
+    return ("ADA95_5.1.1",)
+
+
+def name(id):
+    return {
+        "ADA95_5.1.1": "Published Standards/Ada 95/5.1.1 Loop Names",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.1.1": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Syntax",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.1.1": """
+<p><b>Guideline</b></p>
+<p>&#8226; Associate names with loops when they are nested (Booch 1986, 1987).</p>
+<p>&#8226; Associate names with any loop that contains an <code>exit</code> statement.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">Process_Each_Page:
+   loop
+      Process_All_The_Lines_On_This_Page:
+         loop
+            ...
+            exit Process_All_The_Lines_On_This_Page when Line_Number = Max_Lines_On_Page;
+            ...
+            Look_For_Sentinel_Value:
+               loop
+                  ...
+                  exit Look_For_Sentinel_Value when Current_Symbol = Sentinel;
+                  ...
+               end loop Look_For_Sentinel_Value;
+            ...
+         end loop Process_All_The_Lines_On_This_Page;
+      ...
+      exit Process_Each_Page when Page_Number = Maximum_Pages;
+      ...
+   end loop Process_Each_Page;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>When you associate a name with a loop, you must include that name with the associated end
+for that loop (Ada Reference Manual 1995). This helps readers find the associated end for any
+given loop. This is especially true if loops are broken over screen or page boundaries. The
+choice of a good name for the loop documents its purpose, reducing the need for explanatory
+comments. If a name for a loop is very difficult to choose, this could indicate a need for
+more thought about the algorithm.</p>
+<p>Regularly naming loops helps you follow Guideline 5.1.3. Even in the face of code changes,
+for example, adding an outer or inner loop, the <code>exit</code> statement does not become
+ambiguous.</p>
+<p>It can be difficult to think up a name for every loop; therefore, the guideline specifies
+nested loops. The benefits in readability and second thought outweigh the inconvenience of
+naming the loops.</p>
+
+<p><b>Automation Notes</b></p>
+<p>Both guidelines are automated: unnamed nested loops are flagged at the <code>loop</code>
+keyword, and <code>exit</code> statements inside unnamed loops are flagged.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    contents = str(file.contents()).lower()
+    loop_count = contents.count("loop")
+    if not loop_count:
+        return
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    loop_stack = []  # True if named, False if unnamed
+    prev_keyword = None
+    pending_label = False
+    seen = 0
+
+    lex = lexer.first()
+    while lex and seen < loop_count:
+        token = lex.token()
+
+        if token == "Identifier":
+            prev_keyword = None
+            lex = lex.next(True, True)
+            if lex and lex.token() == "Punctuation" and lex.text() == ":":
+                lex = lex.next(True, True)
+                if (
+                    lex
+                    and lex.token() == "Keyword"
+                    and lex.text().lower() in ("loop", "for", "while")
+                ):
+                    pending_label = True
+            continue
+
+        elif token == "Keyword":
+            text_lower = lex.text().lower()
+
+            if text_lower == "loop":
+                seen += 1
+                if prev_keyword == "end":
+                    if loop_stack:
+                        loop_stack.pop()
+                else:
+                    if loop_stack and not pending_label:
+                        check.violation(
+                            None, file, lex.line_begin(), lex.column_begin(), ERR1
+                        )
+                    loop_stack.append(pending_label)
+                pending_label = False
+
+            elif text_lower == "exit":
+                if loop_stack and not loop_stack[-1]:
+                    next_lex = lex.next(True, True)
+                    if not (next_lex and next_lex.token() == "Identifier"):
+                        check.violation(
+                            None, file, lex.line_begin(), lex.column_begin(), ERR2
+                        )
+
+            prev_keyword = text_lower
+
+        lex = lex.next(True, True)

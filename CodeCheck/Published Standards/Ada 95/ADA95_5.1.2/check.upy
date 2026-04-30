@@ -1,0 +1,140 @@
+ERR1 = "Nested block should have a name"
+
+
+def ids():
+    return ("ADA95_5.1.2",)
+
+
+def name(id):
+    return {
+        "ADA95_5.1.2": "Published Standards/Ada 95/5.1.2 Block Names",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.1.2": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Syntax",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.1.2": """
+<p><b>Guideline</b></p>
+<p>&#8226; Associate names with blocks when they are nested.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">Trip:
+   declare
+      ...
+   begin  -- Trip
+      Arrive_At_Airport:
+         declare
+            ...
+         begin  -- Arrive_At_Airport
+            Rent_Car;
+            Claim_Baggage;
+            Reserve_Hotel;
+            ...
+         end Arrive_At_Airport;
+      Visit_Customer:
+         declare
+            ...
+         begin  -- Visit_Customer
+            -- again a set of activities...
+            ...
+         end Visit_Customer;
+      Departure_Preparation:
+         declare
+            ...
+         begin  -- Departure_Preparation
+            Return_Car;
+            Check_Baggage;
+            Wait_For_Flight;
+            ...
+         end Departure_Preparation;
+      Board_Return_Flight;
+   end Trip;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>When there is a nested block structure, it can be difficult to determine which <code>end</code>
+corresponds to which block. Naming blocks alleviates this confusion. The choice of a good name
+for the block documents its purpose, reducing the need for explanatory comments. If a name for
+the block is very difficult to choose, this could indicate a need for more thought about the
+algorithm.</p>
+<p>This guideline is also useful if nested blocks are broken over a screen or page boundary.</p>
+<p>It can be difficult to think up a name for each block; therefore, the guideline specifies
+nested blocks. The benefits in readability and second thought outweigh the inconvenience of
+naming the blocks.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    contents = str(file.contents()).lower()
+    declare_count = contents.count("declare")
+    if not declare_count:
+        return
+
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    declare_stack = []  # (is_named, activation_begin_depth)
+    begin_depth = 0
+    pending_declare = None  # is_named of pending block, cleared when its begin is seen
+    pending_label = False
+    seen = 0
+
+    lex = lexer.first()
+    while lex and seen < declare_count:
+        token = lex.token()
+
+        if token == "Identifier":
+            lex = lex.next(True, True)
+            if lex and lex.token() == "Punctuation" and lex.text() == ":":
+                lex = lex.next(True, True)
+                if lex and lex.token() == "Keyword" and lex.text().lower() == "declare":
+                    pending_label = True
+            continue
+
+        elif token == "Keyword":
+            text_lower = lex.text().lower()
+
+            if text_lower == "declare":
+                seen += 1
+                if declare_stack and not pending_label:
+                    check.violation(
+                        None, file, lex.line_begin(), lex.column_begin(), ERR1
+                    )
+                pending_declare = pending_label
+                pending_label = False
+
+            elif text_lower in ("begin", "do"):
+                begin_depth += 1
+                if pending_declare is not None:
+                    declare_stack.append((pending_declare, begin_depth))
+                    pending_declare = None
+
+            elif text_lower == "end":
+                next_lex = lex.next(True, True)
+                if not (
+                    next_lex
+                    and next_lex.token() == "Keyword"
+                    and next_lex.text().lower()
+                    in ("loop", "if", "case", "record", "select")
+                ):
+                    if declare_stack and declare_stack[-1][1] == begin_depth:
+                        declare_stack.pop()
+                    begin_depth = max(0, begin_depth - 1)
+
+        lex = lex.next(True, True)
