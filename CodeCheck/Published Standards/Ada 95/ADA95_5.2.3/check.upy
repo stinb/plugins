@@ -1,0 +1,95 @@
+ERR1 = "Place default parameters at the end of the formal parameter list"
+
+
+def ids():
+    return ("ADA95_5.2.3",)
+
+
+def name(id):
+    return {
+        "ADA95_5.2.3": "Published Standards/Ada 95/5.2.3 Default Parameters",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.2.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Parameter Lists",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.2.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Provide default parameters to allow for occasional, special use of widely used subprograms or entries.</p>
+<p>&#8226; Place default parameters at the end of the formal parameter list.</p>
+<p>&#8226; Consider providing default values to new parameters added to an existing subprogram.</p>
+
+<p><b>Rationale</b></p>
+<p>Often, the majority of uses of a subprogram or entry need the same value for a given parameter. Providing that value, as the default for the parameter, makes the parameter optional on the majority of calls. It also allows the remaining calls to customize the subprogram or entry by providing different values for that parameter.</p>
+<p>Placing default parameters at the end of the formal parameter list allows the caller to use positional association on the call; otherwise, defaults are available only when named association is used.</p>
+<p>Often during maintenance activities, you increase the functionality of a subprogram or entry. This requires more parameters than the original form for some calls. New parameters may be required to control this new functionality. Give the new parameters default values that specify the old functionality. Calls needing the old functionality need not be changed; they take the defaults. This is true if the new parameters are added to the end of the parameter list, or if named association is used on all calls. New calls needing the new functionality can specify that by providing other values for the new parameters.</p>
+<p>This enhances maintainability in that the places that use the modified routines do not themselves have to be modified, while the previous functionality levels of the routines are allowed to be <i>"reused."</i></p>
+
+<p><b>Exceptions</b></p>
+<p>Do not go overboard. If the changes in functionality are truly radical, you should be preparing a separate routine rather than modifying an existing one. One indicator of this situation would be that it is difficult to determine value combinations for the defaults that uniquely and naturally require the more restrictive of the two functions. In such cases, it is better to go ahead with creation of a separate routine.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only the second guideline — place default parameters at the end of the formal parameter list — is automatable and is what this check enforces.</p>
+<p>The first guideline (provide default parameters for occasional special use) is a design judgment: no static rule can determine whether a parameter is invoked with the same value most of the time.</p>
+<p>The third guideline (provide defaults for new parameters added to an existing subprogram) requires knowing which parameters were added in a recent change, which depends on version history. The Understand API sees only the current state of the code and cannot identify what is "new."</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    filename = file.longname()
+    checked = set()
+
+    for decl_ref in file.filerefs("Declare", "Procedure, Function, Entry", False):
+        subprog_ent = decl_ref.ent()
+        ent_id = subprog_ent.id()
+
+        if ent_id in checked:
+            continue
+        checked.add(ent_id)
+
+        # If the subprogram has a spec in a different .ads file, defer to that file.
+        # Body-only subprograms (params only in the current file) are always checked.
+        has_spec_elsewhere = any(
+            str(r.file().longname()).endswith(".ads")
+            and r.file().longname() != filename
+            for r in subprog_ent.refs("Declare", "Parameter", False)
+        )
+
+        if has_spec_elsewhere:
+            continue
+
+        params = sorted(
+            [r for r in subprog_ent.refs("Declare", "Parameter", False)
+             if r.file().longname() == filename],
+            key=lambda r: (r.line(), r.column()),
+        )
+
+        if len(params) < 2:
+            continue
+
+        seen_default = False
+
+        for param_ref in params:
+            param_ent = param_ref.ent()
+            has_default = bool(param_ent.refs("Setby Init"))
+
+            if has_default:
+                seen_default = True
+            elif seen_default:
+                check.violation(subprog_ent, file, decl_ref.line(), decl_ref.column(), ERR1)
+                break
