@@ -1,0 +1,115 @@
+ERR1 = "Show the mode indication of all procedure and entry parameters"
+
+
+def ids():
+    return ("ADA95_5.2.4",)
+
+
+def name(id):
+    return {
+        "ADA95_5.2.4": "Published Standards/Ada 95/5.2.4 Mode Indication",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.2.4": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Parameter Lists",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.2.4": """
+<p><b>Guideline</b></p>
+<p>&#8226; Show the mode indication of all procedure and entry parameters (Nissen and Wallis 1984).</p>
+<p>&#8226; Use the most restrictive parameter mode applicable to your application.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">procedure Open_File (File_Name   : in     String;
+                    Open_Status :    out Status_Codes);
+entry Acquire (Key      : in     Capability;
+               Resource :    out Tape_Drive);
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>By showing the mode of parameters, you aid the reader. If you do not specify a parameter mode, the default mode is <code>in</code>. Explicitly showing the mode indication of all parameters is a more assertive action than simply taking the default mode. Anyone reviewing code later will be more confident about intended parameter modes.</p>
+<p>Use modes reflecting actual parameter usage. Avoid defaulting all parameters to <code>in out</code> mode since <code>out</code> parameters may be examined as well as updated.</p>
+
+<p><b>Exceptions</b></p>
+<p>Consider alternative implementations carefully. For example, a bounded stack implemented as a pointer to an array might warrant <code>in out</code> mode to allow implementation changes. If you later change the implementation to a simple array, the mode will have to be <code>in out</code>, potentially causing changes to all places that the routine is called.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only the first guideline — show the mode indication of all procedure and entry parameters — is automatable and is what this check enforces.</p>
+<p>The second guideline (use the most restrictive parameter mode applicable) requires data flow analysis to determine how each parameter is actually read and written, which is beyond the scope of static lexical analysis.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def _has_explicit_mode(lexer, line, col):
+    """Return True if the parameter at (line, col) has an explicit mode keyword."""
+    lex = lexer.lexeme(line, col)
+
+    if not lex:
+        return False
+
+    while lex and not (lex.token() == "Punctuation" and lex.text() == ":"):
+        lex = lex.next(True, True)
+
+    if not lex:
+        return False
+
+    lex = lex.next(True, True)
+
+    if not lex:
+        return False
+
+    # access parameters carry no mode keyword — treat as valid
+    if lex.token() == "Keyword" and lex.text() == "access":
+        return True
+
+    return lex.token() == "Keyword" and lex.text() in ("in", "out")
+
+
+def check(check, file):
+    filename = file.longname()
+    lexer = None
+    checked = set()
+
+    for decl_ref in file.filerefs("Declare", "Procedure, Function, Entry", False):
+        subprog_ent = decl_ref.ent()
+        ent_id = subprog_ent.id()
+
+        if ent_id in checked:
+            continue
+        checked.add(ent_id)
+
+        has_spec_elsewhere = any(
+            r.file().longname().endswith(".ads")
+            and r.file().longname() != filename
+            for r in subprog_ent.refs("Declare", "Parameter", False)
+        )
+
+        if has_spec_elsewhere:
+            continue
+
+        params = sorted(
+            [r for r in subprog_ent.refs("Declare", "Parameter", False)
+             if r.file().longname() == filename],
+            key=lambda r: (r.line(), r.column()),
+        )
+
+        for param_ref in params:
+            if lexer is None:
+                lexer = file.lexer(lookup_ents=False)
+
+            if not _has_explicit_mode(lexer, param_ref.line(), param_ref.column()):
+                param_ent = param_ref.ent()
+                check.violation(param_ent, file, param_ref.line(), param_ref.column(), ERR1)

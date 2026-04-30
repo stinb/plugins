@@ -1,0 +1,197 @@
+ERR1 = "Use named association for calls with more than two formal parameters"
+ERR2 = "Use named association when instantiating generics"
+ERR3 = "Use named association for infrequently used subprograms"
+ERR4 = "Use named association when actual parameter is a literal or expression"
+ERR5 = "Use named association when supplying a value for an optional parameter"
+
+
+def ids():
+    return ("ADA95_5.2.2",)
+
+
+def name(id):
+    return {
+        "ADA95_5.2.2": "Published Standards/Ada 95/5.2.2 Named Association",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.2.2": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Parameter Lists",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.2.2": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use named parameter association in calls of infrequently used subprograms or entries
+with many formal parameters.</p>
+<p>&#8226; Use named association when instantiating generics.</p>
+<p>&#8226; Use named association for clarification when the actual parameter is any literal or
+expression.</p>
+<p>&#8226; Use named association when supplying a nondefault value to an optional parameter.</p>
+
+<p><b>Instantiation</b></p>
+<p>&#8226; Use named parameter association in calls of subprograms or entries called from less
+than five places in a single source file or with more than two formal parameters.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">Encode_Telemetry_Packet (Source         => Power_Electronics,
+                         Content        => Temperature,
+                         Value          => Read_Temperature_Sensor(Power_Electronics),
+                         Time           => Current_Time,
+                         Sequence       => Next_Packet_ID,
+                         Vehicle        => This_Spacecraft,
+                         Primary_Module => True);
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Calls of infrequently used subprograms or entries with many formal parameters can be difficult
+to understand without referring to the subprogram or entry code. Named parameter association can
+make these calls more readable.</p>
+<p>When the formal parameters have been named appropriately, it is easier to determine exactly
+what purpose the subprogram serves without looking at its code. This reduces the need for named
+constants that exist solely to make calls more readable. It also allows variables used as actual
+parameters to be given names indicating what they are without regard to why they are being passed
+in a call. An actual parameter, which is an expression rather than a variable, cannot be named
+otherwise.</p>
+<p>Named association allows subprograms to have new parameters inserted with minimal ramifications
+to existing calls.</p>
+
+<p><b>Notes</b></p>
+<p>The judgment of when named parameter association improves readability is subjective. Certainly,
+simple or familiar subprograms, such as a swap routine or a sine function, do not require the
+extra clarification of named association in the procedure call.</p>
+
+<p><b>Caution</b></p>
+<p>A consequence of named parameter association is that the formal parameter names may not be
+changed without modifying the text of each call.</p>
+
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def _scan_parens(lexer, line, col):
+    """Return (arg_count, all_named, has_positional_literal, positional_count) scanning the parameter list."""
+    lex = lexer.lexeme(line, col)
+
+    if not lex:
+        return 0, True, False, 0
+
+    while lex and not (lex.token() == "Punctuation" and lex.text() in ("(", ";")):
+        lex = lex.next(True, True)
+
+    if not lex or lex.text() == ";":
+        return 0, True, False, 0
+
+    lex = lex.next(True, True)
+
+    if not lex or (lex.token() == "Punctuation" and lex.text() == ")"):
+        return 0, True, False, 0
+
+    depth = 1
+    commas = 0
+    has_positional_arg = False
+    has_positional_literal = False
+    current_arg_named = False
+    arg_has_literal = False
+    positional_count = 0
+
+    while lex and depth > 0:
+        if lex.token() == "Punctuation":
+            if lex.text() == "(":
+                depth += 1
+            elif lex.text() == ")":
+                depth -= 1
+                if depth == 0:
+                    if not current_arg_named:
+                        has_positional_arg = True
+                        positional_count += 1
+                    if not current_arg_named and arg_has_literal:
+                        has_positional_literal = True
+            elif lex.text() == "," and depth == 1:
+                commas += 1
+                if not current_arg_named:
+                    has_positional_arg = True
+                    positional_count += 1
+                if not current_arg_named and arg_has_literal:
+                    has_positional_literal = True
+                current_arg_named = False
+                arg_has_literal = False
+            elif lex.text() == "=>" and depth == 1:
+                current_arg_named = True
+                if not has_positional_arg:
+                    break
+        elif depth == 1 and lex.token() == "Literal":
+            arg_has_literal = True
+        lex = lex.next(True, True)
+
+    return commas + 1, not has_positional_arg, has_positional_literal, positional_count
+
+
+def _positional_hits_optional(call_ent, positional_count):
+    """Return True if any of the first positional_count args maps to a parameter with a default."""
+    if positional_count == 0:
+        return False
+    params = sorted(
+        call_ent.refs("Declare", "Parameter", False),
+        key=lambda r: (r.line(), r.column()),
+    )
+    for i, param_ref in enumerate(params):
+        if i >= positional_count:
+            break
+        if param_ref.ent().refs("Setby Init"):
+            return True
+    return False
+
+
+def check(check, file):
+    call_refs = file.filerefs("Call", "Procedure, Function, Entry", False)
+
+    call_site_count = {}
+
+    for call_ref in call_refs:
+        ent_id = call_ref.ent().id()
+        call_site_count[ent_id] = call_site_count.get(ent_id, 0) + 1
+
+    lexer = None
+
+    for call_ref in call_refs:
+        ent = call_ref.ent()
+
+        if lexer is None:
+            lexer = file.lexer(lookup_ents=False)
+
+        n_args, named, has_lit, pos_count = _scan_parens(
+            lexer, call_ref.line(), call_ref.column()
+        )
+
+        if named:
+            continue
+        if n_args > 2:
+            check.violation(ent, file, call_ref.line(), call_ref.column(), ERR1)
+        elif call_site_count.get(ent.id(), 0) < 5:
+            check.violation(ent, file, call_ref.line(), call_ref.column(), ERR3)
+        elif has_lit:
+            check.violation(ent, file, call_ref.line(), call_ref.column(), ERR4)
+        elif _positional_hits_optional(ent, pos_count):
+            check.violation(ent, file, call_ref.line(), call_ref.column(), ERR5)
+
+    for inst_ref in file.filerefs("Instanceof", "", False):
+        ent = inst_ref.ent()
+
+        if lexer is None:
+            lexer = file.lexer(lookup_ents=False)
+        _, named, _, _ = _scan_parens(lexer, inst_ref.line(), inst_ref.column())
+
+        if not named:
+            check.violation(ent, file, inst_ref.line(), inst_ref.column(), ERR2)
