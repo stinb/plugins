@@ -1,0 +1,305 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-05-04
+
+
+ERR1 = 'Identifier "%1" used in controlling expression of #%2 is not #define\'d'
+
+
+# Backslash + newline: the line-continuation token inside a preprocessor
+# directive. It extends the directive across multiple physical lines.
+_LINE_CONT = "\\\n"
+
+
+# Standard C/C++ predefined macros, plus common compiler-supplied ones.
+# Per Rule 20.9 amplification, identifiers may effectively be #define'd by
+# implementation-defined means (compiler -D flags, environment variables, or
+# pre-defined identifiers). Names in this set are treated as such even when
+# the parser has no corresponding macro entity.
+_PREDEFINED = frozenset((
+    # ISO C
+    "__FILE__", "__LINE__", "__DATE__", "__TIME__",
+    "__STDC__", "__STDC_HOSTED__", "__STDC_VERSION__",
+    "__STDC_MB_MIGHT_NEQ_WC__", "__STDC_ISO_10646__",
+    "__STDC_ANALYZABLE__", "__STDC_LIB_EXT1__",
+    "__STDC_NO_ATOMICS__", "__STDC_NO_COMPLEX__",
+    "__STDC_NO_THREADS__", "__STDC_NO_VLA__",
+    "__STDC_IEC_559__", "__STDC_IEC_559_COMPLEX__",
+    "__STDC_UTF_16__", "__STDC_UTF_32__",
+    # ISO C++
+    "__cplusplus", "__STDCPP_DEFAULT_NEW_ALIGNMENT__",
+    "__STDCPP_THREADS__", "__STDCPP_STRICT_POINTER_SAFETY__",
+    # GCC / Clang / MSVC version macros
+    "__GNUC__", "__GNUC_MINOR__", "__GNUC_PATCHLEVEL__",
+    "__clang__", "__clang_major__", "__clang_minor__", "__clang_patchlevel__",
+    "_MSC_VER", "_MSC_FULL_VER", "_MSC_BUILD", "_MSC_EXTENSIONS",
+    # Platform
+    "__APPLE__", "__linux__", "__unix__", "__unix",
+    "__FreeBSD__", "__FreeBSD_version", "__OpenBSD__",
+    "__NetBSD__", "__DragonFly__",
+    "__sun", "__sun__", "__SVR4", "__svr4__",
+    "_WIN32", "_WIN64", "__WIN32__", "__CYGWIN__", "__MINGW32__",
+    # Architecture
+    "__i386__", "__x86_64__", "__arm__", "__aarch64__",
+    "__ARM_ARCH", "__ARMEL__", "__ARMEB__",
+    "__sparc__", "__sparc64__",
+    "__mips__", "__mips64",
+    "__powerpc__", "__POWERPC__", "__ppc__", "__ppc64__",
+    "__BIG_ENDIAN__", "__LITTLE_ENDIAN__",
+    "__BYTE_ORDER__", "__ORDER_LITTLE_ENDIAN__", "__ORDER_BIG_ENDIAN__",
+))
+
+
+def ids():
+    return ('MISRA12_20.9', 'MISRA23_20.9', 'MISRA25_20.9', 'CPP_PR045')
+
+
+def name(id):
+    title = """\
+20.9 All identifiers used in the controlling expression of #if or #elif preprocessing directives shall be #define'd before evaluation"""
+    return {
+        'MISRA12_20.9': 'Published Standards/MISRA C 2012/' + title,
+        'MISRA23_20.9': 'Published Standards/MISRA C 2023/' + title,
+        'MISRA25_20.9': 'Published Standards/MISRA C 2025/' + title,
+        'CPP_PR045': 'All Checks/Language Specific/C and C++/Preprocessor/' + """\
+All identifiers used in the controlling expression of #if or #elif preprocessing directives shall be #define'd before evaluation""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_20.9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'MISRA23_20.9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'MISRA25_20.9': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'CPP_PR045': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>As well as using a <code>#define</code> preprocessor directive, identifiers may effectively be <code>#define</code>'d in other, implementation-defined, ways. For example some implementations support:</p>
+<ul>
+  <li>Using a compiler command-line option, such as <code>-D</code> to allow identifiers to be defined prior to translation;</li>
+  <li>Using environment variables to achieve the same effect;</li>
+  <li>Pre-defined identifiers provided by the compiler.</li>
+</ul>
+
+<p><b>Rationale</b></p>
+<p>If an attempt is made to use a macro identifier in a preprocessor directive, and that identifier has not been defined, then the preprocessor will assume that it has a value of zero. This may not meet developer expectations.</p>
+
+<p><b>Example</b></p>
+<p>The following examples assume that the macro <code>M</code> is undefined.</p>
+<pre><code language="C">#if M == 0             /* Non-compliant                                            */
+                       /* Does 'M' expand to zero or is it undefined?              */
+#endif
+
+#if defined ( M ) /* Compliant - M is not evaluated                                */
+#if M == 0        /* Compliant - M is known to be defined                          */
+                  /* 'M' must expand to zero.                                      */
+#endif
+#endif
+
+/* Compliant - B is only evaluated in ( B == 0 ) if it is defined */
+#if defined ( B ) &amp;&amp; ( B == 0 )
+#endif</code></pre>
+"""
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().text(
+        'extra_predefined',
+        'Additional predefined identifiers to allow (whitespace-separated)',
+        '',
+    )
+
+
+def _advance(lex):
+    """Walk to the next non-whitespace, non-comment lexeme on the same logical
+    preprocessor line. Backslash+newline line continuations are skipped so
+    the walk follows continued lines, but a real Newline ends the directive
+    and is returned to the caller."""
+    if lex is None:
+        return None
+    lex = lex.next(False, True)
+    while lex is not None:
+        tok = lex.token()
+        if tok == 'Whitespace':
+            lex = lex.next(False, True)
+            continue
+        if tok == 'Preprocessor' and lex.text() == _LINE_CONT:
+            lex = lex.next(False, True)
+            continue
+        return lex
+    return None
+
+
+def _is_defined_macro(ent):
+    """True if `ent` is a resolved macro entity. Excludes Unresolved Macro
+    placeholders that the parser may attach to identifiers it could not
+    match to a real definition."""
+    if ent is None:
+        return False
+    kind = ent.kind()
+    return kind.check('Macro') and not kind.check('Unresolved')
+
+
+def _scan_controlling_expr(check, file, hash_lex, directive, predefined,
+                           guarded):
+    """Walk the controlling expression of a #if or #elif starting at the `#`
+    token. Reports each identifier that is neither the operand of `defined`,
+    listed in `guarded` from earlier in the same #if/#elif chain, a known
+    predefined identifier, nor resolved to a macro entity. Mutates `guarded`
+    so that operands of `defined` here also propagate to later branches of
+    the same chain — handling the `#if !defined(X) #error #elif X` idiom
+    common in Qt moc-generated headers."""
+    lex = _advance(hash_lex)              # the directive keyword
+    if lex is None:
+        return
+    lex = _advance(lex)                    # first token of the expression
+
+    # State machine for the `defined` operator. After we see `defined`, the
+    # next token (an identifier, optionally wrapped in parentheses) is the
+    # operand and must NOT be checked. Operand names are recorded in
+    # `guarded` so that later uses in the same expression — and in any
+    # later #elif branches of the same chain — are treated as protected.
+    awaiting_operand = False
+    in_parens = False
+
+    # When a function-like macro is invoked (Identifier immediately followed
+    # by `(`), the parenthesized arguments are skipped: after expansion they
+    # are no longer identifiers in the controlling expression. This handles
+    # idioms like `__has_attribute(sentinel)`.
+    skip_args_depth = 0
+    last_was_call_target = False
+
+    while lex is not None and lex.token() != 'Newline':
+        token = lex.token()
+        text = lex.text()
+
+        if skip_args_depth > 0:
+            if text == '(':
+                skip_args_depth += 1
+            elif text == ')':
+                skip_args_depth -= 1
+            lex = _advance(lex)
+            continue
+
+        if last_was_call_target and text == '(':
+            skip_args_depth = 1
+            last_was_call_target = False
+            lex = _advance(lex)
+            continue
+        last_was_call_target = False
+
+        if token == 'Preprocessor' and text == 'defined':
+            awaiting_operand = True
+            in_parens = False
+            lex = _advance(lex)
+            continue
+
+        if awaiting_operand:
+            if not in_parens:
+                if text == '(':
+                    in_parens = True
+                else:
+                    # Bare `defined X` form: record operand and stop awaiting.
+                    if token == 'Identifier':
+                        guarded.add(text)
+                    awaiting_operand = False
+                lex = _advance(lex)
+                continue
+            # Inside `defined(...)`: capture the operand identifier and skip
+            # all other tokens until the matching `)`.
+            if text == ')':
+                awaiting_operand = False
+                in_parens = False
+            elif token == 'Identifier':
+                guarded.add(text)
+            lex = _advance(lex)
+            continue
+
+        if token == 'Identifier':
+            if (text not in guarded and text not in predefined
+                    and not _is_defined_macro(lex.ent())):
+                check.violation(None, file, lex.line_begin(),
+                                lex.column_begin(), ERR1, text, directive)
+            last_was_call_target = True
+
+        lex = _advance(lex)
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=True)
+    if not lexer:
+        return
+
+    extra = check.options().lookup('extra_predefined') or ''
+    predefined = _PREDEFINED | set(extra.split())
+
+    # Stack of `guarded` sets, one per active #if/#endif block. Operands of
+    # `defined` (and the named identifier of #ifdef/#ifndef) accumulate
+    # into the current chain's set, so later #elif branches treat those
+    # identifiers as guarded.
+    chain_stack = []
+
+    lex = lexer.first()
+    while lex is not None:
+        if lex.token() == 'Preprocessor' and lex.text() == '#':
+            nxt = lex.next(ignore_whitespace=True, ignore_comments=True)
+            if nxt is not None and nxt.token() == 'Preprocessor':
+                directive = nxt.text()
+                if directive == 'if':
+                    chain = set()
+                    chain_stack.append(chain)
+                    _scan_controlling_expr(check, file, lex, directive,
+                                           predefined, chain)
+                elif directive == 'elif':
+                    chain = chain_stack[-1] if chain_stack else set()
+                    _scan_controlling_expr(check, file, lex, directive,
+                                           predefined, chain)
+                elif directive in ('ifdef', 'ifndef'):
+                    chain = set()
+                    after = nxt.next(ignore_whitespace=True,
+                                     ignore_comments=True)
+                    if after is not None and after.token() == 'Identifier':
+                        chain.add(after.text())
+                    chain_stack.append(chain)
+                elif directive == 'endif':
+                    if chain_stack:
+                        chain_stack.pop()
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
