@@ -1,0 +1,336 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-05-06
+
+
+ERR1 = 'Macro parameter "%1" is used in mixed contexts (both as operand of # or ## and elsewhere); the argument passed here is itself a macro and so is subject to further macro replacement'
+
+
+def ids():
+    return ('MISRA12_20.12', 'MISRA23_20.12', 'MISRA25_20.12', 'CPP_PR046')
+
+
+def name(id):
+    return {
+        'MISRA12_20.12': 'Published Standards/MISRA C 2012/' + """\
+20.12 A macro parameter used as an operand to the # or ## operators, which is itself subject to further macro replacement, shall only be used as an operand to these operators""",
+        'MISRA23_20.12': 'Published Standards/MISRA C 2023/' + """\
+20.12 A macro parameter used as an operand to the # or ## operators, which is itself subject to further macro replacement, shall only be used as an operand to these operators""",
+        'MISRA25_20.12': 'Published Standards/MISRA C 2025/' + """\
+20.12 A macro parameter used as an operand to the # or ## operators, which is itself subject to further macro replacement, shall only be used as an operand to these operators""",
+        'CPP_PR046': 'All Checks/Language Specific/C and C++/Preprocessor/' + """\
+A macro parameter used as an operand to the # or ## operators, which is itself subject to further macro replacement, shall only be used as an operand to these operators""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_20.12': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'MISRA23_20.12': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'MISRA25_20.12': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'CPP_PR046': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Rationale</b></p>
+<p>A macro parameter that is used as an operand of a <code>#</code> or <code>##</code> operator is not expanded prior to being used. The same parameter appearing elsewhere in the replacement text is expanded. If the macro parameter is itself subject to macro replacement, its use in mixed contexts within a macro replacement may not meet developer expectations.</p>
+
+<p><b>Example</b></p>
+<p>In the following non-compliant example, the macro parameter <code>x</code> is replaced with <code>AA</code> which is subject to further macro replacement when not used as the operand of <code>##</code>:</p>
+<pre><code language="C">#define AA      0xffff
+#define BB( x ) ( x ) + wow ## x   /* Non-compliant */
+
+void f ( void )
+{
+  int32_t wowAA = 0;
+
+  /* Expands as wowAA = ( 0xffff ) + wowAA; */
+  wowAA = BB ( AA );
+}</code></pre>
+<p>In the following compliant example, the macro parameter <code>X</code> is not subject to further macro replacement:</p>
+<pre><code language="C">int32_t speed;
+int32_t speed_scale;
+int32_t scaled_speed;
+#define SCALE( X ) ( ( X ) * X ## _scale )
+/* expands to scaled_speed = ( ( speed ) * speed_scale ); */
+scaled_speed = SCALE ( speed );</code></pre>
+"""
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    pass
+
+
+# Backslash + newline: line-continuation token inside a preprocessor directive.
+_LINE_CONT = "\\\n"
+
+
+def _advance(lex):
+    """Return the next macro-body lexeme, skipping whitespace, comments, and
+    backslash-newline line continuations. A real Newline token is returned so
+    callers can detect the end of the macro definition.
+    """
+    if lex is None:
+        return None
+    lex = lex.next(False, True)
+    while lex is not None:
+        tok = lex.token()
+        if tok == "Whitespace":
+            lex = lex.next(False, True)
+            continue
+        if tok == "Preprocessor" and lex.text() == _LINE_CONT:
+            lex = lex.next(False, True)
+            continue
+        return lex
+    return None
+
+
+def _significant_neighbor(lex, forward):
+    """Return the immediate semantic neighbor of `lex` (next if forward, else
+    previous), skipping whitespace, comments, and line continuations.
+    """
+    step = (lambda x: x.next(False, True)) if forward else (lambda x: x.previous(False, True))
+    n = step(lex)
+    while n is not None:
+        tok = n.token()
+        if tok == "Whitespace":
+            n = step(n)
+            continue
+        if tok == "Preprocessor" and n.text() == _LINE_CONT:
+            n = step(n)
+            continue
+        return n
+    return None
+
+
+def _find_param_list(lex):
+    """Advance `lex` to the opening '(' of the macro parameter list."""
+    lex = _advance(lex)
+    while lex is not None:
+        if lex.text() == "(":
+            return lex
+        if lex.token() == "Newline":
+            return None
+        lex = _advance(lex)
+    return None
+
+
+def _collect_parameters(lex):
+    """Collect parameter identifier names from the parameter list.
+
+    `lex` should point at the opening '('. Returns (params, lex_after_close)
+    where params is a dict {name: index} preserving declaration order.
+    Returns ({}, None) on error.
+    """
+    params = {}
+    depth = 1
+    next_idx = 0
+    lex = _advance(lex)
+    while lex is not None and depth > 0:
+        if lex.token() == "Newline":
+            return {}, None
+        text = lex.text()
+        if text == "(":
+            depth += 1
+        elif text == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        elif depth == 1 and lex.token() == "Identifier":
+            if text not in params:
+                params[text] = next_idx
+                next_idx += 1
+        lex = _advance(lex)
+    if lex is None:
+        return {}, None
+    return params, _advance(lex)
+
+
+def _is_operand_of_hash(lex):
+    """True if the parameter occurrence at `lex` is an operand of # or ##.
+
+    The # operator only stringifies an immediately following parameter.
+    The ## operator concatenates with the immediately preceding or following
+    token. Whitespace between them is allowed.
+    """
+    prev = _significant_neighbor(lex, forward=False)
+    if prev is not None:
+        prev_text = prev.text()
+        if prev_text == "#" or prev_text == "##":
+            return True
+    nxt = _significant_neighbor(lex, forward=True)
+    if nxt is not None and nxt.text() == "##":
+        return True
+    return False
+
+
+# Cache of macro-entity-id -> (mixed-param-name set, name->index map).
+# The same macro may be invoked from many files; analyze its body once.
+_macro_param_cache = {}
+
+
+def _analyze_macro_definition(macro_ent):
+    """Return (mixed_params, name_to_index) for the function-like macro.
+
+    mixed_params is the set of parameter names that appear both as operand
+    of # or ## and elsewhere in the body. name_to_index gives the positional
+    index of each declared parameter. Returns (set(), {}) if the macro
+    cannot be analyzed.
+    """
+    cache_key = macro_ent.id()
+    cached = _macro_param_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    empty = (set(), {})
+    _macro_param_cache[cache_key] = empty
+
+    define_ref = macro_ent.ref("Definein")
+    if define_ref is None:
+        return empty
+
+    def_file = define_ref.file()
+    if def_file is None:
+        return empty
+
+    def_lexer = def_file.lexer(lookup_ents=False)
+    if def_lexer is None:
+        return empty
+
+    lex = def_lexer.lexeme(define_ref.line(), define_ref.column())
+    if lex is None:
+        return empty
+
+    paren_lex = _find_param_list(lex)
+    if paren_lex is None:
+        return empty
+
+    params, body_lex = _collect_parameters(paren_lex)
+    if not params or body_lex is None:
+        return empty
+
+    operand_uses = set()
+    other_uses = set()
+
+    lex = body_lex
+    while lex is not None and lex.token() != "Newline":
+        if lex.token() == "Identifier" and lex.text() in params:
+            if _is_operand_of_hash(lex):
+                operand_uses.add(lex.text())
+            else:
+                other_uses.add(lex.text())
+        lex = _advance(lex)
+
+    result = (operand_uses & other_uses, params)
+    _macro_param_cache[cache_key] = result
+    return result
+
+
+def _parse_call_args(lexer, line, col):
+    """Parse the argument list of a macro call whose name is at (line, col).
+
+    Returns a list of argument-token-lists, one per positional argument
+    (split at depth-1 commas). Returns None if no parenthesized argument
+    list is found.
+    """
+    lex = lexer.lexeme(line, col)
+    if lex is None:
+        return None
+    lex = lex.next(True, True)
+    if lex is None or lex.text() != "(":
+        return None
+    lex = lex.next(True, True)
+    depth = 1
+    args = [[]]
+    while lex is not None:
+        text = lex.text()
+        if text == "(":
+            depth += 1
+            args[-1].append(lex)
+        elif text == ")":
+            depth -= 1
+            if depth == 0:
+                break
+            args[-1].append(lex)
+        elif text == "," and depth == 1:
+            args.append([])
+        else:
+            args[-1].append(lex)
+        lex = lex.next(True, True)
+
+    if len(args) == 1 and not args[0]:
+        return []
+    return args
+
+
+def _arg_subject_to_replacement(arg_tokens):
+    """True if the argument tokens contain an identifier that is itself a
+    macro (and therefore would undergo further macro replacement).
+    """
+    for lex in arg_tokens:
+        if lex.token() != "Identifier":
+            continue
+        ent = lex.ent()
+        if ent is not None and ent.kind().check("Macro"):
+            return True
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=True)
+    if not lexer:
+        return
+
+    for use_ref in file.filerefs("Use", "Macro Functional"):
+        macro = use_ref.ent()
+        mixed, params = _analyze_macro_definition(macro)
+        if not mixed:
+            continue
+
+        args = _parse_call_args(lexer, use_ref.line(), use_ref.column())
+        if not args:
+            continue
+
+        for param_name in mixed:
+            idx = params.get(param_name)
+            if idx is None or idx >= len(args):
+                continue
+            if _arg_subject_to_replacement(args[idx]):
+                check.violation(macro, file, use_ref.line(), use_ref.column(),
+                                ERR1, param_name)
