@@ -1,0 +1,272 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-05-07
+
+
+ERR1 = 'Return value of "%1" is discarded; error information is not tested'
+
+# Common standard-library functions that return error information. Per the
+# Amplification, the list is project-specific; this default list covers the
+# most-frequently misused C standard-library functions.
+DEFAULT_ERROR_FUNCS = [
+    # Memory allocation
+    'malloc', 'calloc', 'realloc', 'aligned_alloc',
+    # File handling
+    'fopen', 'freopen', 'tmpfile',
+    'fclose', 'fflush',
+    'fread', 'fwrite',
+    'fseek', 'ftell', 'fsetpos', 'fgetpos',
+    'fputc', 'fputs', 'putc', 'putchar', 'puts',
+    'fgetc', 'fgets', 'getc', 'getchar',
+    'ungetc',
+    'remove', 'rename',
+    'setvbuf',
+    # Formatted I/O
+    'fprintf', 'printf', 'sprintf', 'snprintf',
+    'fscanf', 'scanf', 'sscanf',
+    'vfprintf', 'vprintf', 'vsprintf', 'vsnprintf',
+    'vfscanf', 'vscanf', 'vsscanf',
+    # System / process
+    'system',
+    'atexit',
+    'raise', 'signal',
+    # Time
+    'time', 'mktime', 'clock',
+    # String-to-number conversion
+    'strtol', 'strtoul', 'strtoll', 'strtoull',
+    'strtof', 'strtod', 'strtold',
+]
+
+
+def ids():
+    return ('MISRA12_DIR_4.7', 'MISRA23_DIR_4.7', 'MISRA25_DIR_4.7', 'CPP_F073')
+
+
+def name(id):
+    return {
+        'MISRA12_DIR_4.7': 'Published Standards/MISRA C 2012/' + """\
+Directive 4.7 If a function returns error information, then that error information shall be tested""",
+        'MISRA23_DIR_4.7': 'Published Standards/MISRA C 2023/' + """\
+Directive 4.7 If a function returns error information, then that error information shall be tested""",
+        'MISRA25_DIR_4.7': 'Published Standards/MISRA C 2025/' + """\
+Directive 4.7 If a function returns error information, then that error information shall be tested""",
+        'CPP_F073': 'All Checks/Language Specific/C and C++/Functions/' + """\
+If a function returns error information, then that error information shall be tested""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_DIR_4.7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Functions',
+        ],
+        'MISRA23_DIR_4.7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Functions',
+        ],
+        'MISRA25_DIR_4.7': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Functions',
+        ],
+        'CPP_F073': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>The list of functions that are deemed to return error information shall be determined by the project.</p>
+<p>The error information returned by a function shall be tested in a meaningful manner.</p>
+
+<p><b>Rationale</b></p>
+<p>A function (whether it is part of The Standard Library, a third party library or a user defined function) may be deemed to provide some means of indicating the occurrence of an error. This may be via an error flag, some special return value or some other means. Whenever such a mechanism is provided by a function the calling program shall check for the indication of an error as soon as the function returns.</p>
+<p>However, note that the checking of input values to functions is considered a more robust means of error prevention than trying to detect errors after the function has completed (see Dir 4.11).</p>
+
+<p><b>Exception</b></p>
+<p>If it can be shown, for example by checking arguments, that a function cannot return an error indication then there is no need to perform a check.</p>
+
+<p><b>See also</b></p>
+<p>Dir 4.11, Rule 17.7</p>
+"""
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.option().checkbox('useDefaults',
+        'Treat common standard-library error-returning functions (malloc, fopen, etc.) as in-scope',
+        True)
+    check.option().text('extraFuncs',
+        'Additional error-returning function names (comma-separated)',
+        '')
+
+
+def _build_func_set(check):
+    funcs = set()
+    if check.option().lookup('useDefaults'):
+        funcs.update(DEFAULT_ERROR_FUNCS)
+    extra = check.option().lookup('extraFuncs') or ''
+    for name in extra.split(','):
+        name = name.strip()
+        if name:
+            funcs.add(name)
+    return funcs
+
+
+def _start_of_callee(name_lex):
+    # Walk back through any member-access / scope-resolution chain
+    # (a.b.foo(), ns::foo(), this->foo(), ...) and return the leftmost
+    # lexeme that is part of the callee expression.
+    lex = name_lex
+    while True:
+        prev = lex.previous(True, True)
+        if prev is None or prev.text() not in ('.', '->', '::'):
+            return lex
+        prev2 = prev.previous(True, True)
+        if prev2 is None or prev2.token() != 'Identifier':
+            return lex
+        lex = prev2
+
+
+def _match_close_paren(open_lex):
+    depth = 1
+    lex = open_lex.next(True, True)
+    while lex:
+        t = lex.text()
+        if t == '(':
+            depth += 1
+        elif t == ')':
+            depth -= 1
+            if depth == 0:
+                return lex
+        lex = lex.next(True, True)
+    return None
+
+
+def _matching_open_paren(close_paren):
+    depth = 1
+    lex = close_paren.previous(True, True)
+    while lex:
+        t = lex.text()
+        if t == ')':
+            depth += 1
+        elif t == '(':
+            depth -= 1
+            if depth == 0:
+                return lex
+        lex = lex.previous(True, True)
+    return None
+
+
+def _is_control_header_close(close_paren):
+    # True iff `close_paren` ends an if / while / for / switch header,
+    # so the next statement is the controlled body.
+    open_paren = _matching_open_paren(close_paren)
+    if open_paren is None:
+        return False
+    kw = open_paren.previous(True, True)
+    return (kw is not None and kw.token() == 'Keyword'
+            and kw.text() in ('if', 'while', 'for', 'switch'))
+
+
+def _is_stmt_left_boundary(lex):
+    # Token immediately to the left of a fresh statement.
+    if lex is None:
+        return False
+    txt = lex.text()
+    if txt in (';', '{', '}'):
+        return True
+    if lex.token() == 'Keyword' and txt in ('else', 'do'):
+        return True
+    if txt == ')':
+        if _is_control_header_close(lex):
+            return True
+        # Otherwise the parens enclose a C-style cast like (T) or
+        # (T *). The `(void)` cast is the explicit-discard idiom
+        # (Rule 17.7) and signals intentional discard, so leave it
+        # alone. Other casts are transparent — recurse onto the
+        # token before the cast's opening '('.
+        open_paren = _matching_open_paren(lex)
+        if open_paren is None:
+            return False
+        inner = open_paren.next(True, True)
+        if (inner is not None and inner.token() == 'Keyword'
+                and inner.text() == 'void'):
+            after_void = inner.next(True, True)
+            if after_void is not None and after_void.text() == ')':
+                return False
+        return _is_stmt_left_boundary(open_paren.previous(True, True))
+    return False
+
+
+def _is_discarded_call(lexer, ref, ent):
+    name_lex = lexer.lexeme(ref.line(), ref.column())
+    if name_lex is None:
+        return False
+    # Macro expansions resolve to a Call ref at the macro-use site, where the
+    # lexer sees the macro identifier rather than the function name. Don't
+    # report a use-site discard for a call that lives inside the macro body.
+    if name_lex.text() != ent.name():
+        return False
+
+    callee_start = _start_of_callee(name_lex)
+    prev = callee_start.previous(True, True)
+    if not _is_stmt_left_boundary(prev):
+        return False
+
+    open_paren = name_lex.next(True, True)
+    if open_paren is None or open_paren.text() != '(':
+        return False
+    close_paren = _match_close_paren(open_paren)
+    if close_paren is None:
+        return False
+
+    after = close_paren.next(True, True)
+    if after is None:
+        return False
+    return after.text() == ';'
+
+
+def check(check, file):
+    funcs = _build_func_set(check)
+    if not funcs:
+        return
+
+    lexer = None
+    for ref in file.filerefs('Call', 'Function ~Member'):
+        ent = ref.ent()
+        if ent.name() not in funcs:
+            continue
+
+        if lexer is None:
+            lexer = file.lexer(lookup_ents=False)
+            if lexer is None:
+                return
+
+        if _is_discarded_call(lexer, ref, ent):
+            check.violation(ent, file, ref.line(), ref.column(),
+                            ERR1, ent.name())
