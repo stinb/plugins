@@ -38,7 +38,7 @@ void fn_good_recvfrom(int sock, struct sockaddr *src_addr, socklen_t *src_len) {
   }
 
   num = ntohl(num);
-  printf("We recieved %u from the network!\n", (unsigned int)num);
+  printf("We received %u from the network!\n", (unsigned int)num);
 }
 
 void fn_bad_send(int sock) {
@@ -64,7 +64,7 @@ void fn_good_send(int sock) {
   }
 
   num = htonl(num);
-  printf("We recieved %u from the network!\n", (unsigned int)num);
+  printf("We received %u from the network!\n", (unsigned int)num);
 }
 
 void fn_bad_sendto(int sock, struct sockaddr *dest_addr, socklen_t *dest_len) {
@@ -90,5 +90,5 @@ void fn_good_sendto(int sock, struct sockaddr *dest_addr, socklen_t *dest_len) {
   }
 
   num = htonl(num);
-  printf("We recieved %u from the network!\n", (unsigned int)num);
+  printf("We received %u from the network!\n", (unsigned int)num);
 }

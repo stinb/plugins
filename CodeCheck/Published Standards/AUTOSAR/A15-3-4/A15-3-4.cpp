@@ -19,7 +19,7 @@ void F1() noexcept(false)
 void F2() noexcept(false)
 {
     std::int32_t ret =
-        Fn(); // UndCC_FalseNeg - can not be sure whether fn() throws or not - False negative becasue it isn't plausible to flag every function call like this
+        Fn(); // UndCC_FalseNeg - can not be sure whether fn() throws or not - False negative because it isn't plausible to flag every function call like this
 
     if (ret < 10)
     {
@@ -48,7 +48,7 @@ void F3() noexcept(false)
     }
 
     catch (std::exception& e) // UndCC_Violation - caught exception is too
-        // general, no information which error occured
+        // general, no information which error occurred
     {
         // Nothing to do
         throw;

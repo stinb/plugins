@@ -24,5 +24,5 @@ void fn_good_recv(int sock) {
   }
 
   num = ntohl(num);
-  printf("We recieved %u from the network!\n", (unsigned int)num);
+  printf("We received %u from the network!\n", (unsigned int)num);
 }
