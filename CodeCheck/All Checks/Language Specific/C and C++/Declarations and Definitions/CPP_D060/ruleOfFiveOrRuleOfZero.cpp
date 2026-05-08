@@ -3,7 +3,7 @@
 
 namespace v1
 {
-    // Class is copyable and moveable via the compiler generated funtions.
+    // Class is copyable and moveable via the compiler generated functions.
     // UndCC_Valid - rule of zero.
     class A
     {
