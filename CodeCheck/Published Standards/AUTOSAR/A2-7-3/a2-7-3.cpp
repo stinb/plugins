@@ -1,15 +1,14 @@
 //% $Id: A2-7-3.hpp 305382 2018-01-26 06:32:15Z michal.szczepankiewicz $
-#include <cstdint>
 
-typedef int16_t new_int; // UndCC_Violation
+typedef short new_int; // UndCC_Violation
 
 /// union sample
 /// @brief union for S
 union S
 {
-    std::int32_t n;     // occupies 4 bytes // UndCC_Violation
-    std::uint16_t s[2]; // occupies 4 bytes // UndCC_Violation
-    std::uint8_t c;     // occupies 1 byte // UndCC_Violation
+    int n;                  // occupies 4 bytes // UndCC_Violation
+    unsigned short s[2];    // occupies 4 bytes // UndCC_Violation
+    unsigned char c;        // occupies 1 byte // UndCC_Violation
 };
 
 struct product // UndCC_Violation
@@ -24,10 +23,10 @@ enum colors // UndCC_Violation
     black
 };
 
-void F1(std::int32_t) noexcept; // UndCC_Violation documentation
+void F1(int) noexcept; // UndCC_Violation documentation
 
-std::int32_t F2(std::int16_t input1, // UndCC_Violation
-                std::int32_t input2); 
+int F2(short input1, // UndCC_Violation
+       int input2);
 
 /// @brief Function description
 ///
@@ -36,9 +35,9 @@ std::int32_t F2(std::int16_t input1, // UndCC_Violation
 /// @throw std::runtime_error conditions to runtime_error occur
 ///
 /// @return return value description
-std::int32_t F3(
-    std::int16_t input1,
-    std::int16_t input2) noexcept(false); // UndCC_Valid documentation
+int F3(
+    short input1,
+    short input2) noexcept(false); // UndCC_Valid documentation
 
 /// @brief Class responsibility
 class C // UndCC_Valid documentation
@@ -48,16 +47,16 @@ public:
     ///
     /// @param input1 input1 parameter description
     /// @param input2 input2 parameter description
-    C(std::int32_t input1, float input2) : x{input1}, y{input2} {}
+    C(int input1, float input2) : x{input1}, y{input2} {}
 
     /// @brief Method description
     ///
     /// @return return value descrption
-    std::int32_t const *GetX() const noexcept { return &x; }
+    int const *GetX() const noexcept { return &x; }
 
 private:
     /// @brief Data member descpription
-    std::int32_t x;
+    int x;
     /// @brief Data member descpription
     float y;
 };
