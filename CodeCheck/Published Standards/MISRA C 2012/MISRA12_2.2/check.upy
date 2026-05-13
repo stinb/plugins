@@ -1,0 +1,518 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-05-08
+
+
+ERR1 = 'Statement has no side effect (dead code)'
+ERR2 = 'Result of unary "*" operator is unused (dead code)'
+
+CONTROL_FLOW_KEYWORDS = {
+    'if', 'else', 'while', 'for', 'switch', 'do',
+    'return', 'break', 'continue', 'goto',
+    'case', 'default',
+    'try', 'catch', 'throw',
+}
+
+# Language-extension keywords whose statement form is exempt from dead-code
+# analysis. Per MISRA 2.2: "Operations that are introduced by language
+# extensions are assumed always to have an effect on program behaviour."
+LANGUAGE_EXTENSION_KEYWORDS = {
+    'asm', '__asm', '__asm__',
+}
+
+# Type-specifiers, storage-classes, and tag introducers that begin a
+# declaration. Anything starting with one of these is not an expression
+# statement and is not analyzed for dead code.
+DECLARATION_KEYWORDS = {
+    'auto', 'register', 'static', 'extern', '_Thread_local', 'thread_local',
+    'const', 'volatile', 'restrict', '_Atomic',
+    'inline', '_Noreturn', 'noreturn',
+    'typedef',
+    'void', 'char', 'short', 'int', 'long',
+    'float', 'double',
+    'signed', 'unsigned',
+    '_Bool', 'bool',
+    '_Complex', '_Imaginary',
+    'struct', 'union', 'enum',
+    'class', 'namespace', 'using', 'template',
+    'public', 'private', 'protected', 'friend', 'virtual', 'explicit',
+    '__attribute__', '__declspec',
+}
+
+ASSIGNMENT_OPS = {
+    '=', '+=', '-=', '*=', '/=', '%=',
+    '<<=', '>>=', '&=', '|=', '^=',
+}
+
+INCREMENT_OPS = {'++', '--'}
+
+# Lexer token categories that we ignore wholesale when collecting statements.
+# Preprocessor lines are dropped entirely in collect_lexemes() (the directive,
+# its arguments, and any identifiers on the same line) so that things like
+# `#if FOO` don't leave a stray Identifier in the token stream.
+SKIP_TOKENS = {'Comment', 'Whitespace'}
+
+TYPE_KIND_PATTERN = 'Typedef, Struct, Union, Enum, Class'
+
+
+def ids():
+    return ('MISRA12_2.2', 'MISRA23_2.2', 'MISRA25_2.2', 'CPP_U011')
+
+
+def name(id):
+    return {
+        'MISRA12_2.2': 'Published Standards/MISRA C 2012/' + """\
+2.2 There shall be no dead code""",
+        'MISRA23_2.2': 'Published Standards/MISRA C 2023/' + """\
+2.2 A project shall not contain dead code""",
+        'MISRA25_2.2': 'Published Standards/MISRA C 2025/' + """\
+2.2 A project shall not contain dead code""",
+        'CPP_U011': 'All Checks/Language Specific/C and C++/Unnecessary Constructs/' + """\
+A project shall not contain dead code""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_2.2': [
+            'Language: C',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Unnecessary Constructs',
+        ],
+        'MISRA23_2.2': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Unnecessary Constructs',
+        ],
+        'MISRA25_2.2': [
+            'Language: C',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Unnecessary Constructs',
+        ],
+        'CPP_U011': [
+            'Language: C',
+            'Unnecessary Constructs',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>Any operation that is executed but whose removal would not affect program behaviour constitutes dead code. Operations that are introduced by language extensions are assumed always to have an effect on program behaviour.</p>
+
+<p><b>Notes</b></p>
+<ol>
+<li>The behaviour of an embedded system is often determined not just by the nature of its actions, but also by the time at which they occur.</li>
+<li>Unreachable code is not dead code, as it cannot be executed.</li>
+<li>Initialization is not the same as an assignment operation and is therefore not a candidate for dead code.</li>
+</ol>
+
+<p><b>Rationale</b></p>
+<p>The presence of dead code may be indicative of an error in the program's logic. Since dead code may be removed by a compiler, its presence may cause confusion.</p>
+
+<p><b>Exception</b></p>
+<ol>
+<li>A cast to void is assumed to indicate a value that is intentionally not being used. The cast is therefore not dead code itself. It is treated as using its operand which is therefore also not dead code.</li>
+<li>A cast operator whose result is used is not dead code.</li>
+</ol>
+
+<p><b>Example</b></p>
+<p>In this example, it is assumed that the object pointed to by p is used in other functions.</p>
+<pre><code language="C">extern volatile uint16_t v;
+
+extern char *p;
+
+void f ( void )
+{
+  uint16_t x;
+
+    ( void ) v;         /* Compliant     - v is accessed for its side effect
+                         *                 and the cast to void is permitted
+                         *                 by exception                                      */
+    ( int32_t ) v;      /* Non-compliant - the cast operator is dead                         */
+    v &gt;&gt; 3;             /* Non-compliant - the &gt;&gt; operator is dead                           */
+    x = 3;              /* Non-compliant - the = operator is dead
+                         *               - x is not subsequently read                        */
+    *p++;               /* Non-compliant - result of * operator is not used                  */
+    ( *p )++;           /* Compliant     - *p is incremented                                 */
+}
+</code></pre>
+<p>In the following compliant example, the __asm keyword is a language extension, not a function call operation, and is therefore not dead code:</p>
+<pre><code language="C">__asm ( "NOP" );
+</code></pre>
+<p>In the following example, the function g does not contain dead code, and is not itself dead code because it does not contain any operations. However, the call to the function is dead because it could be removed without affecting program behaviour.</p>
+<pre><code language="C">void g ( void )
+{
+  /* Compliant - there are no operations in this function */
+}
+
+void h ( void )
+{
+  g ( );   /* Non-compliant - the call could be removed                 */
+}
+</code></pre>
+
+<p><b>Implementation</b></p>
+<p>This is a conservative implementation of MISRA's "Undecidable, System" rule. It detects:</p>
+<ul>
+<li>Expression statements whose top-level expression has no side effect (e.g. a bare cast, comparison, shift, deref, member access, or identifier).</li>
+<li>The <code>*&lt;expr&gt;++</code> / <code>*&lt;expr&gt;--</code> pattern, where the result of the leading unary <code>*</code> operator is unused.</li>
+</ul>
+<p>The following dead-code cases are detected by companion checks and are not reported here, to avoid duplicate violations:</p>
+<ul>
+<li>Assignments to local variables that are not subsequently read &mdash; reported by <code>CPP_V017</code> (AUTOSAR A0-1-1).</li>
+<li>Discarding the return value of a function that returns error information &mdash; reported by <code>CPP_F073</code> (MISRA Directive 4.7).</li>
+</ul>
+<p>Calls to functions whose body has no observable side effect (e.g. an empty function) require whole-program analysis and are not reported.</p>
+
+<p><b>See also</b></p>
+<p>Rule 17.7</p>
+"""
+
+
+def test_entity(file):
+    if not file.kind().check('Code File, Header File'):
+        return False
+    # MISRA C 2025 lists "Applies to: C90, C99, C11" — C only. Skip C++ TUs
+    # to avoid false positives from operator overloads (stream `<<`/`>>`),
+    # `static_cast<void>(...)`, template declarations, and similar C++
+    # syntax that this lexer-based check cannot reason about.
+    return file.file_type() == 'C'
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    pp_lines = preprocessor_line_set(file)
+
+    for define in file.filerefs('Define', 'Function', True):
+        fun = define.ent()
+        end_ref = fun.ref('End')
+        if not end_ref:
+            continue
+        analyze_function(check, file, lexer, pp_lines, fun,
+                         define.line(), end_ref.line())
+
+
+def preprocessor_line_set(file):
+    """Return the set of physical line numbers that are part of a
+    preprocessor directive, including continuation lines (those joined
+    by a trailing backslash). The lexer tags only the first physical line
+    of a multi-line `#define` as Preprocessor, so we need to read the file
+    to find the rest."""
+    try:
+        contents = file.contents()
+    except Exception:
+        return set()
+    if not contents:
+        return set()
+    pp_lines = set()
+    in_pp = False
+    for i, line in enumerate(contents.split('\n'), start=1):
+        if not in_pp and line.lstrip().startswith('#'):
+            in_pp = True
+        if in_pp:
+            pp_lines.add(i)
+            if not line.rstrip().endswith('\\'):
+                in_pp = False
+    return pp_lines
+
+
+def analyze_function(check, file, lexer, pp_lines, fun, begin_line, end_line):
+    lexemes = collect_lexemes(lexer, pp_lines, begin_line, end_line)
+    if not lexemes:
+        return
+
+    # Locate the body's opening brace (first '{' at paren depth 0).
+    paren = 0
+    body_start = None
+    for i, lx in enumerate(lexemes):
+        text = lx.text()
+        if text == '(':
+            paren += 1
+        elif text == ')':
+            paren -= 1
+        elif text == '{' and paren == 0:
+            body_start = i
+            break
+    if body_start is None:
+        return
+
+    body_end = find_matching_brace(lexemes, body_start, len(lexemes))
+    walk_block(check, file, fun, lexemes, body_start + 1, body_end)
+
+
+def collect_lexemes(lexer, pp_lines, begin_line, end_line):
+    """Return a flat list of lexemes for the function range, excluding
+    comments / whitespace / newlines and dropping every line that is
+    part of a preprocessor directive (including multi-line `#define`
+    continuations, which the lexer does not tag as Preprocessor itself)."""
+    raw = lexer.lexemes(begin_line, end_line)
+    out = []
+    for lx in raw:
+        token = lx.token()
+        line = lx.line_begin()
+        if line in pp_lines:
+            continue
+        if token == 'Preprocessor':
+            continue
+        if token == 'Newline':
+            continue
+        if token in SKIP_TOKENS:
+            continue
+        out.append(lx)
+    return out
+
+
+def walk_block(check, file, fun, lexemes, start, end):
+    """Walk the run of lexemes start..end (exclusive) and invoke
+    analyze_statement on each top-level statement. Recurses into nested
+    code blocks; skips type/declaration/initializer braces."""
+    paren = 0
+    bracket = 0
+    stmt_start = start
+    i = start
+    while i < end:
+        lx = lexemes[i]
+        text = lx.text()
+
+        if text == '(':
+            paren += 1
+        elif text == ')':
+            paren -= 1
+        elif text == '[':
+            bracket += 1
+        elif text == ']':
+            bracket -= 1
+
+        if paren == 0 and bracket == 0:
+            if text == ';':
+                analyze_statement(check, file, fun, lexemes, stmt_start, i)
+                stmt_start = i + 1
+            elif text == ':' and not pending_has_ternary(lexemes, stmt_start, i):
+                # Label / case / default marker: discard the pending tokens
+                # (which may include macro expansions like YY_BREAK that we
+                # cannot statically resolve) and start a fresh statement
+                # after the colon.
+                stmt_start = i + 1
+            elif text == '{':
+                close = find_matching_brace(lexemes, i, end)
+                if (is_declaration_pending(lexemes, stmt_start, i)
+                        or pending_has_assignment(lexemes, stmt_start, i)):
+                    # Type body, declaration body, or initializer list:
+                    # not a code block. Keep stmt_start so any trailing
+                    # variable list (e.g. `struct S { ... } *p, *q;`) is
+                    # carried into the same declaration statement.
+                    pass
+                else:
+                    analyze_statement(check, file, fun, lexemes, stmt_start, i)
+                    walk_block(check, file, fun, lexemes, i + 1, close)
+                    stmt_start = close + 1
+                i = close
+        i += 1
+
+
+def pending_has_assignment(lexemes, start, end):
+    """True if the pending tokens contain a top-level assignment operator.
+    A `{` after a top-level `=` is an initializer list, not a code block."""
+    paren = 0
+    bracket = 0
+    for j in range(start, end):
+        text = lexemes[j].text()
+        if text == '(':
+            paren += 1
+        elif text == ')':
+            paren -= 1
+        elif text == '[':
+            bracket += 1
+        elif text == ']':
+            bracket -= 1
+        elif paren == 0 and bracket == 0 and text in ASSIGNMENT_OPS:
+            return True
+    return False
+
+
+def pending_has_ternary(lexemes, start, end):
+    """True if the pending tokens contain a top-level '?' (i.e. the ':'
+    we're at is the second half of a ternary, not a label/case marker)."""
+    paren = 0
+    bracket = 0
+    for j in range(start, end):
+        text = lexemes[j].text()
+        if text == '(':
+            paren += 1
+        elif text == ')':
+            paren -= 1
+        elif text == '[':
+            bracket += 1
+        elif text == ']':
+            bracket -= 1
+        elif text == '?' and paren == 0 and bracket == 0:
+            return True
+    return False
+
+
+def find_matching_brace(lexemes, open_index, end):
+    depth = 1
+    i = open_index + 1
+    while i < end:
+        text = lexemes[i].text()
+        if text == '{':
+            depth += 1
+        elif text == '}':
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return end
+
+
+def first_significant_index(stmt):
+    """Skip leading scope qualifiers (a::, a::b::, ...) and return the
+    index of the first 'real' token."""
+    i = 0
+    while (i + 1 < len(stmt)
+           and stmt[i].token() == 'Identifier'
+           and stmt[i + 1].text() == '::'):
+        i += 2
+    return i if i < len(stmt) else 0
+
+
+def is_likely_declaration(stmt):
+    """Heuristic declaration detector for cases where the type identifier
+    didn't resolve (e.g. external typedefs). Matches statements whose head
+    is '<id> [* | &]* <id>', as long as the leading identifier isn't a
+    known Object / Function / Variable / Parameter / Macro (which would
+    rule out a declaration)."""
+    if not stmt:
+        return False
+    sig = first_significant_index(stmt)
+    if sig >= len(stmt) or stmt[sig].token() != 'Identifier':
+        return False
+
+    first = stmt[sig]
+    ent = first.ent()
+    if ent and ent.kind().check('Object, Function, Variable, Parameter, Macro'):
+        return False
+
+    j = sig + 1
+    while j < len(stmt) and stmt[j].text() in ('*', '&'):
+        j += 1
+    return j < len(stmt) and stmt[j].token() == 'Identifier'
+
+
+def is_declaration_pending(lexemes, start, end):
+    if start >= end:
+        return False
+    sub = lexemes[start:end]
+    idx = first_significant_index(sub)
+    if idx >= len(sub):
+        return False
+    first = sub[idx]
+    if first.token() == 'Keyword' and first.text() in DECLARATION_KEYWORDS:
+        return True
+    if first.token() == 'Identifier':
+        ent = first.ent()
+        if ent and ent.kind().check(TYPE_KIND_PATTERN):
+            return True
+    return is_likely_declaration(sub)
+
+
+def analyze_statement(check, file, fun, lexemes, start, end):
+    if start >= end:
+        return
+    stmt = lexemes[start:end]
+    if not stmt:
+        return
+
+    # Drop a trailing leftover ':' from a label/case if present.
+    head = stmt[0]
+    head_text = head.text()
+    head_token = head.token()
+
+    # Control-flow / asm / preprocessor leftovers.
+    if head_token == 'Keyword' and head_text in CONTROL_FLOW_KEYWORDS:
+        return
+    if head_token == 'Keyword' and head_text in LANGUAGE_EXTENSION_KEYWORDS:
+        return
+    if head_text == '#':
+        return
+
+    # Labels: 'identifier :' as the first two tokens.
+    if (head_token == 'Identifier' and len(stmt) >= 2
+            and stmt[1].text() == ':'):
+        return
+
+    # Declarations: skip leading scope qualifiers, then look at the first
+    # real token.
+    sig = first_significant_index(stmt)
+    if sig < len(stmt):
+        first = stmt[sig]
+        if first.token() == 'Keyword' and first.text() in DECLARATION_KEYWORDS:
+            return
+        if first.token() == 'Identifier':
+            ent = first.ent()
+            if ent and ent.kind().check(TYPE_KIND_PATTERN):
+                return
+            # Macro identifiers as the leading token: the macro may expand
+            # to a statement (e.g. flex's `YY_BREAK`, `YY_RULE_SETUP`) or to
+            # nothing. Either way we cannot statically tell whether the
+            # expansion has a side effect, so skip conservatively.
+            if ent and ent.kind().check('Macro'):
+                return
+
+    # Heuristic declaration: '<id> [* | &]* <id>' at the head of the
+    # statement. Catches declarations whose type identifier (typedef) the
+    # lexer didn't resolve, e.g. external typedefs like `apr_status_t rv;`.
+    if is_likely_declaration(stmt):
+        return
+
+    # Exception: cast to void '(' 'void' ')' ...
+    if (head_text == '(' and len(stmt) >= 3
+            and stmt[1].text() == 'void' and stmt[2].text() == ')'):
+        return
+
+    # Walk tokens looking for side-effect indicators.
+    has_assignment = False
+    has_increment = False
+    has_call = False
+    prev = None
+    for lx in stmt:
+        text = lx.text()
+        if text in ASSIGNMENT_OPS:
+            has_assignment = True
+        elif text in INCREMENT_OPS:
+            has_increment = True
+        if text == '(' and prev is not None:
+            ptext = prev.text()
+            ptoken = prev.token()
+            if ptoken == 'Identifier' or ptext in (')', ']'):
+                has_call = True
+        prev = lx
+
+    # Side-effect-free expression statement.
+    if not has_assignment and not has_increment and not has_call:
+        check.violation(fun, file, head.line_begin(), head.column_begin(), ERR1)
+        return
+
+    # Leading unary '*' with the only side effect being a postfix/prefix
+    # ++/-- (no assignment, no call): the deref result is unused.
+    # Catches "*p++;" but not "(*p)++;" (which starts with '(').
+    if (head_text == '*' and has_increment
+            and not has_assignment and not has_call):
+        check.violation(fun, file, head.line_begin(), head.column_begin(), ERR2)
+        return
