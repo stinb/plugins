@@ -59,8 +59,6 @@ def printFile(report: ReportContext, file: Ent):
 
 
 def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: list[str] | None, report: ReportContext | None):
-    simple = options[REFERENCE] = 'Simple'
-
     edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields = buildEdgeInfo(db, arch, options)
 
     # Sort the objects
