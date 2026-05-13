@@ -98,22 +98,28 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
     # Make rows for each object
     for obj in objects:
 
-        # See how many tasks it is from
-        fromTasks: set[Ent] = set()
-        fromTasksFiltered: set[Ent] = set()
+        # Match the graph's lockset-based classification (computed in
+        # buildEdgeInfo via classify_shared_objects). Shared = reached from
+        # multiple task roots without a consistent lock. Protected = reached
+        # from multiple task roots with a consistent lock. Single-task
+        # objects are neither.
         edgeKeys = incoming[obj] if obj in incoming else set()
+        fromTasksFiltered: set[Ent] = set()
+        isShared = False
         for edgeKey in edgeKeys:
             info = edgeInfo[edgeKey]
-            if not info['filtered'] and refStr(info['ref']) not in interruptDisabledRefs:
+            if not info['filtered']:
                 fromTasksFiltered.update(info['from'])
-            fromTasks.update(info['from'])
-        shared = len(fromTasks) > 1
-        if options[OBJECTS] == 'shared only' and not shared:
+            if info['shared']:
+                isShared = True
+
+        if options[OBJECTS] == 'shared only' and not isShared:
             continue
 
         # Info for each column for all rows of the object
         objectName = getLongName(obj, options)
-        shared = 'x' if len(fromTasksFiltered) > 1 else '-'
+        shared = 'x' if isShared else '-'
+        protected = 'x' if (len(fromTasksFiltered) > 1 and not isShared) else '-'
 
         # Make rows for each incoming edge to the object
         for edgeKey in edgeKeysForObjects[obj]:
@@ -121,10 +127,6 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
 
             # Info for each column for all rows of the edge
             function = edgeObj['scope']
-            if str(FnAndObj(function, edgeObj['ent'])) in interruptDisabledRefs:
-                protected = 'x'
-            else:
-                protected = '-'
             functionName = getLongName(edgeObj['scope'], options)
             reference = []
             for kindname in edgeObj['kindnames']:
