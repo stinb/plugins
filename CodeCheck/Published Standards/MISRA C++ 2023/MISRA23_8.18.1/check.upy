@@ -1,9 +1,37 @@
 ERR1 = 'Object is assigned to an overlapping object'
 
+MEMCPY_FUNCS = {'memcpy'}
+STR_FUNCS = {'strcpy', 'strncpy', 'strcat', 'strncat', 'sprintf', 'snprintf'}
+
+# For each target function: (min, max) inclusive arg indices that are
+# "source-like" (a pointer/object whose overlap with the destination is
+# forbidden). The destination is always arg 0. max=None means variadic.
+# memcpy/strncpy/strncat have a size arg at index 2 that must NOT be scanned
+# for matches against the destination, otherwise constructs like
+#   memcpy(s->buf, src, s->len)
+# falsely flag because `s` appears in both the destination and the size.
+SRC_ARG_RANGE = {
+    'memcpy':   (1, 1),
+    'strcpy':   (1, 1),
+    'strncpy':  (1, 1),
+    'strcat':   (1, 1),
+    'strncat':  (1, 1),
+    'sprintf':  (2, None),
+    'snprintf': (3, None),
+}
+
+# MISRA C 19.1 wording covers any overlapping copy, so the C aliases default
+# to flagging the broader library set. MISRA C++ 8.18.1's amplification only
+# names memcpy, so the C++ alias (and CPP_T046 / M0-2-1) defaults to memcpy.
+MISRA_C_IDS = {'MISRA12_19.1', 'MISRA23_19.1', 'MISRA25_19.1'}
+
 
 # The ID for the check
 def ids():
-    return ('M0-2-1', 'CPP_T046', 'MISRA23_8.18.1')
+    return (
+        'M0-2-1', 'CPP_T046', 'MISRA23_8.18.1',
+        'MISRA12_19.1', 'MISRA23_19.1', 'MISRA25_19.1',
+    )
 
 
 def name(id):
@@ -14,6 +42,12 @@ Published Standards/AUTOSAR/Assigning Object to an Overlapping Object""",
 All Checks/Language Specific/C and C++/Types/Assigning Object to an Overlapping Object""",
         'MISRA23_8.18.1': """Published Standards/MISRA C++ 2023/8.18.1 \
 An object or subobject must not be copied to an overlapping object""",
+        'MISRA12_19.1': """Published Standards/MISRA C 2012/19.1 \
+An object shall not be assigned or copied to an overlapping object""",
+        'MISRA23_19.1': """Published Standards/MISRA C 2023/19.1 \
+An object shall not be assigned or copied to an overlapping object""",
+        'MISRA25_19.1': """Published Standards/MISRA C 2025/19.1 \
+An object shall not be assigned or copied to an overlapping object""",
     }[id]
 
 
@@ -38,7 +72,28 @@ def tags(id):
             'Standard: MISRA C++ 2023',
             'Category: Mandatory',
             'Expressions',
-        ]
+        ],
+        'MISRA12_19.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Mandatory',
+            'Structures and Unions',
+        ],
+        'MISRA23_19.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+            'Structures and Unions',
+        ],
+        'MISRA25_19.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Mandatory',
+            'Structures and Unions',
+        ],
     }.get(id)
 
 
@@ -147,7 +202,73 @@ void fn ( )
 <p><b>See also</b></p>
 <p>Rule 9-5-1</p>
 """,
+        'MISRA12_19.1': _misra_c_description(),
+        'MISRA23_19.1': _misra_c_description(),
+        'MISRA25_19.1': _misra_c_description(),
     }[id]
+
+
+def _misra_c_description():
+    return """
+<p><b>Rule</b></p>
+<p>An object shall not be assigned or copied to an overlapping object.</p>
+
+<p><b>Rationale</b></p>
+<p>The behaviour is undefined when two objects are created which have some overlap in memory and
+one is assigned or copied to the other.</p>
+
+<p><b>Exception</b></p>
+<p>The following are permitted because the behaviour is well-defined:</p>
+<ol>
+<li>Assignment between two objects that overlap exactly and have compatible types (ignoring
+their type qualifiers)</li>
+<li>Copying between objects that overlap partially or completely using the Standard Library
+function memmove</li>
+</ol>
+
+<p><b>Example</b></p>
+<p>This example also violates Rule 19.2 because it uses unions.</p>
+<pre><code language="C">void fn ( void )
+{
+  union
+  {
+    int16_t i;
+    int32_t j;
+  } a = { 0 };
+
+    a.j = a.i;     /* Non-compliant */
+}
+</code></pre>
+<pre><code language="C">#include &lt;string.h&gt;
+
+int16_t a[ 20 ];
+
+void f ( void )
+{
+  memcpy ( &amp;a[ 5 ], &amp;a[ 4 ], 2u * sizeof ( a[ 0 ] ) );               /* Non-compliant */
+}
+
+void g ( void )
+{
+  int16_t *p = &amp;a[ 0 ];
+  int16_t *q = &amp;a[ 0 ];
+
+    *p = *q;    /* Compliant - exception 1 */
+}
+</code></pre>
+
+<p><b>Developer's Note:</b><br>
+<p>This is a conservative implementation of MISRA's "Undecidable, System" rule. It detects:</p>
+<ul>
+<li>Assignment between two different members of the same union object.</li>
+<li>Calls to <code>memcpy</code> where the same object is referenced as both source and destination (controlled by the <i>Check memcpy calls...</i> option).</li>
+<li>Calls to <code>strcpy</code>, <code>strncpy</code>, <code>strcat</code>, <code>strncat</code>, <code>sprintf</code>, and <code>snprintf</code> with the same object as both source and destination (controlled by the <i>Also check strcpy...</i> option, which is on by default for this rule).</li>
+</ul>
+<p>Calls to <code>memmove</code> are not reported because they are explicitly permitted by the exception. Overlap that requires whole-program pointer-flow analysis (e.g. two pointer parameters that may alias at run time, or partial overlap via pointer arithmetic) is not reported.</p>
+
+<p><b>See also</b></p>
+<p>Rule 19.2</p>
+"""
 
 
 # Tests the type of file
@@ -164,9 +285,21 @@ def test_language(language):
 
 
 def define_options(check):
-    check.options().checkbox('check_memcpy',
-                             'Check memcpy calls using the same array as both source and destination',
-                             check.id() == 'MISRA23_8.18.1')
+    check.options().checkbox(
+        'check_memcpy',
+        'Check memcpy calls using the same object as both source and '
+        'destination',
+        check.id() in (
+            'MISRA23_8.18.1',
+            'MISRA12_19.1', 'MISRA23_19.1', 'MISRA25_19.1',
+        ),
+    )
+    check.options().checkbox(
+        'check_str_funcs',
+        'Also check strcpy, strncpy, strcat, strncat, sprintf, and snprintf '
+        'calls using the same object as both source and destination',
+        check.id() in MISRA_C_IDS,
+    )
 
 
 def get_ent_type(entity):
@@ -221,19 +354,38 @@ def check(check, file):
                     check.violation(memb, ass_ref.file(),
                                     ass_ref.line(), ass_ref.column(), ERR1)
 
-    if not check_memcpy:
+    check_str_funcs = check.options().lookup('check_str_funcs')
+
+    target_funcs = set()
+    if check_memcpy:
+        target_funcs |= MEMCPY_FUNCS
+    if check_str_funcs:
+        target_funcs |= STR_FUNCS
+
+    if not target_funcs:
         return
 
     lexer = file.lexer()
 
     for call_ref in file.filerefs("Call", "Function ~Lambda ~Macro ~Template"):
-        if call_ref.ent().name() != "memcpy":
+        fn_name = call_ref.ent().name()
+
+        if fn_name not in target_funcs:
             continue
+
+        min_src, max_src = SRC_ARG_RANGE[fn_name]
 
         lex = lexer.lexeme(call_ref.line(), call_ref.column())
         on_param = 0
         param = 0
-        arr_dest = None
+        dest_ent = None
+        # When the destination is captured via a struct-field access
+        # (e.g. `s->buf` or `s.buf`), the root entity (`s`) is shared
+        # with many unrelated sibling fields. Suppress matching so we
+        # don't false-positive on `memcpy(s->a, s->b, n)` where `s->a`
+        # and `s->b` point to distinct memory.
+        dest_via_member = False
+        flagged = False
 
         while lex:
             if lex.text() == "(":
@@ -245,20 +397,23 @@ def check(check, file):
                     break
             elif on_param == 1 and lex.text() == ",":
                 param += 1
+            elif on_param == 1 and lex.ent() and lex.ent().kind().check(
+                    "Object, Parameter"):
+                in_src_range = param >= min_src and \
+                    (max_src is None or param <= max_src)
 
-                if param > 0 and not arr_dest:
-                    break
-            elif on_param == 1 and param == 0 and lex.ent():
-                utype = str(lex.ent().freetext("UnderlyingType"))
+                if param == 0 and not dest_ent:
+                    dest_ent = lex.ent()
+                    nxt = lex.next(True, True)
 
-                if "std::array" not in utype:
-                    break
-
-                arr_dest = lex.ent()
-            elif on_param == 1 and param == 1 and lex.ent():
-                if lex.ent().id() == arr_dest.id():
+                    if nxt and nxt.text() in ('->', '.'):
+                        dest_via_member = True
+                elif in_src_range and dest_ent and not flagged and \
+                        not dest_via_member and \
+                        lex.ent().id() == dest_ent.id():
                     check.violation(
-                        arr_dest, file, call_ref.line(), call_ref.column(), ERR1)
-                break
+                        dest_ent, file, call_ref.line(), call_ref.column(),
+                        ERR1)
+                    flagged = True
 
             lex = lex.next(True, True)
