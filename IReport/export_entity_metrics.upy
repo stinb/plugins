@@ -1,0 +1,223 @@
+# Export Entity Metrics - Interactive Report Plugin
+# Exports metrics for selected C++ entity kinds with optional CSV output.
+# Install by dragging this file into Understand and enabling under Tools -> Plugin Manager.
+#
+# NOTE: Default entity kinds target the most common types in C++ projects.
+# To add more kinds (e.g. Typedefs, Macros, Variables), add an entry
+# to ENTITY_KINDS and the choices list in init().
+
+import understand
+import csv
+import os
+import json
+
+def name():
+    """Required, the name of the iReport."""
+    return "Export Entity Metrics"
+
+def description():
+    return '''Export metrics for specific entity kinds as an interactive table or CSV file.
+
+    <p>Select one or more entity kinds (Classes, Structs, Functions, Methods,
+    Files, Enums, Namespaces) and optionally include Unknown or Unresolved
+    entities. Results are displayed as a sortable, filterable table inside
+    Understand.</p>
+
+    <p>The default entity kinds target the most common types in C++ projects.
+    To add additional kinds (e.g. Typedefs, Macros, Variables), add an entry
+    to <code>ENTITY_KINDS</code> and the checkbox choices in
+    <code>init()</code>.</p>
+
+    <p>Enable <b>Export to CSV</b> and use the file selector to choose where
+    the CSV is saved.</p>
+    '''
+
+def tags():
+    return [
+        'Target: Project',
+        'Language: C',
+        'Language: C++',
+        'Language: Any',
+    ]
+
+def test_global(db):
+    """This is a project-level report."""
+    return True
+
+def test_entity(ent):
+    """Not an entity-level report."""
+    return False
+
+def test_architecture(arch):
+    """Not an architecture-level report."""
+    return False
+
+def init(report, target):
+    """Define report options."""
+    opts = report.options()
+
+    # ── Entity Kinds ──
+    opts.label("kinds_label", "Entity Kinds")
+    opts.checkbox_vert("entity_kinds", "Select which entity kinds to include",
+        ["Classes", "Structs", "Functions", "Methods", "Files", "Enums", "Namespaces"],
+        ["Classes"])  # Classes checked by default
+
+    # ── Filters ──
+    opts.label("filters_label", "Filters")
+    opts.checkbox("include_unknown", "Include Unknown Entities", False)
+    opts.checkbox("include_unresolved", "Include Unresolved Entities", False)
+
+    # ── Output ──
+    opts.label("output_label", "Output")
+    opts.checkbox("export_csv", "Export to CSV", False)
+    opts.file("csv_path", "CSV Save Location", "entity_metrics_export.csv")
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Entity kind registry — maps checkbox labels to Understand kind strings.
+# To add a new kind, append an entry here and add it to the
+# checkbox_vert choices list in init().
+# ─────────────────────────────────────────────────────────────────────
+ENTITY_KINDS = {
+    "Classes":    "class",
+    "Structs":    "struct",
+    "Functions":  "function",
+    "Methods":    "method",
+    "Files":      "file",
+    "Enums":      "enum",
+    "Namespaces": "namespace",
+}
+
+
+def generate(report, target):
+    """Required, generate the report."""
+    db = report.db()
+    opts = report.options()
+
+    # Get selected entity kinds from the checkbox group
+    selected_kinds = opts.lookup("entity_kinds")
+    if not selected_kinds:
+        report.print("No entity kinds selected. Check at least one Entity Kind option above.")
+        return
+
+    # Map selected labels to Understand kind filter strings
+    kind_parts = []
+    for kind_label in selected_kinds:
+        if kind_label in ENTITY_KINDS:
+            kind_parts.append(ENTITY_KINDS[kind_label])
+
+    if not kind_parts:
+        report.print("No valid entity kinds selected.")
+        return
+
+    # Build the kindstring: e.g. "class,function ~unknown ~unresolved"
+    kindfilter = ",".join(kind_parts)
+
+    # Append qualifier exclusions unless toggled on
+    if not opts.lookup("include_unknown"):
+        kindfilter += " ~unknown"
+    if not opts.lookup("include_unresolved"):
+        kindfilter += " ~unresolved"
+
+    # Query entities
+    entities = db.ents(kindfilter)
+    if not entities:
+        report.print("No entities found matching: '{}'\n".format(kindfilter))
+        return
+
+    # Collect all unique metric names across matched entities
+    all_metric_names = set()
+    for ent in entities:
+        all_metric_names.update(ent.metrics())
+    all_metric_names = sorted(all_metric_names)
+
+    if not all_metric_names:
+        report.print("No metrics available for the selected entity kinds.\n")
+        return
+
+    # Route to CSV or table output
+    if opts.lookup("export_csv"):
+        csv_path = opts.lookup("csv_path")
+        if not csv_path:
+            csv_path = "entity_metrics_export.csv"
+        export_csv(report, db, entities, all_metric_names, kindfilter, csv_path)
+    else:
+        render_table(report, entities, all_metric_names)
+
+
+def export_csv(report, db, entities, metric_names, kindfilter, csv_path):
+    """Write metrics to a CSV file at the user-specified path."""
+    # If the path isn't absolute, save it next to the project
+    if not os.path.isabs(csv_path):
+        db_path = db.name()
+        if db_path:
+            csv_path = os.path.join(os.path.dirname(db_path), csv_path)
+
+    try:
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Entity", "Kind"] + metric_names)
+            for ent in entities:
+                values = ent.metric(metric_names)
+                row = [ent.longname(), str(ent.kind())]
+                for m in metric_names:
+                    val = values.get(m) if isinstance(values, dict) else None
+                    row.append(val if val is not None else "")
+                writer.writerow(row)
+
+        report.bold()
+        report.print("CSV Export Complete\n")
+        report.bold()
+        report.print("\n")
+
+        report.print("File: ")
+        report.bold()
+        report.print(csv_path)
+        report.bold()
+        report.print("\n")
+
+        report.print("Entities: {}\n".format(len(entities)))
+        report.print("Metrics: {}\n".format(len(metric_names)))
+        report.print("Kind filter: {}\n".format(kindfilter))
+
+    except Exception as e:
+        report.print("Error writing CSV: {}\n".format(str(e)))
+
+
+def render_table(report, entities, metric_names):
+    """Render an interactive, sortable table inside Understand."""
+    # Build column definitions for the interactive table
+    columns = [
+        {"name": "Entity", "filtertype": "string"},
+        {"name": "Kind", "filtertype": "string"},
+    ]
+    for m in metric_names:
+        columns.append({
+            "name": m,
+            "filtertype": "numeric",
+        })
+
+    report.print("{} entities, {} metrics\n\n".format(len(entities), len(metric_names)))
+    report.table(json.dumps(columns))
+
+    for ent in entities:
+        values = ent.metric(metric_names)
+
+        # Entity name cell — linked to the entity for navigation
+        report.tablecell()
+        report.entity(ent)
+        report.print(ent.longname())
+        report.entity()
+
+        # Kind cell
+        report.tablecell()
+        report.print(str(ent.kind()))
+
+        # Metric value cells
+        for m in metric_names:
+            report.tablecell()
+            val = values.get(m) if isinstance(values, dict) else None
+            if val is not None:
+                report.print(str(val))
+
+    report.table()
