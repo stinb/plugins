@@ -1,0 +1,141 @@
+ERR1 = "Minimize the use of aliased variables"
+
+
+def ids():
+    return ("ADA95_5.4.6",)
+
+
+def name(id):
+    return {
+        "ADA95_5.4.6": "Published Standards/Ada 95/5.4.6 Aliased Objects",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.4.6": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Data Structures",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.4.6": """
+<p><b>Guideline</b></p>
+<p>&#8226; Minimize the use of aliased variables.</p>
+<p>&#8226; Use aliasing for statically created, ragged arrays (Rationale 1995, &sect;3.7.1).</p>
+<p>&#8226; Use aliasing to refer to part of a data structure when you want to hide the internal connections and bookkeeping information.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">package Message_Services is
+   type Message_Code_Type is range 0 .. 100;
+   subtype Message is String;
+   function Get_Message (Message_Code: Message_Code_Type)
+     return Message;
+   pragma Inline (Get_Message);
+end Message_Services;
+
+package body Message_Services is
+   type Message_Handle is access constant Message;
+   Message_0 : aliased constant Message := "OK";
+   Message_1 : aliased constant Message := "Up";
+   Message_2 : aliased constant Message := "Shutdown";
+   Message_3 : aliased constant Message := "Shutup";
+   . . .
+   type Message_Table_Type is array (Message_Code_Type) of Message_Handle;
+   Message_Table : Message_Table_Type :=
+     (0 =&gt; Message_0'Access,
+      1 =&gt; Message_1'Access,
+      2 =&gt; Message_2'Access,
+      3 =&gt; Message_3'Access,
+      -- etc.
+     );
+   function Get_Message (Message_Code : Message_Code_Type)
+     return Message is
+   begin
+      return Message_Table (Message_Code).all;
+   end Get_Message;
+end Message_Services;
+</code></pre>
+
+<pre><code language="Ada">generic
+   type Hash_Index is mod &lt;&gt;;
+   type Object is tagged private;
+   type Handle is access all Object;
+   with function Hash (The_Object : in Object) return Hash_Index;
+package Collection is
+   function Insert (Object : in Collection.Object) return Collection.Handle;
+   function Find (Object : in Collection.Object) return Collection.Handle;
+   Object_Not_Found : exception;
+   ...
+private
+   type Cell;
+   type Access_Cell is access Cell;
+end Collection;
+
+package body Collection is
+   type Cell is
+   record
+      Value : aliased Collection.Object;
+      Link  : Access_Cell;
+   end record;
+   type Table_Type is array (Hash_Index) of Access_Cell;
+   Table : Table_Type;
+   -- Go through the collision chain and return an access to the useful data.
+   function Find (Object : in Collection.Object;
+                  Index  : in Hash_Index) return Handle is
+      Current : Access_Cell := Table (Index);
+   begin
+      while Current /= null loop
+         if Current.Value = Object then
+            return Current.Value'Access;
+         else
+            Current := Current.Link;
+         end if;
+      end loop;
+      raise Object_Not_Found;
+   end Find;
+   -- The exported one
+   function Find (Object : in Collection.Object) return Collection.Handle is
+      Index : constant Hash_Index := Hash (Object);
+   begin
+      return Find (Object, Index);
+   end Find;
+   ...
+end Collection;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Aliasing allows the programmer to have indirect access to declared objects. Because you can update aliased objects through more than one path, you must exercise caution to avoid unintended updates. When you restrict the aliased objects to being constant, you avoid having the object unintentionally modified. In the example above, the individual message objects are aliased constant message strings so their values cannot be changed. The ragged array is then initialized with references to each of these constant strings.</p>
+<p>Aliasing allows you to manipulate objects using indirection while avoiding dynamic allocation. For example, you can insert an object onto a linked list without dynamically allocating the space for that object (Rationale 1995, &sect;3.7.1).</p>
+<p>Another use of aliasing is in a linked data structure in which you try to hide the enclosing container. This is essentially the inverse of a self-referential data structure (see Guideline 5.4.7). If a package manages some data using a linked data structure, you may only want to export access values that denote the "useful" data. You can use an access-to-object to return an access to the useful data, excluding the pointers used to chain objects.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Guideline 1 (minimize aliased variables) is automated: this check flags non-constant <code>aliased</code> standalone object declarations where the object's <code>'Access</code> attribute is never taken anywhere in the project. If <code>'Access</code> is taken at least once, the aliasing is considered justified and the object is not flagged. Aliased constants are never flagged, as the rationale explicitly endorses them. Aliased record components are also not flagged: the style guide's own example uses <code>aliased</code> record components as a valid structural pattern. The ragged-array pattern (Guideline 2) is correctly accepted when <code>'Access</code> is taken on the aliased rows. The check may produce false negatives if <code>'Access</code> is only taken in a compilation unit not included in the project analysis.</p>
+<p>Guidelines 2 and 3 are not automatable beyond the <code>'Access</code> heuristic: they require knowing the programmer's intent — whether the aliasing serves a specific structural purpose — which cannot be determined statically.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def _type_str(ent):
+    return str(ent.type()).lower() if ent and ent.type() else ""
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Declare", "Object"):
+        obj_ent = obj_ref.ent()
+        type_str = _type_str(obj_ent)
+
+        if type_str.startswith(("aliased constant ", "constant aliased ")):
+            continue
+
+        if type_str.startswith("aliased "):
+            if not obj_ent.refs("Access"):
+                check.violation(obj_ent, file, obj_ref.line(), obj_ref.column(), ERR1)

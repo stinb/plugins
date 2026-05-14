@@ -1,0 +1,131 @@
+ERR1 = "Use a more constrained subtype for discriminant"
+
+_PREDEFINED_SCALAR = frozenset(
+    {
+        "integer",
+        "long_integer",
+        "short_integer",
+        "long_long_integer",
+        "short_short_integer",
+        "natural",
+        "positive",
+        "float",
+        "long_float",
+        "short_float",
+        "duration",
+    }
+)
+
+_SCALAR_KEYWORDS = ("range", "digits", "delta", "mod ")
+
+
+def ids():
+    return ("ADA95_5.4.1",)
+
+
+def name(id):
+    return {
+        "ADA95_5.4.1": "Published Standards/Ada 95/5.4.1 Discriminated Records",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.4.1": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Data Structures",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.4.1": """
+<p><b>Guideline</b></p>
+<p>&#8226; When declaring a discriminant, use as constrained a subtype as possible (i.e., subtype with as specific a range constraint as possible).</p>
+<p>&#8226; Use a discriminated record rather than a constrained array to represent an array whose actual values are unconstrained.</p>
+
+<p><b>Example</b></p>
+<p>An object of type <code>Number_Holder_2</code> imposes a more reasonable restriction on the length of its string component:</p>
+<pre><code language="Ada">type Number_List is array (Integer range &lt;&gt;) of Integer;
+type Number_Holder_1 (Current_Length : Natural := 0) is
+   record
+      Numbers : Number_List (1 .. Current_Length);
+   end record;
+</code></pre>
+
+<pre><code language="Ada">type    Number_List is array (Integer range &lt;&gt;) of Integer;
+subtype Max_Numbers is Natural range 0 .. 42;
+type Number_Holder_2 (Current_Length : Max_Numbers := 0) is
+   record
+      Numbers : Number_List (1 .. Current_Length);
+   end record;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>When you use the discriminant to constrain an array inside a discriminated record, the larger the range of values the discriminant can assume, the more space an object of the type might require. Although your program may compile and link, it will fail at execution when the run-time system is unable to create an object of the potential size required.</p>
+<p>The discriminated record captures the intent of an array whose bounds may vary at run-time. A simple constrained array definition (e.g., <code>type Number_List is array (1 .. 42) of Integer;</code>) does not capture the intent that there are at most 42 possible numbers in the list.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Guideline 1 (use as constrained a subtype as possible for discriminants) is automated: this check flags discriminants whose declared type is a predefined unconstrained scalar type (Integer, Natural, Positive, Float, etc.) or a user-defined subtype that carries no range constraint. Discriminants typed with an enumeration type or with a user subtype that includes a range, digits, delta, or modular constraint are not flagged.</p>
+<p>Guideline 2 (prefer discriminated record over constrained array) is not automatable: it requires knowing the programmer's intent — whether the array bounds are meant to vary at run-time — which cannot be determined statically.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def _type_str(ent):
+    return str(ent.type()).lower() if ent and ent.type() else ""
+
+
+def check(check, file):
+    seen_discriminants = set()
+
+    for disc_ref in file.filerefs("Declare", "Discriminant"):
+        disc_ent = disc_ref.ent()
+
+        if disc_ent.id() in seen_discriminants:
+            continue
+
+        seen_discriminants.add(disc_ent.id())
+
+        type_ref = disc_ent.ref("Typed", "Type")
+
+        if not type_ref:
+            type_name = _type_str(disc_ent)
+            type_first = type_name.split()[0] if type_name else ""
+
+            if type_first in _PREDEFINED_SCALAR:
+                check.violation(
+                    disc_ent, file, disc_ref.line(), disc_ref.column(), ERR1
+                )
+
+            continue
+
+        type_ent = type_ref.ent()
+
+        if type_ent.kind().check("Enumeration, Access"):
+            continue
+
+        type_ent_name = str(type_ent.name()).lower()
+
+        if type_ent_name in _PREDEFINED_SCALAR:
+            check.violation(disc_ent, file, disc_ref.line(), disc_ref.column(), ERR1)
+            continue
+
+        if any(kw in _type_str(type_ent) for kw in _SCALAR_KEYWORDS):
+            continue
+
+        base_ref = type_ent.ref("Subtypefrom", "Type")
+
+        if not base_ref:
+            continue
+
+        base_ent = base_ref.ent()
+
+        if str(base_ent.name()).lower() in _PREDEFINED_SCALAR:
+            check.violation(disc_ent, file, disc_ref.line(), disc_ref.column(), ERR1)
