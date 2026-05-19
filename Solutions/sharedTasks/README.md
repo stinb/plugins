@@ -2,7 +2,7 @@
 
 Calls graphs with global objects are useful for finding all global objects accessed by a call tree. But, what if you want to find which global objects are shared between multiple call trees? The shared tasks plugins find global objects accessed from multiple call trees.
 
-The plugin [sharedTasksGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) displays all the call trees and objects in a single graph, highlighting global objects that are accessed from multiple root functions. The plugin [sharedTasksObjectGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksObjectGraph.upy) does is the reverse - it starts from objects and goes to root functions. The plugin [sharedTasksCSV.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) displays each reference in a table in an interactive report. It can also export a CSV file at the same time as the interactive report or when run directly from the command line.
+The plugin [sharedTasksGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksGraph.upy) displays all the call trees and objects in a single graph, highlighting global objects that are accessed from multiple root functions. The plugin [sharedTasksObjectGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksObjectGraph.upy) does is the reverse - it starts from objects and goes to root functions. The plugin [sharedTasksCSV.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksCSV.upy) displays each reference in a table in an interactive report. It can also export a CSV file when run directly from the command line.
 
 ![image](.doc/338366919-ff1f01b2-4970-4c34-ad12-ada42ee13c22.png)
 
@@ -49,10 +49,10 @@ There are a lot of options for building an architecture:
 
 # Exports
 
-The interactive report plugin can be used to generate a CSV file while running the report or from the command line.
+The interactive report plugin can be used to generate a CSV file from the command line.
 
 ```sh
-upython sharedTasksCSV.upy -h
+upython sharedTasksCSV.py -h
 ```
 
-To have a dynamic file name, you can add {arch}, {date}, or {time} (case-insensitive) to the "CSV file name" option (IReport) or `-csvFileName` argument (command line)
+To have a dynamic file name, you can add {arch}, {date}, or {time} (case-insensitive) to the `-csvFileName` command-line argument.
