@@ -1,0 +1,113 @@
+ERR1 = "Use <= or >= instead of = when comparing real operands"
+
+
+def ids():
+    return ("ADA95_5.5.6",)
+
+
+def name(id):
+    return {
+        "ADA95_5.5.6": "Published Standards/Ada 95/5.5.6 Accuracy of Operations With Real Operands",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.5.6": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Expressions",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.5.6": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use <code>&lt;=</code> and <code>&gt;=</code> in relational expressions with real operands instead of <code>=</code>.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">Current_Temperature   : Temperature :=       0.0;
+Temperature_Increment : Temperature := 1.0 / 3.0;
+Maximum_Temperature   : constant    :=     100.0;
+...
+loop
+   ...
+   Current_Temperature :=
+         Current_Temperature + Temperature_Increment;
+   ...
+   exit when Current_Temperature >= Maximum_Temperature;
+   ...
+end loop;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Fixed- and floating-point values, even if derived from similar expressions, may not be exactly equal. The imprecise, finite representations of real numbers in hardware always have round-off errors so that any variation in the construction path or history of two real numbers has the potential for resulting in different numbers, even when the paths or histories are mathematically equivalent.</p>
+<p>The Ada definition of model intervals also means that the use of <code>&lt;=</code> is more portable than either <code>&lt;</code> or <code>=</code>.</p>
+
+<p><b>Notes</b></p>
+<p>Floating-point arithmetic is treated in Guideline 7.2.7.</p>
+
+<p><b>Exceptions</b></p>
+<p>If your application must test for an exact value of a real number (e.g., testing the precision of the arithmetic on a certain machine), then the <code>=</code> would have to be used. But never use <code>=</code> on real operands as a condition to exit a loop.</p>
+
+<p><b>Developer's Note</b></p>
+<p>The check may produce false negatives when both operands are complex expressions (e.g., function calls or arithmetic subexpressions) rather than named variables or parameters, since the real type cannot be determined without evaluating the full expression type.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def _is_real_type(ent):
+    if not ent:
+        return False
+
+    type_ref = ent.ref("Typed", "Type")
+    if not type_ref:
+        return False
+
+    type_ent = type_ref.ent()
+
+    while type_ent:
+        type_def = str(type_ent.type()).lower() if type_ent.type() else ""
+        if "digits" in type_def or "delta" in type_def:
+            return True
+        derive_ref = type_ent.ref("Derivefrom")
+        type_ent = derive_ref.ent() if derive_ref else None
+
+    return False
+
+
+def check(check, file):
+    lex = file.lexer().first()
+
+    while lex:
+        if lex.token() == "Operator" and lex.text() == "=":
+            left_lex = lex.previous(True, True)
+            left_ent = (
+                left_lex.ent()
+                if left_lex and left_lex.token() == "Identifier"
+                else None
+            )
+
+            right_lex = lex.next(True, True)
+            right_ent = (
+                right_lex.ent()
+                if right_lex and right_lex.token() == "Identifier"
+                else None
+            )
+
+            if _is_real_type(left_ent) or _is_real_type(right_ent):
+                check.violation(
+                    left_ent or right_ent,
+                    file,
+                    lex.line_begin(),
+                    lex.column_begin(),
+                    ERR1,
+                )
+
+        lex = lex.next(True, True)
