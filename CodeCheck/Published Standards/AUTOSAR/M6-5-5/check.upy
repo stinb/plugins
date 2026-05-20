@@ -93,73 +93,73 @@ def check_entity(ent, ctr_ent):
             return True
     return False
 
-# def - function definition checking
-def validate_function(lex):
-    bool_return = False
-    ent_func = lex.ent()
-
-    if ent_func.ref("Return"):
-        bool_return = ent_func.ref("Return").ent().ref("Modifyby, Setby")
-
-    # move lex to the end of function definition to skip parameter entities
-    while lex and lex.text() != "(":
-        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
-    lex = lex.next(ignore_whitespace=True,ignore_comments=True)
-    paren = 1
-    while lex and paren != 0:
-        if lex.text() == "(":
-            paren = paren + 1
-        if lex.text() == ")":
-            paren = paren - 1
-        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
-
-    # check if return entity value was modified or set
-    # return lex to skip the whole function call
-    return bool_return, lex
-
 def test_language(language):
     return language == 'C++'
 
 # def - loop definition checking
 def validate_loop(lex, file, check):
-    # get the for loop entity
+    # Pass 1: collect loop-counter entities from the init clause.
+    # The MISRA rule targets traditional for(init; cond; expr) loops; a
+    # range-based for has no separate init/condition/expression, so bail out
+    # if we see ':' (or close the for-parens) before a ';'.
     ctr_ent = []
-    while lex and lex.text() != ";":
-        if lex.ent() and lex.ent().kind().check("Object"):
+    paren = 0
+    while lex:
+        if lex.text() == "(":
+            paren += 1
+        elif lex.text() == ")":
+            paren -= 1
+            if paren == 0:
+                return  # closed for(...) without an init-clause terminator
+        elif paren == 1 and lex.text() == ":":
+            return  # range-based for loop — rule does not apply
+        elif paren == 1 and lex.text() == ";":
+            break  # end of init clause
+        elif lex.ent() and lex.ent().kind().check("Object"):
             ctr_ent.append(lex.ent())
-        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
-    lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
 
-    # init variables
+    if not lex:
+        return
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    # Pass 2: scan condition + expression for modifications of non-counter
+    # loop-control-variables. Flag two patterns:
+    #   1) Direct Modifyby/Setby on a non-counter Object on this line.
+    #   2) `&var` taking the address of a non-counter Object — the address
+    #      may flow into a function that mutates the variable through the
+    #      pointer. Per-function dataflow would be more precise but is out
+    #      of scope; this heuristic preserves coverage of the canonical
+    #      `test_a(&bool_a)` example from MISRA C++ 2008 6-5-5.
     paren = 1
     is_breach = False
     ent_breach = None
-    # traverse thru all the entities inside for loop
+    line, column = -1, -1
+    prev_text = None
     while lex and paren != 0 and len(ctr_ent) != 0:
         if lex.text() == "(":
-            paren = paren + 1
-        if lex.text() == ")":
-            paren = paren - 1
+            paren += 1
+        elif lex.text() == ")":
+            paren -= 1
 
-        if lex.ent() and not check_entity(lex.ent(), ctr_ent):
-            line, column = -1, -1
+        if lex.ent() and lex.ent().kind().check("Object") and not check_entity(lex.ent(), ctr_ent):
             for ref in lex.ent().refs():
-                if lex.ent() and lex.line_begin() == ref.line() and file == ref.file():
-                    # check if modify or set
-                    if ref.kind().check("Modifyby, Setby") and lex.ent().kind().check("Object"):
+                if lex.line_begin() == ref.line() and file == ref.file():
+                    if ref.kind().check("Modifyby, Setby"):
                         ent_breach = lex.ent()
                         line, column = lex.line_begin(), lex.column_begin()
                         is_breach = True
                         paren = 0
-                    # if function, check for further details
-                    elif ref.kind().check("Callby") and lex.ent().kind().check("Function"):
-                        ent_breach = lex.ent()
-                        line, column = lex.line_begin(), lex.column_begin()
-                        is_breach, lex = validate_function(lex)
-                        paren = 0
-        lex = lex.next(ignore_whitespace=True,ignore_comments=True)
+                        break
+            if not is_breach and prev_text == "&":
+                ent_breach = lex.ent()
+                line, column = lex.line_begin(), lex.column_begin()
+                is_breach = True
+                paren = 0
 
-    # entity validation
+        prev_text = lex.text()
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
     if is_breach:
         check.violation(ent_breach, file, line, column, ERR1)
 
