@@ -1,4 +1,6 @@
-#include <typeinfo>
+// Minimal stand-in for <typeinfo> (header not available in the analysis
+// environment); the typeid operator only needs std::type_info to exist.
+namespace std { class type_info {}; }
 
 class B1_1211
 {
@@ -65,3 +67,28 @@ B3::B3(B4 *b)
   this->foo(); // UndCC_Violation - calls B3::foo
   b->foo();    // UndCC_Violation - undefined behaviour
 }
+
+// Issue #4878: Qt-style member-of-member virtual call should not be flagged.
+// The receiver is an unrelated polymorphic object, not the object under
+// construction, so the dynamic type of the constructed object is not used.
+class QPushButton4878
+{
+public:
+  virtual void setVisible(bool v);
+};
+
+class UiWrenchWidget4878
+{
+public:
+  QPushButton4878 *resetButton;
+};
+
+class WrenchWidget4878
+{
+public:
+  UiWrenchWidget4878 *ui;
+  WrenchWidget4878()
+  {
+    ui->resetButton->setVisible(false); // UndCC_Valid - call is on an unrelated object
+  }
+};
