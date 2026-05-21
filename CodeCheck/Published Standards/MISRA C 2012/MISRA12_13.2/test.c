@@ -26,6 +26,8 @@ void modified_twice(void)
     int i = 0;
     int j = 0;
     int x = 0;
+    int a[10];
+    int b[10];
 
     j = i++ + i++;                        /* UndCC_Violation - i modified twice */
     j = ++i + i++;                        /* UndCC_Violation - i modified twice */
@@ -34,9 +36,13 @@ void modified_twice(void)
     x = x = 0;                            /* UndCC_Violation - x modified twice (Note 2) */
     i = ++i;                              /* UndCC_Violation - i modified twice */
 
+    a[i++] = b[i++];                      /* UndCC_Violation - i modified twice (MISRA standard example: COPY_ELEMENT(i++)) */
+
     use(i);
     use(j);
     use(x);
+    use(a[0]);
+    use(b[0]);
 }
 
 /* ===== Subrule 3: modified and read elsewhere ===== */
@@ -81,6 +87,7 @@ void isolated_inc_dec(void)
 {
     int x = 0;
     int *p = &x;
+    int *q = &x;
     int a[10];
     int i = 0;
 
@@ -93,10 +100,13 @@ void isolated_inc_dec(void)
     use(a[i++]);                          /* UndCC_Valid */
 
     (*p)++;                               /* UndCC_Valid - p not modified, *p is not a VarDecl mod */
-    *p++;                                 /* UndCC_Valid - p modified once via post-inc */
+    *p++;                                 /* UndCC_Valid - p's read contributes to its own value computation */
+
+    *p++ = *q++;                          /* UndCC_Valid - p and q each modified once, no other access */
 
     use(x);
     use(*p);
+    use(*q);
 }
 
 /* ===== Sequence points break unsequenced regions ===== */
@@ -186,5 +196,130 @@ void sizeof_unevaluated(void)
     j = sizeof(i++) + i;                  /* UndCC_Valid - i++ in sizeof not evaluated */
     j = sizeof(i++);                      /* UndCC_Valid */
 
+    use(j);
+}
+
+/* ===== Multiple reads of the same variable - no modification ===== */
+
+void multiple_reads(void)
+{
+    int i = 0;
+    int j = 0;
+
+    f(i, i);                              /* UndCC_Valid - i read twice, no mod */
+    j = i + i;                            /* UndCC_Valid - i read twice */
+    j = i * i + i;                        /* UndCC_Valid */
+
+    use(j);
+}
+
+/* ===== Adjacent statements are independent full expressions ===== */
+
+void adjacent_statements(void)
+{
+    int i = 0;
+    int j = 0;
+
+    i++; i++;                             /* UndCC_Valid - each is its own full expression */
+    j = i++; j = i++;                     /* UndCC_Valid */
+
+    use(i);
+    use(j);
+}
+
+/* ===== Comma operator separates same-variable modifications ===== */
+
+void comma_separates_mods(void)
+{
+    int i = 0;
+    int j = 0;
+
+    (void)(i++, i++);                     /* UndCC_Valid - comma is a sequence point */
+    j = (i++, i);                         /* UndCC_Valid - covered in sequence_points_split also */
+    (void)(i = 0, i = 1);                 /* UndCC_Valid - two assignments separated by comma */
+
+    use(i);
+    use(j);
+}
+
+/* ===== Multi-declarator initializers are independent full expressions ===== */
+
+void multi_declarator_inits(void)
+{
+    int i = 0;
+
+    /* Each declarator's initializer is a separate full expression. */
+    int x = i++, y = i++;                 /* UndCC_Valid - two separate full expressions */
+    int p = i, q = i;                     /* UndCC_Valid */
+
+    use(x);
+    use(y);
+    use(p);
+    use(q);
+}
+
+/* ===== Unbraced control-flow bodies are still full expressions ===== */
+
+void unbraced_bodies(int cond)
+{
+    int i = 0;
+    int j = 0;
+    int a[10];
+
+    if (cond) i = i++;                    /* UndCC_Violation - i modified twice */
+    if (cond) a[i] = i++;                 /* UndCC_Violation - i modified and read */
+    else      j = i++ + i++;              /* UndCC_Violation - i modified twice */
+
+    while (cond) a[i] = i++;              /* UndCC_Violation */
+
+    do j = i + i++; while (0);            /* UndCC_Violation - i modified and read */
+
+    for (int k = 0; k < 1; ++k) j = i++ * i;  /* UndCC_Violation - body */
+
+    /* Compliant unbraced bodies should still be quiet */
+    if (cond) i++;                        /* UndCC_Valid */
+    while (cond) i = i + 1;               /* UndCC_Valid */
+    for (int k = 0; k < 1; ++k) i = i + 1;    /* UndCC_Valid */
+
+    use(i);
+    use(j);
+    use(a[0]);
+}
+
+/* ===== Switch case bodies ===== */
+
+void switch_case_bodies(int x)
+{
+    int i = 0;
+    int j = 0;
+
+    switch (x) {
+        case 0:
+            j = i++ + i++;                /* UndCC_Violation - i modified twice */
+            break;
+        case 1:
+            i++;                          /* UndCC_Valid */
+            break;
+        default:
+            j = i++ * i;                  /* UndCC_Violation - i modified and read */
+            break;
+    }
+
+    use(i);
+    use(j);
+}
+
+/* ===== Labelled statements ===== */
+
+void labelled_statements(int cond)
+{
+    int i = 0;
+    int j = 0;
+
+    if (!cond) goto end;
+    j = i + i++;                          /* UndCC_Violation - i modified and read */
+
+end:
+    j = i++;                              /* UndCC_Valid - single modification */
     use(j);
 }
