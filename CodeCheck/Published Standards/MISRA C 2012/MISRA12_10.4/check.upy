@@ -117,9 +117,11 @@ u8a + u16b</pre></code>
 enb > A1 /* enum<enumb> and enum<enuma> */
 ena == enb /* enum<enuma> and enum<enumb> */</pre></code>
 <p><b>Developer's Notes</b></p>
-<p>This check will only check directly left and directly right of the operator
-for an entity. If either entity isn't found then the expression is skipped and
-not flagged.</p>
+<p>This check examines the lexemes directly left and right of the operator.
+Numeric and character literals are classified by their textual form (suffixes
+like <code>U</code>, <code>L</code>, presence of a decimal point, etc.).
+Comparisons between a pointer and an integer literal (e.g. <code>p == 0</code>)
+are not flagged.</p>
 """
     return {
         'MISRA12_10.4': desc,
@@ -194,6 +196,8 @@ def check(check, file):
             right = ''
             leftEnt = None
             rightEnt = None
+            leftText = ''
+            rightText = ''
             prevLex = lexeme.previous(True, True)
             nextLex = lexeme.next(True, True)
             if prevLex and lexeme.text() == '<':
@@ -205,8 +209,14 @@ def check(check, file):
 
                 left = prevLex.ent().type()
                 leftEnt = prevLex.ent()
+                leftText = prevLex.text()
                 if leftEnt.kind().check('Macro'):
                     continue
+            elif prevLex and prevLex.token() == 'Literal':
+                literalType = literalEssentialType(prevLex.text())
+                if literalType:
+                    left = literalType
+                    leftText = prevLex.text()
 
             if nextLex.ent():
                 tempLex = nextLex.next(True, True)
@@ -221,6 +231,7 @@ def check(check, file):
                         if tempLex and tempLex.ent():
                             right = str(tempLex.ent().type())
                             rightEnt = tempLex.ent()
+                            rightText = tempLex.text()
                             if rightEnt.kind().check('Macro'):
                                 continue
 
@@ -230,19 +241,63 @@ def check(check, file):
                 if not right:
                     right = str(nextLex.ent().type())
                     rightEnt = nextLex.ent()
+                    rightText = nextLex.text()
                     if rightEnt.kind().check('Macro'):
                         continue
                     if ('*' in right or lexeme.text() == '&') and nextLex.ref().kind().check('Definein, Declarein'):
                         continue
+            elif nextLex and nextLex.token() == 'Literal':
+                literalType = literalEssentialType(nextLex.text())
+                if literalType:
+                    right = literalType
+                    rightText = nextLex.text()
+
             if left and right:
+                # Don't flag pointer compared to integer literal (e.g. p == 0).
+                # The string-based type matcher misclassifies pointer types and
+                # would otherwise produce false positives on a common idiom.
+                if '*' in str(left) or '*' in str(right):
+                    if leftEnt is None or rightEnt is None:
+                        continue
                 if not sameEssentialType(left, right, lexeme.text()):
-                    if rightEnt.kind().check("Enumerator"):
+                    if rightEnt and rightEnt.kind().check("Enumerator"):
                         if left in rightEnt.longname():
                             continue
-                    if leftEnt.kind().check("Enumerator"):
+                    if leftEnt and leftEnt.kind().check("Enumerator"):
                         if right in leftEnt.longname():
                             continue
-                    check.violation(leftEnt, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text(), leftEnt.name(), rightEnt.name())
+                    anchor = leftEnt if leftEnt else rightEnt
+                    leftName = leftEnt.name() if leftEnt else leftText
+                    rightName = rightEnt.name() if rightEnt else rightText
+                    check.violation(anchor, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text(), leftName, rightName)
+
+# Derive the essential type of a numeric or character literal from its text.
+# Returns a synthetic type string compatible with sameEssentialType, or None
+# if the text is not a literal we can classify.
+def literalEssentialType(text):
+    if not text:
+        return None
+    # Character constant: 'A', '\n', L'A', u'A', U'A', u8'A'
+    if text.startswith("'") or re.match(r"^(L|u8?|U)'", text):
+        return 'char'
+    # String literals are not arithmetic operands
+    if text.startswith('"') or re.match(r'^(L|u8?|U)"', text):
+        return None
+    lower = text.lower()
+    # Floating literal: has '.', exponent, or trailing f/F (but not just l/L)
+    if '.' in text:
+        return 'float'
+    if re.search(r'[0-9](e[+\-]?[0-9])', lower):
+        return 'float'
+    if re.search(r'[0-9]p[+\-]?[0-9]', lower):  # hex float p-exponent
+        return 'float'
+    # Integer literal (decimal, hex, octal, binary) with optional u/l suffix
+    if not re.match(r'^(0[xXbB])?[0-9a-fA-F\']+[uUlL]*$', text):
+        return None
+    suffix = re.search(r'[uUlL]+$', text)
+    if suffix and 'u' in suffix.group(0).lower():
+        return 'unsigned int'
+    return 'int'
 
 # Checks if both operands are the same essential type or one of the exceptions
 def sameEssentialType(left, right, operator):
@@ -272,11 +327,9 @@ def sameEssentialType(left, right, operator):
             if type not in right:
                 return False
             if type == 'int':
-                if re.search(r'unsigned|uint', left):
-                    if re.search(r'unsigned|uint', right):
-                        return True
-                elif re.search(r'unsigned|uint', right):
-                    return False
+                left_unsigned = bool(re.search(r'unsigned|uint', left))
+                right_unsigned = bool(re.search(r'unsigned|uint', right))
+                return left_unsigned == right_unsigned
             return True
 
         elif type in right:
