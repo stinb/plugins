@@ -1,21 +1,28 @@
 // $Id: A3-3-2.cpp 305690 2018-01-29 14:35:00Z jan.babst $
-#include <cstdint>
-#include <limits>
-#include <string>
+
+namespace std {
+    class string {
+        public:
+            string() {}
+            string(const char*) {}
+            string(unsigned long, char) {}
+    };
+}
+
 class A
 {
     public:
-        static std::uint8_t instanceId;
+        static unsigned char instanceId;
         static float const pi;
         static std::string const separator;
 
         A() {}
         // Implementation...
 };
-std::uint8_t A::instanceId = 0; // UndCC_Valid - constant initialization
+unsigned char A::instanceId = 0; // UndCC_Valid - constant initialization
 float const A::pi = 3.14159265359; // UndCC_Valid - constant initialization
 std::string const A::separator = // UndCC_Violation
-"=========="; 
+"==========";
 
 class C
 {
@@ -25,8 +32,7 @@ class C
 
 namespace
 {
-    constexpr std::int32_t maxInt32 =
-        std::numeric_limits<std::int32_t>::max(); // UndCC_Valid - constexpr variable
+    constexpr int maxInt32 = 2147483647; // UndCC_Valid - constexpr variable
 
     A instance{}; // UndCC_Valid - constant (value) initialization
     constexpr C c{}; // UndCC_Valid - constexpr c’tor call
@@ -34,7 +40,7 @@ namespace
 
 void Fn() noexcept
 {
-    static std::int32_t counter{0}; // UndCC_Valid
+    static int counter{0}; // UndCC_Valid
     static std::string border(5, '*'); // UndCC_Violation - not a constexpr c’tor
 }
 
