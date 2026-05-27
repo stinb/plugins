@@ -1,7 +1,6 @@
 # This script is designed to run with Understand - CodeCheck
 # Written by Jason Quinn
 # 8-24-2021
-import re
 
 ERR1 = 'std::make_unique was not used to construct std::unique_ptr'
 
@@ -92,12 +91,85 @@ def test_language(language):
     return language == 'C++'
 
 
+def skip_ignorable(lex):
+    while lex and lex.token() in ('Whitespace', 'Newline', 'Comment'):
+        lex = lex.next()
+    return lex
+
+
+def skip_template_args(lex):
+    # lex points at the opening '<'; return the lexeme after the matching '>'.
+    depth = 0
+    while lex:
+        text = lex.text()
+        if text == '<':
+            depth += 1
+        elif text == '>':
+            depth -= 1
+            if depth == 0:
+                return lex.next()
+        elif text == '>>':
+            depth -= 2
+            if depth <= 0:
+                return lex.next()
+        lex = lex.next()
+    return None
+
+
+def constructed_from_new(lex):
+    # lex points at the opening '(' of the constructor argument list. Return a
+    # (has_new, arg_count) tuple describing the top-level arguments.
+    paren = 0
+    angle = 0
+    has_new = False
+    args = 0
+    seen_arg = False
+    while lex:
+        text = lex.text()
+        if text == '(':
+            paren += 1
+        elif text == ')':
+            paren -= 1
+            if paren == 0:
+                break
+        elif text == '<':
+            angle += 1
+        elif text == '>':
+            angle -= 1
+        elif text == '>>':
+            angle -= 2
+        elif paren == 1 and angle == 0 and text == ',':
+            args += 1
+        elif paren == 1 and text == 'new' and lex.token() == 'Keyword':
+            has_new = True
+        if paren >= 1 and lex.token() not in ('Whitespace', 'Newline', 'Comment') \
+                and text not in ('(', ')', ','):
+            seen_arg = True
+        lex = lex.next()
+    if seen_arg:
+        args += 1
+    return has_new, args
+
+
 def check(check, file):
-    refs = file.filerefs('Cast Use', 'Unresolved Class Type Template')
+    lexer = file.lexer()
+    if not lexer:
+        return
 
-    for ref in refs:
-        # Skip if not a unique_ptr
-        if not re.search(r'unique_ptr', ref.ent().name()):
-            continue
-
-        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+    lex = lexer.first()
+    while lex:
+        if lex.text() == 'unique_ptr' and lex.token() in ('Identifier', 'Keyword'):
+            after_name = skip_ignorable(lex.next())
+            # Only the functional construction form unique_ptr<...>( ... ) is a
+            # candidate; declarations and the make_unique return type are not.
+            if after_name and after_name.text() == '<':
+                after_template = skip_ignorable(skip_template_args(after_name))
+                if after_template and after_template.text() == '(':
+                    has_new, args = constructed_from_new(after_template)
+                    # A single argument that is a raw new is non-compliant. More
+                    # than one argument indicates a custom deleter, which the
+                    # standard allows as an exception.
+                    if has_new and args == 1:
+                        ent = lex.ent() if lex.ent() else file
+                        check.violation(ent, file, lex.line_begin(), lex.column_begin(), ERR1)
+        lex = lex.next()
