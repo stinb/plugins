@@ -1,0 +1,117 @@
+ERR1 = "Control structure nesting depth exceeds 5"
+
+MAX_NESTING = 5
+OPEN_KEYWORDS = frozenset(["if", "loop", "case"])
+
+
+def ids():
+    return ("ADA95_5.6.1",)
+
+
+def name(id):
+    return {
+        "ADA95_5.6.1": "Published Standards/Ada 95/5.6.1 Nesting",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.6.1": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Statements",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.6.1": """
+<p><b>Guideline</b></p>
+<p>&#8226; Minimize the depth of nested expressions (Nissen and Wallis 1984).</p>
+<p>&#8226; Minimize the depth of nested control structures (Nissen and Wallis 1984).</p>
+<p>&#8226; Try using simplification heuristics (see the following Notes).</p>
+
+<p><b>Instantiation</b></p>
+<p>&#8226; Do not nest expressions or control structures beyond a nesting level of five.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">if not Condition_1 then
+   if Condition_2 then
+      Action_A;
+   else
+      Action_B;
+   end if;
+else
+   Action_C;
+end if;
+</code></pre>
+<p>can be rewritten as:</p>
+<pre><code language="Ada">if Condition_1 then
+   Action_C;
+elsif Condition_2 then
+   Action_A;
+else
+   Action_B;
+end if;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Deeply nested structures are confusing, difficult to understand, and difficult to maintain. The core challenge involves determining code containment at any nesting level. For expressions, this affects grouping symbols and operator precedence; for control structures, it concerns what parts are controlled. Keep the maximum number of nesting levels between three and five.</p>
+
+<p><b>Notes</b></p>
+<p>Consider these simplification questions:</p>
+<p>&#8226; Can expression parts become constants or variables?</p>
+<p>&#8226; Do nested control structures represent reusable computations for subprograms?</p>
+<p>&#8226; Could nested <code>if</code> statements convert to <code>case</code> statements?</p>
+<p>&#8226; Should <code>else if</code> become <code>elsif</code>?</p>
+<p>&#8226; Can conditional expressions reorder?</p>
+<p>&#8226; Would different design prove simpler?</p>
+
+<p><b>Exceptions</b></p>
+<p>If deep nesting is required frequently, there may be overall design decisions for the code that should be changed. Some algorithms inherently require deeply nested loops; when necessary, proceed cautiously and take special care with identifiers and loop/block names.</p>
+
+<p><b>Developer's Note</b></p>
+<p>The instantiation (maximum nesting depth of 5) is automated for control structures (<code>if</code>, <code>loop</code>, <code>case</code>). Guidelines 1 and 2 in general (minimize nesting) and guideline 3 (simplification heuristics) are not automated: determining whether nesting can be simplified requires understanding the algorithm's intent.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    depth = 0
+    paren_depth = 0
+    lex = file.lexer(lookup_ents=False).first()
+
+    while lex:
+        if lex.token() == "Punctuation":
+            text = lex.text()
+            if text == "(":
+                paren_depth += 1
+            elif text == ")":
+                paren_depth = max(0, paren_depth - 1)
+        elif lex.token() == "Keyword":
+            text = str(lex.text()).lower()
+
+            if text in OPEN_KEYWORDS:
+                if paren_depth == 0:
+                    depth += 1
+                    if depth > MAX_NESTING:
+                        check.violation(
+                            None, file, lex.line_begin(), lex.column_begin(), ERR1
+                        )
+
+            elif text == "end":
+                next_lex = lex.next(True, True)
+                if (
+                    next_lex
+                    and next_lex.token() == "Keyword"
+                    and str(next_lex.text()).lower() in OPEN_KEYWORDS
+                ):
+                    depth = max(0, depth - 1)
+                    lex = next_lex
+
+        lex = lex.next(True, True)

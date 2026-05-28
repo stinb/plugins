@@ -1,0 +1,138 @@
+ERR1 = "Do not use ranges of enumeration literals in case statements"
+
+
+def ids():
+    return ("ADA95_5.6.3",)
+
+
+def name(id):
+    return {
+        "ADA95_5.6.3": "Published Standards/Ada 95/5.6.3 Case Statements",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.6.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Statements",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.6.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Minimize the use of an <code>others</code> choice in a <code>case</code> statement.</p>
+<p>&#8226; Do not use ranges of enumeration literals in <code>case</code> statements.</p>
+<p>&#8226; Use <code>case</code> statements rather than <code>if/elsif</code> statements, wherever possible.</p>
+<p>&#8226; Use type extension and dispatching rather than <code>case</code> statements if possible.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">type Color is (Red, Green, Blue, Purple);
+Car_Color : Color := Red;
+...
+case Car_Color is
+   when Red .. Blue => ...
+   when Purple      => ...
+end case;  -- Car_Color
+</code></pre>
+<p>Now consider a change in the type:</p>
+<pre><code language="Ada">type Color is (Red, Yellow, Green, Blue, Purple);
+</code></pre>
+<p>This change may have an unnoticed and undesired effect in the <code>case</code> statement. If the choices had been enumerated explicitly, as <code>when Red | Green | Blue =&gt;</code> instead of <code>when Red .. Blue =&gt;</code>, then the <code>case</code> statement would not have compiled. This would have forced the maintainer to make a conscious decision about what to do in the case of <code>Yellow</code>.</p>
+
+<p><b>Rationale</b></p>
+<p>All possible values for an object should be known and should be assigned specific actions. Use of an <code>others</code> clause may prevent the developer from carefully considering the actions for each value. A compiler warns the user about omitted values if an <code>others</code> clause is not used.</p>
+<p>You may not be able to avoid the use of <code>others</code> in a <code>case</code> statement when the subtype of the case expression has many values, for example, <code>universal_integer</code>, <code>Wide_Character</code>, or <code>Character</code>. If your choice of values is small compared to the range of the subtype, you should consider using an <code>if/elsif</code> statement. Note that you must supply an <code>others</code> alternative when your <code>case</code> expression is of a generic type.</p>
+<p>Each possible value should be explicitly enumerated. Ranges can be dangerous because of the possibility that the range could change and the <code>case</code> statement may not be reexamined. If you have declared a subtype to correspond to the range of interest, you can consider using this named subtype.</p>
+<p>In many instances, <code>case</code> statements enhance the readability of the code. See Guideline 10.5.3 for a discussion of the performance considerations. In many implementations, <code>case</code> statements may be more efficient.</p>
+<p>Type extension and dispatching ease the maintenance burden when you add a new variant to a data structure. See also Guidelines 5.4.2 and 5.4.4.</p>
+
+<p><b>Notes</b></p>
+<p>Ranges that are needed in <code>case</code> statements can use constrained subtypes to enhance maintainability. It is easier to maintain because the declaration of the range can be placed where it is logically part of the abstraction, not buried in a <code>case</code> statement in the executable code:</p>
+<pre><code language="Ada">subtype Lower_Case is Character range 'a' .. 'z';
+subtype Upper_Case is Character range 'A' .. 'Z';
+subtype Control    is Character range Ada.Characters.Latin_1.NUL ..
+                                      Ada.Characters.Latin_1.US;
+subtype Numbers    is Character range '0' .. '9';
+...
+case Input_Char is
+   when Lower_Case =&gt; Capitalize(Input_Char);
+   when Upper_Case =&gt; null;
+   when Control    =&gt; raise Invalid_Input;
+   when Numbers    =&gt; null;
+   ...
+end case;
+</code></pre>
+
+<p><b>Exceptions</b></p>
+<p>It is acceptable to use ranges for possible values only when the user is certain that new values will never be inserted among the old ones, as for example, in the range of ASCII characters: <code>'a' .. 'z'</code>.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Guideline 2 (do not use ranges of enumeration literals) is automated: the check detects <code>when EnumLiteral .. EnumLiteral =&gt;</code> patterns in case statements by verifying that the bounds are enumerator entities. Character literal ranges (e.g., <code>'a' .. 'z'</code>) are naturally excluded because they are a different token type.</p>
+<p>Guideline 1 (minimize <code>others</code>) cannot be automated. The word "minimize" provides no enforceable threshold, and <code>others</code> is mandatory for case expressions of generic types and for subtypes with large value ranges such as <code>Character</code>, <code>Wide_Character</code>, and <code>universal_integer</code>.</p>
+<p>Guideline 3 (prefer <code>case</code> over <code>if/elsif</code>) cannot be automated. Determining whether an <code>if/elsif</code> chain tests the same variable against discrete values — and could therefore be rewritten as a <code>case</code> statement — requires data-flow analysis beyond lexical pattern matching.</p>
+<p>Guideline 4 (prefer type extension and dispatching over <code>case</code>) cannot be automated. Deciding whether a <code>case</code> statement should be replaced by polymorphism requires understanding the overall type hierarchy and design intent, which cannot be determined by static analysis of individual files.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    paren_depth = 0
+    case_depth = 0
+    lex = file.lexer().first()
+
+    while lex:
+        if lex.token() == "Punctuation":
+            text = lex.text()
+            if text == "(":
+                paren_depth += 1
+            elif text == ")":
+                paren_depth = max(0, paren_depth - 1)
+        elif lex.token() == "Keyword":
+            text = str(lex.text()).lower()
+
+            if text == "case" and paren_depth == 0:
+                case_depth += 1
+
+            elif text == "end":
+                next_lex = lex.next(True, True)
+                if (
+                    next_lex
+                    and next_lex.token() == "Keyword"
+                    and str(next_lex.text()).lower() == "case"
+                    and paren_depth == 0
+                ):
+                    case_depth = max(0, case_depth - 1)
+                    lex = next_lex
+
+            elif text == "when" and case_depth > 0 and paren_depth == 0:
+                next_lex = lex.next(True, True)
+
+                while next_lex and next_lex.text() != "=>":
+                    if next_lex.token() == "Identifier":
+                        enum_ent = next_lex.ent()
+                        if enum_ent and enum_ent.kind().check("Enumeration Literal"):
+                            dotdot_lex = next_lex.next(True, True)
+                            if dotdot_lex and dotdot_lex.text() == "..":
+                                check.violation(
+                                    enum_ent,
+                                    file,
+                                    next_lex.line_begin(),
+                                    next_lex.column_begin(),
+                                    ERR1,
+                                )
+                    next_lex = next_lex.next(True, True)
+
+                lex = next_lex
+                if not lex:
+                    break
+
+        lex = lex.next(True, True)

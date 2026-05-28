@@ -1,0 +1,170 @@
+ERR1 = "Avoid exit statements in for and while loops"
+ERR2 = "Loop has more than two exit paths"
+
+LOOP_KEYWORDS = frozenset(["for", "while"])
+
+
+def ids():
+    return ("ADA95_5.6.4",)
+
+
+def name(id):
+    return {
+        "ADA95_5.6.4": "Published Standards/Ada 95/5.6.4 Loops",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.6.4": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Statements",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.6.4": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use <code>for</code> loops, whenever possible.</p>
+<p>&#8226; Use <code>while</code> loops when the number of iterations cannot be calculated before entering the loop but a simple continuation condition can be applied at the top of the loop.</p>
+<p>&#8226; Use plain loops with <code>exit</code> statements for more complex situations.</p>
+<p>&#8226; Avoid <code>exit</code> statements in <code>while</code> and <code>for</code> loops.</p>
+<p>&#8226; Minimize the number of ways to <code>exit</code> a loop.</p>
+
+<p><b>Example</b></p>
+<p>To iterate over all elements of an array:</p>
+<pre><code language="Ada">for I in Array_Name'Range loop
+   ...
+end loop;
+</code></pre>
+<p>To iterate over all elements in a linked list:</p>
+<pre><code language="Ada">Pointer := Head_Of_List;
+while Pointer /= null loop
+   ...
+   Pointer := Pointer.Next;
+end loop;
+</code></pre>
+<p>Situations requiring a "loop and a half" arise often. For this, use:</p>
+<pre><code language="Ada">P_And_Q_Processing:
+   loop
+      P;
+      exit P_And_Q_Processing when Condition_Dependent_On_P;
+      Q;
+   end loop P_And_Q_Processing;
+</code></pre>
+<p>rather than:</p>
+<pre><code language="Ada">P;
+while not Condition_Dependent_On_P loop
+   Q;
+   P;
+end loop;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>A <code>for</code> loop is bounded, so it cannot be an infinite loop. Language requirements prevent modification of loop counters within the loop body. This provides certainty of understanding for readers and writers. Loop ranges using data structure attributes automatically adjust when declarations change. A <code>while</code> loop has become a very familiar construct and clearly indicates continuation conditions. Plain loop statements suit complex situations better than contrived <code>for</code> or <code>while</code> solutions with extra flags. A reader who encounters a plain loop statement expects to see <code>exit</code> statements. Multiple exit paths should generally not exceed two; all should use explicit <code>exit</code> statements rather than adding exits to <code>for</code> or <code>while</code> loops.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Guidelines 4 (avoid <code>exit</code> in <code>for</code> and <code>while</code> loops) and 5 (minimize exit paths, flagging more than two) are automated for both unnamed and named <code>exit</code> statements. For named exits (e.g., <code>exit Outer_Loop when Condition</code>), the check stores each loop's label in the enclosing loop stack and searches for the matching label when a named exit is encountered, so the type and exit count of the targeted loop are correctly evaluated.</p>
+<p>Guidelines 1, 2, and 3 cannot be automated. Determining whether a loop's iteration count is known in advance, whether a simple top-of-loop condition suffices, or whether a plain loop with <code>exit</code> is more appropriate than a <code>for</code> or <code>while</code> loop requires understanding the algorithm's intent.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def _label_before(lex):
+    """Look backward from lex for a loop label pattern (Name ':').
+    Returns the label text, or None if no label is found."""
+    prev = lex.previous(True, True)
+    if prev and prev.text() == ":":
+        prev2 = prev.previous(True, True)
+        if prev2 and prev2.token() not in ("Keyword", "Punctuation", "Operator"):
+            return str(prev2.text())
+    return None
+
+
+def check(check, file):
+    paren_depth = 0
+    pending_type = "bare"
+    pending_label = None
+    # Stack entries: [loop_type, exit_count, label_or_None]
+    loop_stack = []
+    lex = file.lexer(lookup_ents=False).first()
+
+    while lex:
+        if lex.token() == "Punctuation":
+            text = lex.text()
+            if text == "(":
+                paren_depth += 1
+            elif text == ")":
+                paren_depth = max(0, paren_depth - 1)
+
+        elif lex.token() == "Keyword" and paren_depth == 0:
+            text = str(lex.text()).lower()
+
+            if text in LOOP_KEYWORDS:
+                pending_type = text
+                pending_label = _label_before(lex)
+
+            elif text == "loop":
+                if pending_type == "bare":
+                    pending_label = _label_before(lex)
+                loop_stack.append([pending_type, 0, pending_label])
+                pending_type = "bare"
+                pending_label = None
+
+            elif text == "end":
+                next_lex = lex.next(True, True)
+                if next_lex and str(next_lex.text()).lower() == "loop":
+                    if loop_stack:
+                        loop_stack.pop()
+                    lex = next_lex
+
+            elif text == "exit" and loop_stack:
+                next_lex = lex.next(True, True)
+                is_named = next_lex and next_lex.token() == "Identifier"
+
+                if is_named:
+                    label_name = str(next_lex.text()).lower()
+                    for loop_entry in reversed(loop_stack):
+                        if loop_entry[2] and str(loop_entry[2]).lower() == label_name:
+                            loop_type = loop_entry[0]
+                            if loop_type in LOOP_KEYWORDS:
+                                check.violation(
+                                    None,
+                                    file,
+                                    lex.line_begin(),
+                                    lex.column_begin(),
+                                    ERR1,
+                                )
+                            loop_entry[1] += 1
+                            if loop_entry[1] > 2:
+                                check.violation(
+                                    None,
+                                    file,
+                                    lex.line_begin(),
+                                    lex.column_begin(),
+                                    ERR2,
+                                )
+                            break
+                else:
+                    loop_entry = loop_stack[-1]
+                    loop_type = loop_entry[0]
+
+                    if loop_type in LOOP_KEYWORDS:
+                        check.violation(
+                            None, file, lex.line_begin(), lex.column_begin(), ERR1
+                        )
+
+                    loop_entry[1] += 1
+                    if loop_entry[1] > 2:
+                        check.violation(
+                            None, file, lex.line_begin(), lex.column_begin(), ERR2
+                        )
+
+        lex = lex.next(True, True)

@@ -1,0 +1,129 @@
+ERR1 = "Highlight return statements with comments or white space"
+
+
+def ids():
+    return ("ADA95_5.6.8",)
+
+
+def name(id):
+    return {
+        "ADA95_5.6.8": "Published Standards/Ada 95/5.6.8 Return Statements",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.6.8": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Statements",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.6.8": """
+<p><b>Guideline</b></p>
+<p>&#8226; Minimize the number of <code>return</code> statements from a subprogram (NASA 1987).</p>
+<p>&#8226; Highlight <code>return</code> statements with comments or white space to keep them from being lost in other code.</p>
+
+<p><b>Example</b></p>
+<p>The following code fragment is longer and more complex than necessary:</p>
+<pre><code language="Ada">if Pointer /= null then
+   if Pointer.Count &gt; 0 then
+      return True;
+   else  -- Pointer.Count = 0
+      return False;
+   end if;
+else  -- Pointer = null
+   return False;
+end if;</code></pre>
+<p>It should be replaced with the shorter, more concise, and clearer equivalent line:</p>
+<pre><code language="Ada">return Pointer /= null and then Pointer.Count &gt; 0;</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Excessive use of returns can make code confusing and unreadable. Only use return statements where warranted. Too many returns from a subprogram may be an indicator of cluttered logic. If the application requires multiple returns, use them at the same level (i.e., as in different branches of a <code>case</code> statement), rather than scattered throughout the subprogram code. Some rework can often reduce the number of return statements to one and make the code more clear.</p>
+
+<p><b>Exceptions</b></p>
+<p>Do not avoid <code>return</code> statements if it detracts from natural structure and code readability.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Guideline 1 (minimize return statements) cannot be automated. &#8220;Minimize&#8221; has no specific threshold, and whether multiple returns can be reduced requires semantic analysis of the algorithm.</p>
+<p>Guideline 2 (highlight with comments or white space) is automated: a <code>return</code> statement is flagged when it has no comment on the same line, no standalone comment on the immediately preceding line, and no blank line immediately before it. <code>return</code> statements appearing as the first statement in a body (directly after <code>begin</code>), in a case branch (directly after <code>=&gt;</code>), or in a subprogram declaration are not flagged.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    lex = file.lexer(lookup_ents=False).first()
+
+    while lex:
+        if lex.token() == "Keyword" and str(lex.text()).lower() == "return":
+            # Skip 'return' in subprogram/access-type declarations
+            prev_sig = lex.previous(True, True)
+            if prev_sig and (
+                prev_sig.token() == "Identifier"
+                or str(prev_sig.text()) in (")", "=>")
+                or str(prev_sig.text()).lower() == "function"
+            ):
+                lex = lex.next(True, True)
+                continue
+
+            return_line = lex.line_begin()
+
+            # Previous non-whitespace token, including comments for line analysis
+            prev_content = lex.previous(True, False)
+
+            # Skip 'return' as the first statement directly after 'begin'
+            if prev_content and str(prev_content.text()).lower() == "begin":
+                lex = lex.next(True, True)
+                continue
+
+            # Comment on the same line as the return
+            scan = lex.next(True, False)
+            has_same_line_comment = False
+            while scan and scan.line_begin() == return_line:
+                if scan.token() == "Comment":
+                    has_same_line_comment = True
+                    break
+                scan = scan.next(True, False)
+
+            if has_same_line_comment:
+                lex = lex.next(True, True)
+                continue
+
+            # Blank line before: previous content is two or more lines above
+            has_blank_before = (
+                prev_content is None
+                or prev_content.line_begin() <= return_line - 2
+            )
+
+            # Standalone comment on the immediately preceding line
+            has_comment_before = False
+            if (
+                not has_blank_before
+                and prev_content is not None
+                and prev_content.token() == "Comment"
+                and prev_content.line_begin() == return_line - 1
+            ):
+                prev_prev = prev_content.previous(True, True)
+                has_comment_before = (
+                    prev_prev is None
+                    or prev_prev.line_begin() < return_line - 1
+                )
+
+            if not has_blank_before and not has_comment_before:
+                check.violation(
+                    None,
+                    file,
+                    return_line,
+                    lex.column_begin(),
+                    ERR1,
+                )
+
+        lex = lex.next(True, True)

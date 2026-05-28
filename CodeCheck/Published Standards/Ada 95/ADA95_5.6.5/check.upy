@@ -1,0 +1,115 @@
+ERR1 = "Use exit when rather than if ... then exit"
+
+
+def ids():
+    return ("ADA95_5.6.5",)
+
+
+def name(id):
+    return {
+        "ADA95_5.6.5": "Published Standards/Ada 95/5.6.5 Exit Statements",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.6.5": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Statements",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.6.5": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use <code>exit</code> statements to enhance the readability of loop termination code (NASA 1987).</p>
+<p>&#8226; Use <code>exit when ...</code> rather than <code>if ... then exit</code> whenever possible (NASA 1987).</p>
+<p>&#8226; Review <code>exit</code> statement placement.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">Process_Requests:
+   loop
+      if Status = Done then
+         Shut_Down;
+         exit Process_Requests;
+      end if;
+      ...
+   end loop Process_Requests;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>It is more readable to use <code>exit</code> statements than to try to add Boolean flags to a <code>while</code> loop condition to simulate exits from the middle of a loop.</p>
+<p>Even if all <code>exit</code> statements would be clustered at the top of the loop body, the separation of a complex condition into multiple <code>exit</code> statements can simplify and make it more readable and clear.</p>
+<p>The sequential execution of two <code>exit</code> statements is often more clear than the short-circuit control forms.</p>
+<p>The <code>exit when</code> form is preferable to the <code>if ... then exit</code> form because it makes the word <code>exit</code> more visible by not nesting it inside of any control construct.</p>
+
+<p><b>Notes</b></p>
+<p>Loops with many scattered <code>exit</code> statements can indicate fuzzy thinking regarding the loop's purpose in the algorithm. Such an algorithm might be coded better some other way, for example, with a series of loops. Some rework can often reduce the number of <code>exit</code> statements and make the code clearer.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Guideline 2 (prefer <code>exit when</code> over <code>if ... then exit</code>) is automated for the pattern where an <code>if</code> statement contains only an unconditional <code>exit</code> and has no <code>else</code> or <code>elsif</code> branch — i.e., <code>if Condition then exit; end if;</code> can always be written as <code>exit when Condition;</code>.</p>
+<p>Guideline 1 (use <code>exit</code> rather than Boolean flags) cannot be automated. Detecting when a loop continuation condition is a Boolean flag that could be replaced by an <code>exit</code> statement requires data-flow analysis across the loop body.</p>
+<p>Guideline 3 (review <code>exit</code> statement placement) cannot be automated. Determining whether scattered <code>exit</code> statements reflect unclear thinking or a legitimate algorithm requires understanding the algorithm's intent.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    lex = file.lexer(lookup_ents=False).first()
+
+    while lex:
+        if lex.token() == "Punctuation":
+            text = lex.text()
+
+        elif lex.token() == "Keyword":
+            text = str(lex.text()).lower()
+
+            if text == "exit":
+                # Only flag unconditional unnamed exits (next token is ';')
+                after_exit = lex.next(True, True)
+                if not (after_exit and after_exit.text() == ";"):
+                    lex = lex.next(True, True)
+                    continue
+
+                # The token directly before 'exit' must be 'then'
+                before_exit = lex.previous(True, True)
+                if not (before_exit and str(before_exit.text()).lower() == "then"):
+                    lex = lex.next(True, True)
+                    continue
+
+                # After ';', must be immediately 'end if' with nothing in between
+                after_semi = after_exit.next(True, True)
+                if not (after_semi and str(after_semi.text()).lower() == "end"):
+                    lex = lex.next(True, True)
+                    continue
+
+                after_end = after_semi.next(True, True)
+                if not (after_end and str(after_end.text()).lower() == "if"):
+                    lex = lex.next(True, True)
+                    continue
+
+                # Find the matching 'if' keyword for this 'then'
+                if_lex = before_exit.previous(True, True)
+                while if_lex:
+                    if_text = str(if_lex.text()).lower()
+                    if if_lex.token() == "Keyword" and if_text == "if":
+                        break
+                    if_lex = if_lex.previous(True, True)
+
+                if if_lex:
+                    check.violation(
+                        None,
+                        file,
+                        if_lex.line_begin(),
+                        if_lex.column_begin(),
+                        ERR1,
+                    )
+
+        lex = lex.next(True, True)
