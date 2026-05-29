@@ -1,6 +1,18 @@
-#include <cstdint>
-#include <cstring>
-#include <iterator>
+// Self-contained declarations: the lightweight analysis environment does not
+// provide the standard library headers, so stdlib types and functions used by
+// the test are declared here directly (see CLAUDE-testing.md).
+typedef unsigned char uint8_t;
+
+extern "C" {
+  int memcmp(const void *, const void *, unsigned long);
+  void *memcpy(void *, const void *, unsigned long);
+  void *memmove(void *, const void *, unsigned long);
+}
+
+namespace std {
+  template <typename T>
+  T *next(T *p, long n) { return p + n; }
+}
 
 // ---------------------------------------------------------------------------
 // Array subscript
@@ -12,7 +24,7 @@ void test_subscript()
 
   x = arr[0];                // UndCC_Valid
   x = arr[9];                // UndCC_Valid
-  x = arr[10];               // UndCC_Valid one-past-end
+  x = arr[10];               // UndCC_Violation dereference of one-past-end
   x = arr[-1];               // UndCC_Violation before start
   x = arr[11];               // UndCC_Violation two-past-end
   (void)x;
@@ -28,8 +40,8 @@ void test_multidimensional()
 
   x = a2[0][0];              // UndCC_Valid
   x = a2[4][2];              // UndCC_Valid
-  x = a2[4][3];              // UndCC_Valid one-past-end on inner dimension
-  x = a2[5][0];              // UndCC_Valid one-past-end on outer dimension
+  x = a2[4][3];              // UndCC_Violation dereference one-past-end on inner dimension
+  x = a2[5][0];              // UndCC_Violation dereference one-past-end on outer dimension
   x = a2[4][4];              // UndCC_Violation two-past-end on inner dimension
   x = a2[6][0];              // UndCC_Violation two-past-end on outer dimension
   x = a2[-1][0];             // UndCC_Violation before start on outer dimension
@@ -117,7 +129,7 @@ void test_struct_member()
   int x;
 
   x = s.data[9];             // UndCC_Valid
-  x = s.data[10];            // UndCC_Valid one-past-end
+  x = s.data[10];            // UndCC_Violation dereference of one-past-end
   x = s.data[11];            // UndCC_Violation two-past-end
   (void)x;
 }
@@ -131,7 +143,7 @@ void test_string_literal()
   char c;
 
   c = "hello"[5];            // UndCC_Valid last element (null terminator)
-  c = "hello"[6];            // UndCC_Valid one-past-end
+  c = "hello"[6];            // UndCC_Violation dereference of one-past-end
   c = "hello"[7];            // UndCC_Violation two-past-end
   (void)c;
 }
@@ -145,7 +157,9 @@ void test_explicit_dereference()
   int x;
 
   x = *(arr + 9);            // UndCC_Valid
+  x = *(arr + 10);           // UndCC_Violation dereference of one-past-end
   x = *(arr + 11);           // UndCC_Violation two-past-end
+  (void)(arr + 10);          // UndCC_Valid one-past-end formation, not dereferenced
   (void)x;
 }
 
@@ -177,9 +191,9 @@ void test_known_false_negatives()
   int *p = arr + 5;
   (void)(p + 6);             // UndCC_FalseNeg equivalent to arr + 11
 
-  // &arr[0] + n: getKnownArraySize deliberately returns -1 for &arr[subscript]
-  // to avoid false positives when the subscript is non-zero
-  (void)(&arr[0] + 11);     // UndCC_FalseNeg offset 11 past start of array
+  // &arr[k] + n with a constant k: the checker knows &arr[0] addresses element
+  // 0 of an array of size 10, so it can validate the offset.
+  (void)(&arr[0] + 11);     // UndCC_Violation offset 11 past start of array
 }
 
 // ---------------------------------------------------------------------------
