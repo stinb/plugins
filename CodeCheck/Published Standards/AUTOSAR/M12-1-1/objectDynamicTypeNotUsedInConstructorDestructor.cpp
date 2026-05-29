@@ -71,24 +71,54 @@ B3::B3(B4 *b)
 // Issue #4878: Qt-style member-of-member virtual call should not be flagged.
 // The receiver is an unrelated polymorphic object, not the object under
 // construction, so the dynamic type of the constructed object is not used.
-class QPushButton4878
+class QObject4878
+{
+public:
+  virtual ~QObject4878() {}
+};
+
+class QWidget4878 : public QObject4878
 {
 public:
   virtual void setVisible(bool v);
+};
+
+class QAbstractButton4878 : public QWidget4878
+{
+};
+
+class QPushButton4878 : public QAbstractButton4878
+{
 };
 
 class UiWrenchWidget4878
 {
 public:
   QPushButton4878 *resetButton;
+  QPushButton4878 *helpButton;
+  QPushButton4878 *driveOneTickMarks;
+
+  // Non-virtual helper that itself makes virtual calls on its own members.
+  // This is what Qt's auto-generated Ui_*::setupUi() does. It must not cause
+  // a violation when called as ui->setupUi(parent) from the constructor,
+  // because the call is on `ui`, not on the constructed widget.
+  void setupUi(QWidget4878 *parent)
+  {
+    resetButton->setVisible(true);
+  }
 };
 
-class WrenchWidget4878
+class WrenchWidget4878 : public QWidget4878
 {
 public:
   UiWrenchWidget4878 *ui;
-  WrenchWidget4878()
+  WrenchWidget4878(QWidget4878 *const MyParent)
+    : QWidget4878()
+    , ui(new UiWrenchWidget4878)
   {
-    ui->resetButton->setVisible(false); // UndCC_Valid - call is on an unrelated object
+    ui->setupUi(this);                         // UndCC_Valid - non-virtual call on an unrelated object
+    ui->resetButton->setVisible(false);        // UndCC_Valid - virtual call on an unrelated object
+    ui->helpButton->setVisible(false);         // UndCC_Valid - same pattern
+    ui->driveOneTickMarks->setVisible(false);  // UndCC_Valid - same pattern (issue #4878 follow-up)
   }
 };

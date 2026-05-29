@@ -259,29 +259,9 @@ def check(check, file):
                 # Loop through each virtual calls, if they have a corresponding name reference than that call is ok, throw an error otherwise
                 for virtual in virtualCalls:
 
-                    # Check the text arount the virtual call to ensure we are not using another object
-                    tempLexeme = file.lexer().lexeme(virtual.line(), virtual.column())
-                    # Calling a virtual function via a pointer or object
-                    if not tempLexeme:
-                        continue
-                    prevUseful = tempLexeme.previous(ignore_whitespace=True, ignore_comments=True)
-                    if not prevUseful:
-                        continue
-                    if prevUseful.text() == '->' or prevUseful.text() == '.':
-                        prev = prevUseful.previous(True, True)
-                        dynamic_obj = False
-                            
-                        if prev.text() == "this" and prev.token() == "Keyword":
-                            dynamic_obj = True
-                        elif prev and prev.ent():
-                            prev_ent, _ = get_ent_type(prev.ent())
-
-                            if prev_ent.kind().check("Class") and isSameOrDerivedFrom(prev_ent, classRef.ent()):
-                                dynamic_obj = True
-                        
-                        if not dynamic_obj:
-                            continue
-                    if tempLexeme.token() == 'Keyword':
+                    # Skip virtual calls whose receiver is not the object
+                    # under construction (e.g. ui->resetButton->setVisible).
+                    if not isCallOnConstructedObject(file, virtual.line(), virtual.column(), classRef):
                         continue
 
                     # Test if this is a call to a pure virtual function, if so, throw error and move on
@@ -304,6 +284,10 @@ def check(check, file):
                     if call_ref.line() == method.line():
                         continue
                     elif call_ref.ent().ref("Call Virtual"):
+                        # Skip indirect calls whose receiver is not the
+                        # object under construction (e.g. ui->setupUi(this)).
+                        if not isCallOnConstructedObject(file, call_ref.line(), call_ref.column(), classRef):
+                            continue
                         check.violation(call_ref.ent(), file, call_ref.line(), call_ref.column(), ERR4, call_ref.ent().name())
                         break
 
@@ -397,3 +381,31 @@ def isSameOrDerivedFrom(receiverClass, constructedClass):
                 return True
             stack.append(base)
     return False
+
+
+# Returns True if the call at (line, column) is on the object under
+# construction (this, implicit this, or a same/derived-class receiver).
+# Returns False when the receiver is an unrelated object or cannot be
+# determined. Used by both the direct-virtual-call and the
+# indirect-via-helper loops to avoid flagging calls on unrelated objects
+# (#4878 — e.g. ui->setupUi(this) or ui->resetButton->setVisible(false)).
+def isCallOnConstructedObject(file, line, column, classRef):
+    tempLexeme = file.lexer().lexeme(line, column)
+    if not tempLexeme:
+        return False
+    if tempLexeme.token() == 'Keyword':
+        return False
+    prevUseful = tempLexeme.previous(ignore_whitespace=True, ignore_comments=True)
+    if not prevUseful:
+        return False
+    if prevUseful.text() == '->' or prevUseful.text() == '.':
+        prev = prevUseful.previous(True, True)
+        if prev and prev.text() == "this" and prev.token() == "Keyword":
+            return True
+        if prev and prev.ent():
+            prev_ent, _ = get_ent_type(prev.ent())
+            if prev_ent.kind().check("Class") and isSameOrDerivedFrom(prev_ent, classRef.ent()):
+                return True
+        return False
+    # No explicit receiver — implicit this.
+    return True
