@@ -1,0 +1,308 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-06-03
+
+
+from Modules import refInNode
+
+
+ERR1 = 'Resource allocated here may not be released on all paths to function exit'
+
+# Allocator:deallocator function pairs that are recognised by default. Each
+# allocator returns a resource that is captured in a local object. Projects add
+# their own balanced pairs through the option below.
+DEFAULT_PAIRS = (
+    'fopen:fclose freopen:fclose tmpfile:fclose '
+    'popen:pclose opendir:closedir mutex_lock:mutex_unlock'
+)
+
+# Node kinds that leave the function other than by normal fall-through. A path
+# that leaves through one of these (e.g. an early error return taken when the
+# allocation failed) is treated as deliberate and is not reported as a leak.
+EARLY_EXIT_KINDS = frozenset(('return', 'break', 'continue', 'goto'))
+
+# CFG node kinds whose span covers a controlling condition. A control-flow graph
+# node of one of these kinds spans only its test expression, not its body, so a
+# reference to the resource inside such a node is the resource being tested.
+BRANCH_KINDS = frozenset(('if', 'while-for', 'do-while', 'switch'))
+
+
+def ids():
+    return ('MISRA12_DIR_4.13', 'MISRA23_DIR_4.13', 'MISRA25_DIR_4.13', 'CPP_F074')
+
+
+def name(id):
+    return {
+        'MISRA12_DIR_4.13': 'Published Standards/MISRA C 2012/' + """\
+Directive 4.13 Functions which are designed to provide operations on a resource should be called in an appropriate sequence""",
+        'MISRA23_DIR_4.13': 'Published Standards/MISRA C 2023/' + """\
+Directive 4.13 Functions which are designed to provide operations on a resource should be called in an appropriate sequence""",
+        'MISRA25_DIR_4.13': 'Published Standards/MISRA C 2025/' + """\
+Directive 4.13 Functions which are designed to provide operations on a resource should be called in an appropriate sequence""",
+        'CPP_F074': 'All Checks/Language Specific/C and C++/Functions/' + """\
+Functions which are designed to provide operations on a resource should be called in an appropriate sequence""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_DIR_4.13': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Functions',
+        ],
+        'MISRA23_DIR_4.13': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Functions',
+        ],
+        'MISRA25_DIR_4.13': [
+            'Language: C',
+            'Standard: MISRA C 2025',
+            'Category: Advisory',
+            'Functions',
+        ],
+        'CPP_F074': [
+            'Language: C',
+            'Language: C++',
+            'Functions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>A set of functions providing operations on a resource typically has three kinds of operation:</p>
+<ol>
+<li>Allocation of the resource, e.g. opening a file;</li>
+<li>Deallocation of the resource, e.g. closing a file;</li>
+<li>Other operations, e.g. reading from a file.</li>
+</ol>
+<p>For each such set of functions, all uses of its operations should occur in an appropriate sequence.</p>
+
+<p><b>Rationale</b></p>
+<p>Static analyser tools are capable of providing path analysis checks that can identify paths through a program that result in the deallocation function of a sequence not being called. In order to maximize the benefits of such automated checks, developers are therefore encouraged to enable these checks by designing and declaring sets of balanced functions to the static analyser.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">/* These functions are intended to be paired */
+extern mutex_t mutex_lock   ( void );
+extern void    mutex_unlock ( mutex_t m );
+
+extern int16_t x;
+
+void f ( void )
+{
+  mutex_t m = mutex_lock ( );
+
+  if ( x > 0 )
+  {
+    mutex_unlock ( m );
+  }
+  else
+  {
+    /* Mutex not unlocked on this path */
+  }
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 22.1, Rule 22.2, Rule 22.6</p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check pairs an allocator with its deallocator and reports a resource
+captured in a local object when the deallocator is called on at least one path
+but a fall-through path to the function's exit reaches the exit without calling
+it. Requiring the deallocator to appear keeps the check focused on functions
+that clearly own and intend to release the resource, which keeps false positives
+low.</p>
+<p>Analysis is performed within a single function. The following are deliberately
+not reported: a resource released in a called helper function; ownership
+transferred out of the function (the object is returned, stored in a global or
+structure member, or written through a pointer parameter); and a resource that
+is never released anywhere in the function (assumed to be owned elsewhere).
+Passing the resource to an ordinary function is treated as an operation on it,
+not as a transfer of ownership. Paths that leave the function through an early
+<code>return</code>, <code>break</code>, <code>continue</code>, or
+<code>goto</code> are assumed to be deliberate error handling and are not
+reported. A resource whose value is tested in a condition (for example
+<code>if (fp != NULL)</code> or <code>if (fp)</code>) is also not reported: the
+test marks a deliberate allocation-failure path, and the branch that does not
+release the resource is that path, on which the resource is null and need not be
+released.</p>
+<p>The default allocator:deallocator pairs cover the standard file functions
+(<code>fopen</code>, <code>freopen</code>, <code>tmpfile</code> paired with
+<code>fclose</code>), <code>popen:pclose</code>, <code>opendir:closedir</code>,
+and the directive's <code>mutex_lock:mutex_unlock</code> example. Additional
+project specific balanced pairs can be declared through the option below.</p>
+"""
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    check.options().text(
+        'pairs',
+        'Allocator:deallocator function pairs (space separated, e.g. fopen:fclose mutex_lock:mutex_unlock)',
+        DEFAULT_PAIRS,
+    )
+
+
+def _parse_pairs(check):
+    # Map each allocator function name to the set of names that release it.
+    raw = check.options().lookup('pairs') or ''
+    pairs = {}
+    for token in raw.split():
+        if ':' not in token:
+            continue
+        alloc, dealloc = token.split(':', 1)
+        alloc = alloc.strip()
+        dealloc = dealloc.strip()
+        if alloc and dealloc:
+            pairs.setdefault(alloc, set()).add(dealloc)
+    return pairs
+
+
+def _allocation_sites(fn, alloc_names):
+    # Yield (var, allocRef, allocName) for each local object in fn whose value is
+    # assigned directly from a call to a registered allocator. A pointer result
+    # surfaces as 'Assign Ptr' (e.g. FILE *fp = fopen(...)); a by-value result
+    # surfaces as 'Assign Value' (e.g. mutex_t m = mutex_lock()).
+    for defineRef in fn.refs('Define', 'Object'):
+        var = defineRef.ent()
+        for assignRef in var.refs('Assign Ptr, Assign Value'):
+            callee = assignRef.ent()
+            if callee and callee.name() in alloc_names:
+                yield var, assignRef, callee.name()
+                break
+
+
+def _release_refs_and_escape(var, dealloc_names):
+    # Examine where var's value flows. Returns (releaseRefs, escapes):
+    #   releaseRefs - refs where var is passed to a registered deallocator
+    #   escapes     - True if ownership may pass outside this function, in which
+    #                 case the resource is not considered leaked here.
+    releaseRefs = []
+    escapes = False
+
+    for flowRef in var.refs():
+        kindname = flowRef.kind().longname()
+        target = flowRef.ent()
+
+        if 'Useby Return' in kindname:
+            # Returned to the caller.
+            escapes = True
+        elif 'Deref Assignby' in kindname:
+            # Written through a pointer, e.g. an out-parameter '*out = res'.
+            escapes = True
+        elif 'Assignby' in kindname:
+            if target and target.kind().check('Parameter'):
+                # Passed by value as an argument. A registered deallocator
+                # releases the resource; any other function is an operation on
+                # it, not a transfer of ownership.
+                callee = target.parent()
+                if callee and callee.name() in dealloc_names:
+                    releaseRefs.append(flowRef)
+            else:
+                # Stored into a global, structure member, or other object that
+                # may outlive this function.
+                escapes = True
+
+    return releaseRefs, escapes
+
+
+def _tested_in_condition(var, cfg):
+    # True if var is referenced in the controlling expression of a branch, e.g.
+    # 'if (fp)' or 'if (fp != NULL)'. Such a test means the code distinguishes
+    # the allocation-failure path: the branch that skips the deallocator is the
+    # path on which the resource is null and need not be released. This is the
+    # common 'res = alloc(); if (res) { ...; release(res); }' idiom, which would
+    # otherwise be reported because the null branch reaches the exit unreleased.
+    branchNodes = [node for node in cfg.nodes() if node.kind() in BRANCH_KINDS]
+    if not branchNodes:
+        return False
+    for ref in var.refs():
+        for node in branchNodes:
+            if refInNode(ref, node):
+                return True
+    return False
+
+
+def _leaks(cfg, allocRef, releaseRefs):
+    # True if some fall-through path from the allocation to the function's exit
+    # does not pass through a release of the resource.
+    allocNode = None
+    for node in cfg.nodes():
+        if refInNode(allocRef, node):
+            allocNode = node
+            break
+    if not allocNode:
+        return False
+
+    releaseNodes = set()
+    for node in cfg.nodes():
+        for releaseRef in releaseRefs:
+            if refInNode(releaseRef, node):
+                releaseNodes.add(node)
+                break
+
+    seen = {allocNode}
+    stack = list(allocNode.children())
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        if node in releaseNodes:
+            continue                        # resource released on this path
+        if node.kind() in EARLY_EXIT_KINDS:
+            continue                        # deliberate early exit
+        if node.kind() == 'end' or not node.children():
+            return True                     # reached exit without releasing
+        stack.extend(node.children())
+
+    return False
+
+
+def check(check, file):
+    pairs = _parse_pairs(check)
+    if not pairs:
+        return
+    alloc_names = set(pairs)
+
+    for fnRef in file.filerefs('Define', 'Function'):
+        fn = fnRef.ent()
+
+        cfg = fn.control_flow_graph()
+        if not cfg:
+            continue
+
+        for var, allocRef, allocName in _allocation_sites(fn, alloc_names):
+            releaseRefs, escapes = _release_refs_and_escape(var, pairs[allocName])
+
+            # Only report when the resource is clearly owned here: the
+            # deallocator is called on some path, ownership is not transferred
+            # away, and a fall-through path still reaches the exit unreleased.
+            if escapes or not releaseRefs:
+                continue
+
+            # A resource that is null-tested has a deliberate allocation-failure
+            # path; the unreleased branch is that path, not a leak.
+            if _tested_in_condition(var, cfg):
+                continue
+
+            if _leaks(cfg, allocRef, releaseRefs):
+                check.violation(var, file, allocRef.line(), allocRef.column(), ERR1)
