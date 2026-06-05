@@ -122,3 +122,52 @@ public:
     ui->driveOneTickMarks->setVisible(false);  // UndCC_Valid - same pattern (issue #4878 follow-up)
   }
 };
+
+// Issue #4878 follow-up: implicit-this call to a helper member function
+// whose internal virtual calls all target an unrelated object should not
+// be flagged. Mirrors TableViewDialog::showLegend() from the reporter.
+class QGroupBox4878 : public QWidget4878
+{
+};
+
+class UiTableViewDialog4878
+{
+public:
+  QGroupBox4878 *legendGroupBox;
+};
+
+class TableViewDialog4878 : public QWidget4878
+{
+public:
+  UiTableViewDialog4878 *ui;
+
+  void showLegend(const bool Show) const
+  {
+    ui->legendGroupBox->setVisible(Show); // virtual call on unrelated object
+  }
+
+  TableViewDialog4878()
+    : QWidget4878()
+    , ui(new UiTableViewDialog4878)
+  {
+    showLegend(true); // UndCC_Valid - helper's inner virtual is not on `this`
+  }
+};
+
+// Counter-test: an implicit-this helper that does call a virtual on `this`
+// must still be flagged so we don't regress the legitimate-violation case.
+class HelperOnThis4878
+{
+public:
+  virtual void doIt();
+
+  void helper()
+  {
+    doIt(); // implicit this->doIt() - virtual call on `this`
+  }
+
+  HelperOnThis4878()
+  {
+    helper(); // UndCC_Violation - indirect virtual call on the constructed object
+  }
+};
