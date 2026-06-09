@@ -23,3 +23,19 @@ int main() {
   return 0;
 }
 
+// #4916: an 8-bit destination is not wider than a 16/32-bit operand. Earlier the
+// size comparison was done on strings ("32" < "8"), so any wider operand was
+// treated as narrower and these were flagged.
+void narrow_destination(void) {
+  uint8_t  u8;
+  int32_t  state = 2;
+  uint8_t  dataArr[4] = {0x73, 0xA8, 0xFF, 0x13};
+  uint8_t *dataPtr = &dataArr[0];
+
+  u8 = dataPtr[state] & 0x80;  // UndCC_Valid
+
+  uint8_t *pOut;
+  int32_t  n = 3;
+  pOut = &dataPtr[(uint32_t)n >> 3U];  // UndCC_Valid
+}
+
