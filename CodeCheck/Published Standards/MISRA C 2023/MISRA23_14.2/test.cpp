@@ -1,6 +1,17 @@
 #define UINT_32 unsigned int
 #include <stdint.h>
+#include <string.h>
 int get_status();
+
+// #4916: well-formed loops that were wrongly flagged.
+void misra_4916(const char *s, int32_t x) {
+  char buf[32];
+  int32_t n, k;
+  for (n = 0; n < (int32_t)strlen(s); n++) { }                // UndCC_Valid - pure function as bound
+  for (n = x - 1; n >= 0; n--) { }                            // UndCC_Valid - counter initialized from an object
+  for (k = 0; k < 16; k = k + 4) { }                          // UndCC_Valid - assignment-style increment
+  for (n = 0; n < (int32_t)strlen(s); n++) { buf[n] = s[n]; } // UndCC_Valid - bound object only read in body
+}
 
 uint8_t g_c[10] = {1, 5, 3, 9, 2, 8, 4, 6, 7, 0};
 uint8_t g_array[10][10];
