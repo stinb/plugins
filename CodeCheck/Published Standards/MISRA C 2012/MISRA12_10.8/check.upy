@@ -8,6 +8,33 @@ import Modules
 ERR1 = 'The value of the expression was assigned to a wider or different essential type'
 
 
+def isComposite(openParen):
+    # True if the parenthesized expression has a top-level binary operator.
+    close = Modules.findClose(openParen)
+    if not close:
+        return False
+    alwaysBinary = ('/', '%', '|', '^', '<<', '>>', '?')
+    # +, -, *, & are binary only when they follow a value
+    ambiguous = ('+', '-', '*', '&')
+    depth = 0
+    prevValue = False
+    lex = openParen.next(True, True)
+    while lex and not (lex.line_begin() == close.line_begin() and lex.column_begin() == close.column_begin()):
+        text = lex.text()
+        if text in ('(', '[', '{'):
+            depth += 1
+            prevValue = False
+        elif text in (')', ']', '}'):
+            depth -= 1
+            prevValue = True
+        elif depth == 0 and (text in alwaysBinary or (text in ambiguous and prevValue)):
+            return True
+        else:
+            prevValue = lex.token() in ('Identifier', 'Literal')
+        lex = lex.next(True, True)
+    return False
+
+
 # The ID for the check
 def ids():
     return ('MISRA12_10.8', 'MISRA23_10.8', 'CPP_E078',
@@ -157,6 +184,12 @@ def check(check, file):
                 continue
 
             lexeme = nextLex
+
+        # Rule 10.8 only applies to composite expressions
+        operand = lexeme.next(True, True) if lexeme else None
+        if not (operand and operand.text() == '(' and isComposite(operand)):
+            continue
+
         ok = True
         while lexeme and not re.match(r';|{|}', lexeme.text()):
             # Find ents that have a smaller size than the defined ref
