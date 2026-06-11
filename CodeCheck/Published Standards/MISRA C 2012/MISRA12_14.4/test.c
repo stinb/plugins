@@ -2,6 +2,16 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+// #4916: the rule applies to C if/iteration statements, not preprocessor #if.
+#if ARCH == 7        // UndCC_Valid
+#define A 1
+#elif !defined B && !defined C   // UndCC_Valid
+#define A 2
+#endif
+#if (WORD == 32)     // UndCC_Valid
+#define W 1
+#endif
+
 // MISRA12_14.4
 int main() {
 int32_t *p, *q;
