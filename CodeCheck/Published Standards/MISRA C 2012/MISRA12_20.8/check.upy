@@ -1,0 +1,397 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-06-17
+
+
+ERR1 = 'The controlling expression of #%1 shall evaluate to 0 or 1'
+
+
+# Backslash + newline: the line-continuation token inside a preprocessor
+# directive. It extends the directive across multiple physical lines.
+_LINE_CONT = "\\\n"
+
+# Binary operators whose result is essentially Boolean (always 0 or 1):
+# logical, equality and relational operators.
+_BOOL_OPS = frozenset((
+    "||", "&&", "==", "!=", "<", ">", "<=", ">=",
+))
+
+# Binary operators, mapped to their C precedence. Lower number == looser
+# binding (evaluated last), so the top-level operator with the SMALLEST
+# precedence is the one that determines the type of the whole expression's
+# result. If that operator is in _BOOL_OPS the expression is Boolean (0 or
+# 1); otherwise its value is an unconstrained integer.
+_BINARY_PREC = {
+    "||": 0,
+    "&&": 1,
+    "|": 2,
+    "^": 3,
+    "&": 4,
+    "==": 5, "!=": 5,
+    "<": 6, ">": 6, "<=": 6, ">=": 6,
+    "<<": 7, ">>": 7,
+    "+": 8, "-": 8,
+    "*": 9, "/": 9, "%": 9,
+}
+
+# Multi-character operators, longest first, so the macro-body tokenizer
+# matches e.g. "<<" before "<" and "==" before "=".
+_MULTI_CHAR_OPS = ("||", "&&", "==", "!=", "<=", ">=", "<<", ">>")
+
+# Guard against pathological self-referential macro chains.
+_MAX_MACRO_DEPTH = 16
+
+
+def ids():
+    return ('MISRA12_20.8', 'MISRA23_20.8', 'MISRA25_20.8', 'CPP_PR047')
+
+
+def name(id):
+    title = """\
+20.8 The controlling expression of a #if or #elif preprocessing directive shall evaluate to 0 or 1"""
+    return {
+        'MISRA12_20.8': 'Published Standards/MISRA C 2012/' + title,
+        'MISRA23_20.8': 'Published Standards/MISRA C 2023/' + title,
+        'MISRA25_20.8': 'Published Standards/MISRA C 2025/' + title,
+        'CPP_PR047': 'All Checks/Language Specific/C and C++/Preprocessor/' + """\
+The controlling expression of a #if or #elif preprocessing directive shall evaluate to 0 or 1""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_20.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'MISRA23_20.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'MISRA25_20.8': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'CPP_PR047': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>This rule does not apply to controlling expressions in preprocessing directives which are not evaluated. Controlling expressions are not evaluated if they are within code that is being excluded and cannot have an effect on whether code is excluded or not.</p>
+
+<p><b>Rationale</b></p>
+<p>Strong typing requires the controlling expression of conditional inclusion preprocessing directives to have a Boolean value.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">#define FALSE 0
+#define TRUE 1
+
+#if FALSE               /* Compliant                                       */
+#endif
+
+#if 10                  /* Non-compliant                                   */
+#endif
+
+#if ! defined ( X )     /* Compliant                                       */
+#endif
+
+#if A &gt; B               /* Compliant assuming A and B are numeric */
+#endif</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 14.4</p>
+"""
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    pass
+
+
+def _parse_int_literal(text):
+    """Return the integer value of `text` if it is an integer constant,
+    else None. Accepts decimal, hex (0x), binary (0b) and octal (leading 0)
+    forms, with any combination of standard integer suffixes (u, l, z).
+    Floating-point and character constants return None."""
+    if not text:
+        return None
+    body = text.rstrip("uUlLzZ")
+    if not body:
+        return None
+    try:
+        if body[:2] in ("0x", "0X"):
+            return int(body, 16)
+        if body[:2] in ("0b", "0B"):
+            return int(body, 2)
+        if len(body) > 1 and body[0] == "0":
+            return int(body, 8)
+        return int(body, 10)
+    except ValueError:
+        return None
+
+
+def _advance(lex):
+    """Return the next lexeme that matters for expression analysis, skipping
+    whitespace, comments, and backslash-newline line continuations (which
+    extend the same logical preprocessor line). Real Newline tokens are
+    returned so the caller can detect the end of the directive.
+
+    Note: Lexeme.next(ignore_whitespace=True, ...) silently skips Newline
+    tokens too, which is why we walk with ignore_whitespace=False here."""
+    if lex is None:
+        return None
+    lex = lex.next(False, True)
+    while lex is not None:
+        tok = lex.token()
+        if tok == "Whitespace":
+            lex = lex.next(False, True)
+            continue
+        if tok == "Preprocessor" and lex.text() == _LINE_CONT:
+            lex = lex.next(False, True)
+            continue
+        return lex
+    return None
+
+
+def _collect_directive_expr(lex):
+    """Starting from the `if`/`elif` Preprocessor keyword lexeme, walk forward
+    and return a list of (text, lex) tuples for the controlling expression up
+    to the directive's terminating Newline. Carrying the lex object lets the
+    evaluator resolve identifiers to macro entities."""
+    tokens = []
+    lex = _advance(lex)
+    while lex is not None and lex.token() != "Newline":
+        tokens.append((lex.text(), lex))
+        lex = _advance(lex)
+    return tokens
+
+
+def _tokenize_text(text):
+    """Regex-free tokenizer for macro-body replacement text. Returns a list of
+    (text, None) tuples; the None marks that the token carries no lex object,
+    so identifier resolution via this path is not supported and recursion
+    bottoms out at literals or unresolvable identifiers."""
+    tokens = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c.isalpha() or c == "_":
+            j = i + 1
+            while j < n and (text[j].isalnum() or text[j] == "_"):
+                j += 1
+            tokens.append((text[i:j], None))
+            i = j
+            continue
+        if c.isdigit() or (c == "." and i + 1 < n and text[i + 1].isdigit()):
+            j = i + 1
+            while j < n and (text[j].isalnum() or text[j] in ".+-"):
+                # Allow exponent signs only immediately after e/E.
+                if text[j] in "+-" and text[j - 1] not in "eE":
+                    break
+                j += 1
+            tokens.append((text[i:j], None))
+            i = j
+            continue
+        two = text[i:i + 2]
+        if two in _MULTI_CHAR_OPS:
+            tokens.append((two, None))
+            i += 2
+            continue
+        tokens.append((c, None))
+        i += 1
+    return tokens
+
+
+def _strip_outer_parens(tokens):
+    """If the whole expression is wrapped in a single set of parentheses,
+    return the inner tokens. Repeats for fully-redundant nested parens."""
+    while len(tokens) >= 2 and tokens[0][0] == "(" and tokens[-1][0] == ")":
+        depth = 0
+        matched_last = True
+        for idx, (text, _) in enumerate(tokens):
+            if text == "(":
+                depth += 1
+            elif text == ")":
+                depth -= 1
+                if depth == 0 and idx != len(tokens) - 1:
+                    # First '(' closes before the end: not fully wrapped.
+                    matched_last = False
+                    break
+        if not matched_last:
+            break
+        tokens = tokens[1:-1]
+    return tokens
+
+
+def _is_unary_position(tokens, i):
+    """Return True if the operator at index `i` is in unary position, i.e.
+    there is no operand immediately to its left."""
+    if i == 0:
+        return True
+    prev = tokens[i - 1][0]
+    # An operand to the left is an identifier, a literal, or a ')'.
+    if prev == ")":
+        return False
+    if prev in _BINARY_PREC or prev in ("(", "!", "~", "defined", ","):
+        return True
+    # Identifier or literal to the left -> binary position.
+    return False
+
+
+def _top_level_result_op(tokens):
+    """Return the binary operator (text) that determines the result type of
+    the expression: the one with the lowest precedence at parenthesis depth 0,
+    skipping operators in unary position. Returns None if there is no
+    top-level binary operator."""
+    depth = 0
+    result = None
+    result_prec = None
+    for i, (text, _) in enumerate(tokens):
+        if text == "(":
+            depth += 1
+            continue
+        if text == ")":
+            depth -= 1
+            continue
+        if depth != 0:
+            continue
+        if text in _BINARY_PREC and not _is_unary_position(tokens, i):
+            prec = _BINARY_PREC[text]
+            if result_prec is None or prec < result_prec:
+                result_prec = prec
+                result = text
+    return result
+
+
+def _is_function_like_call(tokens):
+    """Return True if `tokens` is exactly IDENT ( ... ) with the closing paren
+    as the last token: a single function-like macro invocation forming the
+    whole controlling expression (e.g. __has_attribute(x))."""
+    if len(tokens) < 3:
+        return False
+    if tokens[0][1] is None and not (tokens[0][0][:1].isalpha() or tokens[0][0][:1] == "_"):
+        return False
+    if tokens[1][0] != "(" or tokens[-1][0] != ")":
+        return False
+    depth = 0
+    for idx, (text, _) in enumerate(tokens[1:], start=1):
+        if text == "(":
+            depth += 1
+        elif text == ")":
+            depth -= 1
+            if depth == 0:
+                return idx == len(tokens) - 1
+    return False
+
+
+def _macro_body_evaluates_to_zero_or_one(macro_ent, depth):
+    """Resolve `macro_ent`, tokenize its replacement text, and recursively
+    evaluate it. Returns True/False/None as for _evaluate_tokens. Returns None
+    if the macro has no value or the recursion limit is reached."""
+    if macro_ent is None or depth >= _MAX_MACRO_DEPTH:
+        return None
+    value = macro_ent.value()
+    if value is None:
+        return None
+    value = str(value).strip()
+    if value == "":
+        return None
+    return _evaluate_tokens(_tokenize_text(value), depth + 1)
+
+
+def _evaluate_tokens(tokens, depth):
+    """Determine whether the controlling expression `tokens` evaluates to 0 or
+    1. Returns True if it definitely does, False if it definitely does not,
+    and None if it cannot be determined (so the caller does not report it).
+
+    `tokens` is a list of (text, lex_or_None) tuples; an identifier with a lex
+    object can be resolved to its macro definition, allowing recursion through
+    object-like macros such as `#define FALSE 0`."""
+    tokens = _strip_outer_parens(tokens)
+    if not tokens:
+        return None
+
+    # The lowest-precedence top-level operator dictates the result type.
+    op = _top_level_result_op(tokens)
+    if op is not None:
+        return op in _BOOL_OPS
+
+    first = tokens[0][0]
+
+    # Leading logical NOT or the `defined` operator yields a Boolean result.
+    if first in ("!", "defined"):
+        return True
+
+    # A single token: a literal, or an identifier we may be able to resolve.
+    if len(tokens) == 1:
+        value = _parse_int_literal(first)
+        if value is not None:
+            return value in (0, 1)
+        lex = tokens[0][1]
+        if lex is not None:
+            ent = lex.ent()
+            if ent is not None and ent.kind().check("Macro") \
+                    and not ent.kind().check("Unresolved"):
+                return _macro_body_evaluates_to_zero_or_one(ent, depth)
+        return None
+
+    # A single function-like macro call: arguments are substituted on
+    # expansion, so we cannot statically resolve the result. Do not report.
+    if _is_function_like_call(tokens):
+        return None
+
+    # Anything else (ternaries, unary +/-/~ expressions, sequences we do not
+    # model) is treated as indeterminate so we never raise a false positive.
+    return None
+
+
+# Limitation: the Amplification exempts expressions inside excluded code (e.g.
+# a nested #if within an inactive #if 0 block). Detecting exclusion statically
+# is out of scope, so such directives are still examined (may over-report).
+def check(check, file):
+    lexer = file.lexer(lookup_ents=True)
+    if not lexer:
+        return
+
+    lex = lexer.first()
+    while lex is not None:
+        if lex.token() == "Preprocessor" and lex.text() == "#":
+            nxt = lex.next(ignore_whitespace=True, ignore_comments=True)
+            if nxt is not None and nxt.token() == "Preprocessor" \
+                    and nxt.text() in ("if", "elif"):
+                directive = nxt.text()
+                tokens = _collect_directive_expr(nxt)
+                if tokens and _evaluate_tokens(tokens, 0) is False:
+                    check.violation(None, file, nxt.line_begin(),
+                                    nxt.column_begin(), ERR1, directive)
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
