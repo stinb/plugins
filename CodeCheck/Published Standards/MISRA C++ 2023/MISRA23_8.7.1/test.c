@@ -84,9 +84,37 @@ void test_mem_functions(void)
   memcpy(buf1, buf2, 16);         /* UndCC_Valid */
   memmove(buf1, buf2, 8);         /* UndCC_Valid */
 
-  (void)memcmp(buf1, buf2, 17);   /* UndCC_Violation size > buffer element count */
-  memcpy(buf1, buf2, 32);         /* UndCC_Violation size > buffer element count */
-  memmove(buf1, buf2, 17);        /* UndCC_Violation size > buffer element count */
+  (void)memcmp(buf1, buf2, 17);   /* UndCC_Violation size > buffer bytes */
+  memcpy(buf1, buf2, 32);         /* UndCC_Violation size > buffer bytes */
+  memmove(buf1, buf2, 17);        /* UndCC_Violation size > buffer bytes */
+}
+
+/* ===== Multi-byte element arrays - size argument is in bytes, not elements,
+ * so it must be compared against the array's total byte size (issue #4931). */
+void test_mem_multibyte_elements(void)
+{
+  uint32_t w[64];                 /* 256 bytes */
+  int ip_addr[4];                 /* 16 bytes */
+
+  memset(w, 0, sizeof(w));                 /* UndCC_Valid */
+  memset(w, 0, sizeof(uint32_t) * 64);     /* UndCC_Valid */
+  memset(ip_addr, 0, sizeof(ip_addr));     /* UndCC_Valid */
+  memset(ip_addr, 0, 16);                  /* UndCC_Valid */
+  memcpy(w, w, 256);                       /* UndCC_Valid */
+
+  memset(w, 0, 257);                       /* UndCC_Violation size > buffer bytes */
+  memset(ip_addr, 0, 17);                  /* UndCC_Violation size > buffer bytes */
+}
+
+/* ===== Multi-dimensional array - total byte size spans all dimensions ===== */
+void test_mem_multidim(void)
+{
+  uint32_t grid[4][8];            /* 128 bytes */
+
+  memset(grid, 0, sizeof(grid));  /* UndCC_Valid */
+  memset(grid, 0, 128);           /* UndCC_Valid */
+
+  memset(grid, 0, 129);           /* UndCC_Violation size > buffer bytes */
 }
 
 /* ===== Struct member array - ConstantArrayType through member access ===== */

@@ -2,11 +2,13 @@
 // provide the standard library headers, so stdlib types and functions used by
 // the test are declared here directly (see CLAUDE-testing.md).
 typedef unsigned char uint8_t;
+typedef unsigned int uint32_t;
 
 extern "C" {
   int memcmp(const void *, const void *, unsigned long);
   void *memcpy(void *, const void *, unsigned long);
   void *memmove(void *, const void *, unsigned long);
+  void *memset(void *, int, unsigned long);
 }
 
 namespace std {
@@ -113,9 +115,27 @@ void test_mem_functions()
   memcpy(buf1, buf2, 16);         // UndCC_Valid
   memmove(buf1, buf2, 8);         // UndCC_Valid
 
-  (void)memcmp(buf1, buf2, 17);   // UndCC_Violation size > buffer element count
-  memcpy(buf1, buf2, 32);         // UndCC_Violation size > buffer element count
-  memmove(buf1, buf2, 17);        // UndCC_Violation size > buffer element count
+  (void)memcmp(buf1, buf2, 17);   // UndCC_Violation size > buffer bytes
+  memcpy(buf1, buf2, 32);         // UndCC_Violation size > buffer bytes
+  memmove(buf1, buf2, 17);        // UndCC_Violation size > buffer bytes
+}
+
+// ---------------------------------------------------------------------------
+// Multi-byte element arrays - the size argument is in bytes, not elements, so
+// it must be compared against the array's total byte size (issue #4931).
+// ---------------------------------------------------------------------------
+void test_mem_multibyte_elements()
+{
+  uint32_t w[64];                       // 256 bytes
+  int ip_addr[4];                       // 16 bytes
+
+  memset(w, 0, sizeof(w));              // UndCC_Valid
+  memset(w, 0, sizeof(uint32_t) * 64);  // UndCC_Valid
+  memset(ip_addr, 0, sizeof(ip_addr));  // UndCC_Valid
+  memcpy(w, w, 256);                    // UndCC_Valid
+
+  memset(w, 0, 257);                    // UndCC_Violation size > buffer bytes
+  memset(ip_addr, 0, 17);               // UndCC_Violation size > buffer bytes
 }
 
 // ---------------------------------------------------------------------------
