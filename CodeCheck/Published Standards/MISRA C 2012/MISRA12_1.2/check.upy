@@ -1,0 +1,176 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-06-18
+
+
+ERR1 = "Use of language extension '%1'"
+ERR2 = "Use of statement expression, a language extension"
+
+
+# Well-known non-standard keyword tokens. MISRA notes that this rule cannot be
+# fully automated, so the set is deliberately conservative: every entry lives
+# in the implementation's reserved (double-underscore) namespace, so matching
+# one is strong evidence of a genuine language extension rather than ordinary
+# user code. Standard reserved identifiers such as __FILE__, __LINE__,
+# __func__ and __VA_ARGS__ are intentionally excluded.
+_GNU_CLANG = frozenset((
+    "__attribute__", "__attribute",
+    "__typeof__", "__typeof",
+    "__asm__", "__asm",
+    "__inline__", "__inline",
+    "__volatile__", "__volatile",
+    "__signed__", "__signed",
+    "__const__", "__const",
+    "__restrict__", "__restrict",
+    "__extension__",
+    "__alignof__",
+    "__label__",
+    "__real__", "__imag__",
+    "__complex__",
+    "__int128", "__int128_t", "__uint128_t",
+    "__float128", "__float80",
+    "__thread",
+    "__null",
+))
+
+_MICROSOFT = frozenset((
+    "__declspec",
+    "__cdecl", "__stdcall", "__fastcall", "__thiscall", "__vectorcall",
+    "__forceinline",
+    "__try", "__except", "__finally", "__leave",
+    "__int8", "__int16", "__int32", "__int64",
+    "__based", "__unaligned", "__w64",
+    "__sptr", "__uptr", "__ptr32", "__ptr64",
+    "__assume", "__noop",
+    "__super", "__interface",
+))
+
+_EXTENSION_KEYWORDS = _GNU_CLANG | _MICROSOFT
+
+# GNU/Clang intrinsics such as __builtin_expect or __builtin_clz share this
+# prefix; matched separately so the table does not have to list each one.
+_BUILTIN_PREFIX = "__builtin_"
+
+# Token kinds whose text may name an identifier-like extension keyword. Strings
+# and comments are separate token kinds, so they are never examined.
+_NAME_TOKENS = frozenset(("Keyword", "Identifier"))
+
+
+def ids():
+    return ('MISRA12_1.2', 'MISRA23_1.2', 'MISRA25_DIR_1.2', 'CPP_U012')
+
+
+def name(id):
+    return {
+        'MISRA12_1.2': '''Published Standards/MISRA C 2012/\
+1.2 Language extensions should not be used (Partial)''',
+        'MISRA23_1.2': '''Published Standards/MISRA C 2023/\
+1.2 Language extensions should not be used (Partial)''',
+        'MISRA25_DIR_1.2': '''Published Standards/MISRA C 2025/\
+Directive 1.2 The use of language extensions should be minimized (Partial)''',
+        'CPP_U012': '''All Checks/Language Specific/C and C++/Unnecessary Constructs/\
+Language extensions should not be used (Partial)''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA12_1.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2012',
+            'Category: Advisory',
+            'Unnecessary Constructs',
+        ],
+        'MISRA23_1.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Advisory',
+            'Unnecessary Constructs',
+        ],
+        'MISRA25_DIR_1.2': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2025',
+            'Category: Advisory',
+            'Unnecessary Constructs',
+        ],
+        'CPP_U012': [
+            'Language: C',
+            'Language: C++',
+            'Unnecessary Constructs',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    if id == 'MISRA25_DIR_1.2':
+        return """\
+<p><b>Rationale</b></p>
+<p>A program that relies on language extensions may be less portable than one that does not. Although the C Standard requires that a conforming implementation document any extensions that it provides to the language, there is a risk that this documentation might not provide a full description of the behaviour in all circumstances.</p>
+<p>If this directive is not applied, the decision to use each language extension should be justified in the project's design documentation. The methods by which valid use of each extension will be assured, for example checking the compiler and its diagnostics, should also be documented.</p>
+<p>It is recognized that it is necessary to use language extensions in embedded systems. The C Standard requires that an extension does not alter the behaviour of any strictly conforming program. For example, a compiler might implement, as an extension, full evaluation of binary logical operators even though the C Standard specifies that evaluation stops as soon as the result can be determined. Such an extension does not conform to the C Standard because side effects in the right-hand operand of a logical AND operator would always occur, giving rise to a different behaviour.</p>
+
+<p><b>See also</b></p>
+<p>Rule 1.1</p>
+
+<p><b>Note on automation</b></p>
+<p>MISRA states that this directive cannot be fully automated. This check is conservative: it reports the use of well-known non-standard keywords (such as the GNU and Microsoft extensions) and statement expressions. It cannot detect every possible extension, so the absence of a violation does not guarantee that no extension is used.</p>
+"""
+    return """\
+<p><b>Rationale</b></p>
+<p>A program that relies on language extensions may be less portable than one that does not. Although the C Standard requires that a conforming implementation document any extensions that it provides to the language, there is a risk that this documentation might not provide a full description of the behaviour in all circumstances.</p>
+<p>If this rule is not applied, the decision to use each language extension should be documented.</p>
+
+<p><b>Note on automation</b></p>
+<p>MISRA states that this rule cannot be fully automated. This check is conservative: it reports the use of well-known non-standard keywords (such as the GNU and Microsoft extensions) and statement expressions. It cannot detect every possible extension, so the absence of a violation does not guarantee that no extension is used.</p>
+"""
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def test_entity(file):
+    return file.kind().check('Code File, Header File')
+
+
+def test_global():
+    return False
+
+
+def define_options(check):
+    pass
+
+
+def check(check, file):
+    lexer = file.lexer(False)
+    if not lexer:
+        return
+
+    # A '(' immediately followed by '{' is a GNU statement expression. In C no
+    # standard construct places a brace directly after an open paren, so the
+    # pattern is unambiguous. In C++ a braced-init-list argument - f({1, 2}) -
+    # produces the same token pair, so statement expressions are only detected
+    # in C to avoid false positives.
+    detect_stmt_expr = file.file_type() == 'C'
+
+    prev_text = None
+    lex = lexer.first()
+    while lex is not None:
+        token = lex.token()
+        text = lex.text()
+
+        if token in _NAME_TOKENS \
+                and (text in _EXTENSION_KEYWORDS
+                     or text.startswith(_BUILTIN_PREFIX)):
+            check.violation(None, file, lex.line_begin(),
+                            lex.column_begin(), ERR1, text)
+
+        elif detect_stmt_expr and text == "{" and prev_text == "(":
+            check.violation(None, file, lex.line_begin(),
+                            lex.column_begin(), ERR2)
+
+        prev_text = text
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
