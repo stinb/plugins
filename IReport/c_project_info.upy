@@ -1,0 +1,329 @@
+def name():
+    return "C Project Information"
+
+
+def test_global(db):
+    """
+    Optional method, return true for project level reports
+    """
+    return True
+
+
+def description():
+    return '''A script for C projects that generates a text file containing information on its modules.'''
+
+
+def get_modules(target):
+    files = target.ents("C File, C Header")
+    file_names = {}
+    modules = {}
+
+    for file in files:
+        curr_fname = str(file.name())
+        fname = curr_fname.split(".")[0]
+
+        if fname not in file_names:
+            file_names[fname] = file
+        else:
+            stored_file = file_names[fname]
+            stored_fname = stored_file.name()
+
+            if ((stored_fname.endswith(".c") and curr_fname.endswith(".h"))
+                    or (stored_fname.endswith(".h") and curr_fname.endswith(".c"))):
+                modules[fname] = [file, stored_file]
+
+    return modules
+
+
+def is_standard(ent):
+    return str(ent.library()) == "standard"
+
+
+def get_reqs(file, module, req_macs, req_vars, req_types, req_funcs):
+    deps = file.depends()
+
+    for dep_file, dep_refs in deps.items():
+        fname = str(dep_file.name()).split(".")[0]
+
+        if fname == module:
+            continue
+
+        for dep_ref in dep_refs:
+            ent_id = dep_ref.ent().id()
+
+            if dep_ref.ent().kind().check("Object"):
+                if ent_id not in req_vars:
+                    req_vars[ent_id] = dep_ref.ent()
+            elif dep_ref.ent().kind().check("Type"):
+                if ent_id not in req_types:
+                    req_types[ent_id] = dep_ref.ent()
+            elif dep_ref.ent().kind().check("Function, Macro Functional"):
+                if ent_id not in req_funcs:
+                    req_funcs[ent_id] = dep_ref.ent()
+            elif dep_ref.ent().kind().check("Macro ~Functional"):
+                if ent_id not in req_macs:
+                    req_macs[ent_id] = dep_ref.ent()
+
+
+# Report generation
+def generate(report, target):
+    und_name = target.name()
+    und_name = und_name.split("/")[-1].split(".")[0]
+    file_name = f"{und_name}_C_Project_Information.txt"
+    txtfile = open(file_name, 'w')
+    modules = get_modules(target)
+
+    for module, files in modules.items():
+        hfile = None
+        cfile = None
+        all_funcs = {}
+
+        for file in files:
+            if str(file.name()).endswith(".c"):
+                cfile = file
+            else:
+                hfile = file
+
+        txtfile.write(f"========== MODULE: {module} ==========\n\n")
+        txtfile.write(f"PROVIDED INTERFACE\n\n")
+        txtfile.write(f"\tGLOBAL VARIABLES:\n")
+
+        gobj_refs = hfile.filerefs("Define, Declare", "Global Object", True)
+
+        if not gobj_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for gobj_ref in gobj_refs:
+            txtfile.write(
+                f"\t\t{gobj_ref.ent().type()} {gobj_ref.ent().name()};\n")
+
+        txtfile.write(f"\n\tTYPES:\n")
+
+        type_refs = hfile.filerefs("Define, Declare", "Type", True)
+
+        if not type_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for type_ref in type_refs:
+            txtfile.write(
+                f"\t\t{type_ref.ent().name()}; ({type_ref.ent().kindname()})\n")
+
+        txtfile.write(f"\n\tMACROS:\n")
+
+        macro_refs = hfile.filerefs(
+            "Define, Declare", "Macro ~Functional", True)
+
+        if not macro_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for macro_ref in macro_refs:
+            val = macro_ref.ent().value() if macro_ref.ent().value() else ""
+            txtfile.write(f"\t\t{macro_ref.ent().name()} {val}\n")
+
+        txtfile.write(f"\n\tFUNCTIONS:\n")
+
+        func_refs = hfile.filerefs(
+            "Define, Declare", "Function, Macro Functional", True)
+
+        if not func_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for func_ref in func_refs:
+            func_ent = func_ref.ent()
+
+            if func_ent.kind().check("Macro"):
+                txtfile.write(
+                    f"\t\t{func_ent.name()}({func_ent.parameters()}) {func_ent.value()}\n")
+            else:
+                txtfile.write(
+                    f"\t\t{func_ent.type()} {func_ent.name()} ({func_ent.parameters()});\n")
+
+            if func_ent.id() not in all_funcs:
+                all_funcs[func_ent.id()] = func_ent
+
+        txtfile.write(f"\nREQUIRED INTERFACE\n\n")
+        txtfile.write(f"\tINCLUDED HEADERS:\n")
+
+        header_refs = cfile.filerefs("Include", "File", True)
+
+        if not header_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for header_ref in header_refs:
+            if is_standard(header_ref.ent()):
+                continue
+
+            txtfile.write(f"\t\t{header_ref.ent().name()}\n")
+
+        req_macs = {}
+        req_vars = {}
+        req_types = {}
+        req_funcs = {}
+
+        get_reqs(cfile, module, req_macs, req_vars, req_types, req_funcs)
+
+        txtfile.write(f"\n\tUSED MACROS:\n")
+
+        if not req_macs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for mac_ent in req_macs.values():
+            txtfile.write(f"\t\t{mac_ent.name()} {mac_ent.type()}\n")
+
+        txtfile.write(f"\n\tUSED TYPES:\n")
+
+        if not req_types:
+            txtfile.write(f"\t\tNONE\n")
+
+        for type_ent in req_types.values():
+            txtfile.write(f"\t\t{type_ent.type()} {type_ent.name()};\n")
+
+        txtfile.write(f"\n\tUSED VARIABLES:\n")
+
+        if not req_vars:
+            txtfile.write(f"\t\tNONE\n")
+
+        for var_ent in req_vars.values():
+            txtfile.write(f"\t\t{var_ent.type()} {var_ent.name()};\n")
+
+        txtfile.write(f"\n\tUSED FUNCTIONS:\n")
+
+        if not req_funcs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for func_ent in req_funcs.values():
+            txtfile.write(f"\t\t{func_ent.type()} {func_ent.name()};\n")
+
+        txtfile.write(f"\nINTERNAL INTERFACE\n\n")
+        txtfile.write(f"\tINTERNAL MACROS:\n")
+
+        macro_refs = cfile.filerefs(
+            "Define, Declare", "Macro ~Functional", True)
+
+        if not macro_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for macro_ref in macro_refs:
+            val = macro_ref.ent().value() if macro_ref.ent().value() else ""
+            txtfile.write(f"\t\t{macro_ref.ent().name()} {val}\n")
+
+        txtfile.write(f"\n\tINTERNAL TYPES:\n")
+
+        type_refs = cfile.filerefs("Define, Declare", "Type", True)
+
+        if not type_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for type_ref in type_refs:
+            txtfile.write(
+                f"\t\t{type_ref.ent().name()}; ({type_ref.ent().kindname()})\n")
+
+        txtfile.write(f"\n\tINTERNAL DATA:\n")
+
+        obj_refs = cfile.filerefs("Define, Declare", "Static Object", True)
+
+        if not obj_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for obj_ref in obj_refs:
+            txtfile.write(
+                f"\t\t{obj_ref.ent().type()} {obj_ref.ent().name()};\n")
+
+        txtfile.write(f"\n\tINTERNAL FUNCTIONS:\n")
+
+        func_refs = cfile.filerefs(
+            "Define, Declare", "Function, Macro Functional", True)
+
+        if not func_refs:
+            txtfile.write(f"\t\tNONE\n")
+
+        for func_ref in func_refs:
+            func_ent = func_ref.ent()
+
+            if func_ent.kind().check("Macro"):
+                txtfile.write(
+                    f"\t\t{func_ent.name()}({func_ent.parameters()}) {func_ent.value()}\n")
+            else:
+                txtfile.write(
+                    f"\t\t{func_ent.type()} {func_ent.name()} ({func_ent.parameters()});\n")
+
+            if func_ent.id() not in all_funcs:
+                all_funcs[func_ent.id()] = func_ent
+
+        if all_funcs:
+            txtfile.write(f"\nFUNCTIONS\n")
+
+            for func_ent in all_funcs.values():
+                if func_ent.kind().check("Macro"):
+                    txtfile.write(
+                        f"\n\t{func_ent.name()}({func_ent.parameters()}) {func_ent.value()}\n\n")
+                else:
+                    txtfile.write(
+                        f"\n\t{func_ent.type()} {func_ent.name()} ({func_ent.parameters()});\n\n")
+
+                txtfile.write(f"\t\tREQUIRED HEADERS:\n")
+
+                req_headers = {}
+
+                for all_ref in func_ent.refs(""):
+                    href = all_ref.ent().ref("Declarein, Definein", "Header")
+
+                    if href and href.ent().id() not in req_headers:
+                        req_headers[href.ent().id()] = href.ent()
+
+                if not req_headers:
+                    txtfile.write(f"\t\t\tNONE\n")
+
+                for req_header in req_headers.values():
+                    txtfile.write(f"\t\t\t{req_header.name()}\n")
+
+                txtfile.write(f"\n\t\tUSED VARIABLES:\n")
+
+                obj_refs = func_ent.refs(
+                    "~Define ~Definein ~Declare ~Declarein", "Object", True)
+
+                if not obj_refs:
+                    txtfile.write(f"\t\t\tNONE\n")
+
+                for obj_ref in obj_refs:
+                    txtfile.write(
+                        f"\t\t\t{obj_ref.ent().type()} {obj_ref.ent().name()};\n")
+
+                txtfile.write(f"\n\t\tCALLED FUNCTIONS:\n")
+
+                func_refs = func_ent.refs("Call ~Implicit", "Function", True)
+
+                if not func_refs:
+                    txtfile.write(f"\t\t\tNONE\n")
+
+                for func_ref in func_refs:
+                    func_ref_ent = func_ref.ent()
+                    txtfile.write(
+                        f"\t\t\t{func_ref_ent.type()} {func_ref_ent.name()} ({func_ref_ent.parameters()});\n")
+
+                txtfile.write(f"\n\t\tINTERNAL VARIABLES:\n")
+
+                obj_refs = func_ent.refs("Define, Declare", "Object", True)
+
+                if not obj_refs:
+                    txtfile.write(f"\t\t\tNONE\n")
+
+                for obj_ref in obj_refs:
+                    txtfile.write(
+                        f"\t\t\t{obj_ref.ent().type()} {obj_ref.ent().name()};\n")
+
+                txtfile.write(f"\n\t\tINTERNAL TYPES:\n")
+
+                type_refs = func_ent.refs("Define, Declare", "Type", True)
+
+                if not type_refs:
+                    txtfile.write(f"\t\t\tNONE\n")
+
+                for type_ref in type_refs:
+                    txtfile.write(
+                        f"\t\t\t{type_ref.ent().name()}; ({type_ref.ent().kindname()})\n")
+
+        txtfile.write(f"\n")
+
+    txtfile.close()
+    report.print(f"{file_name} has been created in the project folder.")
