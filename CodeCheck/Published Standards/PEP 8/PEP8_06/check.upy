@@ -1,0 +1,275 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 6-22-26
+
+
+import re
+
+
+ERR1 = 'Imports should be on separate lines'
+ERR2 = 'Wildcard import "from %1 import *" should be avoided'
+ERR3 = 'Imports should be placed at the top of the file'
+
+
+# Tokens that are not part of a statement's meaningful content.
+_SKIP_TOKENS = ('Whitespace', 'Comment', 'Newline', 'Indent', 'Dedent')
+
+# Top-level statements that PEP 8 permits before the imports, and that
+# pycodestyle's E402 also tolerates: conditional/guard blocks around
+# imports. These do not count as the "code" that imports must precede.
+_ALLOWED_KEYWORDS = {'try', 'except', 'else', 'finally', 'with', 'if', 'elif'}
+
+# Dunder names like __all__ / __version__ may be assigned before imports.
+_DUNDER_RE = re.compile(r'^__\w+__$')
+
+
+def ids():
+    return ('PEP8_06', 'PYTH_09')
+
+
+def name(id):
+    return {
+        'PEP8_06': 'Published Standards/PEP 8/Imports',
+        'PYTH_09': 'All Checks/Language Specific/Python/Styling/Imports',
+    }[id]
+
+
+def tags(id):
+    return {
+        'PEP8_06': [
+            'Language: Python',
+            'Standard: PEP 8',
+            'Styling',
+        ],
+        'PYTH_09': [
+            'Language: Python',
+            'Styling',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    desc = {
+        'PEP8_06': '''\
+<p><b>Imports</b></p>
+<ul>
+<li><p>Imports should usually be on separate lines:</p>
+<pre><code language="Python"># Correct:
+import os
+import sys
+
+# Wrong:
+import sys, os
+</code></pre>
+<p>It's okay to say this though:</p>
+<pre><code language="Python"># Correct:
+from subprocess import Popen, PIPE
+</code></pre></li>
+<li><p>Imports are always put at the top of the file, just after any
+module comments and docstrings, and before module globals and
+constants.</p>
+<p>Imports should be grouped in the following order:</p>
+<ol>
+<li>Standard library imports.</li>
+<li>Related third party imports.</li>
+<li>Local application/library specific imports.</li>
+</ol>
+<p>You should put a blank line between each group of imports.</p></li>
+<li><p>Absolute imports are recommended, as they are usually more
+readable and tend to be better behaved (or at least give better error
+messages) if the import system is incorrectly configured (such as when
+a directory inside a package ends up on <code>sys.path</code>):</p>
+<pre><code language="Python">import mypkg.sibling
+from mypkg import sibling
+from mypkg.sibling import example
+</code></pre>
+<p>However, explicit relative imports are an acceptable alternative to
+absolute imports, especially when dealing with complex package layouts
+where using absolute imports would be unnecessarily verbose:</p>
+<pre><code language="Python">from . import sibling
+from .sibling import example
+</code></pre>
+<p>Standard library code should avoid complex package layouts and always
+use absolute imports.</p></li>
+<li><p>When importing a class from a class-containing module, it's
+usually okay to spell this:</p>
+<pre><code language="Python">from myclass import MyClass
+from foo.bar.yourclass import YourClass
+</code></pre>
+<p>If this spelling causes local name clashes, then spell them
+explicitly:</p>
+<pre><code language="Python">import myclass
+import foo.bar.yourclass
+</code></pre>
+<p>and use <code>myclass.MyClass</code> and
+<code>foo.bar.yourclass.YourClass</code>.</p></li>
+<li><p>Wildcard imports (<code>from &lt;module&gt; import *</code>) should
+be avoided, as they make it unclear which names are present in the
+namespace, confusing both readers and many automated tools. There is one
+defensible use case for a wildcard import, which is to republish an
+internal interface as part of a public API (for example, overwriting a
+pure Python implementation of an interface with the definitions from an
+optional accelerator module and exactly which definitions will be
+overwritten isn't known in advance).</p>
+<p>When republishing names this way, the guidelines below regarding
+public and internal interfaces still apply.</p></li>
+</ul>
+<p>Reference: <i>https://peps.python.org/pep-0008/#imports</i></p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check enforces the three objectively verifiable rules from PEP
+8's Imports section:</p>
+<ul>
+<li>A plain <code>import</code> statement that imports more than one
+module on a single line (e.g. <code>import sys, os</code>) is flagged.
+The <code>from module import name1, name2</code> form is explicitly
+permitted by PEP 8 and is not flagged.</li>
+<li>Wildcard imports (<code>from module import *</code>) are flagged.</li>
+<li>A module-level <code>import</code> or <code>from ... import</code>
+that appears after other code is flagged. Module docstrings, comments,
+<code>__future__</code> imports, dunder assignments (e.g.
+<code>__all__</code>, <code>__version__</code>), and conditional/guard
+statements (<code>if</code>, <code>elif</code>, <code>else</code>,
+<code>try</code>, <code>except</code>, <code>finally</code>,
+<code>with</code>) are permitted before the imports. Imports nested
+inside a function, class, or other block are not subject to this
+rule.</li>
+</ul>
+<p>The remaining guidance is not enforced because it cannot be checked
+reliably:</p>
+<ul>
+<li>Grouping imports into standard-library, third-party, and local
+groups separated by blank lines requires knowing the origin of each
+imported module.</li>
+<li>The preference for absolute over relative imports is not flagged,
+since PEP 8 accepts both forms.</li>
+<li>Whether to import a class directly or import its module is a
+stylistic choice that depends on local name clashes.</li>
+</ul>
+''',
+    }
+
+    desc['PYTH_09'] = desc['PEP8_06']
+
+    return desc[id]
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Python'
+
+
+def _meaningful_tokens(lexer):
+    """Group the lexer stream into logical statements.
+
+    Each statement is a list of meaningful lexemes (no whitespace,
+    comments, or newlines). Logical lines are joined across bracketed
+    continuations and backslash line-joiners; statements separated by a
+    top-level ';' are split apart.
+    """
+    statements = []
+    cur = []
+    depth = 0
+    prev_line = None
+    pending_backslash = False
+
+    lex = lexer.first()
+    while lex:
+        tok = lex.token()
+        if tok == 'Continuation':
+            pending_backslash = True
+            lex = lex.next()
+            continue
+        if tok in _SKIP_TOKENS:
+            lex = lex.next()
+            continue
+
+        line = lex.line_begin()
+        if cur and depth == 0 and line != prev_line and not pending_backslash:
+            statements.append(cur)
+            cur = []
+        pending_backslash = False
+
+        text = lex.text()
+        if text == ';' and depth == 0:
+            if cur:
+                statements.append(cur)
+                cur = []
+            prev_line = line
+            lex = lex.next()
+            continue
+
+        cur.append(lex)
+        if text in ('(', '[', '{'):
+            depth += 1
+        elif text in (')', ']', '}'):
+            depth = max(0, depth - 1)
+        prev_line = line
+        lex = lex.next()
+
+    if cur:
+        statements.append(cur)
+    return statements
+
+
+def _module_name(st):
+    """Join the tokens between 'from' and 'import' into the module path."""
+    parts = []
+    for lex in st[1:]:
+        if lex.token() == 'Keyword' and lex.text() == 'import':
+            break
+        parts.append(lex.text())
+    return ''.join(parts)
+
+
+def _is_docstring(st):
+    return all(lex.token() == 'String' for lex in st)
+
+
+def _is_dunder_assignment(st):
+    first = st[0]
+    return (first.token() == 'Identifier'
+            and _DUNDER_RE.match(first.text())
+            and any(lex.text() == '=' for lex in st))
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    if not lexer:
+        return
+
+    seen_code = False
+    for st in _meaningful_tokens(lexer):
+        first = st[0]
+        line = first.line_begin()
+        col = first.column_begin()
+        is_import = first.token() == 'Keyword' and first.text() == 'import'
+        is_from = first.token() == 'Keyword' and first.text() == 'from'
+
+        # Rule 1: a plain import of multiple modules (comma-separated).
+        if is_import and any(lex.text() == ',' for lex in st):
+            check.violation(None, file, line, col, ERR1)
+
+        # Rule 2: wildcard import.
+        if is_from and any(lex.text() == '*' for lex in st):
+            check.violation(None, file, line, col, ERR2, _module_name(st))
+
+        # Rule 3: module-level imports must precede other code. Only
+        # statements at indentation 0 are module level.
+        if col == 1:
+            if is_import or is_from:
+                if seen_code:
+                    check.violation(None, file, line, col, ERR3)
+            elif _is_docstring(st) or _is_dunder_assignment(st):
+                pass
+            elif first.token() == 'Keyword' and first.text() in _ALLOWED_KEYWORDS:
+                pass
+            else:
+                seen_code = True
