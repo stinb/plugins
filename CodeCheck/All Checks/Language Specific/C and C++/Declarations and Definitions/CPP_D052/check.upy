@@ -154,10 +154,49 @@ def normal_identifier(lexeme):
     return True
 
 
+def is_parameter_name(lexeme, param_ent):
+    # The name token resolves to the parameter; a template argument in the type
+    # (the 'T' in 'VoteItem<T> p') does not.
+    return bool(lexeme and lexeme.ent() and lexeme.ent().id() == param_ent.id())
+
+
+def non_spurious_param_refs(ent):
+    # Drop spurious refs on a template argument in the parameter type: among
+    # same-line refs of one kind, keep those on the name, else all.
+    refs = ent.refs('Declare, Define', 'Parameter', False)
+
+    groups = {}
+    for i, ref in enumerate(refs):
+        key = (ref.ent().id(), ref.kindname(), ref.file().id(), ref.line())
+        groups.setdefault(key, []).append(i)
+
+    drop = set()
+    for indices in groups.values():
+        if len(indices) < 2:
+            continue
+        named = [i for i in indices
+                 if is_parameter_name(refs[i].file().lexer().lexeme(refs[i].line(), refs[i].column()), refs[i].ent())]
+        if named:
+            drop.update(i for i in indices if i not in named)
+
+    return [ref for i, ref in enumerate(refs) if i not in drop]
+
+
+def unique_param_refs(ent):
+    seen = set()
+    result = []
+    for ref in non_spurious_param_refs(ent):
+        if ref.ent().id() not in seen:
+            seen.add(ref.ent().id())
+            result.append(ref)
+    return result
+
+
 def check(check):
     for func_ent in sorted(check.db().ents('Function ~Lambda'), key=lambda ent: ent.id()):
-        param_count = len(func_ent.refs('Declare, Define', 'Parameter', True))
-        param_refs = sorted(func_ent.refs('Declare, Define', 'Parameter', False), key=lambda ref: ref.file().longname())
+        cleaned_refs = non_spurious_param_refs(func_ent)
+        param_count = len({ref.ent().id() for ref in cleaned_refs})
+        param_refs = sorted(cleaned_refs, key=lambda ref: ref.file().longname())
 
         # Get original parameters
         original_params = []
@@ -190,7 +229,7 @@ def check(check):
 
         # Overrides
         for over_ref in func_ent.refs("Overriddenby"):
-            oparam_refs = over_ref.ent().refs('Declare, Define', 'Parameter', True)
+            oparam_refs = unique_param_refs(over_ref.ent())
 
             for i in range(0, param_count):
                 oparam_ref = oparam_refs[i]
