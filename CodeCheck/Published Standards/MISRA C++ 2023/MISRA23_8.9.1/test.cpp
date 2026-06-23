@@ -200,3 +200,18 @@ void f14()
     if ("MISRA" < "C++") {} // UndCC_Violation - different string literals
     if ("Test" < "Test") {} // UndCC_Valid - same literal (same pointer)
 }
+
+// Test 16: Pointer member vs array member of same struct (issue #4954)
+struct Eval {
+    char linebuf[256];
+    char *lspend; // points into linebuf
+    char abuf[64];
+    char *aptr; // points into abuf
+};
+
+void f15(Eval *eval)
+{
+    if (eval->lspend > eval->linebuf) {} // UndCC_Valid - pointer member may point into array member
+    if (eval->aptr > eval->abuf) {} // UndCC_Valid - pointer member may point into array member
+    if (eval->aptr >= &eval->abuf[63]) {} // UndCC_Valid - pointer member may point into array member
+}
