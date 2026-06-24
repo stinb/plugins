@@ -1,37 +1,48 @@
 // Custom
 
-void invalidCallers() // UndCC_Violation
+void validCall1()
 {
-  ;
 }
 
-void validCaller1()
+void validCall2()
 {
-  invalidCallers();
 }
 
-void validCaller2()
+void validCall3()
 {
-  invalidCallers();
 }
 
-void validCaller3()
+void validCall4()
 {
-  invalidCallers();
 }
 
-void validCaller4()
+void validCall5()
 {
-  invalidCallers();
 }
 
-void validCaller5()
+void validCall6()
 {
-  invalidCallers();
+  validCall1();
 }
 
-void validCaller6()
+void validCall7()
 {
-  validCaller1();
-  invalidCallers();
+  validCall1();
+}
+
+void validCall8()
+{
+  validCall1();
+}
+
+void invalidCalls() // UndCC_Violation
+{
+  validCall1();
+  validCall2();
+  validCall3();
+  validCall4();
+  validCall5();
+  validCall6();
+  validCall7();
+  validCall8();
 }
