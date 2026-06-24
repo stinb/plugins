@@ -90,6 +90,7 @@ OBJECTS = 'objects'
 OVERRIDES = 'overrides'
 REFERENCE = 'reference'
 FUNCTION_POINTER = 'functionPointer'
+POINTERS_TO_GLOBALS = 'pointersToGlobals'
 
 # Option values and choices of values
 OPTION_BOOL_TRUE = 'On'
@@ -109,6 +110,7 @@ COMMON_OPTIONS = (
     Option(MEMBER_OBJECTS, 'Member objects', ['Long name', 'Name', 'Off'], 'Long name'),
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
     Option(OVERRIDES, 'Overrides', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
+    Option(POINTERS_TO_GLOBALS, 'Pointers to globals', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(REFERENCE, 'Reference', ['All', 'Simple'], 'All'),
 )
 
@@ -144,7 +146,7 @@ def refStr(ref: Ref) -> str:
     return f'{ref.ent().id()} {ref.kind().inv().longname()} {ref.scope().id()} {ref.file().id()} {ref.line()} {ref.column()}'
 
 
-def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
+def getLongName(ent: Ent, options: dict[str, str | bool], cache: 'DbCache | None' = None) -> str:
     result = ent.name()
 
     # Member function
@@ -161,6 +163,12 @@ def getLongName(ent: Ent, options: dict[str, str | bool]) -> str:
             return ent.name()
     # Member object parent
     elif entKind.check('Member Object'):
+        # Member reached through a pointer assigned to a global: annotate with
+        # the candidate source(s), e.g. ptr(gDat.ST2, gDat.ST3).mem_C
+        if options.get(POINTERS_TO_GLOBALS):
+            sources = pointerToGlobalSources(cache or DbCache(), ent)
+            if sources:
+                return formatPointerMember(ent, sources)
         if MEMBER_OBJECTS not in options:
             return ent.name()
         optionValue = options[MEMBER_OBJECTS]
@@ -259,6 +267,51 @@ def isUniqueMemberOfGlobal(cache: DbCache, ent: Ent) -> bool:
     return False
 
 
+# Members accessed through a pointer (e.g. ptr->mem_E where ptr = &gDat.ST3) are
+# recorded against the pointer's member (ptr.mem_E), not against the global. When
+# the pointer is assigned a global (or member of a global), return those globals
+# as the candidate source(s) for the member. The pointer may be assigned more
+# than one address, so the result is a list of candidates.
+def pointerToGlobalSources(cache: DbCache, ent: Ent) -> list[Ent]:
+    if not ent.kind().check('Member Object'):
+        return []
+    parent = ent.parent()
+    if not parent:
+        return []
+
+    sources: list[Ent] = []
+    seen: set[int] = set()
+    for ref in parent.refs('Assign Ptr'):
+        src = ref.ent()
+        if src.id() in seen:
+            continue
+        srcKind = src.kind()
+        if srcKind.check('Global Object') \
+        or (srcKind.check('Member Object') and isMemberOfGlobal(cache, src)):
+            seen.add(src.id())
+            sources.append(src)
+
+    sources.sort(key=lambda e: e.longname())
+    return sources
+
+
+def isPointerMemberToGlobal(cache: DbCache, ent: Ent) -> bool:
+    return bool(pointerToGlobalSources(cache, ent))
+
+
+# Build the annotated label ptr(gDat.ST2, gDat.ST3).mem_C for a pointer member
+def formatPointerMember(ent: Ent, sources: list[Ent]) -> str:
+    parent = ent.parent()
+    pointerName = parent.longname() if parent else ent.name()
+    sourceStr = ', '.join(src.longname() or src.name() for src in sources)
+    entLongname = ent.longname()
+    if parent and entLongname.startswith(pointerName):
+        suffix = entLongname[len(pointerName):]
+    else:
+        suffix = '.' + ent.name()
+    return f'{pointerName}({sourceStr}){suffix}'
+
+
 def globalObjRefs(cache: DbCache, function: Ent, options: dict[str, str | bool] | None = None) -> list[Ref]:
     result = []
 
@@ -282,12 +335,16 @@ def globalObjRefs(cache: DbCache, function: Ent, options: dict[str, str | bool] 
             if not memberObjectParents and entHasMembers(ref.ent()):
                 continue
             result.append(ref)
-        # Members of global objects
-        if memberObjects:
+        # Members of global objects, and (optionally) members reached through a
+        # pointer assigned to a global
+        pointersToGlobals = bool(options and options.get(POINTERS_TO_GLOBALS))
+        if memberObjects or pointersToGlobals:
             for ref in otherFunction.refs(refKinds, 'Member Object'):
-                if not isMemberOfGlobal(cache, ref.ent()):
-                    continue
-                result.append(ref)
+                ent = ref.ent()
+                if memberObjects and isMemberOfGlobal(cache, ent):
+                    result.append(ref)
+                elif pointersToGlobals and isPointerMemberToGlobal(cache, ent):
+                    result.append(ref)
 
     result.sort(key=refComparator)
     return result

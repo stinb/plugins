@@ -46,15 +46,23 @@ def entComparator(a: Ent, b: Ent) -> int:
 entComparator = functools.cmp_to_key(entComparator)
 
 
+# Quote a CSV field if it contains a comma, quote, or newline. Pointer-to-global
+# labels like ptr(gDat.ST2, gDat.ST3).mem_C contain commas.
+def csvField(value: str) -> str:
+    if any(c in value for c in (',', '"', '\n', '\r')):
+        return '"' + value.replace('"', '""') + '"'
+    return value
+
+
 def printEnt(report: ReportContext, ent: Ent, options: dict[str, str | bool]):
     report.entity(ent)
-    report.print(getLongName(ent, options))
+    report.print(csvField(getLongName(ent, options)))
     report.entity()
 
 
 def printFile(report: ReportContext, file: Ent):
     report.entity(file)
-    report.print(file.relname())
+    report.print(csvField(file.relname()))
     report.entity()
 
 
@@ -68,8 +76,14 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
         if not ent.kind().check(OBJ_ENT_KINDS):
             continue
         objects.add(ent)
+    # With the pointers-to-globals option, sort by display label so a pointer's
+    # members group together (e.g. ptr(gDat.ST2).mem_C next to
+    # ptr(gDat.ST2).mem_D); otherwise keep the legacy short-name ordering.
     objects = list(objects)
-    objects.sort(key=entComparator)
+    if options.get(POINTERS_TO_GLOBALS):
+        objects.sort(key=lambda obj: getLongName(obj, options))
+    else:
+        objects.sort(key=entComparator)
 
     # Sort the edge keys
     edgeKeysForObjects = dict()
@@ -155,14 +169,14 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
                     report.print(',')
                     printEnt(report, task, options)
                     if entFields:
-                      report.print(',' + ','.join(entFields))
+                      report.print(',' + ','.join(csvField(f) for f in entFields))
                     report.print('\n')
 
                 # Make the row for the file
                 if lines:
-                    line = f'{objectName},{shared},{protected},{functionName},{reference},{relname},{taskName}'
+                    line = f'{csvField(objectName)},{shared},{protected},{csvField(functionName)},{reference},{csvField(relname)},{csvField(taskName)}'
                     if entFields:
-                      line += ',' +  ','.join(entFields)
+                      line += ',' +  ','.join(csvField(f) for f in entFields)
                     line += '\n'
                     lines.append(line)
 

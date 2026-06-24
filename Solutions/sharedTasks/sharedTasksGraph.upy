@@ -119,6 +119,7 @@ def init(graph, target):
     graph.legend().define('globalObject', 'ellipse', 'Global Object', '', gray + opacity, 1, 0)
     graph.legend().define('sharedGlobalObject', 'ellipse', 'Shared Global Object', '', blue + opacity, 2, 0)
     graph.legend().define('functionPointer', 'ellipse', 'Function Pointer', '', yellow + opacity, 3, 0)
+    graph.legend().define('pointerToGlobal', 'ellipse', 'Pointer to Global (Candidate)', purple, '', 4, 0)
     # Legend - Edges
     graph.legend().define('refCall', 'arrow', 'Ref: Call', '', '', 0, 1)
     graph.legend().define('refModify', 'arrow', 'Ref: Modify', orange, orange, 1, 1)
@@ -156,8 +157,8 @@ def drawEdge(graph, head, tail, name, ref, **kwargs):
     return edge
 
 
-def getNodeName(ent: Ent, options: dict[str, str | bool], tasks: dict) -> str:
-    result = getLongName(ent, options)
+def getNodeName(ent: Ent, options: dict[str, str | bool], tasks: dict, cache: DbCache | None = None) -> str:
+    result = getLongName(ent, options, cache)
 
     # Add the fields like the priority on the next line
     if ent in tasks:
@@ -186,6 +187,7 @@ def draw(graph, target):
     edgeInfo, tasks, incoming, interruptDisabledRefs = buildEdgeInfo(graph.db(), target, options)[0:4]
 
     # Draw the graph
+    cache = DbCache()
     nodes = dict()
     graph.set('rankdir', 'LR')
     for edgeObj in edgeInfo.values():
@@ -195,7 +197,7 @@ def draw(graph, target):
         if scope not in nodes:
             isFunctionPointer = checkIsFunctionPointer(scope)
             # Style node
-            name = getNodeName(scope, options, tasks)
+            name = getNodeName(scope, options, tasks, cache)
             box = checkIsCallable(scope) and not isFunctionPointer
             bold = edgeObj['root'] and box
             color = yellow + opacity if isFunctionPointer else None
@@ -213,7 +215,7 @@ def draw(graph, target):
         isFunctionPointer = checkIsFunctionPointer(ent)
         if ent not in nodes:
             # Edge options
-            name = getNodeName(ent, options, tasks)
+            name = getNodeName(ent, options, tasks, cache)
             box = isCallable and not isObject and not isFunctionPointer
             bold = False
             # Edge option: color
@@ -228,6 +230,11 @@ def draw(graph, target):
 
             # Draw and add
             tail = drawNode(graph, ent, name, box=box, bold=bold, color=color)
+            # Mark pointer-to-global candidate members distinctly: the fill still
+            # conveys shared status, the purple border flags the candidate
+            if options[POINTERS_TO_GLOBALS] and isObject and isPointerMemberToGlobal(cache, ent):
+                tail.set('color', purple)
+                tail.set('penwidth', '2')
             nodes[ent] = tail
         else:
             tail = nodes[ent]
