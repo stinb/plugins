@@ -6,6 +6,7 @@ FUND_TYPES = ["bool", "short", "int", "long", "float", "double",
               "char", "wchar_t", "char8_t", "char16_t", "char32_t"]
 STD_LIB_WITH_CTOR = ["std::string", "std::runtime_error", "std::out_of_range", "std::string_view",
                      "std::chrono::seconds", "std::chrono::minutes", "std::chrono::hours", "std::thread", "Json::Value"]
+has_ctor_cache = {}
 
 
 def ids():
@@ -114,10 +115,7 @@ def test_global():
 
 
 def is_ref_invalid(ref):
-    if ref.kind().check("Call, Callby"):
-        return True
-
-    return False
+    return ref.kind().check("Call, Callby")
 
 
 def is_not_param(lex):
@@ -148,12 +146,21 @@ def is_cast(lex):
 
 
 def has_ctor(ent):
+    ent_id = ent.id()
+
+    if ent_id in has_ctor_cache:
+        return has_ctor_cache[ent_id]
+
+    has_ctor_cache[ent_id] = False
     type_ent, _ = get_ent_type(ent)
 
-    if type_ent:
-        for func_ref in type_ent.refs("Define, Declare", "Member Function"):
-            if func_ref.ent().name() == ent.name():
-                return True
+    if not type_ent:
+        return False
+
+    for func_ref in type_ent.refs("Define, Declare", "Member Function", True):
+        if func_ref.ent().name() == ent.name():
+            has_ctor_cache[ent_id] = True
+            return True
 
     return False
 
@@ -164,13 +171,13 @@ def get_ent_type(entity):
 
     while typed_ref:
         obj_ent = typed_ref.ent()
+        obj_ref_type = obj_ent.type()
 
         if obj_ent.id() in seen:
-            return obj_ent, obj_ent.type()
+            return obj_ent, obj_ref_type
 
         seen.add(obj_ent.id())
 
-        obj_ref_type = obj_ent.type()
         typed_ref = obj_ent.ref("Typed ~TemplateArgument")
 
         if not typed_ref:
@@ -185,8 +192,7 @@ def check(check, file):
 
     while lex:
         if lex.token() in ("Literal", "Operator", "String", "Preprocessor"):
-            lex = lex.next(True, True)
-            continue
+            pass
 
         elif (lex.text() in FUND_TYPES or
               (lex.ent() and lex.ent().longname() not in STD_LIB_WITH_CTOR
