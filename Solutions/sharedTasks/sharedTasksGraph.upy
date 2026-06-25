@@ -120,6 +120,7 @@ def init(graph, target):
     graph.legend().define('sharedGlobalObject', 'ellipse', 'Shared Global Object', '', blue + opacity, 2, 0)
     graph.legend().define('functionPointer', 'ellipse', 'Function Pointer', '', yellow + opacity, 3, 0)
     graph.legend().define('pointerToGlobal', 'ellipse', 'Pointer to Global (Candidate)', purple, '', 4, 0)
+    graph.legend().define('arrayMember', 'ellipse', 'Array Member (Candidate)', purple, '', 5, 0)
     # Legend - Edges
     graph.legend().define('refCall', 'arrow', 'Ref: Call', '', '', 0, 1)
     graph.legend().define('refModify', 'arrow', 'Ref: Modify', orange, orange, 1, 1)
@@ -184,7 +185,9 @@ def draw(graph, target):
         options[commonOption.key] = value
     simple = options[REFERENCE] == 'Simple'
 
-    edgeInfo, tasks, incoming, interruptDisabledRefs = buildEdgeInfo(graph.db(), target, options)[0:4]
+    buildResult = buildEdgeInfo(graph.db(), target, options)
+    edgeInfo, tasks, incoming, interruptDisabledRefs = buildResult[0:4]
+    arrayMemberEdges = buildResult[5]
 
     # Draw the graph
     cache = DbCache()
@@ -269,3 +272,34 @@ def draw(graph, target):
 
         # Draw edge
         edge = drawEdge(graph, head, tail, '/'.join(kindnames), edgeObj['ref'], color=color, style=style)
+
+    # Array element member nodes (informational): gDat.ST2[].mem_C. Synthesized
+    # (array, member) nodes keyed by display name; no shared/protected status.
+    for amEdge in arrayMemberEdges:
+        scope = amEdge['scope']
+        if scope not in nodes:
+            isFunctionPointer = checkIsFunctionPointer(scope)
+            box = checkIsCallable(scope) and not isFunctionPointer
+            nodes[scope] = drawNode(graph, scope, getNodeName(scope, options, tasks, cache),
+                                    box=box, bold=amEdge['root'] and box,
+                                    color=yellow + opacity if isFunctionPointer else None)
+        head = nodes[scope]
+
+        key = amEdge['displayName']
+        if key not in nodes:
+            tail = drawNode(graph, amEdge['array'], key, color=gray + opacity)
+            tail.set('color', purple)
+            tail.set('penwidth', '2')
+            tail.set('style', 'dashed')
+            nodes[key] = tail
+        else:
+            tail = nodes[key]
+
+        kindnames = sorted(amEdge['kindnames'])
+        if len(kindnames) == 1:
+            color = {'Modify': orange, 'Set': green, 'Use': blue}.get(kindnames[0])
+        elif len(kindnames) > 1:
+            color = purple
+        else:
+            color = None
+        drawEdge(graph, head, tail, '/'.join(kindnames), amEdge['ref'], color=color)

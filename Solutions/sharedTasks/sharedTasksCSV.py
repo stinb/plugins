@@ -1,40 +1,12 @@
-#! /usr/bin/env upython
+# Shared library for the Shared Tasks CSV interactive report: one table row per
+# task/function/object reference. CSV output is produced by the report
+# framework's export (und report -format csv / GUI), not by this script.
 
 
-# CLI for creating an interactive report of an architecture of shared tasks and
-# optionally exporting it as a CSV
-
-
-import datetime
 import functools
-import os
-import re
-import sys
 
-import understand
 from understand import Arch, Db, Ent, ReportContext
 from sharedTasks import *
-
-
-#######
-# All #
-#######
-
-
-# Option keys
-AUTO_EXPORT = 'autoExport'
-CSV_FILE_LOCATION = 'csvFileLocation'
-CSV_FILE_NAME = 'csvFileName'
-
-# Default CSV export file name
-DEFAULT_FILE_NAME = 'Shared_Tasks_for_{arch}_{date}_{time}.csv'
-
-# Options for all shared tasks CSV plugins and scripts
-CSV_OPTIONS = (
-    Option(AUTO_EXPORT, 'Automatically export CSV file', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
-    Option(CSV_FILE_LOCATION, 'CSV file location', [], ''),
-    Option(CSV_FILE_NAME, 'CSV file name', [], DEFAULT_FILE_NAME),
-) + COMMON_OPTIONS
 
 
 def entComparator(a: Ent, b: Ent) -> int:
@@ -46,28 +18,29 @@ def entComparator(a: Ent, b: Ent) -> int:
 entComparator = functools.cmp_to_key(entComparator)
 
 
-# Quote a CSV field if it contains a comma, quote, or newline. Pointer-to-global
-# labels like ptr(gDat.ST2, gDat.ST3).mem_C contain commas.
-def csvField(value: str) -> str:
-    if any(c in value for c in (',', '"', '\n', '\r')):
-        return '"' + value.replace('"', '""') + '"'
-    return value
-
-
-def printEnt(report: ReportContext, ent: Ent, options: dict[str, str | bool]):
+# Emit one table cell. The report renders a real report.table(), so the
+# framework's CSV export builds and quotes the columns.
+def cellEnt(report: ReportContext, ent: Ent, options: dict[str, str | bool]):
+    report.tablecell()
     report.entity(ent)
-    report.print(csvField(getLongName(ent, options)))
+    report.print(getLongName(ent, options))
     report.entity()
 
 
-def printFile(report: ReportContext, file: Ent):
+def cellFile(report: ReportContext, file: Ent):
+    report.tablecell()
     report.entity(file)
-    report.print(csvField(file.relname()))
+    report.print(file.relname())
     report.entity()
 
 
-def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: list[str] | None, report: ReportContext | None):
-    edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields = buildEdgeInfo(db, arch, options)
+def cellText(report: ReportContext, text: str):
+    report.tablecell()
+    report.print(text)
+
+
+def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: ReportContext):
+    edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields, arrayMemberEdges = buildEdgeInfo(db, arch, options)
 
     # Sort the objects
     objects = set()
@@ -91,21 +64,16 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
         edgeKeysForObjects[obj] = list(incoming[obj])
         edgeKeysForObjects[obj].sort()
 
-    # header
+    # Table columns
     headerFields = [field for field in TASK_FIELDS if field in foundFields]
 
     referenceString = "Reference(M=Modify/S=Set/U=Use)"
     if options[FUNCTION_POINTER] == 'On':
         referenceString = "Reference(M=Modify/S=Set/U=Use/C=Call)"
-    header = 'Global Object,Shared,Protected,Function,' + referenceString + ',File,Task'
-    if headerFields:
-      header += ',' + ','.join(field.capitalize() for field in headerFields)
-    header += '\n'
+    columns = ['Global Object', 'Shared', 'Protected', 'Function', referenceString, 'File', 'Task']
+    columns += [field.capitalize() for field in headerFields]
 
-    if report:
-        report.print(header)
-    if lines != None:
-        lines.append(header)
+    report.table(columns)
 
     # Make rows for each object
     for obj in objects:
@@ -129,7 +97,6 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
             continue
 
         # Info for each column for all rows of the object
-        objectName = getLongName(obj, options)
         shared = 'x' if isShared else '-'
         protected = 'x' if (len(fromTasksFiltered) > 1 and not isShared) else '-'
 
@@ -139,253 +106,44 @@ def generateCSVRows(db: Db, arch: Arch, options: dict[str, str | bool], lines: l
 
             # Info for each column for all rows of the edge
             function = edgeObj['scope']
-            functionName = getLongName(edgeObj['scope'], options)
             reference = []
             for kindname in edgeObj['kindnames']:
                 reference.append(kindname[0])
             reference.sort()
             reference = ''.join(reference)
             file = edgeObj['ref'].file()
-            relname = file.relname()
-
-            # Sort the tasks that this edge is from
-            fromTasks = list(edgeObj['from'])
-            fromTasks.sort(key=entComparator)
 
             # Make a single row for each task the edges are from
-            for task in fromTasks:
-
-                # Info for each column for this single row
-                taskName = getLongName(task, options)
+            for task in sorted(edgeObj['from'], key=entComparator):
                 entFields = [tasks[task].get(field, '') for field in headerFields]
 
-                # Make the clickable row for interactive report
-                if report:
-                    printEnt(report, obj, options)
-                    report.print(f',{shared},{protected},')
-                    printEnt(report, function, options)
-                    report.print(f',{reference},')
-                    printFile(report, file)
-                    report.print(',')
-                    printEnt(report, task, options)
-                    if entFields:
-                      report.print(',' + ','.join(csvField(f) for f in entFields))
-                    report.print('\n')
+                cellEnt(report, obj, options)
+                cellText(report, shared)
+                cellText(report, protected)
+                cellEnt(report, function, options)
+                cellText(report, reference)
+                cellFile(report, file)
+                cellEnt(report, task, options)
+                for f in entFields:
+                  cellText(report, f)
 
-                # Make the row for the file
-                if lines:
-                    line = f'{csvField(objectName)},{shared},{protected},{csvField(functionName)},{reference},{csvField(relname)},{csvField(taskName)}'
-                    if entFields:
-                      line += ',' +  ','.join(csvField(f) for f in entFields)
-                    line += '\n'
-                    lines.append(line)
+    # Array element member rows (informational, e.g. gDat.ST2[].mem_C). These are
+    # synthesized (array, member) accesses with no shared/protected status.
+    for edge in sorted(arrayMemberEdges, key=lambda e: (e['displayName'], e['scope'].name())):
+        reference = ''.join(sorted(k[0] for k in edge['kindnames']))
+        file = edge['ref'].file()
 
+        for task in sorted(edge['from'], key=entComparator):
+            entFields = [tasks[task].get(field, '') for field in headerFields]
 
-def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: ReportContext | None = None):
-    lines: list[str] | None = [] if options[AUTO_EXPORT] else None
+            cellText(report, edge['displayName'])
+            cellText(report, '-')
+            cellText(report, '-')
+            cellEnt(report, edge['scope'], options)
+            cellText(report, reference)
+            cellFile(report, file)
+            cellEnt(report, task, options)
+            for f in entFields:
+              cellText(report, f)
 
-    generateCSVRows(db, arch, options, lines, report)
-
-    if not options[AUTO_EXPORT]:
-        return
-
-    # Default file name
-    if not options[CSV_FILE_NAME]:
-        options[CSV_FILE_NAME] = DEFAULT_FILE_NAME
-
-    # Substitute {arch}
-    if re.search('{arch}', options[CSV_FILE_NAME], flags=re.IGNORECASE):
-        archSimplified = re.sub(r'\W|_', '', arch.name())
-        options[CSV_FILE_NAME] = re.sub('{arch}', archSimplified, options[CSV_FILE_NAME], flags=re.IGNORECASE)
-
-    # Substitute {date}
-    now = None
-    if re.search('{date}', options[CSV_FILE_NAME], flags=re.IGNORECASE):
-        if not now:
-            now = datetime.datetime.now()
-        date = now.strftime('%Y_%m_%d')
-        options[CSV_FILE_NAME] = re.sub('{date}', date, options[CSV_FILE_NAME], flags=re.IGNORECASE)
-
-    # Substitute {time}
-    if re.search('{time}', options[CSV_FILE_NAME], flags=re.IGNORECASE):
-        if not now:
-            now = datetime.datetime.now()
-        time = now.strftime('%H_%M_%S')
-        options[CSV_FILE_NAME] = re.sub('{time}', time, options[CSV_FILE_NAME], flags=re.IGNORECASE)
-
-    # Append .csv to file name
-    if not re.search(r'\.csv$', options[CSV_FILE_NAME]):
-        options[CSV_FILE_NAME] += '.csv'
-
-    # Export lines to a new file
-    file = open(os.path.join(options[CSV_FILE_LOCATION] or os.getcwd(), options[CSV_FILE_NAME]), 'w')
-    file.writelines(lines)
-    file.close()
-
-
-##########################
-# Command Line Interface #
-##########################
-
-
-# Required option keys
-ARCH = 'arch'
-DB = 'db'
-
-# Options required for the CSV command line interface
-REQUIRED_CLI_OPTIONS = (
-    Option(ARCH, 'Architecture long name', [], ''),
-    Option(DB, 'Path of .und folder', [], ''),
-)
-
-
-def printArguments(options: tuple[Option]):
-    for option in options:
-        # Key and value
-        print(f'    -{option.key} VALUE')
-
-        # Skip if no default value
-        if not option.default:
-            continue
-
-        # Default value
-        print(f'        Default: {option.default}')
-
-        # Choices
-        if option.choices == OPTION_BOOL_CHOICES:
-            choices = "('False', 'True')"
-        elif option.choices:
-            choices = option.choices
-        else:
-            continue
-        print(f'        Choices: {choices} (case-insensitive)')
-
-
-def printHelpAndExit(expected: str | None = None, actual: str | None = None):
-    if expected:
-        print('Error parsing arguments:')
-        print(f'    expected: {expected}')
-        if actual:
-            print(f'    actual:   "{actual}"')
-        print('    help: [\'-h\']')
-
-    else:
-        print('Required arguments:')
-        printArguments(REQUIRED_CLI_OPTIONS)
-        print()
-        print('Optional arguments:')
-        printArguments(CSV_OPTIONS)
-
-    exit()
-
-
-def parseArguments() -> dict[str, str | bool]:
-    result: dict[str, str | bool] = dict()
-
-    # Get the CLI options as a dictionary
-    optionDict: dict[str, Option] = dict()
-    for option in REQUIRED_CLI_OPTIONS + CSV_OPTIONS:
-        optionDict[f'-{option.key}'] = option
-
-    # Get arguments
-    argKey: str | None = None
-    for arg in sys.argv[1:]:
-        # Help argument
-        if arg in {'-h', '-help', '--help', 'help'}:
-            printHelpAndExit()
-
-        # Argument key
-        elif arg in optionDict:
-            argKey = arg
-            continue
-        # Fail if there's no previous argument key
-        elif not argKey:
-            printHelpAndExit('-db or -arch', arg)
-
-        # Get the option information
-        option: Option = optionDict[argKey]
-
-        # Remove the leading dash
-        optionKey = argKey[1:]
-
-        # Remove quotes from the beginning and end
-        if re.match(r'^\'.*\'$|^\".*\"$', arg):
-            arg = arg[1:-1]
-
-        # Option type: bool
-        if option.choices == OPTION_BOOL_CHOICES:
-            arg = arg.lower()
-            if arg in {'true', '1'}:
-                result[optionKey] = True
-            elif arg in {'false', '0'}:
-                result[optionKey] = False
-            # Fail if the boolean value was bad
-            else:
-                printHelpAndExit(f'value for -{optionKey}', arg)
-        elif option.choices == OPTION_DEPTH_CHOICES and arg != 'All':
-            try:
-                result[optionKey] = int(arg)
-            except:
-                printHelpAndExit(f'value for -{optionKey} from {option.choices}', arg)
-        # Option type: string from choices
-        elif option.choices:
-            argLower = arg.lower()
-            allowedChoice = False
-            for choice in option.choices:
-                if argLower == choice.lower():
-                    result[optionKey] = choice
-                    allowedChoice = True
-                    break
-            # Fail if the choice was bad
-            if not allowedChoice:
-                printHelpAndExit(f'value for -{optionKey} from {option.choices}', arg)
-        # Option type: string
-        else:
-            result[optionKey] = arg
-
-        argKey = None
-
-    # Fail if there are missing required arguments
-    missingRequiredArgs: list[str] = []
-    for option in REQUIRED_CLI_OPTIONS:
-        if option.key not in result:
-            missingRequiredArgs.append(f'-{option.key}')
-    if missingRequiredArgs:
-        printHelpAndExit(f'required arguments: {missingRequiredArgs}')
-
-    # Add missing optional arguments
-    for option in CSV_OPTIONS:
-        if option.key not in result:
-            if option.choices == OPTION_BOOL_CHOICES:
-                value = option.default == OPTION_BOOL_TRUE
-            else:
-                value = option.default
-            result[option.key] = value
-
-    return result
-
-
-if __name__ == '__main__':
-    # Parse arguments
-    options = parseArguments()
-    options[AUTO_EXPORT] = True
-
-    # Get the database
-    try:
-        dbPath = options[DB]
-        db = understand.open(dbPath)
-    except:
-        print('Error opening database:')
-        print(f'    {dbPath}')
-        exit(1)
-
-    # Get the architecture
-    archLongName = options[ARCH]
-    arch = db.lookup_arch(archLongName)
-    if not arch:
-        print('Error getting architecture:')
-        print(f'    {archLongName}')
-        exit(1)
-
-    # Export file
-    generateCSV(db, arch, options)
+    report.table()

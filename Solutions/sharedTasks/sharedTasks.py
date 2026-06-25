@@ -91,6 +91,7 @@ OVERRIDES = 'overrides'
 REFERENCE = 'reference'
 FUNCTION_POINTER = 'functionPointer'
 POINTERS_TO_GLOBALS = 'pointersToGlobals'
+ARRAY_MEMBERS = 'arrayMembers'
 
 # Option values and choices of values
 OPTION_BOOL_TRUE = 'On'
@@ -111,6 +112,7 @@ COMMON_OPTIONS = (
     Option(OBJECTS, 'Objects', ['All', 'Shared only'], 'All'),
     Option(OVERRIDES, 'Overrides', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(POINTERS_TO_GLOBALS, 'Pointers to globals', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
+    Option(ARRAY_MEMBERS, 'Array members', OPTION_BOOL_CHOICES, OPTION_BOOL_FALSE),
     Option(REFERENCE, 'Reference', ['All', 'Simple'], 'All'),
 )
 
@@ -312,6 +314,83 @@ def formatPointerMember(ent: Ent, sources: list[Ent]) -> str:
     return f'{pointerName}({sourceStr}){suffix}'
 
 
+# Element type of an array object, resolved through typedefs to the underlying
+# record type (so it matches a type member's parent struct). Global arrays carry
+# a direct Typed ref; member-object arrays (e.g. gDat.ST2) only expose it through
+# their Instanceof type member, so fall back to that.
+def arrayElementType(ent: Ent) -> Ent | None:
+    typed = ent.ents('Typed')
+    elem = typed[0] if typed else None
+    if elem is None:
+        for instance in ent.ents('Instanceof'):
+            typed = instance.ents('Typed')
+            if typed:
+                elem = typed[0]
+                break
+
+    seen: set[int] = set()
+    while elem and elem.id() not in seen and elem.kind().check('Typedef Type'):
+        seen.add(elem.id())
+        nextType = elem.ents('Typed')
+        if not nextType:
+            break
+        elem = nextType[0]
+    return elem
+
+
+def memberAccessKind(ref: Ref) -> str | None:
+    kindname = ref.kind().longname()
+    if 'Modify' in kindname:
+        return 'Modify'
+    if 'Set' in kindname:
+        return 'Set'
+    if 'Use' in kindname:
+        return 'Use'
+    return None
+
+
+# Array element member accesses (e.g. gDat.ST2[1].mem_C). Understand records
+# these against the struct *type* member (STRUCT2::mem_C), not a per-element
+# instance, alongside a same-line Deref to the array object. Pair them to
+# synthesize an index-agnostic (array, member) access. Best-effort: the link is
+# same-line co-location and array elements are not distinguished.
+def arrayMemberAccesses(function: Ent) -> list[tuple[Ent, Ent, str, Ref]]:
+    typeMemberRefs: list[tuple[Ref, Ent, str]] = []
+    derefByLine: dict[int, list[tuple[Ref, Ent]]] = dict()
+    for ref in function.refs():
+        kindname = ref.kind().longname()
+        ent = ref.ent()
+        if 'Deref' in kindname:
+            if ent.kind().check('Object') and arrayElementType(ent) is not None:
+                derefByLine.setdefault(ref.line(), []).append((ref, ent))
+        elif ent.kind().check('Member Object'):
+            parent = ent.parent()
+            if parent and parent.kind().check('Type'):
+                kind = memberAccessKind(ref)
+                if kind:
+                    typeMemberRefs.append((ref, ent, kind))
+
+    results: list[tuple[Ent, Ent, str, Ref]] = []
+    for ref, member, kind in typeMemberRefs:
+        memberType = member.parent()
+        candidates = []
+        for derefRef, array in derefByLine.get(ref.line(), []):
+            elemType = arrayElementType(array)
+            if elemType and elemType.id() == memberType.id():
+                candidates.append((derefRef, array))
+        if not candidates:
+            continue
+        # The array deref appears before the member textually; prefer the
+        # nearest one at or before the member's column.
+        preceding = [c for c in candidates if c[0].column() <= ref.column()]
+        if preceding:
+            chosen = max(preceding, key=lambda c: c[0].column())
+        else:
+            chosen = min(candidates, key=lambda c: c[0].column())
+        results.append((chosen[1], member, kind, ref))
+    return results
+
+
 def globalObjRefs(cache: DbCache, function: Ent, options: dict[str, str | bool] | None = None) -> list[Ref]:
     result = []
 
@@ -357,6 +436,7 @@ def getEdgeInfo(
         incoming: dict,
         outgoing: dict,
         edgeInfo: dict,
+        arrayMemberEdges: dict,
         root: Ent,
         fun: Ent,
         options: dict[str, str | bool],
@@ -415,6 +495,29 @@ def getEdgeInfo(
             outgoing[scope] = set()
         outgoing[scope].add(edgeKey)
 
+    # Array element member accesses (e.g. gDat.ST2[].mem_C). Kept in a separate
+    # collection: these are informational-only synthetic (array, member) nodes
+    # that do not participate in shared/protected, lockset, or filtering.
+    if options.get(ARRAY_MEMBERS):
+        scope = root if options[REFERENCE] == 'Simple' else fun
+        for array, member, kindname, ref in arrayMemberAccesses(fun):
+            key = f'{scope.id()} {array.id()} {member.id()}'
+            edge = arrayMemberEdges.get(key)
+            if not edge:
+                edge = {
+                    'root': scope in tasks,
+                    'scope': scope,
+                    'array': array,
+                    'member': member,
+                    'displayName': f'{array.longname()}[].{member.name()}',
+                    'kindnames': set(),
+                    'from': set(),
+                    'ref': ref,
+                }
+                arrayMemberEdges[key] = edge
+            edge['kindnames'].add(kindname)
+            edge['from'].add(root)
+
     # Function calls
     refKinds = getFnRefKinds(options)
 
@@ -451,9 +554,9 @@ def getEdgeInfo(
             # Add assignby ref to edge
             for assby_ref in call.ent().refs("Assignby Functionptr"):
                 getEdgeInfo(cache, visited, tasks, incoming, outgoing,
-                            edgeInfo, root, assby_ref.ent(), options, depth + 1)
+                            edgeInfo, arrayMemberEdges, root, assby_ref.ent(), options, depth + 1)
 
-        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, root, call.ent(), options, depth + 1)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, root, call.ent(), options, depth + 1)
 
 
 def filterIncomingEdges(
@@ -578,11 +681,14 @@ def buildEdgeInfo(
                       #     'filtered': boolean,
                       #     'ref': ref
                       # }, ... }
+    arrayMemberEdges = dict() # { key: { 'scope', 'array', 'member',
+                              #     'displayName', 'kindnames', 'from', 'ref',
+                              #     'root' }, ... } - informational-only
     tasks, enableDisableFunctions, foundFields = parseArch(arch)
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
-        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, ent, ent, options, 0)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, ent, ent, options, 0)
 
     # See which edges are filtered out
     if options[FILTER_MODIFY_SET_ONLY] or options[FILTER_USE_ONLY]:
@@ -659,7 +765,13 @@ def buildEdgeInfo(
                 incoming[ent].remove(edgeKey)
                 del edgeInfo[edgeKey]
 
-    return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields)
+    # Array members are informational-only and have no shared classification,
+    # so omit them when only shared objects are requested.
+    arrayMemberList = []
+    if options[OBJECTS] != 'Shared only':
+        arrayMemberList = list(arrayMemberEdges.values())
+
+    return (edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields, arrayMemberList)
 
 
 def checkIsFunctionPointer(ent: Ent) -> bool:
