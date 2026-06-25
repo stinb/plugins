@@ -551,10 +551,17 @@ def getEdgeInfo(
                 outgoing[scope] = set()
             outgoing[scope].add(edgeKey)
 
-            # Add assignby ref to edge
-            for assby_ref in call.ent().refs("Assignby Functionptr"):
+            # Recurse into function-pointer call targets. For a struct-member
+            # pointer (e.g. schedule->CallFunction) the assignment is on the
+            # type member, reached via Instanceof, not on the instance.
+            funcptr = call.ent()
+            targets = [r.ent() for r in funcptr.refs("Assignby FunctionPtr")]
+            if funcptr.kind().check("Object"):
+                for inst in funcptr.refs("Instanceof"):
+                    targets += [r.ent() for r in inst.ent().refs("Assign FunctionPtr")]
+            for target in targets:
                 getEdgeInfo(cache, visited, tasks, incoming, outgoing,
-                            edgeInfo, arrayMemberEdges, root, assby_ref.ent(), options, depth + 1)
+                            edgeInfo, arrayMemberEdges, root, target, options, depth + 1)
 
         getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, root, call.ent(), options, depth + 1)
 
