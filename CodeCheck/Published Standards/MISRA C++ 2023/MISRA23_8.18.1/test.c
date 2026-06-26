@@ -22,7 +22,7 @@ int16_t arr[20];
 
 void f(void)
 {
-    memcpy(&arr[5], &arr[4], 2u * sizeof(arr[0]));  /* UndCC_Violation(memcpy) */
+    memcpy(&arr[5], &arr[4], 2u * sizeof(arr[0]));  /* UndCC_Violation(Win,Lin) */
     memmove(&arr[5], &arr[4], 2u * sizeof(arr[0])); /* UndCC_Valid - memmove permitted by exception 2 */
 }
 
@@ -41,10 +41,10 @@ void memcpy_same_array(void)
 {
     int16_t buf[20];
 
-    memcpy(buf, buf, 10u * sizeof(buf[0]));          /* UndCC_Violation(memcpy) - direct same-pointer copy */
-    memcpy(&buf[0], &buf[1], 10u * sizeof(buf[0]));  /* UndCC_Violation(memcpy) */
-    memcpy(&buf[1], &buf[0], 10u * sizeof(buf[0]));  /* UndCC_Violation(memcpy) */
-    memcpy(&buf[0], &buf[10], 5u * sizeof(buf[0]));  /* UndCC_FalsePos(memcpy) - disjoint slices, no overlap */
+    memcpy(buf, buf, 10u * sizeof(buf[0]));          /* UndCC_Violation(Lin,Win) - direct same-pointer copy */
+    memcpy(&buf[0], &buf[1], 10u * sizeof(buf[0]));  /* UndCC_Violation(Lin,Win) */
+    memcpy(&buf[1], &buf[0], 10u * sizeof(buf[0]));  /* UndCC_Violation(Lin,Win) */
+    memcpy(&buf[0], &buf[10], 5u * sizeof(buf[0]));  /* UndCC_FalsePos(Lin,Win) - disjoint slices, no overlap */
     memmove(&buf[0], &buf[1], 10u * sizeof(buf[0])); /* UndCC_Valid - memmove permitted */
 }
 
@@ -131,10 +131,10 @@ void nested_union(void)
  * doesn't flag them by default. */
 void str_funcs_same_ptr(char *p)
 {
-    strcpy(p, p);      /* UndCC_Violation(str_funcs) */
-    strncpy(p, p, 10); /* UndCC_Violation(str_funcs) */
-    strcat(p, p);      /* UndCC_Violation(str_funcs) */
-    strncat(p, p, 5);  /* UndCC_Violation(str_funcs) */
+    strcpy(p, p);      /* UndCC_Violation(Win,Lin) */
+    strncpy(p, p, 10); /* UndCC_Violation(Win,Lin) */
+    strcat(p, p);      /* UndCC_Violation(Win,Lin) */
+    strncat(p, p, 5);  /* UndCC_Violation(Win,Lin) */
 }
 
 void str_funcs_distinct(char *dest, const char *src)
