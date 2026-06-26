@@ -9,6 +9,33 @@ import re
 ERR1 = 'Type is implicitly converted from "%1" to "%2"'
 
 
+# Resolve an entity's type to a fundamental type in numTypes by following the
+# typedef chain (e.g. size_t -> unsigned long). Stops at pointers/references
+# and only follows typedef aliases. Falls back to the spelled type string.
+def resolveType(ent, numTypes, seen=None):
+    if seen is None:
+        seen = set()
+    if not ent or ent in seen:
+        return None
+    seen.add(ent)
+
+    typeText = ent.type()
+    if not typeText or typeText in numTypes:
+        return typeText
+
+    if '*' in typeText or '&' in typeText:
+        return typeText
+
+    for typeEnt in ent.ents('Typed'):
+        if not typeEnt.kind().check('Typedef, Type Alias'):
+            continue
+        resolved = resolveType(typeEnt, numTypes, seen)
+        if resolved in numTypes:
+            return resolved
+
+    return typeText
+
+
 def ids():
     return ('M5-0-3', 'MISRA08_5-0-3', 'CPP_T007')
 
@@ -113,6 +140,8 @@ def check(check, file):
         
         # Both are different types
         if lexeme and lexeme.ent():
-            if ent.type() in numTypes and lexeme.ent().type() in numTypes:
-                    if ent.type() != lexeme.ent().type():
-                        check.violation(ent, file, ref.line(), ref.column(), ERR1, lexeme.ent().type(), ent.type())
+            lhsType = resolveType(ent, numTypes)
+            rhsType = resolveType(lexeme.ent(), numTypes)
+            if lhsType in numTypes and rhsType in numTypes:
+                    if lhsType != rhsType:
+                        check.violation(ent, file, ref.line(), ref.column(), ERR1, rhsType, lhsType)
