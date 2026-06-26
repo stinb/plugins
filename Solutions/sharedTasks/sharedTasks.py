@@ -319,14 +319,22 @@ def formatPointerMember(ent: Ent, sources: list[Ent]) -> str:
 # a direct Typed ref; member-object arrays (e.g. gDat.ST2) only expose it through
 # their Instanceof type member, so fall back to that.
 def arrayElementType(ent: Ent) -> Ent | None:
+    typeText = ent.type()
     typed = ent.ents('Typed')
     elem = typed[0] if typed else None
     if elem is None:
+        # Member-array instances expose the array type via their Instanceof member
         for instance in ent.ents('Instanceof'):
-            typed = instance.ents('Typed')
-            if typed:
-                elem = typed[0]
+            instanceTyped = instance.ents('Typed')
+            if instanceTyped:
+                typeText = instance.type()
+                elem = instanceTyped[0]
                 break
+
+    # Only arrays (T[...]) qualify; a pointer (T*) also carries a Typed ref to
+    # its pointee but must not be treated as an array.
+    if not typeText or '[' not in typeText:
+        return None
 
     seen: set[int] = set()
     while elem and elem.id() not in seen and elem.kind().check('Typedef Type'):
@@ -361,7 +369,11 @@ def arrayMemberAccesses(function: Ent) -> list[tuple[Ent, Ent, str, Ref]]:
         kindname = ref.kind().longname()
         ent = ref.ent()
         if 'Deref' in kindname:
-            if ent.kind().check('Object') and arrayElementType(ent) is not None:
+            # Require a real array instance: array-typed (not a pointer) and not
+            # a bare type member (parent must be an object/file, not a Type).
+            parent = ent.parent()
+            if ent.kind().check('Object') and arrayElementType(ent) is not None \
+            and not (parent and parent.kind().check('Type')):
                 derefByLine.setdefault(ref.line(), []).append((ref, ent))
         elif ent.kind().check('Member Object'):
             parent = ent.parent()
