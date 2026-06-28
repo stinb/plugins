@@ -7,10 +7,22 @@
 int f(int val);
 bool f3(int val);
 
-int f2(int val)
+int f2a(int val) // Non-persistent
 {
     val += 1;
     return val;
+}
+
+int f2b(int &val) // Persistent
+{
+    val += 1;
+    return val;
+}
+
+int f2c(int *val) // Persistent
+{
+    *val += 1;
+    return *val;
 }
 
 void func1()
@@ -28,7 +40,13 @@ void func1()
                                // Complaint
     {
     }
-    if (ishigh || (x == f2(x))) // UndCC_Violation
+    if (ishigh || (x == f2a(x))) // UndCC_Valid
+    {
+    }
+    if (ishigh || (x == f2b(x))) // UndCC_Violation
+    {
+    }
+    if (ishigh || (x == f2c(&x))) // UndCC_Violation
     {
     }
 
