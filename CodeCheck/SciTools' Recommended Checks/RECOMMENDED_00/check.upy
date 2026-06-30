@@ -19,9 +19,15 @@ CONDITION = r'\b(if|do|for|while)\b\s*\(.*\)\s*{?' + COMMENT_OR_END_OF_LINE # if
 PHRASE = r'\s*' + r'[A-Z]?[a-z]+[,.?:;!-]?[\s]+' * 4
 SENTENCE = r'^[\s\S]*[a-z]+\.\s*$'
 
+# Comment styles a check can flag. C/C++ only; Ada has a single style.
+STYLE_BOTH = 'Both // and /* */ comments'
+STYLE_C    = 'C-style /* */ comments only'
+STYLE_CPP  = 'C++ // comments only'
+STYLE_CHOICES = [STYLE_BOTH, STYLE_C, STYLE_CPP]
+
 
 def ids():
-    return ('RECOMMENDED_00', 'MISRA04_2.4', 'MISRA12_DIR_4.4', 'MISRA08_2-7-2', 'CPP_C000', 'A2-7-2', 'MISRA23_DIR_4.4', 'MISRA23_5.7.2', 'MISRA25_DIR_4.4')
+    return ('RECOMMENDED_00', 'MISRA04_2.4', 'MISRA12_DIR_4.4', 'MISRA08_2-7-2', 'MISRA08_2-7-3', 'CPP_C000', 'A2-7-2', 'MISRA23_DIR_4.4', 'MISRA23_5.7.2', 'MISRA25_DIR_4.4')
 
 
 def name(id):
@@ -33,7 +39,9 @@ Commented Out Code''',
         'MISRA12_DIR_4.4': '''Published Standards/MISRA C 2012/\
 Directive 4.4 Sections of code should not be "commented out"''',
         'MISRA08_2-7-2': '''Published Standards/MISRA-C++ 2008/\
-2-7-2 Sections of code shall not be "commented out"''',
+2-7-2 Sections of code shall not be "commented out" using C-style comments''',
+        'MISRA08_2-7-3': '''Published Standards/MISRA-C++ 2008/\
+2-7-3 Sections of code should not be "commented out" using C++ comments''',
         'CPP_C000': '''All Checks/Language Specific/C and C++/Comments/\
 Commented Out Code''',
         'A2-7-2': '''Published Standards/AUTOSAR/\
@@ -54,6 +62,13 @@ def tags(id):
             'Language: C++',
             'Standard: MISRA C++ 2008',
             'Category: Required',
+            'Comments',
+        ],
+        'MISRA08_2-7-3': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Advisory',
             'Comments',
         ],
         'MISRA04_2.4': [
@@ -155,6 +170,27 @@ commenting-out.</p>
 </code></pre>
 <p><b>See Also</b></p>
 <p>Rule 2-7-1, Rule 2-7-3</p>
+''',
+            'MISRA08_2-7-3': '''\
+<p><b>Rationale</b></p>
+<p>Ideally, comments should only be used to explain aspects of the code that
+may not be clear from the source code itself. Code that is commented-out may
+become out of date, which may lead to confusion when maintaining the code.</p>
+<p>A more appropriate method of recording the history of changes in source
+code (e.g. a Source Control System) should be used instead of
+commenting-out.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">  void fn ( int32_t i )
+  {
+     // ++i;
+     // We want to increment
+     for ( int32_t j = 0 ; j != i ; ++j )
+     {
+     }
+  }
+</code></pre>
+<p><b>See also</b></p>
+<p>Rule 2-7-2</p>
 ''',
             'CPP_C000': '''\
 <p><b>Rationale</b></p>
@@ -302,11 +338,21 @@ def test_language(language):
     return language in ('C++', 'Ada')
 
 
+def defaultCommentStyle(id):
+    # Each rule's own wording determines which comment styles it targets.
+    if id in ('MISRA08_2-7-2', 'MISRA04_2.4'):
+        return STYLE_C   # C-style /* */ comments
+    if id == 'MISRA08_2-7-3':
+        return STYLE_CPP # C++ // comments
+    return STYLE_BOTH
+
+
 def define_options(check):
     flag_directive = True if check.id() == "MISRA23_5.7.2" else False
 
     check.option().checkbox('ignoreInactive', 'Ignore Inactive Code', False)
     check.option().checkbox('flag_directive', 'Flag the use of "#if 0"', flag_directive)
+    check.option().choice('comment_style', 'Comment styles to flag', STYLE_CHOICES, defaultCommentStyle(check.id()))
 
     choices = [
         'More Aggressive - may result in false positives, comments that are not really code',
@@ -438,6 +484,7 @@ def check(check, file):
     ignoreInactive = check.options().lookup('ignoreInactive')
     strict = re.match('More', check.options().lookup('strict'))
     flag_directive = check.options().lookup('flag_directive')
+    comment_style = check.options().lookup('comment_style')
 
     # Lines that are marked as commented code
     lines = set()
@@ -457,6 +504,16 @@ def check(check, file):
         if ignoreInactive and lex.inactive():
             lex = nextLex(lex)
             continue
+
+        # Skip comments that don't match the selected style (Ada has one style)
+        if file.language() != 'Ada':
+            is_cpp_style = lex.text().lstrip().startswith('//')
+            if comment_style == STYLE_C and is_cpp_style:
+                lex = nextLex(lex)
+                continue
+            if comment_style == STYLE_CPP and not is_cpp_style:
+                lex = nextLex(lex)
+                continue
 
         # Use a single regex to handle both C/C++ and Ada comments
         if file.language() == 'Ada':
