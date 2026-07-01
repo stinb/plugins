@@ -1,6 +1,12 @@
+import re
+
+
 ERR1 = 'Parameter is passed incorrectly'
-NON_TRIVIAL_TYPES = {"basic_string<char>", "basic_string<char, char_traits<char>, allocator<char>>"}
-CHEAP_TO_COPY_TYPES = {"short", "long", "void", "int", "float", "bool", "double", "char"}
+NON_TRIVIAL_TYPES = ("basic_string<char>",
+                     "basic_string<char, char_traits<char>, allocator<char>>",
+                     "std::basic_string<char>",
+                     "std::basic_string<char, std::char_traits<char>, std::allocator<char>>")
+CHEAP_TO_COPY_TYPES = r"^(short|long|void|int|float|bool|double|char)"
 
 
 # The ID for the check
@@ -14,9 +20,6 @@ def name(id):
         'A8-4-7': 'Published Standards/AUTOSAR/"in" parameters for "cheap to copy" types shall be passed by value.',
         'CPP_T035': 'All Checks/Language Specific/C and C++/Types/"in" parameters for "cheap to copy" types shall be passed by value.',
     }[id]
-
-
-
 
 
 def tags(id):
@@ -35,6 +38,8 @@ def tags(id):
     }.get(id)
 
 # The long description of the check
+
+
 def detailed_description():
     return '''
 <p><b>Rule</b></p>
@@ -117,6 +122,57 @@ def test_language(language):
     return language == 'C++'
 
 
+def is_copyable(_ent):
+    # No virtual members
+    if _ent.ref("", "Virtual"):
+        return False
+
+    # Members should also be copyable
+    for member_ref in _ent.refs("Define", "~Static Member Object"):
+        mem_type = get_utype(member_ref.ent())
+
+        if member_ref.ent().kind().check("Struct, ~Unresolved Class, Union"):
+            if not is_copyable(member_ref.ent()):
+                return False
+        elif mem_type in NON_TRIVIAL_TYPES:
+            return False
+        elif not re.search(CHEAP_TO_COPY_TYPES, mem_type):
+            return False
+
+    return True
+
+
+def get_utype(ent):
+    utype = str(ent.freetext("UnderlyingType"))
+    utype = re.sub("unsigned", "", utype)
+    utype = re.sub("signed", "", utype)
+    utype = re.sub("const", "", utype)
+    utype = utype.strip(" ")
+
+    return utype
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+    seen = set()
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+
+        if obj_ent.id() in seen:
+            return obj_ent, obj_ent.type()
+
+        seen.add(obj_ent.id())
+
+        obj_ref_type = obj_ent.type()
+        typed_ref = obj_ent.ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
 def check(check, file):
     def check_violation(_ref):
         check.violation(_ref.ent(), file, _ref.line(), _ref.column(), ERR1)
@@ -130,49 +186,16 @@ def check(check, file):
                 "Assign Value, Modifyby, Setby, Assign Ref, Assignby Ref, Assignby Ptr, Addr Useby")
 
             if not change_ref:
-                paramType = param_ref.ent().type()
-                is_ref = True if paramType and "&" in paramType else False
+                paramType = str(param_ref.ent().freetext("UnderlyingType"))
+                is_ref = paramType.endswith("&")
                 entity, ent_type = get_ent_type(param_ref.ent())
+                utype = get_utype(param_ref.ent())
 
                 if not ent_type and entity.kind().check("Struct, ~Unresolved Class, Union"):
                     if is_copyable(entity) and is_ref:
                         check_violation(param_ref)
-                elif ent_type in NON_TRIVIAL_TYPES:
+                elif utype in NON_TRIVIAL_TYPES:
                     if not is_ref:
                         check_violation(param_ref)
-                elif ent_type and any(_type in ent_type for _type in CHEAP_TO_COPY_TYPES) and is_ref:
+                elif is_ref and re.search(CHEAP_TO_COPY_TYPES, utype):
                     check_violation(param_ref)
-
-
-def is_copyable(_ent):
-    # No virtual members
-    if _ent.ref("", "Virtual"):
-        return False
-
-    # Members should also be copyable
-    for member_ref in _ent.refs("Define", "~Static Member Object"):
-        if member_ref.ent().kind().check("Struct, ~Unresolved Class, Union"):
-            if not is_copyable(member_ref.ent()):
-                return False
-        elif str(member_ref.ent().type()) in NON_TRIVIAL_TYPES:
-            return False
-        elif not any(_type in str(member_ref.ent().type()) for _type in CHEAP_TO_COPY_TYPES):
-            return False
-
-    return True
-
-
-def get_ent_type(entity):
-    typed_ref = entity.ref("Typed")
-
-    seen = set()
-    while typed_ref and typed_ref not in seen:
-        obj_ent = typed_ref.ent()
-        obj_ref_type = obj_ent.type()
-        typed_ref = typed_ref.ent().ref("Typed")
-        seen.add(typed_ref)
-
-        if not typed_ref:
-            return obj_ent, obj_ref_type
-
-    return entity, entity.type()
