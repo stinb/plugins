@@ -135,24 +135,31 @@ def generate(report, db):
 
 
 def _rows_for_function(fn, lexer_cache):
-  # Positions and callee names at which this function calls another function.
+  # Single pass over references: bucket calls and sets/inits together rather
+  # than querying refs() twice per function.
+  call_refs = []
+  set_refs = []
   call_lines = set()
-  call_info = []   # (line, column, callee_name)
-  for cref in fn.refs("call, call ptr"):
-    callee = cref.ent()
-    call_lines.add(cref.line())
-    call_info.append((cref.line(), cref.column(),
-                      callee.name() if callee else ""))
-  if not call_info:
+  for ref in fn.refs("call, call ptr, set, init"):
+    if ref.kind().check("set, init"):
+      set_refs.append(ref)
+    else:
+      call_refs.append(ref)
+      call_lines.add(ref.line())
+  if not call_refs or not set_refs:
     return []
 
-  dest = _signature(fn)
+  # Callee names are only needed once we know the function both calls others
+  # and sets locals, so build call_info here rather than for every caller.
+  call_info = [(r.line(), r.column(), r.ent().name() if r.ent() else "")
+               for r in call_refs]
 
   # One row per variable that receives a value from a call. A variable set from
   # calls at more than one site is a single row; its distinct source
   # expressions are aggregated so no coupling relationship is lost.
+  dest = None   # computed lazily on the first qualifying row
   by_var = {}   # var.id() -> row dict; preserves first-seen order
-  for sref in fn.refs("set, init"):
+  for sref in set_refs:
     line = sref.line()
     if line not in call_lines:
       continue
@@ -181,6 +188,8 @@ def _rows_for_function(fn, lexer_cache):
 
     row = by_var.get(var.id())
     if row is None:
+      if dest is None:
+        dest = _signature(fn)
       by_var[var.id()] = {
         "module": f.relname() or f.name(),
         "dest": dest,
@@ -202,6 +211,12 @@ def _rows_for_function(fn, lexer_cache):
   return out
 
 
+# Cache of compiled word-boundary patterns keyed by lowercased callee name.
+# Callee names repeat heavily across the project, so this avoids recompiling
+# the same regex for every candidate (a major cost at scale).
+_word_re_cache = {}
+
+
 def _has_explicit_call(source, call_info, start_pos, end_pos):
   src = source.lower()
   for line, col, name in call_info:
@@ -209,7 +224,12 @@ def _has_explicit_call(source, call_info, start_pos, end_pos):
       continue
     if not name:
       continue
-    if re.search(r"\b" + re.escape(name.lower()) + r"\b", src):
+    nl = name.lower()
+    rx = _word_re_cache.get(nl)
+    if rx is None:
+      rx = re.compile(r"\b" + re.escape(nl) + r"\b")
+      _word_re_cache[nl] = rx
+    if rx.search(src):
       return True
   return False
 
