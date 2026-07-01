@@ -1,0 +1,338 @@
+# Interactive Report: Data Coupling
+#
+# For each function under analysis, list every variable whose value is sourced
+# from a call to another function within that function's body. Mirrors Section
+# 6.1 of the ETI / DO-178C data coupling report format (issue #4874).
+#
+# Columns: Module | Destination (Consumer Function) | Variable | Source |
+#          Variable Data Type | SVCPs (left blank for the analyst)
+#
+# Scoping:
+#   - One row per variable that receives a value from a call to another
+#     function inside the consumer function body (per assignment site).
+#   - Calls that appear only in control statements (if/while/for/switch
+#     conditions and loop guards) are excluded -- those are control coupling.
+
+import re
+
+# Assignment operators that count as "receives a value" (top level only).
+_ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=",
+               "<<=", ">>=", ":="}
+# Statement-leading keywords that mark a control statement (multi-language).
+_CONTROL_KW = {"if", "while", "for", "switch", "foreach", "elsif", "elif",
+               "case", "until", "loop", "when", "do"}
+_OPEN = {"(", "[", "{"}
+_CLOSE = {")", "]", "}"}
+_STMT_BOUNDARY = {";", "{", "}", ":"}
+
+
+def name():
+  return "Data Coupling"
+
+
+def description():
+  return '''Documents data coupling between functions: for each function, every
+    variable whose value is sourced from a call to another function.
+    <p>Output mirrors Section 6.1 of the ETI / DO-178C data coupling report
+    format. The table is filterable by Module and by function name.</p>
+    <p>Columns:</p>
+    <ul>
+      <li><b>Module</b> &ndash; source file containing the consumer function</li>
+      <li><b>Destination (Consumer Function)</b> &ndash; the function consuming the data</li>
+      <li><b>Variable</b> &ndash; the variable that holds the data</li>
+      <li><b>Source</b> &ndash; the expression (containing the call) that sets the variable</li>
+      <li><b>Variable Data Type</b> &ndash; declared type of the variable</li>
+      <li><b>SVCPs</b> &ndash; Software Verification and Certification Points,
+        left blank for the analyst to fill in</li>
+    </ul>
+    <p>Calls appearing only in control statements (conditions and loop guards)
+    are excluded &ndash; those belong in the Control Coupling report.</p>
+  '''
+
+
+def tags():
+  return [
+    'Target: Project',
+    'Language: Any',
+    'API',
+  ]
+
+
+def test_global(db):
+  return True
+
+
+def is_enabled_by_default():
+  return True
+
+
+def support_abort():
+  return True
+
+
+def generate(report, db):
+  report.table('''
+    [{
+      "name" : "Module",
+      "filtertype": "string"
+     },{
+      "name" : "Destination (Consumer Function)",
+      "filtertype": "string"
+     },{
+      "name" : "Variable",
+      "filtertype": "string"
+     },{
+      "name" : "Source",
+      "filtertype": "string"
+     },{
+      "name" : "Variable Data Type",
+      "filtertype": "string"
+     },{
+      "name" : "SVCPs",
+      "filtertype": "string"
+    }]''')
+
+  funcs = db.ents("function ~unresolved ~unknown, "
+                  "method ~unresolved ~unknown, "
+                  "procedure ~unresolved ~unknown, "
+                  "subroutine ~unresolved ~unknown")
+
+  lexer_cache = {}
+  rows = []
+  total = max(1, len(funcs))
+  for i, fn in enumerate(funcs):
+    report.progress(int(i / total * 100))
+    if report.is_aborted():
+      return
+    rows.extend(_rows_for_function(fn, lexer_cache))
+
+  # Group by Module, then by consumer function, then by source order.
+  rows.sort(key=lambda r: (r["module"].lower(), r["dest"].lower(), r["line"]))
+
+  for r in rows:
+    report.tablecell()
+    report.print(r["module"])
+
+    report.tablecell()
+    report.entity(r["fn"])
+    report.print(r["dest"])
+    report.entity()
+
+    report.tablecell()
+    report.syncfile(r["file"].longname(), r["line"], r["col"])
+    report.print(r["var"])
+    report.syncfile()
+
+    report.tablecell()
+    report.print(r["source"])
+
+    report.tablecell()
+    report.print(r["type"])
+
+    report.tablecell()  # SVCPs: intentionally blank
+
+  report.table()
+
+
+def _rows_for_function(fn, lexer_cache):
+  # Positions and callee names at which this function calls another function.
+  call_lines = set()
+  call_info = []   # (line, column, callee_name)
+  for cref in fn.refs("call, call ptr"):
+    callee = cref.ent()
+    call_lines.add(cref.line())
+    call_info.append((cref.line(), cref.column(),
+                      callee.name() if callee else ""))
+  if not call_info:
+    return []
+
+  dest = _signature(fn)
+
+  # One row per variable that receives a value from a call. A variable set from
+  # calls at more than one site is a single row; its distinct source
+  # expressions are aggregated so no coupling relationship is lost.
+  by_var = {}   # var.id() -> row dict; preserves first-seen order
+  for sref in fn.refs("set, init"):
+    line = sref.line()
+    if line not in call_lines:
+      continue
+    var = sref.ent()
+    if var is None:
+      continue
+
+    f = sref.file()
+    lexer = _get_lexer(f, lexer_cache)
+    if lexer is None:
+      continue
+
+    source, is_control, start_pos, end_pos = _assignment_source(lexer, sref)
+    if source is None or is_control:
+      continue
+
+    # Require an explicit call within the right-hand side: a call whose
+    # position lies in the RHS span AND whose callee name appears in the
+    # source text. This filters out both unrelated same-line calls
+    # (`x = CONST;` beside a call) and implicit calls with no visible call
+    # expression -- copy/conversion constructors (`r = *this;`) and operator
+    # overloads (`a + b`) -- which are not meaningful inter-function data
+    # coupling for this report.
+    if not _has_explicit_call(source, call_info, start_pos, end_pos):
+      continue
+
+    row = by_var.get(var.id())
+    if row is None:
+      by_var[var.id()] = {
+        "module": f.relname() or f.name(),
+        "dest": dest,
+        "fn": fn,
+        "var": var.name(),
+        "sources": [source],
+        "type": var.type() or "",
+        "file": f,
+        "line": line,      # first (top-most) assignment site
+        "col": sref.column(),
+      }
+    elif source not in row["sources"]:
+      row["sources"].append(source)
+
+  out = []
+  for row in by_var.values():
+    row["source"] = " ; ".join(row["sources"])
+    out.append(row)
+  return out
+
+
+def _has_explicit_call(source, call_info, start_pos, end_pos):
+  src = source.lower()
+  for line, col, name in call_info:
+    if not (start_pos <= (line, col) <= end_pos):
+      continue
+    if not name:
+      continue
+    if re.search(r"\b" + re.escape(name.lower()) + r"\b", src):
+      return True
+  return False
+
+
+def _signature(fn):
+  params = fn.parameters()
+  if params is None:
+    params = ""
+  params = re.sub(r",\s*", ", ", params).strip()   # normalize comma spacing
+  if not params and _is_c_family(fn):
+    params = "void"                                 # C/C++ idiom for no args
+  return "{}({})".format(fn.name(), params)
+
+
+def _is_c_family(fn):
+  lang = (fn.language() or "").lower()
+  return "c" == lang or "c++" in lang or "objective" in lang
+
+
+def _get_lexer(file, cache):
+  fid = file.id()
+  if fid in cache:
+    return cache[fid]
+  lexer = None
+  try:
+    lexer = file.lexer(lookup_ents=False)
+  except Exception:
+    lexer = None
+  cache[fid] = lexer
+  return lexer
+
+
+_NOPOS_LO = (0, 0)
+_NOPOS_HI = (10 ** 9, 10 ** 9)
+
+
+def _assignment_source(lexer, ref):
+  """Return (source_text, is_control, start_pos, end_pos) for the assignment at
+  ref, or (None, False, _, _).
+
+  source_text is the right-hand side expression (which contains the call).
+  is_control is True when the assignment sits inside a control statement.
+  start_pos/end_pos bound the RHS as (line, column) tuples so the caller can
+  confirm a call actually lies inside it.
+  """
+  try:
+    lex = lexer.lexeme(ref.line(), ref.column())
+  except Exception:
+    lex = None
+  if lex is None:
+    return None, False, _NOPOS_LO, _NOPOS_HI
+
+  is_control = _statement_is_control(lex)
+
+  # Find the top-level assignment operator at or after the variable token.
+  depth = 0
+  eq = None
+  scan = lex
+  while scan is not None:
+    tok = scan.token()
+    txt = scan.text()
+    if tok in ("Punctuation", "Operator"):
+      if txt in _OPEN:
+        depth += 1
+      elif txt in _CLOSE:
+        if depth == 0:
+          break
+        depth -= 1
+      elif depth == 0 and txt in _ASSIGN_OPS:
+        eq = scan
+        break
+      elif depth == 0 and txt == ";":
+        break
+    scan = scan.next(True, True)
+  if eq is None:
+    return None, is_control, _NOPOS_LO, _NOPOS_HI
+
+  # Collect the RHS from just after '=' up to the top-level ';', tracking the
+  # span so the caller can verify a call is inside it.
+  parts = []
+  depth = 0
+  start_pos = _pos(eq, _NOPOS_LO)
+  end_pos = _NOPOS_HI
+  scan = eq.next()
+  while scan is not None:
+    tok = scan.token()
+    txt = scan.text()
+    if tok in ("Punctuation", "Operator"):
+      if txt in _OPEN:
+        depth += 1
+      elif txt in _CLOSE:
+        if depth == 0:
+          end_pos = _pos(scan, _NOPOS_HI)
+          break
+        depth -= 1
+      elif depth == 0 and txt == ";":
+        end_pos = _pos(scan, _NOPOS_HI)
+        break
+    if tok != "Comment":
+      parts.append(txt)
+    scan = scan.next()
+
+  source = re.sub(r"\s+", " ", "".join(parts)).strip()
+  if not source:
+    return None, is_control, start_pos, end_pos
+  return source, is_control, start_pos, end_pos
+
+
+def _pos(lex, default):
+  try:
+    return (lex.line_begin(), lex.column_begin())
+  except Exception:
+    return default
+
+
+def _statement_is_control(lex):
+  """Walk back to the start of the statement; True if it starts with a
+  control keyword."""
+  start = lex
+  prev = lex.previous(True, True)
+  while prev is not None and prev.text() not in _STMT_BOUNDARY:
+    start = prev
+    prev = prev.previous(True, True)
+  if start is None:
+    return False
+  return start.text().lower() in _CONTROL_KW
