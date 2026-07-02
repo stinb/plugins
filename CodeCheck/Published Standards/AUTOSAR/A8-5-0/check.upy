@@ -2,13 +2,13 @@ import re
 
 
 ERR1 = 'Uninitialized memory is read'
-FUNDAMENTAL_TYPES = {"short", "int", "signed", "long",
-                     "unsigned", "bool", "char", "float", "double"}
+FUNDAMENTAL_TYPES = r"^(short|long|void|int|float|bool|double|char)"
 
 
 # The ID for the check
 def ids():
     return ('A8-5-0', 'MISRA12_9.1', 'CPP_M005', 'MISRA23_9.1', 'MISRA23_11.6.2', 'MISRA25_9.1')
+
 
 def name(id):
     return {
@@ -30,7 +30,6 @@ before it has been set""",
 Published Standards/MISRA C 2025/9.1 The value of an object with automatic storage \
 duration shall not be read before it has been set""",
     }[id]
-
 
 
 def tags(id):
@@ -76,6 +75,7 @@ def tags(id):
             'Memory Allocation',
         ],
     }.get(id)
+
 
 # The long description of the check
 def detailed_description(id):
@@ -377,16 +377,27 @@ def test_language(language):
     return language == 'C++'
 
 
+def get_utype(ent):
+    utype = str(ent.freetext("UnderlyingType"))
+    utype = re.sub("unsigned", "", utype)
+    utype = re.sub("signed", "", utype)
+    utype = re.sub("const", "", utype)
+    utype = utype.strip(" ")
+
+    return utype
+
+
 def check(check, file):
     lexer = None
     for func_ref in file.filerefs("Define", "Function"):
         for obj_ref in func_ref.ent().refs("Define", "Object ~Global ~Static ~TemplateParameter"):
             if re.search("^(std::)?vector", str(obj_ref.ent().type())):
                 continue
-            
-            ent, ent_type = get_ent_type(obj_ref.ent())
 
-            if ent_type and any(_type in ent_type for _type in FUNDAMENTAL_TYPES) and ent.kindname() not in {"Struct", "Class"}:
+            # ent, ent_type = get_ent_type(obj_ref.ent())
+            ent_type = get_utype(obj_ref.ent())
+
+            if re.search(FUNDAMENTAL_TYPES, ent_type):
                 is_init = is_initialized(obj_ref)
                 assign_ptr = []
 
@@ -471,7 +482,7 @@ def is_initialized(_ref):
         while lex.text() != ";":
             if lex.text() == "=" and lex.token() == "Operator":
                 return True
-            
+
             lex = lex.next(True, True)
     else:
         lexer = _ref.file().lexer(lookup_ents=False)
@@ -482,19 +493,3 @@ def is_initialized(_ref):
             return True
 
     return False
-
-
-def get_ent_type(entity):
-    typed_ref = entity.ref("Typed")
-
-    if not typed_ref:
-        return entity, entity.type()
-
-    seen = set()
-    while typed_ref and typed_ref not in seen:
-        obj_ent = typed_ref.ent()
-        obj_ref_type = obj_ent.type()
-        typed_ref = typed_ref.ent().ref("Typed")
-        seen.add(typed_ref)
-
-    return obj_ent, obj_ref_type
