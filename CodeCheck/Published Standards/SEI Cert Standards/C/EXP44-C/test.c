@@ -1,4 +1,5 @@
 #include <stdio.h>
+#define EMPTY
 #define S(val) _Generic(val, int : 2, \
 short : 3, \
 default : 1)
