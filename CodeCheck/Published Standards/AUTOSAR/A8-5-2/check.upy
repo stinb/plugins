@@ -1,13 +1,17 @@
+import re
+
+
 ERR1 = 'Braced-initialization, without equals sign, shall be used for variable initialization'
 
 
 # 1 Byte data is not narrowed down
-BYTE_TYPES = {"int", "double", "float", "char", "short", "long"}
+BYTE_TYPES = ("int", "double", "float", "char", "short", "long")
 
 
 # The ID for the check
 def ids():
     return ('A8-5-2', 'CPP_V019')
+
 
 def name(id):
     return {
@@ -17,7 +21,6 @@ Braced-Initialization""",
         'CPP_V019': """\
 All Checks/Language Specific/C and C++/Variables/Initializing Variables Without Using Braced-Initialization"""
     }[id]
-
 
 
 def tags(id):
@@ -36,6 +39,7 @@ def tags(id):
             'Variables',
         ],
     }.get(id)
+
 
 # The long description of the check
 def detailed_description():
@@ -157,6 +161,37 @@ def test_language(language):
     return language == 'C++'
 
 
+def get_utype(ent):
+    utype = str(ent.freetext("UnderlyingType"))
+    utype = re.sub("unsigned", "", utype)
+    utype = re.sub("signed", "", utype)
+    utype = re.sub("const", "", utype)
+    utype = utype.strip(" ")
+
+    return utype
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+    seen = set()
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+
+        if obj_ent.id() in seen:
+            return obj_ent, obj_ent.type()
+
+        seen.add(obj_ent.id())
+
+        obj_ref_type = obj_ent.type()
+        typed_ref = obj_ent.ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
+
+
 def check(check, file):
     lexer = file.lexer(lookup_ents=False)
 
@@ -164,32 +199,38 @@ def check(check, file):
         return
 
     for obj_ref in file.filerefs("C Set Init", "Local Object"):
-        macro = True if obj_ref.ent().freetext("DefinedInMacro") else False
+        if obj_ref.ent().freetext("DefinedInMacro"):
+            continue
+
+        stop = False
+
+        for ass_ref in obj_ref.ent().refs("Assign Value", "Function"):
+            if obj_ref.line() == ass_ref.line():
+                stop = True
+                break
+
+        if stop:
+            continue
+
         value = obj_ref.ent().value() if obj_ref.ent().value() else ""
-        type_ref = obj_ref.ent().ref("Typed")
-        last_type_ref = type_ref
-        obj_ref_type = None
+        obj_ref_type = get_utype(obj_ref.ent())
         exception = False
 
         lex = lexer.lexeme(obj_ref.line(), obj_ref.column())
-        lex = lex.next(ignore_comments=True, ignore_whitespace=True)
-        next_lex = lex.next(ignore_comments=True, ignore_whitespace=True)
+        lex = lex.next(True, True)
+        next_lex = lex.next(True, True)
 
-        seen = set()
-        while type_ref and type_ref.ent().id() not in seen:
-            seen.add(type_ref.ent().id())
-            last_type_ref = type_ref
-            obj_ref_type = str(type_ref.ent().type())
-            type_ref = type_ref.ent().ref("Typed")
-
-        if not obj_ref_type:
-            obj_ref_type = str(obj_ref.ent().type())
-
-        if macro or (obj_ref_type and (("*" in obj_ref_type) or ("&" in obj_ref_type))):
+        if obj_ref_type.endswith(("*", "&")):
             continue
-        elif obj_ref_type and any(_type in obj_ref_type for _type in BYTE_TYPES) and value.isdigit() and int(value) < 256 and next_lex.text() != "{":
+        elif obj_ref_type in BYTE_TYPES and value.isdigit() and int(value) < 256 and next_lex.text() != "{":
             continue
-        elif last_type_ref and last_type_ref.ent().kind().check("Class, Struct, Enum"):  # User-defined Types
+
+        _ent, _type = get_ent_type(obj_ref.ent())
+
+        # User-defined Types
+        if _ent and (_ent.kind().check("Class, Struct, Enum")
+                     or (_ent.kind().check("Typedef") and _ent.library() == "standard"
+                         and obj_ref_type not in BYTE_TYPES)):
             # Assignment
             if (lex.text() == "=" and lex.token() == "Operator") and next_lex.text() != "{":
                 continue
@@ -199,8 +240,8 @@ def check(check, file):
             elif (lex.text() == "{" and lex.token() == "Punctuation") and next_lex.text() == "{" and lex.token() == "Punctuation":
                 continue
 
-            for func_ref in last_type_ref.ent().refs("Define", "Member Function"):
-                if (func_ref.ent().name() == last_type_ref.ent().name()) and ("initializer_list" in func_ref.ent().parameters()):
+            for func_ref in _ent.refs("Define", "Member Function"):
+                if (func_ref.ent().name() == _ent.name()) and ("initializer_list" in func_ref.ent().parameters()):
                     exception = True
                     break
 
