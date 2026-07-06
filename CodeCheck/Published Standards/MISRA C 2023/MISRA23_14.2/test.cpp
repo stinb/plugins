@@ -3,14 +3,26 @@
 #include <string.h>
 int get_status();
 
-// #4916: well-formed loops that were wrongly flagged.
-void misra_4916(const char *s, int32_t x) {
+// Well-formed loops that were previously flagged in error.
+void well_formed_loops(const char *s, int32_t x) {
   char buf[32];
   int32_t n, k;
   for (n = 0; n < (int32_t)strlen(s); n++) { }                // UndCC_Valid - pure function as bound
   for (n = x - 1; n >= 0; n--) { }                            // UndCC_Valid - counter initialized from an object
   for (k = 0; k < 16; k = k + 4) { }                          // UndCC_Valid - assignment-style increment
   for (n = 0; n < (int32_t)strlen(s); n++) { buf[n] = s[n]; } // UndCC_Valid - bound object only read in body
+}
+
+// A different struct member in the body is not a change to the loop bound.
+typedef struct { int32_t numItems; int32_t item[10]; } S_bound;
+void struct_member_bound(S_bound aStructure) {
+  int32_t i;
+  for (i = 0; i < aStructure.numItems; i++) {  // UndCC_Valid - item[] is a different member
+    aStructure.item[i] = 5;
+  }
+  for (i = 0; i < aStructure.numItems; i++) {  // UndCC_Violation - same member modified
+    aStructure.numItems = aStructure.numItems - 1;
+  }
 }
 
 uint8_t g_c[10] = {1, 5, 3, 9, 2, 8, 4, 6, 7, 0};
