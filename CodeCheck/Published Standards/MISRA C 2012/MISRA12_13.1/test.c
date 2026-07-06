@@ -30,7 +30,7 @@ int main() {
   uint32_t arr3[2] = {(uint32_t)(x++), 5};  // UndCC_Violation
 }
 
-// #4916: assigning to an array element is not an initializer list.
+// Assigning to an array element is not an initializer list.
 uint32_t make_value(void) { return 7; }
 void element_assignment(void) {
   uint8_t message[20];

@@ -9,7 +9,7 @@ int main() {
   enum etag { A, B } e = ( enum etag ) p; // UndCC_FalseNeg
 }
 
-// #4916: no pointer/integer conversion occurs in these. The check used to read
+// No pointer/integer conversion occurs in these. The check used to read
 // the declared type of an operand while ignoring '&' (address-of) and the
 // subscript operator.
 void no_conversion(void) {

@@ -1,6 +1,6 @@
 #include "string_lib.h"
 
-// #4916: memset is declared in a header but a fortified library macro redirects
+// memset is declared in a header but a fortified library macro redirects
 // the call to compiler builtins (__builtin___memset_chk, __builtin_object_size).
 // Those are compiler intrinsics, not implicit declarations.
 void test_fortified_memset( void ) {

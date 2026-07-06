@@ -2,7 +2,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-// #4916: the rule applies to C if/iteration statements, not preprocessor #if.
+// The rule applies to C if/iteration statements, not preprocessor #if.
 #if ARCH == 7        // UndCC_Valid
 #define A 1
 #elif !defined B && !defined C   // UndCC_Valid

@@ -23,7 +23,7 @@ int main() {
   return 0;
 }
 
-// #4916: an 8-bit destination is not wider than a 16/32-bit operand. Earlier the
+// An 8-bit destination is not wider than a 16/32-bit operand. Earlier the
 // size comparison was done on strings ("32" < "8"), so any wider operand was
 // treated as narrower and these were flagged.
 void narrow_destination(void) {

@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 
-// #4916: rule 10.8 only applies to composite expressions. A cast of a single
+// Rule 10.8 only applies to composite expressions. A cast of a single
 // object, constant, function call or array element is compliant.
 #define OUTPUT_BITS (256)
 void non_composite_operands(const uint8_t *data, uint32_t index) {
