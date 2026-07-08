@@ -1,0 +1,339 @@
+import re
+
+
+ERR1 = 'Provide placement new with properly aligned pointers to sufficient storage capacity'
+
+
+# The ID for the check
+def id():
+    return ('MEM54-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MEM54-CPP': 'Published Standards/SEI Cert Standards/C++/Provide placement new with properly aligned pointers to sufficient storage capacity',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Provide placement new with properly aligned pointers to sufficient storage capacity'
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Title</b></p>
+<p>Provide placement new with properly aligned pointers to sufficient storage capacity</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Providing placement new with a pointer to storage that is insufficiently sized or improperly aligned for the type of the object being constructed results in undefined behavior. This can corrupt memory beyond the bounds of the storage or trap on architectures that enforce alignment.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/MEM54-CPP.+Provide+placement+new+with+properly+aligned+pointers+to+sufficient+storage+capacity'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/MEM54-CPP.+Provide+placement+new+with+properly+aligned+pointers+to+sufficient+storage+capacity</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<p>In this noncompliant code example, the storage provided to placement new is smaller than a <code>long</code>:</p>
+<pre><code language="C++">
+#include &lt;new&gt;
+
+void f() {
+  short s;
+  long *lp = ::new (&s) long;
+}
+</code></pre>
+
+<p>In this noncompliant code example, the storage is large enough but is not properly aligned for a <code>long</code>:</p>
+<pre><code language="C++">
+#include &lt;new&gt;
+
+void f() {
+  unsigned char buffer[sizeof(long)];
+  long *lp = ::new (buffer) long;
+}
+</code></pre>
+
+<p>In this noncompliant code example, an array of <code>S</code> is constructed in storage sized for exactly <code>N</code> objects, leaving no room for the array allocation overhead added by the implementation:</p>
+<pre><code language="C++">
+struct S {
+  S();
+  ~S();
+};
+
+void f() {
+  const unsigned N = 32;
+  alignas(S) unsigned char buffer[sizeof(S) * N];
+  S *sp = ::new (buffer) S[N];
+}
+</code></pre>
+
+<p><b>Compliant Solution</b></p>
+<pre><code language="C++">
+#include &lt;new&gt;
+
+void f() {
+  alignas(long) unsigned char buffer[sizeof(long)];
+  long *lp = ::new (buffer) long;
+}
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This check flags placement new expressions whose storage argument resolves to a local declaration that is either not sized with <code>sizeof</code> of the constructed type, not aligned to the constructed type (via <code>alignas</code> or <code>std::aligned_storage</code>), or, for array placement new, sized as exactly <code>sizeof(T) * N</code> with no additional overhead term.
+It is a heuristic, textual check: storage declared far from its use, computed through helper functions, or sized with an equivalent but differently-written expression may not be recognized, and a human reviewer should confirm any reported violation as well as any placement new not flagged.</p>
+'''
+
+
+def tags(id):
+    return {
+        'MEM54-CPP': [
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Detectable: Yes',
+            'Repairable: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+PLACEMENT_RE = re.compile(
+    r'^(?:::)?\s*new\s*\(((?:[^()]|\([^()]*\))*)\)\s*([\w:]+)\s*(\[[^\]]*\])?\s*$')
+
+
+def find_storage_ent(file, obj_ref):
+    # Walk the lexer to the actual placement-argument identifier and read
+    # its resolved entity directly, rather than re-deriving it from text.
+    # This is exact even when an identically-named variable exists in a
+    # different scope, since Understand already resolved this reference.
+    lex = file.lexer().lexeme(obj_ref.line(), obj_ref.column())
+
+    while lex and not (lex.text() == 'new' and lex.token() == 'Keyword'):
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    if not lex:
+        return None
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    if not lex or lex.text() != '(':
+        return None
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    if lex and lex.text() == '&':
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return lex.ent() if lex else None
+
+
+def resolve_type_ent(lex):
+    # A type-id used as the constructed type of a `new` expression (or as
+    # the argument to sizeof/alignas/alignof) resolves to the constructor
+    # being invoked rather than the class/struct itself; unwrap that.
+    ent = lex.ent() if lex else None
+
+    if ent and ent.kind().check("Function"):
+        ent = ent.parent()
+
+    return ent
+
+
+def find_target_type_ent(file, obj_ref):
+    # Mirrors find_storage_ent's walk, but continues past the placement-args
+    # parens to resolve the constructed type-id to its actual entity. This
+    # lets later comparisons match on identity rather than spelling, so a
+    # qualified name (std::string) and an unqualified one reached via a
+    # using-declaration (string) are recognized as the same type.
+    lex = file.lexer().lexeme(obj_ref.line(), obj_ref.column())
+
+    while lex and not (lex.text() == 'new' and lex.token() == 'Keyword'):
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    if not lex:
+        return None
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    if not lex or lex.text() != '(':
+        return None
+
+    depth = 1
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    while lex and depth > 0:
+        if lex.text() == '(':
+            depth += 1
+        elif lex.text() == ')':
+            depth -= 1
+
+            if depth == 0:
+                break
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    if not lex:
+        return None
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    ent = None
+
+    while lex:
+        ent = resolve_type_ent(lex)
+        nxt = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+        if not (nxt and nxt.text() == '::'):
+            break
+
+        lex = nxt.next(ignore_whitespace=True, ignore_comments=True)
+
+    return ent
+
+
+def statement_lexemes(file, line, col, max_lines=8):
+    lex = file.lexer().lexeme(line, col)
+    lexemes = []
+    depth = 0
+
+    while lex:
+        if lex.line_begin() - line > max_lines:
+            break
+
+        lexemes.append(lex)
+        text = lex.text()
+
+        if text in ('(', '['):
+            depth += 1
+        elif text in (')', ']'):
+            depth -= 1
+        elif text == ';' and depth <= 0:
+            break
+
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    return lexemes
+
+
+def declaration_lexemes(file, ref):
+    lex = file.lexer().lexeme(ref.line(), ref.column())
+    start_line, start_col = ref.line(), ref.column()
+    lex = lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+    while lex and lex.text() not in (';', '{', '}'):
+        start_line, start_col = lex.line_begin(), lex.column_begin()
+        lex = lex.previous(ignore_whitespace=True, ignore_comments=True)
+
+    return statement_lexemes(file, start_line, start_col)
+
+
+def call_wraps_type(lexemes, call_names, target_ent, target_name):
+    # Detect `sizeof(T)` / `alignas(T)` / `alignof(T)` (T anywhere among the
+    # call's arguments, to also match forms like `aligned_alloc(alignof(T),
+    # sizeof(T))`). A bare-name text match handles fundamental types (which
+    # have no entity of their own) and is kept as the primary signal even for
+    # class types, since Understand can resolve an array-new type-id (`new
+    # (p) S[n]`) to a placeholder entity distinct from S's real declaration
+    # when S's constructor is never defined. An entity-id match is only used
+    # to additionally recognize a differently-spelled/qualified same type
+    # (e.g. `std::string` vs. an unqualified `string` reached via a
+    # using-declaration), which the text match alone would miss.
+    n = len(lexemes)
+
+    for i in range(n - 1):
+        if lexemes[i].text() not in call_names or lexemes[i + 1].text() != '(':
+            continue
+
+        depth = 1
+        j = i + 2
+
+        while j < n and depth > 0:
+            text = lexemes[j].text()
+
+            if text == '(':
+                depth += 1
+            elif text == ')':
+                depth -= 1
+
+                if depth == 0:
+                    break
+            elif text == target_name:
+                return True
+            elif target_ent:
+                candidate = resolve_type_ent(lexemes[j])
+
+                if candidate and candidate.id() == target_ent.id():
+                    return True
+
+            j += 1
+
+    return False
+
+
+def check(check, file):
+    for obj_ref in file.filerefs("Define", "Object"):
+        obj_ent = obj_ref.ent()
+        init_text = obj_ent.freetext("InitText")
+
+        if not init_text:
+            continue
+
+        match = PLACEMENT_RE.match(init_text.strip())
+
+        if not match:
+            continue
+
+        target_name = match.group(2).rsplit('::', 1)[-1]
+        array_suffix = match.group(3)
+        target_ent = find_target_type_ent(file, obj_ref)
+
+        storage_ent = find_storage_ent(file, obj_ref)
+
+        if not storage_ent:
+            continue
+
+        def_ref = storage_ent.ref("Definein, Declarein")
+
+        if not def_ref:
+            continue
+
+        decl_lexemes = declaration_lexemes(def_ref.file(), def_ref)
+        decl_text = ' '.join(lex.text() for lex in decl_lexemes)
+        same_type_storage = bool(re.search(
+            r'\b' + re.escape(target_name) + r'\b', storage_ent.type() or ''))
+
+        has_sufficient_size = same_type_storage or call_wraps_type(
+            decl_lexemes, ('sizeof',), target_ent, target_name)
+        is_aligned = same_type_storage or 'aligned_storage' in decl_text or call_wraps_type(
+            decl_lexemes, ('alignas', 'alignof'), target_ent, target_name)
+
+        violation = False
+
+        if not has_sufficient_size or not is_aligned:
+            violation = True
+        elif array_suffix:
+            size_expr_match = re.search(r'\[(.*)\]', decl_text)
+            size_expr = size_expr_match.group(1) if size_expr_match else ''
+
+            if '+' not in size_expr and 'aligned_storage' not in decl_text:
+                violation = True
+
+        if violation:
+            check.violation(obj_ref.ent(), obj_ref.file(),
+                            obj_ref.line(), obj_ref.column(), ERR1)

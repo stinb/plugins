@@ -1,0 +1,240 @@
+import re
+
+
+ERR1 = 'Do not store an already-owned pointer value in an unrelated smart pointer'
+
+
+# The ID for the check
+def id():
+    return ('MEM56-CPP')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MEM56-CPP': 'Published Standards/SEI Cert Standards/C++/Do not store an already-owned pointer value in an unrelated smart pointer',
+    }[id]
+
+
+# The short description of the check
+def description():
+    return 'Do not store an already-owned pointer value in an unrelated smart pointer'
+
+
+# The long description of the check
+def detailed_description():
+    return '''
+<p><b>Title</b></p>
+<p>Do not store an already-owned pointer value in an unrelated smart pointer</p>
+
+<p><b>Risk Assessment</b></p>
+<p>Creating an unrelated smart pointer object with a pointer value already owned by another smart pointer results in undefined behavior when either smart pointer is destroyed. This commonly leads to double-free or use-after-free vulnerabilities.</p>
+
+<p><b>Full Standard</b></p>
+<p><a href='https://wiki.sei.cmu.edu/confluence/display/cplusplus/MEM56-CPP.+Do+not+store+an+already-owned+pointer+value+in+an+unrelated+smart+pointer'>
+https://wiki.sei.cmu.edu/confluence/display/cplusplus/MEM56-CPP.+Do+not+store+an+already-owned+pointer+value+in+an+unrelated+smart+pointer</a></p>
+
+<p><b>Noncompliant Code Example</b></p>
+<p>In this noncompliant code example, two unrelated <code>shared_ptr</code> objects are constructed from the same raw pointer:</p>
+<pre><code language="C++">
+#include &lt;memory&gt;
+
+void f() {
+  int *i = new int;
+  std::shared_ptr&lt;int&gt; p1(i);
+  std::shared_ptr&lt;int&gt; p2(i);
+}
+</code></pre>
+
+<p>In this noncompliant code example, a raw pointer obtained from one <code>shared_ptr</code> via <code>get()</code> and <code>dynamic_cast</code> is used to construct a second, unrelated <code>shared_ptr</code>:</p>
+<pre><code language="C++">
+#include &lt;memory&gt;
+
+struct B {
+  virtual ~B() = default;
+};
+struct D : B {};
+
+void g(std::shared_ptr&lt;D&gt; derived);
+
+void f() {
+  std::shared_ptr&lt;B&gt; poly(new D);
+  g(std::shared_ptr&lt;D&gt;(dynamic_cast&lt;D *&gt;(poly.get())));
+}
+</code></pre>
+
+<p>In this noncompliant code example, a member function wraps <code>this</code> in a new, unrelated <code>shared_ptr</code>:</p>
+<pre><code language="C++">
+#include &lt;memory&gt;
+
+struct S {
+  std::shared_ptr&lt;S&gt; g() { return std::shared_ptr&lt;S&gt;(this); }
+};
+</code></pre>
+
+<p><b>Compliant Solution</b></p>
+<pre><code language="C++">
+#include &lt;memory&gt;
+
+void f() {
+  std::shared_ptr&lt;int&gt; p1 = std::make_shared&lt;int&gt;();
+  std::shared_ptr&lt;int&gt; p2(p1);
+}
+</code></pre>
+
+<pre><code language="C++">
+g(std::dynamic_pointer_cast&lt;D, B&gt;(poly));
+</code></pre>
+
+<pre><code language="C++">
+#include &lt;memory&gt;
+
+struct S : std::enable_shared_from_this&lt;S&gt; {
+  std::shared_ptr&lt;S&gt; g() { return shared_from_this(); }
+};
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>This check flags three patterns: (1) two or more <code>shared_ptr</code>/<code>unique_ptr</code> objects, in the same enclosing function, that acquire ownership of the same raw-pointer-typed identifier — whether through direct construction (<code>shared_ptr&lt;T&gt;(raw)</code>) or through <code>existing.reset(raw)</code>; (2) a <code>shared_ptr</code> constructed from another smart pointer's <code>get()</code>, with or without an intervening cast (e.g. <code>shared_ptr&lt;D&gt;(dynamic_cast&lt;D *&gt;(other.get()))</code> or plain <code>shared_ptr&lt;B&gt;(other.get())</code>), instead of <code>std::dynamic_pointer_cast</code>; and (3) a member function that wraps <code>this</code> in a new <code>shared_ptr</code> when its class does not directly inherit from <code>std::enable_shared_from_this</code>. It is a heuristic, textual check and will not catch equivalent patterns spread across indirection (e.g. through helper functions, member/reference storage, or a typedef alias of <code>enable_shared_from_this</code>) or written with unusual formatting.</p>
+'''
+
+
+def tags(id):
+    return {
+        'MEM56-CPP': [
+            'Language: C++',
+            'Standard: SEI CERT C++',
+            'Severity: 75',
+            'Likelihood: Likely',
+            'Detectable: Yes',
+            'Repairable: Medium',
+            'Priority: P18',
+            'Level: L1',
+            'Memory Allocation',
+        ],
+    }.get(id)
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+SMART_PTR_RE = re.compile(r'\b(?:shared|unique)_ptr\b')
+GET_RE = re.compile(
+    r'shared_ptr\s*<[^>]*>\s*\w*\s*\(\s*(?:\w+_cast\s*<[^>]*>\s*\(\s*)?\w+\s*\.\s*get\s*\(\s*\)\s*\)+')
+THIS_RE = re.compile(r'shared_ptr\s*<[^>]*>\s*\w*\s*\(\s*this\s*\)')
+RESET_RE = re.compile(r'\b(\w+)\s*\.\s*reset\s*\(\s*(\w+)\s*\)')
+
+
+def is_smart_ptr(ent):
+    return bool(ent and SMART_PTR_RE.search(ent.type() or ''))
+
+
+def locate_in_contents(func_ref, contents, offset):
+    # .contents() always starts at column 1 of func_ref.line(), so an
+    # offset into it can be converted back to a real (line, column).
+    prefix = contents[:offset]
+    line = func_ref.line() + prefix.count('\n')
+    last_newline = prefix.rfind('\n')
+    column = offset - last_newline if last_newline != -1 else offset + 1
+    return line, column
+
+
+def check_shared_source(check, file):
+    all_objs = [ref.ent() for ref in file.filerefs("Define", "Object")]
+
+    def find_obj(name):
+        return next((o for o in all_objs if o.name() == name), None)
+
+    groups = {}
+
+    for obj_ref in file.filerefs("Define", "Object"):
+        ent = obj_ref.ent()
+
+        if not is_smart_ptr(ent):
+            continue
+
+        init_text = (ent.freetext("InitText") or '').strip()
+
+        if not re.match(r'^\w+$', init_text):
+            continue
+
+        if is_smart_ptr(find_obj(init_text)):
+            continue
+
+        parent = ent.parent()
+        key = (parent.id() if parent else None, init_text)
+        groups.setdefault(key, []).append(
+            (obj_ref.line(), obj_ref.column(), ent, obj_ref.file()))
+
+    for func_ref in file.filerefs("Define", "Function"):
+        func_ent = func_ref.ent()
+        contents = func_ent.contents() or ''
+
+        for match in RESET_RE.finditer(contents):
+            obj_name, raw_name = match.group(1), match.group(2)
+
+            if not is_smart_ptr(find_obj(obj_name)) or is_smart_ptr(find_obj(raw_name)):
+                continue
+
+            line, column = locate_in_contents(
+                func_ref, contents, match.start())
+            key = (func_ent.id(), raw_name)
+            groups.setdefault(key, []).append(
+                (line, column, func_ent, func_ref.file()))
+
+    for refs in groups.values():
+        if len(refs) > 1:
+            for line, col, ent, vfile in refs[1:]:
+                check.violation(ent, vfile, line, col, ERR1)
+
+
+def check_dynamic_cast_get(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        contents = func_ref.ent().contents() or ''
+        match = GET_RE.search(contents)
+
+        if match:
+            line, column = locate_in_contents(
+                func_ref, contents, match.start())
+            check.violation(func_ref.ent(), func_ref.file(),
+                            line, column, ERR1)
+
+
+def check_this_without_enable(check, file):
+    for func_ref in file.filerefs("Define", "Function"):
+        func_ent = func_ref.ent()
+        contents = func_ent.contents() or ''
+        match = THIS_RE.search(contents)
+
+        if not match:
+            continue
+
+        parent = func_ent.parent()
+        has_enable_shared_from_this = False
+
+        if parent and parent.kind().check("Struct, Class"):
+            for base_ref in parent.refs("Base"):
+                if 'enable_shared_from_this' in base_ref.ent().name():
+                    has_enable_shared_from_this = True
+                    break
+
+        if not has_enable_shared_from_this:
+            line, column = locate_in_contents(
+                func_ref, contents, match.start())
+            check.violation(func_ent, func_ref.file(), line, column, ERR1)
+
+
+def check(check, file):
+    check_shared_source(check, file)
+    check_dynamic_cast_get(check, file)
+    check_this_without_enable(check, file)
