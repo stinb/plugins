@@ -14,6 +14,7 @@ ERR1 = 'Argument used but not validated'
 validatedParams = dict()
 checkedParams = set()
 flaggedParams = set()
+inProgressParams = set()
 
 
 def ids():
@@ -206,36 +207,49 @@ def preParametersValidated(method, varOrParam):
     if varOrParam.kind().check('Variable'):
         return entInIf(method, varOrParam)
 
-    # Invalid if parameter number not found
-    paramNum = getParamNum(method, varOrParam)
-    if paramNum == None:
-        validatedParams[varOrParam] = False
+    # Cycle guard: this parameter is already being resolved further up the
+    # current call chain. getPreParameters only skips direct recursion and
+    # one-hop indirect recursion (A calls B calls A); a longer call-graph
+    # cycle (A calls B calls C calls A) isn't caught there and would
+    # otherwise make this function recurse into itself forever. Treat a
+    # rediscovered in-progress parameter as unresolved rather than looping.
+    if varOrParam in inProgressParams:
+        return False
+
+    inProgressParams.add(varOrParam)
+    try:
+        # Invalid if parameter number not found
+        paramNum = getParamNum(method, varOrParam)
+        if paramNum == None:
+            validatedParams[varOrParam] = False
+            return validatedParams[varOrParam]
+
+        # Get all the variables the become this parameter
+        varsAndMethods = getPreParameters(method, varOrParam, paramNum)
+
+        # Invalid if all pre-parameters weren't found
+        if not varsAndMethods:
+            validatedParams[varOrParam] = False
+            return validatedParams[varOrParam]
+
+        # Make sure each variable is in an if statement
+        for otherVarOrParam, otherMethod in varsAndMethods.items():
+            if not entInIf(otherMethod, otherVarOrParam):
+                # Parameter
+                if otherVarOrParam.kind().check('Parameter'):
+                    validated = preParametersValidated(otherMethod, otherVarOrParam)
+                    validatedParams[varOrParam] = validated
+                    return validatedParams[varOrParam]
+
+                # Variable
+                else:
+                    validatedParams[varOrParam] = False
+                    return validatedParams[varOrParam]
+
+        validatedParams[varOrParam] = True
         return validatedParams[varOrParam]
-
-    # Get all the variables the become this parameter
-    varsAndMethods = getPreParameters(method, varOrParam, paramNum)
-
-    # Invalid if all pre-parameters weren't found
-    if not varsAndMethods:
-        validatedParams[varOrParam] = False
-        return validatedParams[varOrParam]
-
-    # Make sure each variable is in an if statement
-    for otherVarOrParam, otherMethod in varsAndMethods.items():
-        if not entInIf(otherMethod, otherVarOrParam):
-            # Parameter
-            if otherVarOrParam.kind().check('Parameter'):
-                validated = preParametersValidated(otherMethod, otherVarOrParam)
-                validatedParams[varOrParam] = validated
-                return validatedParams[varOrParam]
-
-            # Variable
-            else:
-                validatedParams[varOrParam] = False
-                return validatedParams[varOrParam]
-
-    validatedParams[varOrParam] = True
-    return validatedParams[varOrParam]
+    finally:
+        inProgressParams.discard(varOrParam)
 
 
 def checkMethod(check, method):
