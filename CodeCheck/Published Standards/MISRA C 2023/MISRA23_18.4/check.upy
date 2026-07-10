@@ -5,11 +5,13 @@
 import re
 
 ERR1 = "The %1 operator was applied to an expression of pointer type"
+# Strict mode (MISRA C 2004 17.4): indexing only allowed on array-typed objects
+ERR2 = "Array indexing was applied to %1, which is not defined as an array type"
 
 # The ID for the check
 def ids():
     return ('MISRA23_18.4', 'MISRA12_18.4', 'CPP_P062',
-               'MISRA25_18.4'
+               'MISRA25_18.4', 'MISRA04_17.4'
     )
 
 # The short name of the check
@@ -24,6 +26,8 @@ All Checks/Language Specific/C and C++/Pointers/
 The +, -, += and -= operators should not be applied to an expression of pointer
 type""",
         'MISRA25_18.4': 'Published Standards/MISRA C 2025/18.4 The +, -, += and -= operators should not be applied to an expression of pointer type',
+        'MISRA04_17.4': 'Published Standards/MISRA-C 2004/' + """\
+17.4 Array indexing shall be the only allowed form of pointer arithmetic""",
     }[id]
 
 
@@ -54,6 +58,12 @@ def tags(id):
             'Language: C',
             'Standard: MISRA C 2025',
             'Category: Advisory',
+            'Pointers',
+        ],
+        'MISRA04_17.4': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: Required',
             'Pointers',
         ],
     }.get(id)
@@ -202,6 +212,42 @@ void fn4 ( void )
   fn3 ( &amp;data, &amp;a2[ 4 ] );
 }</code></pre>
 """,
+
+        'MISRA04_17.4': """\
+<p>Array indexing is the only acceptable form of pointer arithmetic, because it
+is clearer and hence less error prone than pointer manipulation. This rule bans
+the explicit calculation of pointer values. Array indexing shall only be applied
+to objects defined as an array type. Any explicitly calculated pointer value has
+the potential to access unintended or invalid memory addresses. Pointers may go
+out of bounds of arrays or structures, or may even point to effectively
+arbitrary locations. See also Rule 21.1.</p>
+<pre><code language="C++">void my_fn(uint8_t * p1, uint8_t p2[])
+{
+   uint8_t index = 0U;
+   uint8_t * p3;
+   uint8_t * p4;
+     *p1 = 0U;
+     p1 ++;          /* not compliant - pointer increment               */
+     p1 = p1 + 5;    /* not compliant - pointer increment               */
+     p1[5] = 0U;     /* not compliant - p1 was not declared as an array */
+     p3 = &amp;p1[5];    /* not compliant - p1 was not declared as an array */
+     p2[0] = 0U;
+     index ++;
+     index = index + 5U;
+     p2[index] = 0U; /* compliant                                       */
+     p4 = &amp;p2[5];    /* compliant                                       */
+}
+
+uint8_t a1[16];
+uint8_t a2[16];
+my_fn(a1, a2);
+my_fn(&amp;a1[4], &amp;a2[4]);
+uint8_t a[10];
+uint8_t * p;
+p = a;
+*(p+5) = 0U;            /* not compliant                                 */
+p[5] = 0U;              /* not compliant                                 */</code></pre>
+""",
     }[id]
 
 def test_entity(file):
@@ -210,11 +256,27 @@ def test_entity(file):
 def test_language(language):
     return language == 'C++'
 
+def define_options(check):
+    # MISRA C 2004 17.4 is stricter than 18.4: it also bans pointer ++/-- and
+    # indexing applied to objects not defined as an array type. Default on only
+    # for MISRA04_17.4.
+    strict = check.id() == 'MISRA04_17.4'
+    check.option().checkbox('strict',
+        'Also flag pointer ++/-- and array indexing on objects not defined as '
+        'an array type (MISRA C 2004 Rule 17.4)',
+        strict)
+
 def check(check, file):
     lexer = None
     lexers = {}
+    strict = check.option().lookup('strict')
     # Operators to check around pointer usage
     operators = ['+', '-', '+=', '-=']
+    # In strict mode also flag ++/--; these appear as Modify references
+    useKinds = 'Deref Setby, Useby'
+    if strict:
+        operators = operators + ['++', '--']
+        useKinds = useKinds + ', Modifyby'
 
     # Get all references to defined objects or parameters in the file
     refs = file.filerefs('Define', 'Object, Parameter')
@@ -224,8 +286,12 @@ def check(check, file):
         if '*' not in str(ref.ent().freetext("underlyingtype")):
             continue
 
+        # An object defined as an array type (including a decayed array
+        # parameter such as p2[]) keeps '[' in its declared type
+        arrayDeclared = '[' in str(ref.ent().type())
+
         # Get all dereference and usage references of the pointer
-        useRefs = ref.ent().refs('Deref Setby, Useby')
+        useRefs = ref.ent().refs(useKinds)
 
         for useRef in useRefs:
             # Reuse lexer for each file to avoid reloading
@@ -241,8 +307,14 @@ def check(check, file):
                 prevLex = lexeme.previous(True, True)
                 nextLex = lexeme.next(True, True)
 
-                # Skip if followed by array indexing
+                # Handle array indexing
                 if nextLex and nextLex.text() == '[':
+                    # In strict mode, indexing is only allowed on objects
+                    # defined as an array type
+                    if strict and not arrayDeclared:
+                        check.violation(useRef.ent(), useRef.file(),
+                                        useRef.line(), useRef.column(), ERR2,
+                                        ref.ent().name())
                     continue
 
                 # Skip if followed by member access (-> or .)

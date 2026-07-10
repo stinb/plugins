@@ -8,9 +8,9 @@ void fn1 ( void )
   a[ index ] = 0U; /* UndCC_Valid */
   ptr = &a[ 5 ]; /* UndCC_Valid */
   ptr = a;
-  ptr++; /* UndCC_Valid - increment operator not + */
+  ptr++; /* UndCC_Violation(strict) - increment operator not + */
   *( ptr + 5 ) = 0U; /* UndCC_Violation */
-  ptr[ 5 ] = 0U; /* UndCC_Valid */
+  ptr[ 5 ] = 0U; /* UndCC_Violation(strict) - ptr not declared as an array */
 }
 void fn2 ( void )
 {
@@ -23,18 +23,18 @@ void fn2 ( void )
     uint8_t *row = array_2_2[ i ];
     for ( j = 0U; j < 2U; j++ )
     {
-      sum += row[ j ]; /* UndCC_Valid */
+      sum += row[ j ]; /* UndCC_Violation(strict) - row not declared as an array */
     }
   }
 }
 void fn3 ( uint8_t *p1, uint8_t p2[ ] )
 {
-  p1++; /* UndCC_Valid */
+  p1++; /* UndCC_Violation(strict) */
   p1 = p1 + 5; /* UndCC_Violation */
-  p1[ 5 ] = 0U; /* UndCC_Valid */
-  p2++; /* UndCC_Valid */
+  p1[ 5 ] = 0U; /* UndCC_Violation(strict) - p1 not declared as an array */
+  p2++; /* UndCC_Violation(strict) */
   p2 = p2 + 3; /* UndCC_Violation */
-  p2[ 3 ] = 0U; /* UndCC_Valid */
+  p2[ 3 ] = 0U; /* UndCC_Valid - p2 declared as an array */
 }
 uint8_t a1[ 16 ];
 uint8_t a2[ 16 ];
