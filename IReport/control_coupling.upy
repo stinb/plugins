@@ -1,0 +1,517 @@
+# Interactive Report: Control Coupling
+#
+# For each function under analysis, list every function call it makes,
+# classified as Consume (the call's return value is used), Produce (the call
+# is made to drive/control another component), or both. Mirrors Section 6.2
+# of the ETI / DO-178C control coupling report format (issue #4876).
+#
+# Columns: Module | Function Under Analysis | Consume | Produce |
+#          Decision Point | SVCPs (left blank for the analyst)
+#
+# Scoping:
+#   - One row per function call made within the function under analysis.
+#   - A call is Consume when its return value is used: assigned, tested in a
+#     condition, passed as an argument, returned, or otherwise part of a
+#     larger expression.
+#   - A call is Produce when it is invoked for effect: its return value is
+#     discarded, or the callee has no return value or visible side effects
+#     (writes to globals/statics/members or through pointers).
+#   - A single call can be both Consume and Produce.
+#   - Decision Point is populated when the call appears inside the condition
+#     of an if/while/for/do-while/switch or a ternary expression.
+
+import re
+
+# Assignment operators (top level only).
+_ASSIGN_OPS = {"=", "+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=",
+               "<<=", ">>=", ":="}
+# Statement-leading keywords that mark a control statement (multi-language).
+_CONTROL_KW = {"if", "while", "for", "switch", "foreach", "elsif", "elif",
+               "case", "until", "loop", "when", "do"}
+# Operators after a call's closing paren that mean the return value is used.
+_VALUE_USE_OPS = _ASSIGN_OPS | {
+    "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "&&", "||",
+    "&", "|", "^", "<<", ">>", "?", ".", "->", "[", "("}
+_OPEN = {"(", "[", "{"}
+_CLOSE = {")", "]", "}"}
+_STMT_BOUNDARY = {";", "{", "}", ":"}
+_TERMINATORS = {";", "{", "}"}
+_MAX_STMT_TOKENS = 500
+
+
+def name():
+  return "Control Coupling"
+
+
+def description():
+  return '''Documents control coupling between functions: for each function,
+    every function call it makes, classified as consumer, producer, or both.
+    <p>Output mirrors Section 6.2 of the ETI / DO-178C control coupling report
+    format. The table is filterable by Module and by function name.</p>
+    <p>Columns:</p>
+    <ul>
+      <li><b>Module</b> &ndash; source file containing the function under analysis</li>
+      <li><b>Function Under Analysis</b> &ndash; the function making the call(s)</li>
+      <li><b>Consume</b> &ndash; called function whose return value/output is
+        used by the function under analysis (N/A if not applicable)</li>
+      <li><b>Produce</b> &ndash; called function that the function under
+        analysis drives/controls (N/A if not applicable)</li>
+      <li><b>Decision Point</b> &ndash; the condition/loop expression if the
+        call appears inside a conditional or loop guard; otherwise N/A</li>
+      <li><b>SVCPs</b> &ndash; Software Verification and Certification Points,
+        left blank for the analyst to fill in</li>
+    </ul>
+    <p>A single call can appear as both Consume and Produce when the return
+    value is used and the call also controls another component. Calls whose
+    value is discarded are always Produce. Calls whose value is used are also
+    Produce when the callee returns nothing or has visible side effects
+    (writes to globals, statics, members, or through pointers).</p>
+  '''
+
+
+def tags():
+  return [
+    'Target: Project',
+    'Language: Any',
+    'API',
+  ]
+
+
+def test_global(db):
+  return True
+
+
+def is_enabled_by_default():
+  return True
+
+
+def support_abort():
+  return True
+
+
+def generate(report, db):
+  report.table('''
+    [{
+      "name" : "Module",
+      "filtertype": "string"
+     },{
+      "name" : "Function Under Analysis",
+      "filtertype": "string"
+     },{
+      "name" : "Consume",
+      "filtertype": "string"
+     },{
+      "name" : "Produce",
+      "filtertype": "string"
+     },{
+      "name" : "Decision Point",
+      "filtertype": "string"
+     },{
+      "name" : "SVCPs",
+      "filtertype": "string"
+    }]''')
+
+  funcs = db.ents("function ~unresolved ~unknown, "
+                  "method ~unresolved ~unknown, "
+                  "procedure ~unresolved ~unknown, "
+                  "subroutine ~unresolved ~unknown")
+
+  caches = _Caches()
+  rows = []
+  total = max(1, len(funcs))
+  for i, fn in enumerate(funcs):
+    report.progress(int(i / total * 100))
+    if report.is_aborted():
+      return
+    rows.extend(_rows_for_function(fn, caches))
+
+  # Group by Module, then by function under analysis, then by source order.
+  rows.sort(key=lambda r: (r["module"].lower(), r["dest"].lower(),
+                           r["line"], r["col"]))
+
+  for r in rows:
+    report.tablecell()
+    report.print(r["module"])
+
+    report.tablecell()
+    report.entity(r["fn"])
+    report.print(r["dest"])
+    report.entity()
+
+    report.tablecell()
+    if r["consumed"]:
+      report.syncfile(r["file"].longname(), r["line"], r["col"])
+      report.print(r["call"])
+      report.syncfile()
+    else:
+      report.print("N/A")
+
+    report.tablecell()
+    if r["produced"]:
+      report.syncfile(r["file"].longname(), r["line"], r["col"])
+      report.print(r["call"])
+      report.syncfile()
+    else:
+      report.print("N/A")
+
+    report.tablecell()
+    report.print(r["decision"] if r["decision"] else "N/A")
+
+    report.tablecell()  # SVCPs: intentionally blank
+
+  report.table()
+
+
+class _Caches:
+  def __init__(self):
+    self.lexers = {}    # file id -> lexer (or None)
+    self.modules = {}   # file id -> module display name
+    self.callees = {}   # callee id -> (name, usable)
+    self.effects = {}   # callee id -> has visible side effects
+
+
+# A callee that can produce a row must be callable and have an
+# identifier-shaped name: destructors (~Foo) and operators (operator==) can
+# never match the lexeme at the call site, so they are rejected up front
+# without a lexer lookup.
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*$")
+
+
+def _rows_for_function(fn, caches):
+  call_refs = fn.refs("call, call ptr")
+  if not call_refs:
+    return []
+
+  dest = None       # computed lazily on the first qualifying row
+  rows = []
+  seen = set()      # (file id, line, col, callee name) already emitted
+  # Consecutive refs are almost always in the same file; track the current
+  # file locally so the common case costs no cache lookup.
+  cur_fid = None
+  cur_file = None
+  cur_module = None
+  cur_lexer = None
+  for ref in call_refs:
+    callee = ref.ent()
+    if callee is None:
+      continue
+    cid = callee.id()
+    info = caches.callees.get(cid)
+    if info is None:
+      cname = callee.name()
+      info = (cname,
+              bool(_IDENT_RE.fullmatch(cname)) and _is_callable(callee))
+      caches.callees[cid] = info
+    cname, usable = info
+    if not usable:
+      continue
+
+    f = ref.file()
+    fid = f.id()
+    if fid != cur_fid:
+      cur_fid = fid
+      cur_file = f
+      cur_module = caches.modules.get(fid)
+      if cur_module is None:
+        cur_module = f.relname() or f.name()
+        caches.modules[fid] = cur_module
+      cur_lexer = _get_lexer(f, caches.lexers)
+    if cur_lexer is None:
+      continue
+
+    line = ref.line()
+    col = ref.column()
+    # The same source call can carry several refs (e.g. paired call +
+    # deref-call, or overload candidates sharing a name); one row each.
+    key = (fid, line, col, cname)
+    if key in seen:
+      continue
+    seen.add(key)
+
+    site = _analyze_call_site(cur_lexer, line, col, cname)
+    if site is None:
+      continue
+    call_text, consumed, decision = site
+
+    # A discarded call is inherently made for effect. A consumed call also
+    # produces when the callee returns nothing or has visible side effects.
+    produced = (not consumed) or _callee_has_effects(callee, cid,
+                                                     caches.effects)
+
+    if dest is None:
+      dest = _signature(fn)
+    rows.append({
+      "module": cur_module,
+      "dest": dest,
+      "fn": fn,
+      "call": call_text,
+      "consumed": consumed,
+      "produced": produced,
+      "decision": decision,
+      "file": cur_file,
+      "line": line,
+      "col": col,
+    })
+  return rows
+
+
+def _analyze_call_site(lexer, line, col, callee_name):
+  """Classify the call at (line, col). Returns (call_text, consumed,
+  decision_text) or None when the call has no explicit source expression
+  (implicit calls, operator overloads, constructors)."""
+  try:
+    lex = lexer.lexeme(line, col)
+  except Exception:
+    return None
+  if lex is None or lex.text().lower() != callee_name.lower():
+    return None
+
+  # Collect the statement's tokens once; all classification below works on
+  # the list. ci is the index of the callee name token.
+  stmt, ci = _statement_tokens(lex)
+  close = _call_close(stmt, ci)
+
+  in_guard, decision = _guard_info(stmt, ci)
+  consumed = in_guard or _value_is_used(stmt, ci, close)
+  if not in_guard:
+    decision = _ternary_decision(stmt, ci, close)
+    if decision:
+      consumed = True
+  return _text_of(stmt, ci, close), consumed, decision
+
+
+def _statement_tokens(lex):
+  """The statement containing lex as a list of (text, lexeme) tuples
+  (comments and whitespace excluded), plus the index of lex in that list.
+  Lexemes are kept so _text_of can reconstruct spacing lazily; everything
+  else works on the text alone."""
+  before = []
+  scan = lex.previous(True, True)
+  count = 0
+  while scan is not None and count < _MAX_STMT_TOKENS:
+    txt = scan.text()
+    if txt in _STMT_BOUNDARY:
+      break
+    before.append((txt, scan))
+    scan = scan.previous(True, True)
+    count += 1
+  before.reverse()
+  # Drop a leading 'else' so 'else if (...)' classifies as an if guard.
+  if before and before[0][0].lower() == "else":
+    before.pop(0)
+
+  stmt = before
+  ci = len(stmt)
+  stmt.append((lex.text(), lex))
+
+  scan = lex.next(True, True)
+  count = 0
+  while scan is not None and count < _MAX_STMT_TOKENS:
+    txt = scan.text()
+    stmt.append((txt, scan))
+    if txt in _TERMINATORS:
+      break
+    scan = scan.next(True, True)
+    count += 1
+  return stmt, ci
+
+
+def _guard_info(stmt, ci):
+  """Return (in_guard, decision_text): whether the call at index ci sits in
+  the condition of the control statement."""
+  if ci == 0 or stmt[0][0].lower() not in _CONTROL_KW:
+    return False, None
+
+  if len(stmt) > 1 and stmt[1][0] == "(":
+    close = _match(stmt, 1, "(", ")")
+    if close is not None and 1 < ci < close:
+      return True, _text_of(stmt, 0, close)
+    return False, None
+
+  # Paren-less guard (Ada, Fortran, ...): keyword up to then/loop/do/:.
+  end = 0
+  for i in range(1, len(stmt)):
+    txt = stmt[i][0].lower()
+    if txt in _TERMINATORS:
+      break
+    end = i
+    if txt in ("then", "loop", "do", ":"):
+      break
+  if 0 < ci <= end:
+    return True, _text_of(stmt, 0, end)
+  return False, None
+
+
+def _value_is_used(stmt, ci, close):
+  """True when the call's return value participates in a larger expression:
+  returned, assigned, nested in an argument list or subscript, or followed by
+  an operator that consumes it."""
+  if stmt[0][0].lower() in ("return", "throw"):
+    return True
+
+  depth = 0
+  for i in range(ci):
+    txt = stmt[i][0]
+    if txt in _OPEN:
+      depth += 1
+    elif txt in _CLOSE:
+      depth -= 1
+    elif depth == 0 and txt in _ASSIGN_OPS:
+      return True    # call is in the right-hand side of an assignment
+  if depth > 0:
+    return True      # call nested in parens/brackets: argument or subscript
+
+  nxt = close + 1
+  return nxt < len(stmt) and stmt[nxt][0] in _VALUE_USE_OPS
+
+
+def _ternary_decision(stmt, ci, close):
+  """Return the decision text when the call ends inside the condition of a
+  ternary expression (a top-level '?' follows it), else None."""
+  q = None
+  depth = 0
+  for i in range(close + 1, len(stmt)):
+    txt = stmt[i][0]
+    if txt in _OPEN:
+      depth += 1
+    elif txt in _CLOSE:
+      if depth == 0:
+        break
+      depth -= 1
+    elif depth == 0:
+      if txt in (";", "{", "}", ":", ","):
+        break
+      if txt == "?":
+        q = i
+        break
+  if q is None:
+    return None
+
+  # Decision text runs from after the last top-level assignment operator (or
+  # the statement start) through the '?'.
+  begin = 1 if stmt[0][0].lower() in ("return", "throw") else 0
+  depth = 0
+  for i in range(begin, q):
+    txt = stmt[i][0]
+    if txt in _OPEN:
+      depth += 1
+    elif txt in _CLOSE:
+      depth -= 1
+    elif depth == 0 and txt in _ASSIGN_OPS:
+      begin = i + 1
+  return _text_of(stmt, begin, q)
+
+
+def _call_close(stmt, ci):
+  """Index of the token that ends the call expression starting at ci: the
+  matching close paren of its argument list, or ci for paren-less calls."""
+  n = ci + 1
+  if n < len(stmt) and stmt[n][0] == "<":
+    angle = _match(stmt, n, "<", ">")      # template args: foo<T>(x)
+    if angle is not None and angle + 1 < len(stmt) \
+        and stmt[angle + 1][0] == "(":
+      n = angle + 1
+  if n >= len(stmt) or stmt[n][0] != "(":
+    return ci
+  close = _match(stmt, n, "(", ")")
+  return close if close is not None else ci
+
+
+def _match(stmt, open_idx, open_txt, close_txt):
+  """Index of the token matching the opener at open_idx, or None."""
+  depth = 1
+  for i in range(open_idx + 1, len(stmt)):
+    txt = stmt[i][0]
+    if txt == open_txt:
+      depth += 1
+    elif txt == close_txt:
+      depth -= 1
+      if depth == 0:
+        return i
+  return None
+
+
+def _text_of(stmt, a, b):
+  """Source text of tokens a..b inclusive, with original single spacing
+  reconstructed from token positions."""
+  ptxt, plex = stmt[a]
+  parts = [ptxt]
+  pline = plex.line_begin()
+  pcol = plex.column_begin()
+  for i in range(a + 1, b + 1):
+    txt, lex = stmt[i]
+    line = lex.line_begin()
+    col = lex.column_begin()
+    if line != pline or col > pcol + len(ptxt):
+      parts.append(" ")
+    parts.append(txt)
+    ptxt, pline, pcol = txt, line, col
+  text = "".join(parts)
+  if len(text) > 200:
+    text = text[:200] + "..."
+  return text
+
+
+def _is_callable(ent):
+  """True for functions and for named function pointers. Filters out the
+  object-targeted call refs emitted for member calls on unresolved types."""
+  if ent.kind().check("function, method, procedure, subroutine"):
+    return True
+  t = ent.type() or ""
+  return "(*" in t or "(^" in t or "function" in t.lower()
+
+
+def _callee_has_effects(callee, cid, cache):
+  """True when calling callee is itself an act of control: it returns nothing
+  or writes state visible outside the call (globals, statics, members, or
+  through pointers/references)."""
+  if cid in cache:
+    return cache[cid]
+
+  result = False
+  rtype = callee.type()
+  if rtype is None or rtype.strip().lower() in ("", "void"):
+    result = True
+  else:
+    for ref in callee.refs("set, modify, deref set, deref modify",
+                           unique=True):
+      tgt = ref.ent()
+      if tgt is None:
+        continue
+      if ref.kind().check("deref"):
+        result = True
+        break
+      if tgt.kind().check("global object, static object, member object"):
+        result = True
+        break
+
+  cache[cid] = result
+  return result
+
+
+def _signature(fn):
+  params = fn.parameters()
+  if params is None:
+    params = ""
+  params = re.sub(r",\s*", ", ", params).strip()   # normalize comma spacing
+  if not params and _is_c_family(fn):
+    params = "void"                                 # C/C++ idiom for no args
+  return "{}({})".format(fn.name(), params)
+
+
+def _is_c_family(fn):
+  lang = (fn.language() or "").lower()
+  return "c" == lang or "c++" in lang or "objective" in lang
+
+
+def _get_lexer(file, cache):
+  fid = file.id()
+  if fid in cache:
+    return cache[fid]
+  lexer = None
+  try:
+    lexer = file.lexer(lookup_ents=False)
+  except Exception:
+    lexer = None
+  cache[fid] = lexer
+  return lexer

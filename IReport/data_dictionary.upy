@@ -1,0 +1,574 @@
+# Interactive Report: Data Dictionary
+#
+# A multi-section reference document covering the functions, enums, constants,
+# and variables in the analyzed code. Mirrors Appendix A of the ETI / DO-178C
+# analysis report format (issue #4875).
+#
+# Sections (one page each):
+#   Functions - Source File | Name | Description | Parameters | Return Type
+#   Enums     - Source File | Name | Description | Values | Note
+#   Constants - Source File | Name | Constant Value | Note
+#               (covers both #define macros and const-qualified variables)
+#   Variables - Source File | Name | Description | Type | Rng | Init |
+#               Scope | Get/Set
+#
+# Descriptions come from the doc comment preceding the definition (doxygen
+# @brief when present). Rng is extracted from range annotations in comments
+# when documented, '-' otherwise.
+
+import re
+
+_SECTIONS = ["Functions", "Enums", "Constants", "Variables"]
+_INDEX = "Data Dictionary"
+
+_FUNC_KINDS = ("function ~unresolved ~unknown, "
+               "method ~unresolved ~unknown, "
+               "procedure ~unresolved ~unknown, "
+               "subroutine ~unresolved ~unknown")
+
+
+def name():
+  return "Data Dictionary"
+
+
+def description():
+  return '''Generates a Data Dictionary: a multi-section reference document
+    covering all functions, enums, constants, and variables in the project.
+    <p>Output mirrors Appendix A of the ETI / DO-178C analysis report format.
+    Each section is a separate page with a table filterable by source file
+    and by name.</p>
+    <ul>
+      <li><b>Functions</b> &ndash; name, description (from the doc comment or
+        doxygen @brief), parameter types, and return type</li>
+      <li><b>Enums</b> &ndash; enum types with their enumerator values</li>
+      <li><b>Constants</b> &ndash; #define macros and const-qualified
+        variables with their values</li>
+      <li><b>Variables</b> &ndash; type, documented valid range, initial
+        value, scope (local/file/global), and accessor/mutator functions</li>
+    </ul>
+  '''
+
+
+def tags():
+  return [
+    'Target: Project',
+    'Language: Any',
+    'API',
+  ]
+
+
+def test_global(db):
+  return True
+
+
+def is_enabled_by_default():
+  return True
+
+
+def support_abort():
+  return True
+
+
+def init(report):
+  report.options().checkbox("locals",
+    "Include local variables in the Variables section", False)
+
+
+def pages(report, db):
+  return [_INDEX] + _SECTIONS
+
+
+def generate(report, db, page):
+  if page == "Functions":
+    _breadcrumbs(report, page)
+    _functions_page(report, db)
+  elif page == "Enums":
+    _breadcrumbs(report, page)
+    _enums_page(report, db)
+  elif page == "Constants":
+    _breadcrumbs(report, page)
+    _constants_page(report, db)
+  elif page == "Variables":
+    _breadcrumbs(report, page)
+    _variables_page(report, db)
+  else:
+    _index_page(report)
+
+
+def _breadcrumbs(report, page):
+  report.breadcrumbs([_INDEX, page], 1)
+
+
+def _index_page(report):
+  report.heading(1)
+  report.print("Data Dictionary")
+  report.heading()
+  report.print("A reference document covering the functions, enums, "
+               "constants, and variables in the project.\n\n")
+  for section in _SECTIONS:
+    report.pagelink(section)
+    report.print(section + "\n")
+    report.pagelink()
+
+
+# ---------------------------------------------------------------------------
+# Functions
+
+
+def _functions_page(report, db):
+  report.heading(1)
+  report.print("Functions")
+  report.heading()
+  report.table('''
+    [{
+      "name" : "Source File",
+      "filtertype": "string"
+     },{
+      "name" : "Name",
+      "filtertype": "string"
+     },{
+      "name" : "Description",
+      "filtertype": "string"
+     },{
+      "name" : "Parameters",
+      "filtertype": "string"
+     },{
+      "name" : "Return Type",
+      "filtertype": "string"
+    }]''')
+
+  rows = []
+  ents = db.ents(_FUNC_KINDS)
+  total = max(1, len(ents))
+  for i, fn in enumerate(ents):
+    report.progress(int(i / total * 100))
+    if report.is_aborted():
+      return
+    f = _def_file(fn)
+    if f is None:
+      continue
+
+    params = fn.parameters(False) or ""
+    params = re.sub(r",\s*", ", ", params).strip()
+    if not params and _is_c_family(fn):
+      params = "void"
+
+    rows.append({
+      "module": f.relname() or f.name(),
+      "ent": fn,
+      "name": fn.longname(),
+      "desc": _brief(_doc_before(fn)),
+      "params": params,
+      "rtype": fn.type() or "",
+    })
+
+  rows.sort(key=lambda r: (r["module"].lower(), r["name"].lower()))
+  for r in rows:
+    _name_row(report, r)
+    report.tablecell()
+    report.print(r["params"])
+    report.tablecell()
+    report.print(r["rtype"])
+  report.table()
+
+
+# ---------------------------------------------------------------------------
+# Enums
+
+
+def _enums_page(report, db):
+  report.heading(1)
+  report.print("Enums")
+  report.heading()
+  report.table('''
+    [{
+      "name" : "Source File",
+      "filtertype": "string"
+     },{
+      "name" : "Name",
+      "filtertype": "string"
+     },{
+      "name" : "Description",
+      "filtertype": "string"
+     },{
+      "name" : "Values",
+      "filtertype": "string"
+     },{
+      "name" : "Note",
+      "filtertype": "string"
+    }]''')
+
+  rows = []
+  ents = db.ents("enum ~unresolved ~unknown")
+  total = max(1, len(ents))
+  for i, en in enumerate(ents):
+    report.progress(int(i / total * 100))
+    if report.is_aborted():
+      return
+    f = _def_file(en)
+    if f is None:
+      continue
+
+    values = []
+    for ref in en.refs("define, declare", "enumerator"):
+      e = ref.ent()
+      if e is None:
+        continue
+      val = e.value()
+      values.append("{}={}".format(e.name(), val) if val not in (None, "")
+                    else e.name())
+    if len(values) > 60:
+      values = values[:60] + ["... (+{} more)".format(len(values) - 60)]
+
+    en_name = en.name()
+    if not en_name or en_name.startswith(("(", "[")) \
+        or "anon" in en_name.lower() or "unnamed" in en_name.lower():
+      en_name = "anonymous"
+
+    desc, note = _brief_and_note(_doc_before(en))
+    rows.append({
+      "module": f.relname() or f.name(),
+      "ent": en,
+      "name": en_name,
+      "desc": desc,
+      "values": ", ".join(values),
+      "note": note,
+    })
+
+  rows.sort(key=lambda r: (r["module"].lower(), r["name"].lower()))
+  for r in rows:
+    _name_row(report, r)
+    report.tablecell()
+    report.print(r["values"])
+    report.tablecell()
+    report.print(r["note"])
+  report.table()
+
+
+# ---------------------------------------------------------------------------
+# Constants
+
+
+def _constants_page(report, db):
+  report.heading(1)
+  report.print("Constants")
+  report.heading()
+  report.table('''
+    [{
+      "name" : "Source File",
+      "filtertype": "string"
+     },{
+      "name" : "Name",
+      "filtertype": "string"
+     },{
+      "name" : "Constant Value",
+      "filtertype": "string"
+     },{
+      "name" : "Note",
+      "filtertype": "string"
+    }]''')
+
+  rows = []
+  macros = db.ents("macro ~unresolved ~unknown ~inactive")
+  objects = db.ents("object ~unresolved ~unknown")
+  total = max(1, len(macros) + len(objects))
+  done = 0
+
+  for m in macros:
+    done += 1
+    report.progress(int(done / total * 100))
+    if report.is_aborted():
+      return
+    if m.parameters():        # function-like macro, not a constant
+      continue
+    value = m.value() or ""
+    if not value:             # valueless flag/include-guard macro
+      continue
+    f = _def_file(m)
+    if f is None:
+      continue
+    rows.append({
+      "module": f.relname() or f.name(),
+      "ent": m,
+      "name": m.name(),
+      "value": value,
+      "note": _brief(_doc_before(m)),
+    })
+
+  for obj in objects:
+    done += 1
+    report.progress(int(done / total * 100))
+    if report.is_aborted():
+      return
+    if not _is_const(obj) or _is_unnamed(obj):
+      continue
+    f = _def_file(obj)
+    if f is None:
+      continue
+    rows.append({
+      "module": f.relname() or f.name(),
+      "ent": obj,
+      "name": obj.name(),
+      "value": _value(obj),
+      "note": _brief(_doc_before(obj)),
+    })
+
+  rows.sort(key=lambda r: (r["module"].lower(), r["name"].lower()))
+  for r in rows:
+    report.tablecell()
+    report.print(r["module"])
+    report.tablecell()
+    report.entity(r["ent"])
+    report.print(r["name"])
+    report.entity()
+    report.tablecell()
+    report.print(r["value"])
+    report.tablecell()
+    report.print(r["note"])
+  report.table()
+
+
+# ---------------------------------------------------------------------------
+# Variables
+
+
+def _variables_page(report, db):
+  report.heading(1)
+  report.print("Variables")
+  report.heading()
+  report.table('''
+    [{
+      "name" : "Source File",
+      "filtertype": "string"
+     },{
+      "name" : "Name",
+      "filtertype": "string"
+     },{
+      "name" : "Description",
+      "filtertype": "string"
+     },{
+      "name" : "Type",
+      "filtertype": "string"
+     },{
+      "name" : "Rng",
+      "filtertype": "string"
+     },{
+      "name" : "Init",
+      "filtertype": "string"
+     },{
+      "name" : "Scope",
+      "filtertype": "string"
+     },{
+      "name" : "Get/Set",
+      "filtertype": "string"
+    }]''')
+
+  include_locals = report.options().lookup("locals")
+  rows = []
+  ents = db.ents("object ~unresolved ~unknown")
+  total = max(1, len(ents))
+  for i, obj in enumerate(ents):
+    report.progress(int(i / total * 100))
+    if report.is_aborted():
+      return
+    if _is_const(obj):        # const objects belong in the Constants section
+      continue
+    if _is_unnamed(obj):
+      continue
+    scope = _scope(obj)
+    if scope == "local" and not include_locals:
+      continue
+    f = _def_file(obj)
+    if f is None:
+      continue
+
+    has_init = bool(obj.value())
+    value = _value(obj)
+    if scope in ("file", "global"):
+      if value:
+        init = "Set to {} at startup".format(value)
+      elif not has_init and _is_c_family(obj):
+        init = "Zero-initialized at startup"
+      else:
+        init = ""
+    else:
+      init = value
+
+    doc = _doc_before(obj)
+    rows.append({
+      "module": f.relname() or f.name(),
+      "ent": obj,
+      "name": obj.name(),
+      "desc": _brief(doc),
+      "type": obj.type() or "",
+      "rng": _range_from_comments(doc),
+      "init": init,
+      "scope": scope,
+      "getset": _accessors(obj),
+    })
+
+  rows.sort(key=lambda r: (r["module"].lower(), r["name"].lower()))
+  for r in rows:
+    _name_row(report, r)
+    report.tablecell()
+    report.print(r["type"])
+    report.tablecell()
+    report.print(r["rng"])
+    report.tablecell()
+    report.print(r["init"])
+    report.tablecell()
+    report.print(r["scope"])
+    report.tablecell()
+    report.print(r["getset"])
+  report.table()
+
+
+def _scope(obj):
+  kind = obj.kind()
+  if kind.check("local, parameter"):
+    return "local"
+  if kind.check("member"):
+    return "member"
+  if kind.check("static"):
+    return "file"
+  if kind.check("global"):
+    return "global"
+  return ""
+
+
+def _accessors(var):
+  getters = _ref_func_names(var, "useby return")
+  setters = _ref_func_names(var, "setby ~init, modifyby")
+  parts = []
+  if getters:
+    parts.append("Get: " + ", ".join(getters))
+  if setters:
+    parts.append("Set: " + ", ".join(setters))
+  return "; ".join(parts)
+
+
+def _ref_func_names(var, refkinds):
+  names = set()
+  try:
+    refs = var.refs(refkinds, "function, method, procedure, subroutine",
+                    True)
+  except Exception:
+    return []
+  for ref in refs:
+    e = ref.ent()
+    if e is not None:
+      names.add(e.name())
+  names = sorted(names)
+  if len(names) > 6:
+    names = names[:6] + ["..."]
+  return names
+
+
+_RANGE_PATTERNS = [
+  re.compile(r"[@\\]range\s+([^\n@\\]+)", re.I),
+  re.compile(r"-?\d+(?:\.\d+)?\s*\.\.\s*-?\d+(?:\.\d+)?"),
+  re.compile(r"[\[\(]\s*-?\d+(?:\.\d+)?\s*(?:,|\.\.)\s*"
+             r"-?\d+(?:\.\d+)?\s*[\]\)]"),
+  re.compile(r"\brange\s*[:=]\s*([^\n;]+)", re.I),
+]
+
+
+def _range_from_comments(text):
+  if text:
+    for rx in _RANGE_PATTERNS:
+      m = rx.search(text)
+      if m:
+        rng = m.group(1) if m.groups() else m.group(0)
+        return _one_line(rng.strip().rstrip("."))
+  return "-"
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+
+
+def _name_row(report, r):
+  """Emit the Source File | Name (entity-linked) | Description cells common
+  to the Functions, Enums, and Variables tables."""
+  report.tablecell()
+  report.print(r["module"])
+  report.tablecell()
+  report.entity(r["ent"])
+  report.print(r["name"])
+  report.entity()
+  report.tablecell()
+  report.print(r["desc"])
+
+
+def _def_file(ent):
+  """File containing the entity's definition (or declaration), or None."""
+  ref = ent.ref("definein, body declarein, declarein")
+  return ref.file() if ref is not None else None
+
+
+def _doc_before(ent):
+  for refkind in ("definein", "declarein"):
+    try:
+      c = ent.comments("before", False, refkind)
+    except Exception:
+      c = None
+    if c:
+      return c
+  try:
+    return ent.comments("before") or ""
+  except Exception:
+    return ""
+
+
+def _brief(text):
+  """Extract a short description from a doc comment: the doxygen @brief text
+  when present, otherwise the first paragraph."""
+  return _brief_and_note(text)[0]
+
+
+def _brief_and_note(text):
+  """Split a doc comment into a short description (the doxygen @brief text
+  when present, otherwise the first paragraph) and any remaining text."""
+  if not text:
+    return "", ""
+  # Strip doxygen/comment continuation decoration at line starts.
+  text = "\n".join(re.sub(r"^[\s*!/]+", "", ln) for ln in text.splitlines())
+  m = re.search(r"[@\\]brief\s+(.*?)(?=\n\s*\n|\n\s*[@\\]\w|$)", text, re.S)
+  if m:
+    brief = m.group(1)
+    note = text[:m.start()] + text[m.end():]
+  else:
+    parts = re.split(r"\n\s*\n|\n\s*(?=[@\\]\w)", text, maxsplit=1)
+    brief = parts[0]
+    note = parts[1] if len(parts) > 1 else ""
+  return _one_line(brief), _one_line(note)
+
+
+def _one_line(text):
+  if not text:
+    return ""
+  text = re.sub(r"\s+", " ", text).strip()
+  if len(text) > 300:
+    text = text[:300] + "..."
+  return text
+
+
+def _is_const(obj):
+  t = obj.type()
+  return t is not None and re.search(r"\bconst\b", t) is not None
+
+
+def _is_unnamed(ent):
+  name = ent.name()
+  return not name or name.startswith(("[", "("))
+
+
+def _value(ent):
+  """Initial/constant value text, dropping parser recovery placeholders."""
+  value = ent.value() or ""
+  return "" if "<recovery-expr>" in value else value
+
+
+def _is_c_family(ent):
+  lang = (ent.language() or "").lower()
+  return "c" == lang or "c++" in lang or "objective" in lang
