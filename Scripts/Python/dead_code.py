@@ -51,7 +51,7 @@ if __name__ == '__main__':
     for func in funcs:
         if re.search('standard', func.library().lower()) or func.ref("instanceof"):
             continue
-        if re.search('c', func.language().lower()) and func.search('~|operator', func.name().lower()):
+        if re.search('c', func.language().lower()) and re.search('~|operator', func.name().lower()):
             continue
         if re.search('fortran', func.language().lower()) and func.ref("UseRenameEntityby"):
             continue
