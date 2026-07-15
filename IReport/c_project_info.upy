@@ -13,24 +13,33 @@ def description():
     return '''A script for C projects that generates a text file containing information on its modules.'''
 
 
+def get_fname(file):
+    fname = str(file.name())
+    fname = fname.split(".")[0]
+
+    return fname
+
+
 def get_modules(target):
-    files = target.ents("C File, C Header")
-    file_names = {}
+    hfiles = target.ents("C Header")
+    cfiles = target.ents("C File")
     modules = {}
 
-    for file in files:
-        curr_fname = str(file.name())
-        fname = curr_fname.split(".")[0]
+    # 1.02 include headers only as module
+    for hfile in hfiles:
+        if is_standard(hfile):
+            continue
 
-        if fname not in file_names:
-            file_names[fname] = file
-        else:
-            stored_file = file_names[fname]
-            stored_fname = stored_file.name()
+        fname = get_fname(hfile)
 
-            if ((stored_fname.endswith(".c") and curr_fname.endswith(".h"))
-                    or (stored_fname.endswith(".h") and curr_fname.endswith(".c"))):
-                modules[fname] = [file, stored_file]
+        if fname not in modules:
+            modules[fname] = [hfile]
+
+    for cfile in cfiles:
+        fname = get_fname(cfile)
+
+        if fname in modules:
+            modules[fname].append(cfile)
 
     return modules
 
@@ -43,7 +52,7 @@ def get_reqs(file, module, req_macs, req_vars, req_types, req_funcs):
     deps = file.depends()
 
     for dep_file, dep_refs in deps.items():
-        fname = str(dep_file.name()).split(".")[0]
+        fname = get_fname(dep_file)
 
         if fname == module:
             continue
@@ -63,6 +72,27 @@ def get_reqs(file, module, req_macs, req_vars, req_types, req_funcs):
             elif dep_ref.ent().kind().check("Macro ~Functional"):
                 if ent_id not in req_macs:
                     req_macs[ent_id] = dep_ref.ent()
+
+
+def get_ent_type(entity):
+    typed_ref = entity.ref("Typed ~TemplateArgument")
+    seen = set()
+
+    while typed_ref:
+        obj_ent = typed_ref.ent()
+
+        if obj_ent.id() in seen:
+            return obj_ent, obj_ent.type()
+
+        seen.add(obj_ent.id())
+
+        obj_ref_type = obj_ent.type()
+        typed_ref = obj_ent.ref("Typed ~TemplateArgument")
+
+        if not typed_ref:
+            return obj_ent, obj_ref_type
+
+    return entity, entity.type()
 
 
 # Report generation
@@ -144,15 +174,19 @@ def generate(report, target):
         txtfile.write(f"\nREQUIRED INTERFACE\n\n")
         txtfile.write(f"\tINCLUDED HEADERS:\n")
 
-        header_refs = cfile.filerefs("Include", "File", True)
+        # 1.01 libraries included on the header file should also be added
+        header_refs = cfile.filerefs(
+            "Include", "File", True) + hfile.filerefs("Include", "File", True) if cfile else ""
+        listed = []
 
         if not header_refs:
             txtfile.write(f"\t\tNONE\n")
 
         for header_ref in header_refs:
-            if is_standard(header_ref.ent()):
+            if is_standard(header_ref.ent()) or header_ref.ent().id() in listed:
                 continue
 
+            listed.append(header_ref.ent().id())
             txtfile.write(f"\t\t{header_ref.ent().name()}\n")
 
         req_macs = {}
@@ -160,7 +194,21 @@ def generate(report, target):
         req_types = {}
         req_funcs = {}
 
-        get_reqs(cfile, module, req_macs, req_vars, req_types, req_funcs)
+        if cfile:
+            get_reqs(cfile, module, req_macs, req_vars, req_types, req_funcs)
+
+            # 1.05 add types of local variables/data
+            for local_ref in cfile.refs("Define, Declare", "Local"):
+                _ent, _type = get_ent_type(local_ref.ent())
+
+                if _ent and _ent.kind().check("Type") and _ent.id() not in req_types:
+                    dec_ref = var_ent.ref("Declarein, Definein")
+                    fname = get_fname(dec_ref.file()) if dec_ref else ""
+
+                    if fname == module:
+                        continue
+
+                    req_types[_ent.id()] = _ent
 
         txtfile.write(f"\n\tUSED MACROS:\n")
 
@@ -168,15 +216,12 @@ def generate(report, target):
             txtfile.write(f"\t\tNONE\n")
 
         for mac_ent in req_macs.values():
-            txtfile.write(f"\t\t{mac_ent.name()} {mac_ent.type()}\n")
+            # 1.06 include module name
+            dec_ref = mac_ent.ref("Declarein, Definein")
+            mod_name = get_fname(dec_ref.file())
 
-        txtfile.write(f"\n\tUSED TYPES:\n")
-
-        if not req_types:
-            txtfile.write(f"\t\tNONE\n")
-
-        for type_ent in req_types.values():
-            txtfile.write(f"\t\t{type_ent.type()} {type_ent.name()};\n")
+            txtfile.write(
+                f"\t\t({mod_name}) {mac_ent.name()} {mac_ent.type()}\n")
 
         txtfile.write(f"\n\tUSED VARIABLES:\n")
 
@@ -184,7 +229,22 @@ def generate(report, target):
             txtfile.write(f"\t\tNONE\n")
 
         for var_ent in req_vars.values():
-            txtfile.write(f"\t\t{var_ent.type()} {var_ent.name()};\n")
+            # 1.04 add types of external variables
+            _ent, _type = get_ent_type(var_ent)
+
+            # 1.07 list only the parent structure
+            if _ent and _ent.kind().check("Struct") and var_ent.kind().check("Member"):
+                continue
+
+            if _ent and _ent.kind().check("Type") and _ent.id() not in req_types:
+                req_types[_ent.id()] = _ent
+
+            # 1.06 include module name
+            dec_ref = var_ent.ref("Declarein, Definein")
+            mod_name = get_fname(dec_ref.file())
+
+            txtfile.write(
+                f"\t\t({mod_name}) {var_ent.type()} {var_ent.name()};\n")
 
         txtfile.write(f"\n\tUSED FUNCTIONS:\n")
 
@@ -192,13 +252,39 @@ def generate(report, target):
             txtfile.write(f"\t\tNONE\n")
 
         for func_ent in req_funcs.values():
-            txtfile.write(f"\t\t{func_ent.type()} {func_ent.name()};\n")
+            # 1.03 add types of params
+            for param_ref in func_ent.refs("Define, Declare", "Parameter", True):
+                _ent, _type = get_ent_type(param_ref.ent())
+
+                if _ent and _ent.kind().check("Type") and _ent.id() not in req_types:
+                    req_types[_ent.id()] = _ent
+
+            # 1.06 include module name
+            dec_ref = func_ent.ref("Declarein, Definein")
+            mod_name = get_fname(dec_ref.file())
+
+            txtfile.write(
+                f"\t\t({mod_name}) {func_ent.type()} {func_ent.name()};\n")
+
+        txtfile.write(f"\n\tUSED TYPES:\n")
+
+        if not req_types:
+            txtfile.write(f"\t\tNONE\n")
+
+        for type_ent in req_types.values():
+            type_str = f"{type_ent.type()}" if type_ent.type() else ""
+
+            # 1.06 include module name
+            dec_ref = type_ent.ref("Declarein, Definein")
+            mod_name = get_fname(dec_ref.file())
+
+            txtfile.write(f"\t\t({mod_name}) {type_str}{type_ent.name()};\n")
 
         txtfile.write(f"\nINTERNAL INTERFACE\n\n")
         txtfile.write(f"\tINTERNAL MACROS:\n")
 
         macro_refs = cfile.filerefs(
-            "Define, Declare", "Macro ~Functional", True)
+            "Define, Declare", "Macro ~Functional", True) if cfile else ""
 
         if not macro_refs:
             txtfile.write(f"\t\tNONE\n")
@@ -209,7 +295,8 @@ def generate(report, target):
 
         txtfile.write(f"\n\tINTERNAL TYPES:\n")
 
-        type_refs = cfile.filerefs("Define, Declare", "Type", True)
+        type_refs = cfile.filerefs(
+            "Define, Declare", "Type", True) if cfile else ""
 
         if not type_refs:
             txtfile.write(f"\t\tNONE\n")
@@ -220,7 +307,8 @@ def generate(report, target):
 
         txtfile.write(f"\n\tINTERNAL DATA:\n")
 
-        obj_refs = cfile.filerefs("Define, Declare", "Static Object", True)
+        obj_refs = cfile.filerefs(
+            "Define, Declare", "Static Object", True) if cfile else ""
 
         if not obj_refs:
             txtfile.write(f"\t\tNONE\n")
@@ -232,13 +320,20 @@ def generate(report, target):
         txtfile.write(f"\n\tINTERNAL FUNCTIONS:\n")
 
         func_refs = cfile.filerefs(
-            "Define, Declare", "Function, Macro Functional", True)
+            "Define, Declare", "Function, Macro Functional", True) if cfile else ""
 
         if not func_refs:
             txtfile.write(f"\t\tNONE\n")
 
         for func_ref in func_refs:
             func_ent = func_ref.ent()
+
+            # 1.08 function declared in same module should be excluded
+            dec_ref = func_ent.ref("Declarein")
+            fname = get_fname(dec_ref.file()) if dec_ref else ""
+
+            if fname == module:
+                continue
 
             if func_ent.kind().check("Macro"):
                 txtfile.write(
@@ -286,8 +381,20 @@ def generate(report, target):
                     txtfile.write(f"\t\t\tNONE\n")
 
                 for obj_ref in obj_refs:
+                    obj_ent = obj_ref.ent()
+                    _ent, _type = get_ent_type(obj_ent)
+
+                    # 1.07 list only the parent structure
+                    if _ent and _ent.kind().check("Struct") and obj_ent.kind().check("Member"):
+                        continue
+
+                    # 1.06 include module name
+                    dec_ref = obj_ent.ref("Declarein")
+                    mod_name = get_fname(dec_ref.file()) if dec_ref else None
+                    mod_name = f"({mod_name}) " if mod_name and mod_name != module else ""
+
                     txtfile.write(
-                        f"\t\t\t{obj_ref.ent().type()} {obj_ref.ent().name()};\n")
+                        f"\t\t\t{mod_name}{obj_ent.type()} {obj_ent.name()};\n")
 
                 txtfile.write(f"\n\t\tCALLED FUNCTIONS:\n")
 
@@ -298,8 +405,17 @@ def generate(report, target):
 
                 for func_ref in func_refs:
                     func_ref_ent = func_ref.ent()
+
+                    # 1.06 include module name
+                    if is_standard(func_ref_ent):
+                        continue
+
+                    dec_ref = func_ref_ent.ref("Declarein, Definein")
+                    mod_name = get_fname(dec_ref.file()) if dec_ref else None
+                    mod_name = f"({mod_name}) " if mod_name and mod_name != module else ""
+
                     txtfile.write(
-                        f"\t\t\t{func_ref_ent.type()} {func_ref_ent.name()} ({func_ref_ent.parameters()});\n")
+                        f"\t\t\t{mod_name}{func_ref_ent.type()} {func_ref_ent.name()} ({func_ref_ent.parameters()});\n")
 
                 txtfile.write(f"\n\t\tINTERNAL VARIABLES:\n")
 
