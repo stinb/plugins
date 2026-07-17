@@ -24,8 +24,8 @@ void Fn2(std::vector<std::int32_t>& v) noexcept
 
 void Fn3(std::vector<std::int32_t>& v) noexcept
 {
-  for (std::vector<std::int32_t>::const_iterator iter{v.begin()}, // UndCC_Violation(Win,Lin)
-  end{v.end()}; // UndCC_Violation(Win,Lin)
+  for (std::vector<std::int32_t>::const_iterator iter{v.begin()}, // UndCC_Violation
+  end{v.end()}; // UndCC_Violation
   iter != end;
   ++iter) 
   {
