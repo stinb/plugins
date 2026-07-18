@@ -1,8 +1,8 @@
 #include <string.h>
+#include <stddef.h>
 
 typedef short int16_t;
 typedef int int32_t;
-typedef unsigned long size_t;
 
 /* MISRA C 2025 worked example — union member assignment. */
 void fn(void)
