@@ -1,0 +1,234 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-07-21
+
+ERR1 = "The operands of a logical %1 shall be primary-expressions"
+
+# Tokens that delimit the start/end of an operand
+BOUNDS_LEFT = {'(', '=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=',
+               '<<=', '>>=', ',', ';', '{', '}', '?', ':'}
+BOUNDS_RIGHT = {')', ',', ';', '{', '}', '?', ':'}
+# Prefix operators that make the following operand a non-primary expression
+PREFIX_OPS = {'!', '~', '-', '+', '*', '&', '++', '--'}
+# Operators that continue an operand when adjacent to a parenthesised group
+POSTFIX_OPS = {'.', '->', '[', '('}
+VALUE_KEYWORDS = {'true', 'false', 'nullptr'}
+
+
+def ids():
+    return ('MISRA04_12.5', 'CPP_E092')
+
+
+def name(id):
+    return {
+        'MISRA04_12.5': 'Published Standards/MISRA-C 2004/' + """\
+12.5 The operands of a logical && or || shall be primary-expressions""",
+        'CPP_E092': """\
+All Checks/Language Specific/C and C++/Expressions/\
+The operands of a logical && or || shall be primary-expressions""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA04_12.5': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E092': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Rationale</b></p>
+<p>&ldquo;Primary expressions&rdquo; are defined in ISO/IEC 9899:1990 [2],
+section 6.3.1. Essentially they are either a single identifier, or a constant, or
+a parenthesised expression. The effect of this rule is to require that if an
+operand is other than a single identifier or constant then it must be
+parenthesised. Parentheses are important in this situation both for readability
+of code and for ensuring that the behaviour is as the programmer intended. Where
+an expression consists of either a sequence of only logical &amp;&amp; or a
+sequence of only logical ||, extra parentheses are not required.</p>
+<p>For example, write:</p>
+<pre><code language="C++">if ( ( x == 0 ) &amp;&amp; ishigh )    /* make x == 0 primary       */
+if ( x || y || z )             /* exception allowed,
+                                  if x, y and z are Boolean */
+if ( x || ( y &amp;&amp; z ) )         /* make y &amp;&amp; z primary       */
+if ( x &amp;&amp; ( !y ) )             /* make !y primary           */
+if ( ( is_odd (y) ) &amp;&amp; x )     /* make call primary         */</code></pre>
+<p>Where an expression consists of either a sequence of only logical &amp;&amp; or
+a sequence of only logical ||, extra parentheses are not required.</p>
+<pre><code language="C++">if ( ( x &gt; c1) &amp;&amp; (y &gt; c2) &amp;&amp; (z &gt; c3) )   /* Compliant               */
+if ( ( x &gt; c1) &amp;&amp; (y &gt; c2) || (z &gt; c3) )   /* not compliant           */
+if ( ( x &gt; c1) &amp;&amp; ((y &gt; c2) || (z &gt; c3)) ) /* Compliant extra () used */</code></pre>
+<p>Note that this rule is a special case of Rule 12.1.</p>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def is_value(lex):
+    # A single identifier or constant (the primary-expression building blocks)
+    return (lex.token() in ('Identifier', 'Literal', 'String') or
+            (lex.token() == 'Keyword' and lex.text() in VALUE_KEYWORDS))
+
+
+def match_backward(close_lex):
+    # Return the '(' matching a ')'
+    depth = 0
+    lex = close_lex
+    while lex:
+        t = lex.text()
+        if t == ')':
+            depth += 1
+        elif t == '(':
+            depth -= 1
+            if depth == 0:
+                return lex
+        lex = lex.previous(True, True)
+    return None
+
+
+def match_forward(open_lex):
+    # Return the ')' matching a '('
+    depth = 0
+    lex = open_lex
+    while lex:
+        t = lex.text()
+        if t == '(':
+            depth += 1
+        elif t == ')':
+            depth -= 1
+            if depth == 0:
+                return lex
+        lex = lex.next(True, True)
+    return None
+
+
+def bound_left(op, lex):
+    # True if lex ends the operand to the left of op (so the operand is simple)
+    t = lex.text()
+    if t == op:
+        return True                         # sequence of the same operator
+    if op == '&&' and t == '||':
+        return True                         # || binds looser -> boundary
+    if op == '||' and t == '&&':
+        return False                        # && binds tighter -> operand extends
+    if t in BOUNDS_LEFT:
+        return True
+    if lex.token() == 'Keyword' and t in ('return', 'case', 'else', 'do'):
+        return True
+    return False
+
+
+def bound_right(op, lex):
+    # True if lex ends the operand to the right of op (so the operand is simple)
+    t = lex.text()
+    if t == op:
+        return True
+    if op == '&&' and t == '||':
+        return True
+    if op == '||' and t == '&&':
+        return False
+    if t in BOUNDS_RIGHT:
+        return True
+    return False
+
+
+def left_is_primary(op_lex, op):
+    l1 = op_lex.previous(True, True)
+    if not l1:
+        return True
+    if l1.text() == ')':
+        open_lex = match_backward(l1)
+        if not open_lex:
+            return True
+        before = open_lex.previous(True, True)
+        if not before:
+            return True
+        # A function call or subscript closing here is not a primary-expression
+        if before.token() == 'Identifier' or before.text() in (')', ']'):
+            return False
+        return bound_left(op, before)
+    if is_value(l1):
+        l2 = l1.previous(True, True)
+        if not l2:
+            return True
+        # A cast, member access or subscript makes the operand non-primary
+        if l2.text() in (')', ']', '.', '->'):
+            return False
+        return bound_left(op, l2)
+    # Ends in an operator (e.g. postfix ++/--) -> not primary
+    return False
+
+
+def right_is_primary(op_lex, op):
+    r1 = op_lex.next(True, True)
+    if not r1:
+        return True
+    if r1.text() == '(':
+        close_lex = match_forward(r1)
+        if not close_lex:
+            return True
+        after = close_lex.next(True, True)
+        if not after:
+            return True
+        if after.text() in POSTFIX_OPS:
+            return False
+        return bound_right(op, after)
+    if r1.text() in PREFIX_OPS:
+        return False
+    if is_value(r1):
+        r2 = r1.next(True, True)
+        if not r2:
+            return True
+        if r2.text() in POSTFIX_OPS:
+            return False
+        return bound_right(op, r2)
+    return False
+
+
+def on_preprocessor_line(lex):
+    # Rule 12.5 applies to C expressions, not preprocessor directives. Scan back
+    # over the current logical line only (Continuation tokens cross backslash
+    # line-joins); a directive reaches a Preprocessor token before the Newline
+    # that ends the logical line. Stopping at the Newline avoids treating the
+    # first statement after a directive as if it too were on that directive.
+    cur = lex.previous()
+    while cur:
+        t = cur.token()
+        if t == 'Preprocessor':
+            return True
+        if t == 'Newline':
+            return False
+        if t != 'Continuation' and cur.text() in (';', '{', '}'):
+            return False
+        cur = cur.previous()
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer()
+
+    for lexeme in lexer.lexemes():
+        op = lexeme.text()
+        if op not in ('&&', '||'):
+            continue
+        if on_preprocessor_line(lexeme):
+            continue
+        if not left_is_primary(lexeme, op) or not right_is_primary(lexeme, op):
+            check.violation(file, file, lexeme.line_begin(),
+                            lexeme.column_begin(), ERR1, op)
