@@ -1,0 +1,155 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+# 2026-07-22
+
+ERR1 = "Object %1 of floating type is used in the controlling expression of a for statement"
+
+
+def ids():
+    return ('MISRA04_13.4', 'CPP_E093')
+
+
+def name(id):
+    return {
+        'MISRA04_13.4': 'Published Standards/MISRA-C 2004/' + """\
+13.4 The controlling expression of a for statement shall not contain any objects of floating type""",
+        'CPP_E093': """\
+All Checks/Language Specific/C and C++/Expressions/\
+The controlling expression of a for statement shall not contain any objects of floating type""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA04_13.4': [
+            'Language: C',
+            'Standard: MISRA C 2004',
+            'Category: Required',
+            'Expressions',
+        ],
+        'CPP_E093': [
+            'Language: C',
+            'Language: C++',
+            'Expressions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Rationale</b></p>
+<p>The controlling expression may include a loop counter, whose value is tested
+to determine termination of the loop. Floating-point variables shall not be used
+for this purpose. Rounding and truncation errors can be propagated through the
+iterations of the loop, causing significant inaccuracies in the loop variable,
+and possibly giving unexpected results when the test is performed. For example
+the number of times the loop is performed may vary from one implementation to
+another, and may be unpredictable. See also Rule 13.3.</p>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def floating_base(ent):
+    # Return the type text if ent is an object (variable / parameter / member) of
+    # floating base type, else None. Functions, types and macros are excluded. The
+    # text may still denote a pointer or array of that floating type.
+    if not ent:
+        return None
+    kind = ent.kind().longname()
+    if 'Function' in kind or 'Type' in kind or 'Macro' in kind:
+        return None
+    ut = str(ent.freetext('underlyingtype'))
+    if ut in ('', 'None'):
+        ut = str(ent.type())
+    if 'float' in ut or 'double' in ut:
+        return ut
+    return None
+
+
+def is_floating_object(lex, ent):
+    # True if lex denotes an object of floating type. A scalar floating variable
+    # always is. A pointer-to-float or array-of-float is not itself a floating
+    # object, but yields one when dereferenced (*p) or subscripted (p[i]).
+    ut = floating_base(ent)
+    if ut is None:
+        return False
+    if '*' not in ut and '[' not in ut:
+        return True
+    nxt = lex.next(True, True)
+    if nxt and nxt.text() == '[':
+        return True
+    prev = lex.previous(True, True)
+    # A '*' before a float pointer can only be a dereference (multiplying by a
+    # pointer is not valid), so it reaches the floating object.
+    if prev and prev.text() == '*':
+        return True
+    return False
+
+
+def match_forward(open_lex):
+    # Return the ')' matching a '('
+    depth = 0
+    lex = open_lex
+    while lex:
+        t = lex.text()
+        if t == '(':
+            depth += 1
+        elif t == ')':
+            depth -= 1
+            if depth == 0:
+                return lex
+        lex = lex.next(True, True)
+    return None
+
+
+def check_controlling(check, file, open_paren):
+    # The controlling expression is the second clause of the for header - the
+    # tokens between the first and second top-level ';'.
+    depth = 0
+    semis = 0
+    reported = set()
+    lex = open_paren
+    while lex:
+        t = lex.text()
+        if t == '(':
+            depth += 1
+        elif t == ')':
+            depth -= 1
+            if depth == 0:
+                break
+        elif t == ';' and depth == 1:
+            semis += 1
+            if semis >= 2:
+                break
+        elif depth == 1 and semis == 1:
+            ent = lex.ent()
+            if ent and is_floating_object(lex, ent):
+                if ent.uniquename() not in reported:
+                    reported.add(ent.uniquename())
+                    check.violation(ent, file, lex.line_begin(),
+                                    lex.column_begin(), ERR1, ent.name())
+        lex = lex.next(True, True)
+
+
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    lexeme = lexer.first()
+    while lexeme:
+        if lexeme.text() == 'for' and lexeme.token() == 'Keyword':
+            open_paren = lexeme.next(True, True)
+            if open_paren and open_paren.text() == '(':
+                check_controlling(check, file, open_paren)
+                close = match_forward(open_paren)
+                if close:
+                    lexeme = close
+        lexeme = lexeme.next(True, True)
