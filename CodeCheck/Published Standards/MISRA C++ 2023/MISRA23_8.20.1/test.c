@@ -138,3 +138,13 @@ void test_cast(void)
   uint32_t a = (uint32_t)(0u - 1u);         /* UndCC_Violation */
   (void)a;
 }
+
+/* A wrap inside a user-defined macro is still a violation; only wraps
+   originating in a system-header macro are exempt */
+#define USER_WRAP (0u - 5u)
+
+void test_user_macro(void)
+{
+  uint32_t a = USER_WRAP;                   /* UndCC_Violation - user macro, not system */
+  (void)a;
+}
