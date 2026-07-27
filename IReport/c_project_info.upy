@@ -21,25 +21,21 @@ def get_fname(file):
 
 
 def get_modules(target):
-    hfiles = target.ents("C Header")
-    cfiles = target.ents("C File")
+    files = target.ents("C Header, C File")
     modules = {}
 
     # 1.02 include headers only as module
-    for hfile in hfiles:
-        if is_standard(hfile):
+    # A1, include c file only as module
+    for file in files:
+        if is_standard(file):
             continue
 
-        fname = get_fname(hfile)
+        fname = get_fname(file)
 
         if fname not in modules:
-            modules[fname] = [hfile]
-
-    for cfile in cfiles:
-        fname = get_fname(cfile)
-
-        if fname in modules:
-            modules[fname].append(cfile)
+            modules[fname] = [file]
+        else:
+            modules[fname].append(file)
 
     return modules
 
@@ -103,6 +99,38 @@ def get_origin_mod(ent, module):
     return mod_name
 
 
+def get_params(func_ent):
+    params = func_ent.parameters()
+
+    if not params:
+        dec_ref = func_ent.ref("Declarein, Definein")
+
+        if not dec_ref:
+            return params
+        else:
+            lex = dec_ref.file().lexer(lookup_ents=False).lexeme(
+                dec_ref.line(), dec_ref.column())
+            on_param = 0
+            param_text = ""
+
+            while lex:
+                if lex.text() == "(":
+                    on_param += 1
+                elif lex.text() == ")":
+                    on_param -= 1
+
+                    if not on_param:
+                        return param_text
+                elif on_param:
+                    param_text += lex.text()
+
+                lex = lex.next(ignore_comments=True)
+
+            return param_text
+
+    return params
+
+
 # Report generation
 def generate(report, target):
     und_name = target.name()
@@ -124,9 +152,22 @@ def generate(report, target):
 
         txtfile.write(f"========== MODULE: {module} ==========\n\n")
         txtfile.write(f"PROVIDED INTERFACE\n\n")
-        txtfile.write(f"\tGLOBAL VARIABLES:\n")
 
-        gobj_refs = hfile.filerefs("Define, Declare", "Global Object", True)
+        gobj_refs = []
+        type_refs = []
+        macro_refs = []
+        func_refs = []
+
+        if hfile:
+            gobj_refs = hfile.filerefs(
+                "Define, Declare", "Global Object", True)
+            type_refs = hfile.filerefs("Define, Declare", "Type", True)
+            macro_refs = hfile.filerefs(
+                "Define, Declare", "Macro ~Functional", True)
+            func_refs = hfile.filerefs(
+                "Define, Declare", "Function, Macro Functional", True)
+
+        txtfile.write(f"\tGLOBAL VARIABLES:\n")
 
         if not gobj_refs:
             txtfile.write(f"\t\tNONE\n")
@@ -137,8 +178,6 @@ def generate(report, target):
 
         txtfile.write(f"\n\tTYPES:\n")
 
-        type_refs = hfile.filerefs("Define, Declare", "Type", True)
-
         if not type_refs:
             txtfile.write(f"\t\tNONE\n")
 
@@ -147,9 +186,6 @@ def generate(report, target):
                 f"\t\t{type_ref.ent().name()}; ({type_ref.ent().kindname()})\n")
 
         txtfile.write(f"\n\tMACROS:\n")
-
-        macro_refs = hfile.filerefs(
-            "Define, Declare", "Macro ~Functional", True)
 
         if not macro_refs:
             txtfile.write(f"\t\tNONE\n")
@@ -160,21 +196,19 @@ def generate(report, target):
 
         txtfile.write(f"\n\tFUNCTIONS:\n")
 
-        func_refs = hfile.filerefs(
-            "Define, Declare", "Function, Macro Functional", True)
-
         if not func_refs:
             txtfile.write(f"\t\tNONE\n")
 
         for func_ref in func_refs:
             func_ent = func_ref.ent()
+            params = get_params(func_ent)
 
             if func_ent.kind().check("Macro"):
                 txtfile.write(
-                    f"\t\t{func_ent.name()}({func_ent.parameters()}) {func_ent.value()}\n")
+                    f"\t\t{func_ent.name()}({params}) {func_ent.value()}\n")
             else:
                 txtfile.write(
-                    f"\t\t{func_ent.type()} {func_ent.name()} ({func_ent.parameters()});\n")
+                    f"\t\t{func_ent.type()} {func_ent.name()} ({params});\n")
 
             if func_ent.id() not in all_funcs:
                 all_funcs[func_ent.id()] = func_ent
@@ -183,18 +217,24 @@ def generate(report, target):
         txtfile.write(f"\tINCLUDED HEADERS:\n")
 
         # 1.01 libraries included on the header file should also be added
-        header_refs = cfile.filerefs(
-            "Include", "File", True) + hfile.filerefs("Include", "File", True) if cfile else ""
-        listed = []
+        header_refs = {}
+
+        if cfile:
+            for inc_ref in cfile.filerefs("Include", "File", True):
+                header_refs[inc_ref.ent().id()] = inc_ref
+
+        if hfile:
+            for inc_ref in hfile.filerefs("Include", "File", True):
+                if inc_ref.ent().id() not in header_refs:
+                    header_refs[inc_ref.ent().id()] = inc_ref
 
         if not header_refs:
             txtfile.write(f"\t\tNONE\n")
 
-        for header_ref in header_refs:
-            if is_standard(header_ref.ent()) or header_ref.ent().id() in listed:
+        for header_ref in header_refs.values():
+            if is_standard(header_ref.ent()):
                 continue
 
-            listed.append(header_ref.ent().id())
             txtfile.write(f"\t\t{header_ref.ent().name()}\n")
 
         req_macs = {}
@@ -338,12 +378,14 @@ def generate(report, target):
             if fname == module:
                 continue
 
+            params = get_params(func_ent)
+
             if func_ent.kind().check("Macro"):
                 txtfile.write(
-                    f"\t\t{func_ent.name()}({func_ent.parameters()}) {func_ent.value()}\n")
+                    f"\t\t{func_ent.name()}({params}) {func_ent.value()}\n")
             else:
                 txtfile.write(
-                    f"\t\t{func_ent.type()} {func_ent.name()} ({func_ent.parameters()});\n")
+                    f"\t\t{func_ent.type()} {func_ent.name()} ({params});\n")
 
             if func_ent.id() not in all_funcs:
                 all_funcs[func_ent.id()] = func_ent
@@ -352,18 +394,21 @@ def generate(report, target):
             txtfile.write(f"\nFUNCTIONS\n")
 
             for func_ent in all_funcs.values():
+                params = get_params(func_ent)
+
                 if func_ent.kind().check("Macro"):
                     txtfile.write(
-                        f"\n\t{func_ent.name()}({func_ent.parameters()}) {func_ent.value()}\n\n")
+                        f"\n\t{func_ent.name()}({params}) {func_ent.value()}\n\n")
                 else:
                     txtfile.write(
-                        f"\n\t{func_ent.type()} {func_ent.name()} ({func_ent.parameters()});\n\n")
+                        f"\n\t{func_ent.type()} {func_ent.name()} ({params});\n\n")
 
                 txtfile.write(f"\t\tREQUIRED HEADERS:\n")
 
                 req_headers = {}
 
-                for all_ref in func_ent.refs(""):
+                # A4, remove reverse dependencies
+                for all_ref in func_ent.refs("~Assignby ~Callby"):
                     href = all_ref.ent().ref("Declarein, Definein", "Header")
 
                     if href and href.ent().id() not in req_headers:
@@ -377,8 +422,9 @@ def generate(report, target):
 
                 txtfile.write(f"\n\t\tUSED VARIABLES:\n")
 
+                # A2, remove assingby refs
                 obj_refs = func_ent.refs(
-                    "~Define ~Definein ~Declare ~Declarein", "Object", True)
+                    "~Define ~Definein ~Declare ~Declarein ~Assignby", "Object", True)
 
                 if not obj_refs:
                     txtfile.write(f"\t\t\tNONE\n")
@@ -412,9 +458,10 @@ def generate(report, target):
                         continue
 
                     mod_name = get_origin_mod(func_ref_ent, module)
+                    params = get_params(func_ent)
 
                     txtfile.write(
-                        f"\t\t\t{mod_name}{func_ref_ent.type()} {func_ref_ent.name()} ({func_ref_ent.parameters()});\n")
+                        f"\t\t\t{mod_name}{func_ref_ent.type()} {func_ref_ent.name()} ({params});\n")
 
                 txtfile.write(f"\n\t\tINTERNAL VARIABLES:\n")
 
