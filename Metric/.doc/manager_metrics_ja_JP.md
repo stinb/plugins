@@ -19,7 +19,7 @@ Understand には、コード行数や関数の McCabe サイクロマチック�
 *OpenSSL のメトリクス ツリーマップ（サイズはコード行数、色分けは最大サイクロマチック複雑度）。サイクロマチック複雑度でノードが色分けされたコールツリー。Comment to Code Ratio（コード行に占めるコメント行の割合）を表示するエンティティロケーター。*
 
 - 「メトリクス」 -> 「メトリクス ツリーマップ」からメトリクス ツリーマップを表示します。
-- 対応しているグラフにメトリクスのカラースケールを適用するには、[サポート記事 &#8599;](https://support.scitools.com/support/solutions/articles/70000641315-customizing-understand-s-graphs)の手順に従ってください。
+- 対応しているグラフにメトリクスのカラースケールを適用するには、[サポート記事 &#8599;](https://docs.scitools.com/help/graphs/style-graphs.html)の手順に従ってください。
 - エンティティロケーター（「表示」 -> 「エンティティ ロケーター」）でメトリクスの列を追加するには「列の追加」アイコンから行います。
 
 ![image](locator_button.png)
@@ -28,7 +28,7 @@ Understand には、コード行数や関数の McCabe サイクロマチック�
 
 ## 独自のプラグインを作成する
 
-メトリクスプラグインのスクリプトは複数のメトリクスを定義できます。そのため、[Coverage](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Coverage%22) や [Halstead](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Halstead%20Metrics%22) など関連するメトリクスは同じファイルにまとめられることがよくあります。[Legacy](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Tags%3A%22Legacy%22) メトリクスは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/metric.html) に示されているサンプルテンプレートで一括定義されています。テンプレートをコピーするには、そのうちの一つをカスタマイズします。スクリプト作成に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。なお、「メトリクス ブラウザー」 は、いずれかのメトリクスを表示する前に、選択したエンティティまたはアーキテクチャのすべてのメトリクスを計算します。そのため、実行時間の長いメトリクスを有効化すると待ち時間が増加します。
+メトリクスプラグインのスクリプトは複数のメトリクスを定義できます。そのため、[Coverage](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Coverage%22) や [Halstead](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Halstead%20Metrics%22) など関連するメトリクスは同じファイルにまとめられることがよくあります。[Legacy](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Tags%3A%22Legacy%22) メトリクスは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/python/metric.html) に示されているサンプルテンプレートで一括定義されています。テンプレートをコピーするには、そのうちの一つをカスタマイズします。スクリプト作成に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。なお、「メトリクス ブラウザー」 は、いずれかのメトリクスを表示する前に、選択したエンティティまたはアーキテクチャのすべてのメトリクスを計算します。そのため、実行時間の長いメトリクスを有効化すると待ち時間が増加します。
 
 
 ### カスタムプラグイン作成時のヒント

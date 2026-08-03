@@ -20,7 +20,7 @@ The main way to view metric plugins is through the Metrics Browser (Metrics -> B
 *A Metric’s Treemap for OpenSSL with size by lines of code and coloring by maximum cyclomatic complexity. A Call Tree with nodes colored by cyclomatic complexity. The Entity Locator showing the Comment to Code Ratio.*
 
 - Open a Metrics Treemap from Metrics -> Metrics Treemap.
-- Apply a metric color scale to supported graphs following the directions in the [support article &#8599;](https://support.scitools.com/support/solutions/articles/70000641315-customizing-understand-s-graphs).
+- Apply a metric color scale to supported graphs following the directions in the [support article &#8599;](https://docs.scitools.com/help/graphs/style-graphs.html).
 - Add metric columns to the Entity Locator (View -> Entity Locator) with the "Add Columns" icon.
 
 ![image](locator_button.png)
@@ -29,7 +29,7 @@ The main way to view metric plugins is through the Metrics Browser (Metrics -> B
 
 ## Writing Your Own Plugins
 
-A metric plugin script can define multiple metrics. So related metrics such as all the [Coverage](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Coverage%22) or [Halstead](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Halstead%20Metrics%22) metrics are often grouped in the same file. The [Legacy](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Tags%3A%22Legacy%22) metrics are all defined in the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/metric.html). Customize one of them to copy the template. There is also a [tutorial &#8599;](https://scitools.freshdesk.com/support/solutions/articles/70000582855) on writing scripts. Note that the Metrics Browser calculates all metrics for the selected entity or architecture before displaying any of them so enabling long running metrics can increase the wait time.
+A metric plugin script can define multiple metrics. So related metrics such as all the [Coverage](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Coverage%22) or [Halstead](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Halstead%20Metrics%22) metrics are often grouped in the same file. The [Legacy](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Tags%3A%22Legacy%22) metrics are all defined in the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/python/metric.html). Customize one of them to copy the template. There is also a [tutorial &#8599;](https://docs.scitools.com/help/apis/tutorials/tutorial-1-getting-started.html) on writing scripts. Note that the Metrics Browser calculates all metrics for the selected entity or architecture before displaying any of them so enabling long running metrics can increase the wait time.
 
 ### Plugin Developper Tips
 

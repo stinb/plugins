@@ -6,7 +6,7 @@
 
 *[Git Stability](und://plugin/arch/Git%20Stability)アーキテクチャから生成されたファイル依存関係グラフ*
 
-# 作成者
+## 作成者
 
 作成者は以下の3つのカテゴリに分類されます[1]：
 
@@ -16,13 +16,13 @@
 
 **技術的負債のヒント:** 強い所有権を持つファイルが望ましく、多くの副次的な貢献者を持つファイルはバグが多い傾向があります。[1,2]
 
-## プラグイン
+### プラグイン
 
 ![image](chart_authors.svg)
 
 [Git Authors](und://plugin/ireport/Git%20Authors)インタラクティブレポートで概要を確認してください。[author](und://plugin/arch/Git%20Author)や[owner](und://plugin/arch/Git%20Owner)でグループ化するアーキテクチャを作成します。[number of authors](und://plugin/metric/GitAuthors)、[number of major contributors](und://plugin/metric/GitMajorContributors)、[number of minor contributors](und://plugin/metric/GitMinorContributors)、および[ownership](und://plugin/metric/GitOwnership)（オーナーによるコミットの割合）を計算するメトリクスを使用します。
 
-# 変更頻度（コードチャーン）
+## 変更頻度（コードチャーン）
 
 ファイルは以下のように分類されます：
 
@@ -32,7 +32,7 @@
 
 **技術的負債のヒント:** Recurrently Activeのファイルは、設計が不十分であるか、多くのバグを含んでいる可能性があります。[2,3]
 
-## プラグイン
+### プラグイン
 
 ![image](arch_stability.png)
 
@@ -40,13 +40,13 @@
 
 ![image](../../../.doc/home_metric.png)
 
-# 結合性と凝集性
+## 結合性と凝集性
 
 ファイルは、同じコミットで両方が変更された場合、Gitを通じて他のファイルと結合されています。結合性は、2つのファイルが同じコミットで共起する回数をターゲットファイルのコミット数で割った値で測定されます。
 
 **技術的負債のヒント:** 結合されたファイルに不要な依存関係（コピー＆ペーストコードなど）がないか確認してください。
 
-## プラグイン
+### プラグイン
 
 ![image](ireport_coupling.png)
 
@@ -54,7 +54,7 @@
 
 関連する概念として、凝集性はコミットがどの程度アーキテクチャをまたいでいるかを測定します。[Git Cohesion](und://plugin/metric/GitCohesion)メトリクスを確認してください。
 
-# 参考文献
+## 参考文献
 
 1. Bird, Christian, et al. "Don't touch my code! Examining the effects of ownership on software quality." Proceedings of the 19th ACM SIGSOFT symposium and the 13th European conference on Foundations of software engineering. 2011.
 2. Omeyer, Alexandre . 3 Technical Debt Metrics Every Engineer Should Know. 31 July 2019, www.stepsize.com/blog/use-research-from-industry-leaders-to-measure-technical-debt. Accessed 10 Mar. 2025.

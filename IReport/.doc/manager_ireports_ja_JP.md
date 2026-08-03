@@ -38,7 +38,7 @@
 
 ## 独自のプラグインを作成する
 
-[Print Name](und://plugin/ireport/Print%20Name) インタラクティブレポートのプラグインは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/ireport.html) に掲載されているサンプルテンプレートです。スクリプト作成に関する [チュートリアル &#8599;](https://scitools.freshdesk.com/support/solutions/articles/70000582855) もあります。
+[Print Name](und://plugin/ireport/Print%20Name) インタラクティブレポートのプラグインは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/python/ireport.html) に掲載されているサンプルテンプレートです。スクリプト作成に関する [チュートリアル &#8599;](https://docs.scitools.com/help/apis/tutorials/tutorial-1-getting-started.html) もあります。
 
 ### カスタムプラグイン作成時のヒント
 

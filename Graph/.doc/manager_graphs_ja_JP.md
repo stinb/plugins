@@ -42,7 +42,7 @@
 
 ## 独自のプラグインを作成する
 
-[Calls - Python Sample Template](und://plugin/graph/Calls-Python%20Sample%20Template) のグラフプラグインは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/graph.html) に掲載されているサンプルテンプレートです。そのグラフプラグインに関する [ブログ記事 &#8599;](https://blog.scitools.com/making-a-custom-call-tree/) と、スクリプト作成全般に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。
+[Calls - Python Sample Template](und://plugin/graph/Calls-Python%20Sample%20Template) のグラフプラグインは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/python/graph.html) に掲載されているサンプルテンプレートです。そのグラフプラグインに関する [ブログ記事 &#8599;](https://blog.scitools.com/making-a-custom-call-tree/) と、スクリプト作成全般に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。
 
 
 ### カスタムプラグイン作成時のヒント

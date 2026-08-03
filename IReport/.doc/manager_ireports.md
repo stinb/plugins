@@ -43,7 +43,7 @@ View available CodeCheck inspections from Checks -> Open CodeCheck. Right click 
 
 ## Writing Your Own Plugins
 
-The [Print Name](und://plugin/ireport/Print%20Name) interactive report plugin is the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/ireport.html). There is also a [tutorial &#8599;](https://scitools.freshdesk.com/support/solutions/articles/70000582855) on writing scripts.
+The [Print Name](und://plugin/ireport/Print%20Name) interactive report plugin is the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/python/ireport.html). There is also a [tutorial &#8599;](https://docs.scitools.com/help/apis/tutorials/tutorial-1-getting-started.html) on writing scripts.
 
 ### Plugin Developper Tips
 

@@ -33,7 +33,7 @@ And here are some areas it's not so good at:
 
 
 # Write Your First Custom Check
-1. Open the file [CodeCheck Template example](https://docs.scitools.com/manuals/python/codecheck.html) in a text Editor or in Understand and save it in the plugins directory for your OS:
+1. Open the file [CodeCheck Template example](https://docs.scitools.com/python/codecheck.html) in a text Editor or in Understand and save it in the plugins directory for your OS:
  - Window: C:\Users\USERID\AppData\Roaming\SciTools\plugin\Codecheck
  - Linux: ~/.config/SciTools/plugin/Codecheck
  - MacOSX: ~/Library/Application Support/SciTools/plugin/User/Custom/ Note that the /plugin/User/Custom/ directories will need to be created.

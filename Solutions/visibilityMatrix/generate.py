@@ -4,7 +4,7 @@
 # the visual display. Or, you can use your own version of python3 with
 # matplotlib, numpy, and Understand to get the full features. See the following
 # article on using Understand with custom Python installations.
-# https://support.scitools.com/support/solutions/articles/70000582852-getting-started-with-the-python-api
+# https://docs.scitools.com/help/apis/python-getting-started.html
 
 import argparse
 import os

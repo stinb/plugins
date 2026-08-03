@@ -21,7 +21,7 @@ long_variable = "this is padded to be line eighty characters"  # UndCC_Violation
 """This single line docstring exceeds the limit!!!!"""  # UndCC_Violation
 
 # URL-only comment lines should be excluded regardless of length
-# https://docs.scitools.com/manuals/python/index.html?highlight=lexer#understand.File.lexer
+# https://docs.scitools.com/python/index.html?highlight=lexer#understand.File.lexer
 
 # Multi-line docstring with a long interior line
 def example():

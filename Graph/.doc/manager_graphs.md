@@ -46,7 +46,7 @@ Graphs that target CodeCheck Inspections are only available from interactive rep
 
 ## Writing Your Own Plugins
 
-The [Calls - Python Sample Template](und://plugin/graph/Calls-Python%20Sample%20Template) graph plugin is the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/graph.html). There is also a [blog article &#8599;](https://blog.scitools.com/making-a-custom-call-tree/) for that graph plugin and a general [tutorial &#8599;](https://scitools.freshdesk.com/support/solutions/articles/70000582855) on writing scripts.
+The [Calls - Python Sample Template](und://plugin/graph/Calls-Python%20Sample%20Template) graph plugin is the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/python/graph.html). There is also a [blog article &#8599;](https://blog.scitools.com/making-a-custom-call-tree/) for that graph plugin and a general [tutorial &#8599;](https://docs.scitools.com/help/apis/tutorials/tutorial-1-getting-started.html) on writing scripts.
 
 ### Plugin Developper Tips
 

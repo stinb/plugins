@@ -1,7 +1,7 @@
 
 Hersteller Initiative Software（HIS）メトリクスは、コード品質を保証するために自動車業界で策定されたメトリクスとしきい値の一覧です。英語によるドキュメントは [https://emenda.com/his/ &#8599;](https://emenda.com/his/) にあります。
 
-![image](../../../IReport/.doc/his_metrics.png)
+![image](../../IReport/.doc/his_metrics.png)
 
 *The [HIS Metrics](und://plugin/ireport/HIS%20Metrics) インタラクティブ レポート*
 
@@ -32,6 +32,7 @@ Understand では、これらのメトリクスにアクセスする方法とし
 
 
 注意:
+
 1. このメトリクスはUnderstandに標準で付属しています。
 2. 表示するサイクロマティック複雑度メトリクスはプロジェクトの設定にて変更できます。
 3. このメトリクスは最終リターンを除いた関数からの明示的な終了/リターンの回数を表示します。そのため、値は1つ少なくなります。

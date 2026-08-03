@@ -4,7 +4,7 @@ This directory contains MCP (Model Context Protocol) servers that provide access
 
 ## Setup Instructions
 
-For detailed setup instructions, see the [official documentation](https://scitools.freshdesk.com/support/solutions/articles/70000680031). The [directions](https://scitools.freshdesk.com/support/solutions/articles/70000582855-api-tutorial-1-getting-started-with-the-python-api) for setting up a custom python installation with the Understand API may also be useful because the `upython` executable shipped with Understand does not include FastMCP.
+For detailed setup instructions, see the [official documentation](https://docs.scitools.com/help/ai/connect-via-mcp.html). The [directions](https://docs.scitools.com/help/apis/tutorials/tutorial-1-getting-started.html) for setting up a custom python installation with the Understand API may also be useful because the `upython` executable shipped with Understand does not include FastMCP.
 
 ### Quick Setup
 

@@ -30,7 +30,7 @@
 
 明瞭性スコアは、コードがどれだけシンプルで読みやすいかを測定する指標です。これは1つのメトリクス `UsefulCommentDensity` のみを使用し、CBR-Insightでは手動レビューによるスコアを含めることができます。Understandメトリクスプラグインは [CBRIUsefulCommentToCodeRatio](und://plugin/metric/CBRIUsefulCommentToCodeRatio) であり、[CBRIUsefulComments](und://plugin/metric/CBRIUsefulComments) を [CBRIUsefulLOC](und://plugin/metric/CBRIUsefulLOC) で割った比率として定義されます。
 
-# 参考文献
+## 参考文献
 
 1. Ludwig, Jeremy, Devin Cline, and Aaron Novstrup. "A case study using CBR-insight to visualize source code quality." 2020 IEEE Aerospace Conference. IEEE, 2020.
 2. Baldwin, Carliss, Alan MacCormack, and John Rusnak. "Hidden structure: Using network methods to map system architecture." Research Policy 43.8 (2014): 1381-1397.

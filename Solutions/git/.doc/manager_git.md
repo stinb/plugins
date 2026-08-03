@@ -6,7 +6,7 @@ These plugins read information from a Git repository. There is also a [blog arti
 
 *A File Dependencies graph generated from the [Git Stability](und://plugin/arch/Git%20Stability) architecture*
 
-# Authors
+## Authors
 
 Authors can be broken into three categories [1]:
 
@@ -16,14 +16,14 @@ Authors can be broken into three categories [1]:
 
 **Technical Debt Tip:** Files with strong ownership are preferred, and files with many minor contributors are more bug prone. [1,2]
 
-## Plugins
+### Plugins
 
 ![image](chart_authors.svg)
 
 Check out the [Git Authors](und://plugin/ireport/Git%20Authors) interactive report for an overview. Create architectures to group by [author](und://plugin/arch/Git%20Author) or [owner](und://plugin/arch/Git%20Owner). Use metrics to calculate the [number of authors](und://plugin/metric/GitAuthors),
 the [number of major contributors](und://plugin/metric/GitMajorContributors), the [number of minor contributors](und://plugin/metric/GitMinorContributors), and the [ownership](und://plugin/metric/GitOwnership) (the percentage of commits made by the owner).
 
-# Churn
+## Churn
 
 Files can be classified as:
 
@@ -33,7 +33,7 @@ Files can be classified as:
 
 **Technical Debt Tip:** Recurrently active files can be a sign that a file is poorly designed or has many bugs. [2,3]
 
-## Plugins
+### Plugins
 
 ![image](arch_stability.png)
 
@@ -41,13 +41,13 @@ Tag "Recurrently Active" files with the [Git Stability](und://plugin/arch/Git%20
 
 ![image](../../../.doc/home_metric.png)
 
-# Coupling and Cohesion
+## Coupling and Cohesion
 
 A file is coupled to another file through Git if they are both modified in the same commit. The coupling is measured by the number of commits the two files co-occur in divided by the number of commits for the target file.
 
 **Technical Debt Tip:** Check coupled files for unwanted dependencies, such as copy-paste code.
 
-## Plugins
+### Plugins
 
 ![image](ireport_coupling.png)
 
@@ -56,7 +56,7 @@ Check out the [Git Coupling](und://plugin/ireport/Git%20Coupling) interactive re
 A related concept, cohesion, measures how commits cross architectures. Check out the [Git Cohesion](und://plugin/metric/GitCohesion) metric for details.
 
 
-# References
+## References
 
 1. Bird, Christian, et al. "Don't touch my code! Examining the effects of ownership on software quality." Proceedings of the 19th ACM SIGSOFT symposium and the 13th European conference on Foundations of software engineering. 2011.
 2. Omeyer, Alexandre . 3 Technical Debt Metrics Every Engineer Should Know. 31 July 2019, www.stepsize.com/blog/use-research-from-industry-leaders-to-measure-technical-debt. Accessed 10 Mar. 2025.

@@ -30,7 +30,7 @@
 
 ## 独自のプラグインを作成する
 
-[Long Name](und://plugin/arch/Long%20Name) 自動アーキテクチャ・プラグインは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/arch.html) に示されているサンプルテンプレートです。スクリプト作成に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。アーキテクチャはバックグラウンドで生成されますが、すべてのアーキテクチャが完了するまで、アーキテクチャを使用する一部の機能が利用できない場合がある点にご留意ください。
+[Long Name](und://plugin/arch/Long%20Name) 自動アーキテクチャ・プラグインは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/python/arch.html) に示されているサンプルテンプレートです。スクリプト作成に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。アーキテクチャはバックグラウンドで生成されますが、すべてのアーキテクチャが完了するまで、アーキテクチャを使用する一部の機能が利用できない場合がある点にご留意ください。
 
 ### カスタムプラグイン作成時のヒント
 

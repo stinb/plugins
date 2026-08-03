@@ -30,7 +30,7 @@ You can view and edit your architectures by selecting Architectures -> Browse Ar
 
 ## Writing Your Own Plugins
 
-The [Long Name](und://plugin/arch/Long%20Name) automatic architecture plugin is the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/manuals/python/arch.html). There is also a [tutorial &#8599;](https://scitools.freshdesk.com/support/solutions/articles/70000582855) on writing scripts. Keep in mind that even though architectures are generated on background threads, some features that use architectures may not be available until all architectures have finished.
+The [Long Name](und://plugin/arch/Long%20Name) automatic architecture plugin is the sample template shown in the [Understand Python API Documentation &#8599;](https://docs.scitools.com/python/arch.html). There is also a [tutorial &#8599;](https://docs.scitools.com/help/apis/tutorials/tutorial-1-getting-started.html) on writing scripts. Keep in mind that even though architectures are generated on background threads, some features that use architectures may not be available until all architectures have finished.
 
 ### Plugin Developper Tips
 
