@@ -1,6 +1,6 @@
 # Overview
 
-Understand comes with a lot of built-in metrics, like the number of code lines or the McCabe cyclomatic complexity of a function. With the Python API metrics plugins you can add your own metrics as well! Not only can you view and export these values, but you can also use them in other Understand views. For example, you can shade the nodes in a call tree by cyclomatic complexity, find outliers with treemaps, or sort by metrics in the locator.
+Understand comes with a lot of built-in metrics, like the number of code lines or the McCabe [cyclomatic complexity](und://plugin/metric/Cyclomatic) of a function. With the Python API metrics plugins you can add your own metrics as well! Not only can you view and export these values, but you can also use them in other Understand views. For example, you can shade the nodes in a call tree by cyclomatic complexity, find outliers with treemaps, or sort by metrics in the locator.
 
 ![image](../../.doc/home_metric.png)
 
@@ -17,7 +17,7 @@ The main way to view metric plugins is through the Metrics Browser (Metrics -> B
 
 ![image](metrics.png)
 
-*A Metric’s Treemap for OpenSSL with size by lines of code and coloring by maximum cyclomatic complexity. A Call Tree with nodes colored by cyclomatic complexity. The Entity Locator showing the Comment to Code Ratio.*
+*A Metric’s Treemap for OpenSSL with size by lines of code and coloring by [maximum cyclomatic complexity](und://plugin/metric/MaxCyclomatic). A Call Tree with nodes colored by [cyclomatic complexity](und://plugin/metric/Cyclomatic). The Entity Locator showing the [Comment to Code Ratio](und://plugin/metric/RatioCommentToCode).*
 
 - Open a Metrics Treemap from Metrics -> Metrics Treemap.
 - Apply a metric color scale to supported graphs following the directions in the [support article &#8599;](https://docs.scitools.com/help/graphs/style-graphs.html).
@@ -26,6 +26,14 @@ The main way to view metric plugins is through the Metrics Browser (Metrics -> B
 ![image](locator_button.png)
 
 ![image](locator_dialog.png)
+
+## Metric Suites
+
+Some built-in metrics are part of a named suite from published research. Each suite has its own page describing where the metrics come from and linking each one:
+
+- [McCabe](und://plugins/Solutions/.doc/manager_mccabe.md?filter=Suite%3A%22McCabe%22) - Cyclomatic Complexity and Essential Complexity
+- [Lorenz & Kidd](und://plugins/Solutions/.doc/manager_lorenzkidd.md?filter=Suite%3A%22Lorenz%20%26%20Kidd%22) - class size metrics like Number of Methods and Average Method Size
+- [Chidamber & Kemerer](und://plugins/Solutions/.doc/manager_chidamberkemerer.md?filter=Suite%3A%22Chidamber%20%26%20Kemerer%22) - class-level design metrics like Coupling Between Objects and Depth of Inheritance Tree
 
 ## Writing Your Own Plugins
 

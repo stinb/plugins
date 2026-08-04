@@ -12,13 +12,13 @@ Understand では、これらのメトリクスにアクセスする方法とし
 | 名前                                  | 頭字語     |  Understand メトリクス ID                                                             |
 |---------------------------------------|-------------|-----------------------------------------------------------------------------------|
 | Comment Density                       | COMF        | [RatioCommentsWithBeforeToCode](und://plugin/metric/RatioCommentsWithBeforeToCode)|
-| Number of paths                       | PATH        | CountPath [1,2]                                                                   |
+| Number of paths                       | PATH        | [CountPath](und://plugin/metric/CountPath) [1,2]                                  |
 | Number of Goto Statements             | GOTO	      | [CountGoTo](und://plugin/metric/CountGoTo)                                        |
-| Cyclomatic Complexity                 | v(G)        | Cyclomatic [1,2]                                                                  |
+| Cyclomatic Complexity                 | v(G)        | [Cyclomatic](und://plugin/metric/Cyclomatic) [1,2]                                |
 | Number of Calling Functions           | CALLING     | [CountCallbyUnique](und://plugin/metric/CountCallbyUnique)                        |
 | Number of called functions            | CALLS       | [CountCallsUnique](und://plugin/metric/CountCallsUnique)                          |
 | Number of Function Parameters         | PARAM       | [CountParams](und://plugin/metric/CountParams)                                    |
-| Number of Instructions per function   | STMT        | CountStmt [1]                                                                     |
+| Number of Instructions per function   | STMT        | [CountStmt](und://plugin/metric/CountStmt) [1]                                    |
 | Number of call Levels                 | LEVEL       | [MaxCallDepth](und://plugin/metric/MaxCallDepth)                                  |
 | Number of return points               | RETURN      | [CountEarlyExit](und://plugin/metric/CountEarlyExit) [3]                          |
 | The stability index                   | S           | [StabilityIndex](und://plugin/metric/StabilityIndex) [4]                          |
@@ -26,9 +26,9 @@ Understand では、これらのメトリクスにアクセスする方法とし
 | Number of MISRA HIS Subset violations | NOMV		    | [HISNOMV](und://plugin/metric/HISNOMV) [5]                                        |
 | Number of MISRA violations per rule	  | NOMVPR      | [5,6]                                                                             |
 | Number of recursions                  | ap_cg_cycle | [IsRecursive](und://plugin/metric/IsRecursive) [7]                                |
-| Statements changed                    | SCHG        | CountLineChanged [1,4,8]                                                          |
-| Statements deleted                    | SDEL        | CountLineRemoved [1,4,8]                                                          |
-| New statements                        | SNew        | CountLineNew [1,4,8]                                                              |
+| Statements changed                    | SCHG        | [CountLineChanged](und://plugin/metric/CountLineChanged) [1,4,8]                  |
+| Statements deleted                    | SDEL        | [CountLineRemoved](und://plugin/metric/CountLineRemoved) [1,4,8]                  |
+| New statements                        | SNew        | [CountLineNew](und://plugin/metric/CountLineNew) [1,4,8]                          |
 
 
 注意:

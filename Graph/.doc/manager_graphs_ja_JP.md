@@ -1,6 +1,6 @@
 # 概要
 
-グラフプラグインを使うと、特定の情報ニーズに対応するカスタムグラフを独自に開発できます。多くの組み込みグラフは、[Butterfly](und://plugin/graph/Butterfly-Classic)、[Variable Tracker](und://plugin/graph/Variable%20Tracker-Custom)、[Control Flow](und://plugin/graph/Control%20Flow-Custom)、[UML Class Diagram](und://plugin/graph/UML%20Class%20Diagram-Custom) のように、プラグインとして始まりました。グラフプラグインは、デフォルトの [Graphviz Dot &#8599;](https://graphviz.org/docs/layouts/dot/) レイアウト以外も使用でき、ファイル依存関係グラフの作成に使われる [Graphviz SFDP  &#8599;](https://graphviz.org/docs/layouts/sfdp/) レイアウトや、Understand が提供するいくつかの [チャートレイアウト &#8599;](https://github.com/stinb/plugins/blob/main/Graph/Charts/README.md) なども利用できます。
+グラフプラグインを使うと、特定の情報ニーズに対応するカスタムグラフを独自に開発できます。多くの組み込みグラフは、[Butterfly](und://plugin/graph/Butterfly-Classic)、[Variable Tracker](und://plugin/graph/Variable%20Tracker-Custom)、[Control Flow](und://plugin/graph/Control%20Flow-Custom)、[UML Class Diagram](und://plugin/graph/UML%20Class%20Diagram-Custom) のように、プラグインとして始まりました。グラフプラグインは、デフォルトの [Graphviz Dot &#8599;](https://graphviz.org/docs/layouts/dot/) レイアウト以外も使用でき、[ファイル依存関係グラフ](und://plugin/graph/File%20Dependencies-Classic)の作成に使われる [Graphviz SFDP  &#8599;](https://graphviz.org/docs/layouts/sfdp/) レイアウトや、Understand が提供するいくつかの [チャートレイアウト &#8599;](https://github.com/stinb/plugins/blob/main/Graph/Charts/README.md) なども利用できます。
 
 ![image](../../.doc/home_graph.png)
 
