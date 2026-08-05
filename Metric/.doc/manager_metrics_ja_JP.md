@@ -28,7 +28,7 @@ Understand には、コード行数や関数の McCabe [サイクロマチック
 
 ## 独自のプラグインを作成する
 
-メトリクスプラグインのスクリプトは複数のメトリクスを定義できます。そのため、[Coverage](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Coverage%22) や [Halstead](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Halstead%20Metrics%22) など関連するメトリクスは同じファイルにまとめられることがよくあります。[Legacy](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Tags%3A%22Legacy%22) メトリクスは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/python/metric.html) に示されているサンプルテンプレートで一括定義されています。テンプレートをコピーするには、そのうちの一つをカスタマイズします。スクリプト作成に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。なお、「メトリクス ブラウザー」 は、いずれかのメトリクスを表示する前に、選択したエンティティまたはアーキテクチャのすべてのメトリクスを計算します。そのため、実行時間の長いメトリクスを有効化すると待ち時間が増加します。
+メトリクスプラグインのスクリプトは複数のメトリクスを定義できます。そのため、[Coverage](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Solution%3A%22Coverage%22) や [Halstead](und://plugins/Solutions/.doc/manager_halstead.md?filter=Suite%3A%22Halstead%22) など関連するメトリクスは同じファイルにまとめられることがよくあります。[Legacy](und://plugins/Metric/.doc/manager_metrics.md?filter=Kind%3A%22Metric%22%20Tags%3A%22Legacy%22) メトリクスは、[Understand Python API Documentation &#8599;](https://docs.scitools.com/python/metric.html) に示されているサンプルテンプレートで一括定義されています。テンプレートをコピーするには、そのうちの一つをカスタマイズします。スクリプト作成に関する [チュートリアル &#8599;](https://understand.techmatrix.jp/understand-70-pythonapi-tutorial-1/) もあります。なお、「メトリクス ブラウザー」 は、いずれかのメトリクスを表示する前に、選択したエンティティまたはアーキテクチャのすべてのメトリクスを計算します。そのため、実行時間の長いメトリクスを有効化すると待ち時間が増加します。
 
 
 ### カスタムプラグイン作成時のヒント
