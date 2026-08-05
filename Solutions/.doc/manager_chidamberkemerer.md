@@ -16,7 +16,7 @@ Notes:
 
 1. Chidamber & Kemerer's original WMC definition weights each method by a complexity metric of the implementer's choosing, without specifying one. Understand offers two interpretations: [CountDeclMethod](und://plugin/metric/CountDeclMethod) counts methods unweighted (every method has weight 1), while [SumCyclomatic](und://plugin/metric/SumCyclomatic) weights each method by its own [Cyclomatic Complexity](und://plugin/metric/Cyclomatic) before summing, which is the more common weighting used in practice.
 2. [CountDeclMethodAll](und://plugin/metric/CountDeclMethodAll) is also tagged as [Lorenz & Kidd](und://plugins/Solutions/.doc/manager_lorenzkidd.md?filter=Suite%3A%22Lorenz%20%26%20Kidd%22)'s Number of Methods (NM), since RFC's simplified form (methods in the class, ignoring the methods it calls elsewhere) and Lorenz & Kidd's NM count the same thing.
-3. [PercentLackOfCohesion](und://plugin/metric/PercentLackOfCohesion) also goes by LCOM2, Chidamber & Kemerer's refined, percentage-based cohesion measure, as opposed to their original 1991 pairwise LCOM.
+3. [PercentLackOfCohesion](und://plugin/metric/PercentLackOfCohesion) also goes by LCOM2 — a normalized, percentage-based cohesion formula commonly used in tools (100% minus the average share of methods that touch each attribute). That is not Chidamber & Kemerer's own LCOM from their 1994 TSE paper, which instead counts dissimilar method pairs minus similar method pairs (floored at zero) — a raw integer, not a percentage; Understand uses the LCOM2 form for the suite's cohesion slot.
 
 ## References
 
