@@ -1,0 +1,186 @@
+ERR1 = "Provide a use type clause instead of renaming an operator"
+ERR2 = "Rename a subprogram that merely delegates instead of writing a pass-through wrapper"
+
+
+def ids():
+    return ("ADA95_5.7.2",)
+
+
+def name(id):
+    return {
+        "ADA95_5.7.2": "Published Standards/Ada 95/5.7.2 The Renames Clause",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.7.2": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Visibility",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.7.2": """
+<p><b>Guideline</b></p>
+<p>&#8226; Keep the scope of a renaming declaration as small as possible.</p>
+<p>&#8226; Rename a long, fully qualified name if it becomes unwieldy.</p>
+<p>&#8226; If a subprogram body does nothing but call another subprogram, rename the target instead of writing a pass-through body.</p>
+<p>&#8226; Prefer renaming over a <code>use</code> clause for visibility, except for operators.</p>
+<p>&#8226; Rename identifiers from a reused component whose original names do not fit your project's naming scheme.</p>
+<p>&#8226; Adopt a project-wide convention for abbreviating common package names via renaming.</p>
+<p>&#8226; Provide a <code>use type</code> clause rather than renaming an operator.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">procedure Disk_Write (Track_Name : in     Track;
+                      Item       : in     Data) renames
+   System_Specific.Device_Drivers.Disk_Head_Scheduler.Transmit;</code></pre>
+
+<p><b>Rationale</b></p>
+<p>If the renaming facility is abused, the code can be difficult to read. A renames clause can substitute an abbreviation for a qualifier or long package name locally. This can make code more readable yet anchor the code to the full name. You can use the renames clause to evaluate a complex name once or to provide a new "view" of an object (regardless of whether it is tagged). However, the use of renames clauses can often be avoided or made obviously undesirable by carefully choosing names so that fully qualified names read well.</p>
+<p>When a subprogram body calls another subprogram without adding local data or other algorithmic content, it is more readable to have this subprogram body rename the subprogram that actually does the work. Thus, you avoid having to write code to "pass through" a subprogram call (Rationale 1995, §II.12).</p>
+<p>The list of renaming declarations serves as a list of abbreviation definitions (see Guideline 3.1.4). As an alternative, you can rename a package at the library level to define project-wide abbreviations for packages and then with the renamed packages. Often the parts recalled from a reuse library do not have names that are as general as they could be or that match the new application's naming scheme. An interface package exporting the renamed subprograms can map to your project's nomenclature. See also Guideline 5.7.1.</p>
+<p>The method described in the Ada Reference Manual, §8.5 for renaming a type is to use a subtype (see Guideline 3.4.1).</p>
+<p>The use type clause eliminates the need for renaming infix operators. Because you no longer need to rename each operator explicitly, you avoid errors such as renaming a + to a -. See also Guideline 5.7.1.</p>
+
+<p><b>Notes</b></p>
+<p>You should choose package names to be minimally meaningful, recognizing that package names will be widely used as prefixes (e.g., Pkg.Operation or Object : Pkg.Type_Name;). If you rename every package to some abbreviation, you defeat the purpose of choosing meaningful names, and it becomes hard to keep track of what all the abbreviations represent.</p>
+<p>For upward compatibility of Ada 83 programs in an Ada 95 environment, the environment includes library-level renamings of the Ada 83 library level packages (Ada Reference Manual, §J.1). It is not recommended that you use these renamings in Ada 95 code.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Two cases are automated: (1) a renaming declaration whose target is an operator is flagged, since <code>use type</code> should be used instead; and (2) a subprogram body consisting of exactly one statement that calls another subprogram, forwarding its own parameters unchanged and in the same order, is flagged as a candidate for a renaming declaration instead. The other guidelines require developer judgment (there is no defined threshold for an "unwieldy" name, no way to assess whether a name is "nondescriptive," and no project-wide abbreviation convention to check against) and are not automated.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def get_forward_call_args(file, fn, call_ref):
+    begin_ref = fn.ref("Begin Body")
+
+    if not begin_ref:
+        return None
+
+    # begin_ref points to the "is" that starts the body's declarative part,
+    # not to "begin" itself. If the very next token isn't "begin", the body
+    # has its own declarative part (local declarations), so it cannot be a
+    # pure one-statement pass-through.
+    lex = file.lexer().lexeme(begin_ref.line(), begin_ref.column())
+    lex = lex.next(True, True)
+
+    if not lex or lex.text().lower() != "begin":
+        return None
+
+    lex = lex.next(True, True)
+
+    if fn.kind().check("Function"):
+        if not lex or lex.text().lower() != "return":
+            return None
+
+        lex = lex.next(True, True)
+
+    # Walk through the (possibly dotted/qualified) call target name,
+    # tracking the last identifier's position. call_ref points at the
+    # resolved entity's own token -- the last component of a qualified name
+    # (e.g. "Actual_Work" in "E3.Actual_Work"), not the first -- so the
+    # position is checked after the walk, against that last identifier.
+    # Bounding this to identifier/dot tokens also keeps a zero-argument call
+    # (valid Ada has no parens at all for a parameterless call) from
+    # running the search past its own statement looking for some unrelated
+    # "(" later in the file.
+    last_line, last_col = None, None
+
+    while lex and (lex.token() == "Identifier" or lex.text() == "."):
+        if lex.token() == "Identifier":
+            last_line, last_col = lex.line_begin(), lex.column_begin()
+
+        lex = lex.next(True, True)
+
+    if last_line != call_ref.line() or last_col != call_ref.column():
+        return None
+
+    args = []
+
+    if lex and lex.text() == "(":
+        current = ""
+        depth = 1
+        lex = lex.next(True, True)
+
+        while lex and depth > 0:
+            text = lex.text()
+
+            if text == "(":
+                depth += 1
+                current += text
+            elif text == ")":
+                depth -= 1
+
+                if depth == 0:
+                    if current.strip():
+                        args.append(current.strip())
+                    break
+
+                current += text
+            elif text == "," and depth == 1:
+                args.append(current.strip())
+                current = ""
+            else:
+                current += text
+
+            lex = lex.next(True, True)
+
+        lex = lex.next(True, True)
+
+    if not lex or lex.text() != ";":
+        return None
+
+    lex = lex.next(True, True)
+
+    if not lex or lex.text().lower() != "end":
+        return None
+
+    return args
+
+
+def check_renamed_operator(check, file):
+    for ref in file.filerefs("Rename"):
+        if ref.ent().kind().check("Function Operator"):
+            check.violation(ref.scope(), file, ref.line(), ref.column(), ERR1)
+
+
+def check_pass_through_wrapper(check, file):
+    for ref in file.filerefs("Declare Body", "Function, Procedure"):
+        fn = ref.ent()
+        calls = fn.refs("Call")
+
+        if len(calls) != 1:
+            continue
+
+        target = calls[0].ent()
+
+        if target.id() == fn.id():
+            continue
+
+        args = get_forward_call_args(file, fn, calls[0])
+
+        if args is None:
+            continue
+
+        params = fn.ents("Declare", "Parameter")
+
+        if len(args) != len(params):
+            continue
+
+        if all(arg == param.name() for arg, param in zip(args, params)):
+            check.violation(fn, ref.file(), calls[0].line(),
+                            calls[0].column(), ERR2)
+
+
+def check(check, file):
+    check_renamed_operator(check, file)
+    check_pass_through_wrapper(check, file)
