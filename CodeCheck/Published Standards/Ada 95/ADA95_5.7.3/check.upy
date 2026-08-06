@@ -1,0 +1,84 @@
+ERR1 = "Mark an overriding declaration with the overriding keyword"
+
+
+def ids():
+    return ("ADA95_5.7.3",)
+
+
+def name(id):
+    return {
+        "ADA95_5.7.3": "Published Standards/Ada 95/5.7.3 Overloaded Subprograms",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.7.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Subprograms",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.7.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Restrict overloading to frequently-used subprograms that perform comparable operations on different argument types.</p>
+<p>&#8226; Do not overload merely to avoid choosing a new name; overload only when the operations genuinely share the same purpose.</p>
+<p>&#8226; Watch for the case where a new declaration's parameter profile is not sufficiently distinct from an existing one: instead of adding a sibling operation, it can silently mask (override) the original.</p>
+<p>&#8226; This concern applies within a single scope; reusing a subprogram name across unrelated packages is not restricted.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">function Sin (Angles : in Matrix_Of_Radians) return Matrix;
+function Sin (Angles : in Vector_Of_Radians) return Vector;
+function Sin (Angle  : in Radians) return Small_Real;
+function Sin (Angle  : in Degrees) return Small_Real;</code></pre>
+<p>Each overload performs the same conceptual operation on a different argument type &#8212; the pattern the guideline considers appropriate.</p>
+
+<p><b>Rationale</b></p>
+<p>If the renaming facility is abused, the code can be difficult to read. A renames clause can substitute an abbreviation for a qualifier or long package name locally. This can make code more readable yet anchor the code to the full name. You can use the renames clause to evaluate a complex name once or to provide a new "view" of an object (regardless of whether it is tagged). However, the use of renames clauses can often be avoided or made obviously undesirable by carefully choosing names so that fully qualified names read well.</p>
+<p>When a subprogram body calls another subprogram without adding local data or other algorithmic content, it is more readable to have this subprogram body rename the subprogram that actually does the work. Thus, you avoid having to write code to "pass through" a subprogram call (Rationale 1995, §II.12).</p>
+<p>The list of renaming declarations serves as a list of abbreviation definitions (see Guideline 3.1.4). As an alternative, you can rename a package at the library level to define project-wide abbreviations for packages and then with the renamed packages. Often the parts recalled from a reuse library do not have names that are as general as they could be or that match the new application's naming scheme. An interface package exporting the renamed subprograms can map to your project's nomenclature. See also Guideline 5.7.1.</p>
+<p>The method described in the Ada Reference Manual, §8.5 for renaming a type is to use a subtype (see Guideline 3.4.1).</p>
+<p>The use type clause eliminates the need for renaming infix operators. Because you no longer need to rename each operator explicitly, you avoid errors such as renaming a + to a -. See also Guideline 5.7.1.</p>
+
+<p><b>Notes</b></p>
+<p>You should choose package names to be minimally meaningful, recognizing that package names will be widely used as prefixes (e.g., Pkg.Operation or Object : Pkg.Type_Name;). If you rename every package to some abbreviation, you defeat the purpose of choosing meaningful names, and it becomes hard to keep track of what all the abbreviations represent.</p>
+<p>For upward compatibility of Ada 83 programs in an Ada 95 environment, the environment includes library-level renamings of the Ada 83 library level packages (Ada Reference Manual, §J.1). It is not recommended that you use these renamings in Ada 95 code.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only the masking/overriding risk is automated, and only its Ada 2005-and-later mitigation: a primitive operation that overrides an inherited one is flagged when its declaration is not marked with the <code>overriding</code> keyword. The override relationship is determined semantically (whether the profile actually matches an inherited primitive), not by the keyword's presence, so this catches exactly the case the guideline warns about &#8212; a profile that overrides without the author having said so. Declarations marked <code>not overriding</code>, or that do not override anything at all, are not flagged. The broader guideline &#8212; restricting overloading to genuinely comparable operations, and not overloading merely to avoid naming &#8212; requires judging semantic intent and is not automated. This check is only meaningful for code that can use the <code>overriding</code> keyword (Ada 2005 and later); it is not applicable to a codebase restricted to Ada 83/95 syntax, where the keyword does not exist and every override would otherwise be flagged.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def check(check, file):
+    for ref in file.filerefs("Declare Spec, Declare Body", "Function, Procedure"):
+        fn = ref.ent()
+
+        # A subprogram normally has both a spec and a body declaration, in
+        # separate files, each producing its own ref here -- report only
+        # from the spec then, to avoid flagging the same entity twice. Only
+        # fall back to the body declaration when there is no spec at all
+        # anywhere in the project (a primitive declared entirely within a
+        # package body, with no separate spec entry).
+        if ref.kind().check("Declare Body") and fn.refs("Declare Spec"):
+            continue
+
+        if not any(r.kind().check("Overrides") for r in fn.refs()):
+            continue
+
+        lex = file.lexer().lexeme(ref.line(), ref.column())
+        prev = lex.previous(True, True)
+        prev = prev.previous(True, True) if prev else None
+
+        if prev and prev.text().lower() == "overriding":
+            continue
+
+        check.violation(fn, ref.file(), ref.line(), ref.column(), ERR1)
