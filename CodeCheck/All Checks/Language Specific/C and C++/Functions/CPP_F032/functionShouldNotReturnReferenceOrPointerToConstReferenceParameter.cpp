@@ -41,7 +41,7 @@ const A *Fn3(const A &ref) noexcept // UNDCC_Violation - the function returns a
     return &ref;
 }
 template <typename T>
-T &Fn4(T &v) // UNDCC_Valid - the function will not bind to temporary objects
+T &Fn4(T &v) // UndCC_Violation(broad) - non-const reference parameter (valid under AUTOSAR A7-5-1)
 {
     // ...
     return v;
