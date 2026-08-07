@@ -1,0 +1,246 @@
+ERR1 = "Provide an explicit equality operator for a type with an access or floating-point component"
+ERR2 = "Define /= to match an equality operator that returns a non-Boolean result"
+
+
+def ids():
+    return ("ADA95_5.7.5",)
+
+
+def name(id):
+    return {
+        "ADA95_5.7.5": "Published Standards/Ada 95/5.7.5 Overloading the Equality Operator",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.7.5": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Operators",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.7.5": """
+<p><b>Guideline</b></p>
+<p>&#8226; Define an appropriate equality operator for private types.</p>
+<p>&#8226; Consider redefining the equality operator for a private type.</p>
+<p>&#8226; When overloading the equality operator for types, maintain the properties of an algebraic equivalence relation.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">type Measurement is record
+   Value : Float;
+end record;
+
+function "=" (Left, Right : Measurement) return Boolean is
+   Epsilon : constant Float := Float'Model_Epsilon * 1000.0;
+begin
+   return abs (Left.Value - Right.Value) <=
+      Epsilon * Float'Max (abs (Left.Value), abs (Right.Value));
+end "=";</code></pre>
+
+<p><b>Rationale</b></p>
+<p>The predefined equality operation provided with private types depends on the data structure chosen to implement that type.
+If access types are used, then equality will mean the operands have the same pointer value.
+If discrete types are used, then equality will mean the operands have the same value.
+If a floating-point type is used, then equality is based on Ada model intervals (see Guideline 7.2.7).
+You should, therefore, redefine equality to provide the meaning expected by the client.
+If you implement a private type using an access type, you should redefine equality to provide a deep equality.
+For floating-point types, you may want to provide an equality that tests for equality within some application-dependent epsilon value.</p>
+<p>Any assumptions about the meaning of equality for private types will create a dependency on the implementation of that type.
+See Gonzalez (1991) for a detailed discussion.</p>
+<p>When the definition of "=" is provided, there is a conventional algebraic meaning implied by this symbol.
+As described in Baker (1991), the following properties should remain true for the equality operator:</p>
+<p>Reflexive: a = a</p>
+<p>Symmetric: a = b ==> b = a</p>
+<p>Transitive: a = b and b = c ==> a = c</p>
+<p>In redefining equality, you are not required to have a result type of Standard.Boolean.
+The Rationale (1995, §6.3) gives two examples where your result type is a user-defined type.
+In a three-valued logic abstraction, you redefine equality to return one of True, False, or Unknown.
+In a vector processing application, you can define a component-wise equality operator that returns a vector of Boolean values.
+In both these instances, you should also redefine inequality because it is not the Boolean complement of the equality function.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Two structural cases are automated.
+First, a record, array, or private type with an access-type or floating-point component (or, for an array, element type) that has no user-defined same-type <code>"="</code> &#8212; one whose two parameters are both the type itself, since a mixed-type overload does not address same-type comparisons &#8212; is flagged as a candidate for review, since the predefined equality is exactly the case this guideline calls out as unreliable for those component kinds.
+Second, an equality operator that returns something other than <code>Boolean</code> is flagged when no matching <code>"/="</code> is defined for the same type, since Ada will not derive one automatically.
+The equivalence-relation requirement (reflexive, symmetric, transitive) is not automated, since it depends on what the operator's implementation actually does, not its structure.
+A derived (tagged) type that adds no components of its own is only checked for its own declared components, not components inherited from an ancestor, so a risky inherited component with no equality defined anywhere in the hierarchy may not be flagged.
+When reviewing a flagged type, confirm any <code>"="</code> declared nearby is actually for that type &#8212; a <code>"="</code> for a different, unrelated type in the same file does not resolve the violation.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+PREDEFINED_FLOAT_NAMES = {"FLOAT", "LONG_FLOAT",
+                          "SHORT_FLOAT", "LONG_LONG_FLOAT"}
+
+
+def declaration_tokens(type_ent):
+    def_ref = type_ent.ref("Declare")
+
+    if not def_ref:
+        return []
+
+    lex = def_ref.file().lexer().lexeme(def_ref.line(), def_ref.column())
+    tokens = []
+
+    while lex and lex.text() != ";":
+        tokens.append(lex.text())
+        lex = lex.next(True, True)
+
+    return tokens
+
+
+def is_float_type(type_ent):
+    # The predefined Float (and its variants) reports the same generic
+    # "Ada Type" kind as every other type, with nothing to distinguish it
+    # as numeric/floating-point -- unlike access types, which do get a
+    # distinct kind. Matching by name covers the predefined case; for a
+    # user-defined type, its own declaration is checked for the "digits"
+    # keyword (a new floating-point type) or "is new <a known float>"
+    # (one level of derivation from a known float type).
+    if type_ent.name().upper() in PREDEFINED_FLOAT_NAMES:
+        return True
+
+    tokens = declaration_tokens(type_ent)
+
+    if "digits" in tokens:
+        return True
+
+    if "new" in tokens:
+        idx = tokens.index("new")
+
+        if idx + 1 < len(tokens) and tokens[idx + 1].upper() in PREDEFINED_FLOAT_NAMES:
+            return True
+
+    return False
+
+
+def has_risky_component(t):
+    for comp in t.ents("Declare", "Component"):
+        typed = comp.ref("Typed")
+
+        if not typed:
+            continue
+
+        te = typed.ent()
+
+        if te.kind().check("Type Access") or is_float_type(te):
+            return True
+
+    return False
+
+
+def has_custom_equality(t):
+    # An operation "for" t is not necessarily a same-type equality: a
+    # mixed-type "=" (e.g. T vs. Integer) is still associated with T but
+    # does not address T-vs-T comparisons, which is what this guideline is
+    # actually about. Both parameters must resolve to t itself.
+    for r in t.refs("Operation"):
+        fn = r.ent()
+
+        if fn.longname().rsplit(".", 1)[-1] != "=":
+            continue
+
+        params = fn.ents("Declare", "Parameter")
+
+        if len(params) != 2:
+            continue
+
+        if all((p.ref("Typed") and p.ref("Typed").ent().id() == t.id()) for p in params):
+            return True
+
+    return False
+
+
+def check_missing_equality(check, file):
+    # A private type's partial declaration and its full-view completion
+    # (often in the private part, or a separate body) are the same entity
+    # with two separate "Declare"-kind refs -- without deduplicating, both
+    # would be reported as independent violations for the one type.
+    reported = set()
+
+    for ref in file.filerefs("Declare", "Type Record"):
+        t = ref.ent()
+
+        if t.id() in reported:
+            continue
+
+        if has_custom_equality(t):
+            continue
+
+        if has_risky_component(t):
+            check.violation(t, ref.file(), ref.line(), ref.column(), ERR1)
+            reported.add(t.id())
+
+    for ref in file.filerefs("Declare", "Type Array"):
+        t = ref.ent()
+
+        if t.id() in reported:
+            continue
+
+        if has_custom_equality(t):
+            continue
+
+        typed = t.ref("Typed")
+
+        if not typed:
+            continue
+
+        te = typed.ent()
+
+        if te.kind().check("Type Access") or is_float_type(te):
+            check.violation(t, ref.file(), ref.line(), ref.column(), ERR1)
+            reported.add(t.id())
+
+
+def check_missing_inequality(check, file):
+    all_operators = list(file.filerefs(
+        "Declare Spec, Declare Body", "Function Operator"))
+
+    def op_name(fn):
+        return fn.longname().rsplit(".", 1)[-1]
+
+    def param_type(fn):
+        params = fn.ents("Declare", "Parameter")
+        return params[0].type() if len(params) == 2 else None
+
+    for ref in all_operators:
+        fn = ref.ent()
+
+        if op_name(fn) != "=":
+            continue
+
+        # A subprogram normally has both a spec and a body declaration, in
+        # separate files, each producing its own ref here -- report only
+        # from the spec, to avoid flagging the same entity twice.
+        if ref.kind().check("Declare Body") and fn.refs("Declare Spec"):
+            continue
+
+        if fn.type() == "Boolean":
+            continue
+
+        ptype = param_type(fn)
+
+        if ptype is None:
+            continue
+
+        has_matching_neq = any(
+            op_name(other.ent()) == "/=" and param_type(other.ent()) == ptype
+            for other in all_operators
+        )
+
+        if not has_matching_neq:
+            check.violation(fn, ref.file(), ref.line(), ref.column(), ERR2)
+
+
+def check(check, file):
+    check_missing_equality(check, file)
+    check_missing_inequality(check, file)
