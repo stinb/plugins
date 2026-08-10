@@ -1,0 +1,101 @@
+ERR1 = "Capture exception details in a handler for others instead of discarding them"
+
+
+def ids():
+    return ("ADA95_5.8.2",)
+
+
+def name(id):
+    return {
+        "ADA95_5.8.2": "Published Standards/Ada 95/5.8.2 Handlers for Others",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.8.2": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Exception Handling",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.8.2": """
+<p><b>Guideline</b></p>
+<p>&#8226; When a <code>when others</code> handler is used, capture what actually happened via <code>Ada.Exceptions.Exception_Name</code>, <code>Exception_Message</code>, or <code>Exception_Information</code> rather than silently discarding the exception.</p>
+<p>&#8226; Reserve <code>others</code> for exceptions that cannot be named explicitly in advance; treat it as a safety net, not a routine handler.</p>
+<p>&#8226; During development, use an <code>others</code> handler to discover unforeseen exceptions, then replace it with explicit, named handlers once the actual failure modes are known.</p>
+<p>&#8226; At the outermost level (a task or the main program), an <code>others</code> handler is the opportunity to shut down cleanly rather than terminate abruptly.</p>
+<p>&#8226; Because <code>others</code> cannot distinguish which exception occurred, treat anything it catches as a serious, unexpected failure rather than something to recover from and continue past casually.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">begin
+   Choice := Read_Menu_Choice;
+exception
+   when Constraint_Error =>
+      Ada.Text_IO.Put_Line ("Choice out of range.");
+
+   when Occurrence : others =>
+      Ada.Text_IO.Put_Line
+        (Ada.Exceptions.Exception_Information (Occurrence));
+end;</code></pre>
+
+<p><b>Rationale</b></p>
+<p>A catch-all handler prevents an unhandled exception from crashing the program, but if it discards the exception silently, it also discards the only forensic information available about what actually went wrong. Logging via <code>Ada.Exceptions</code> keeps the safety net without losing that information.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only the logging requirement is automated: a <code>when others</code> handler is flagged when its own body never calls <code>Exception_Name</code>, <code>Exception_Message</code>, or <code>Exception_Information</code> (in either the anonymous form via <code>Ada.Exceptions.Current_Exception</code>, or the named-occurrence form, <code>when E : others =&gt;</code>). Since <code>others</code> must always be the last handler in its own exception block, each <code>others</code> handler's own body is taken to run from its own line up to (but not including) the next handler of any kind that follows it, or to the end of the enclosing subprogram if there is none &#8212; this keeps a subprogram's separate exception blocks (nested or sequential) evaluated independently, so a call to one of those functions in one handler does not excuse a different, silent <code>others</code> handler elsewhere in the same subprogram. A bare <code>raise;</code> inside an <code>others</code> handler is still flagged, since re-raising propagates the exception without itself capturing any forensic detail at that handler &#8212; whether some caller further up the chain eventually logs it is outside what this check can see. The remaining guidelines &#8212; reserving <code>others</code> for truly unnameable exceptions, using it as a temporary development aid, and providing a clean shutdown specifically at the main/task level &#8212; are not automated: the first two are development-process judgments with no structural signal, and Understand's Ada support has no way to identify which subprogram is the main subprogram of a partition, so "the outermost level" cannot be reliably located.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+EXCEPTION_INFO_NAMES = {"Exception_Name", "Exception_Message", "Exception_Information"}
+
+
+def check(check, file):
+    for ref in file.filerefs("Declare Body", "Function, Procedure"):
+        fn = ref.ent()
+
+        # fn.refs() is scoped to the entity, not the file: if the same
+        # subprogram has bodies in more than one file (e.g. GNAT's
+        # "__target"-suffixed alternate-body convention, or unrelated
+        # same-named top-level procedures Understand has merged), refs()
+        # pools handlers and calls from every one of those files. Restrict
+        # to this file only, or the same handler gets evaluated once per
+        # alternate file and reported that many times over.
+        all_handles = sorted(
+            (h for h in fn.refs("Handle") if h.file().id() == file.id()),
+            key=lambda h: h.line())
+        others_handles = [
+            h for h in all_handles if h.ent().name().lower() == "others"]
+        calls_here = [c for c in fn.refs(
+            "Call") if c.file().id() == file.id()]
+
+        for handle_ref in others_handles:
+            # "others" must be the last handler in its own block, but a
+            # subprogram can contain more than one exception block (nested
+            # or sequential siblings), each ending in its own "others" --
+            # the next Handle ref after this one, regardless of name, marks
+            # where this handler's own body ends; with no next handle, its
+            # body runs to the end of the subprogram.
+            later_lines = [h.line()
+                            for h in all_handles if h.line() > handle_ref.line()]
+            end_line = min(later_lines) if later_lines else None
+
+            logged = any(
+                call.ent().name() in EXCEPTION_INFO_NAMES
+                and call.line() >= handle_ref.line()
+                and (end_line is None or call.line() < end_line)
+                for call in fn.refs("Call")
+            )
+
+            if not logged:
+                check.violation(fn, handle_ref.file(), handle_ref.line(),
+                                 handle_ref.column(), ERR1)
