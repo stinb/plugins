@@ -1,0 +1,179 @@
+ERR1 = "This handler does nothing but re-raise the caught exception"
+
+
+def ids():
+    return ("ADA95_5.8.3",)
+
+
+def name(id):
+    return {
+        "ADA95_5.8.3": "Published Standards/Ada 95/5.8.3 Propagation",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.8.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Exception Handling",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.8.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Handle both predefined and user-defined exceptions rather than assuming a failure "can't happen."</p>
+<p>&#8226; Provide a handler at whatever level in the call chain can actually act on the exception, so it does not escape the abstraction it belongs to unexpectedly.</p>
+<p>&#8226; Do not treat "catch it and pass it up" as a routine, default response &#8212; repeating that pattern at every level can bring the whole program down. Let an exception propagate only when the current level genuinely cannot recover.</p>
+<p>&#8226; If propagation really is the right call, make that a deliberate decision: use the opportunity to shut down cleanly &#8212; closing files, releasing resources, raising an alarm &#8212; rather than letting the exception leak out as an accident of omission.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">begin
+   Open (File, In_File, Name);
+   Process (File);
+exception
+   when Name_Error =>
+      Ada.Text_IO.Put_Line ("Could not open " & Name);
+      raise;
+end;</code></pre>
+
+<p><b>Rationale</b></p>
+<p>An exception handler whose only action is to hand the exception back up adds nothing that leaving it unhandled would not already accomplish &#8212; an exception with no handler propagates on its own. Reflexive catch-and-relay handlers like this give the appearance of exception handling without any of its benefit, and they hide the places where a real decision (recover, clean up, or deliberately let go) still needs to be made.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only one structural pattern is automated: a handler is flagged when its entire body, statement for statement, does nothing but re-raise the exact exception (or one of the exceptions, for a combined choice list) it caught, with no other action taken. This covers both a bare <code>raise;</code> and an explicit <code>raise Same_Exception;</code> naming one of the handler's own caught exceptions with no attached message, since the two are behaviorally identical &#8212; but <code>raise Same_Exception with "...";</code> is not flagged, since attaching a message adds forensic value a bare relay does not have. A <code>null;</code> statement does not count as an action, so a handler consisting only of <code>null;</code> followed by a reraise is flagged the same way. A call, an assignment, and <code>abort</code>, <code>delay</code>, <code>exit</code>, <code>return</code>, or <code>goto</code> statements all count as real action, regardless of how deeply nested inside an <code>if</code>/<code>case</code>/<code>loop</code>/block they are, and disqualify the handler from being flagged &#8212; wrapping a bare reraise in a conditional with no other branch (e.g. <code>if X then raise; end if;</code>) is still flagged, since nothing else happens either way, but a conditional that does real work on any path is not. A handler that raises a genuinely <em>different</em> exception is deliberate translation, not passive relay, and is likewise not flagged. A handler that silently discards an exception (no reraise at all, e.g. a bare <code>null;</code> with no <code>raise;</code>) is a different anti-pattern (swallowing, not propagation) and is out of scope here. The broader guidelines &#8212; whether every exception that can be raised is handled <em>somewhere</em>, and whether a given abstraction level genuinely could not have recovered &#8212; are whole-program design judgments with no structural signal: deliberate propagation all the way to a top-level handler that shuts down cleanly is explicitly the guideline's own recommended outcome in some cases, not a violation, so "unhandled anywhere" cannot be used as a signal on its own.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+BLOCK_OPENERS = {"if", "case", "loop", "begin", "select", "record"}
+ALWAYS_REAL_ACTION = {"abort", "delay", "exit", "goto", "requeue", "return"}
+
+
+def handler_extent(handle_ref):
+    # A handler's own extent isn't reliably bounded by "the next Handle ref
+    # anywhere in the function" (see ADA95_5.8.2): a nested block's handler
+    # can be followed by more ordinary code before the next handler or
+    # enclosing "end" is reached, and Understand has no ref marking an
+    # anonymous block's own end. Walk the lexer instead, tracking depth so
+    # a nested case-statement's own "when" choices, or a nested "end
+    # if"/"end loop"/etc., aren't mistaken for this handler's own boundary.
+    # While walking, also note whether the body contains an assignment or
+    # one of the always-real-action keywords ANYWHERE, regardless of
+    # nesting depth -- a bare "if X then raise; end if;" with no other
+    # branch is still a pure relay, but "if X then Log (...); else raise;
+    # end if;" is not, and neither is "Flag := 0; raise;" or "abort T;
+    # raise;", none of which are visible to a Call-ref-only search.
+    lex = handle_ref.file().lexer().lexeme(handle_ref.line(), handle_ref.column())
+    choice_tokens = []
+
+    while lex and lex.text() != "=>":
+        choice_tokens.append(lex.text())
+        lex = lex.next(True, True)
+
+    if not lex:
+        return set(), None, True
+
+    if ":" in choice_tokens:
+        choice_tokens = choice_tokens[choice_tokens.index(":") + 1:]
+
+    choice_names = {t.upper() for t in choice_tokens if t != "|"}
+
+    lex = lex.next(True, True)
+    depth = 0
+    has_real_action = False
+
+    while lex:
+        t = lex.text()
+        tl = t.lower()
+
+        if tl in BLOCK_OPENERS:
+            depth += 1
+        elif tl == "end":
+            if depth == 0:
+                return choice_names, lex.line_begin(), has_real_action
+            depth -= 1
+            # "end" is always followed by exactly one more token before its
+            # ";" -- the closing keyword (if/case/loop/select/record), a
+            # defining name, or the ";" itself for an anonymous block --
+            # skip it so it isn't mistaken for a fresh opener.
+            lex = lex.next(True, True)
+            if lex:
+                lex = lex.next(True, True)
+            continue
+        elif tl == "when" and depth == 0:
+            return choice_names, lex.line_begin(), has_real_action
+        elif t == ":=" or tl in ALWAYS_REAL_ACTION:
+            has_real_action = True
+
+        lex = lex.next(True, True)
+
+    return choice_names, None, has_real_action
+
+
+def check(check, file):
+    for ref in file.filerefs("Declare Body", "Function, Procedure"):
+        fn = ref.ent()
+
+        # See ADA95_5.8.2: fn.refs() pools refs across every file the
+        # entity has a body in, so restrict to this file only.
+        all_handles = [h for h in fn.refs(
+            "Handle") if h.file().id() == file.id()]
+        calls_here = [c for c in fn.refs(
+            "Call") if c.file().id() == file.id()]
+        raises_here = [r for r in fn.refs(
+            "Raise, Raise Implicit") if r.file().id() == file.id()]
+
+        for handle_ref in all_handles:
+            choice_names, end_line, has_real_action = handler_extent(
+                handle_ref)
+
+            if has_real_action:
+                continue
+
+            def in_range(r):
+                return r.line() >= handle_ref.line() and (end_line is None or r.line() < end_line)
+
+            if any(in_range(c) for c in calls_here):
+                continue
+
+            raises_in_range = [r for r in raises_here if in_range(r)]
+
+            if not raises_in_range:
+                continue
+
+            saw_relay = False
+            disqualified = False
+
+            for r in raises_in_range:
+                if r.kind().check("Implicit"):
+                    saw_relay = True
+                    continue
+
+                if r.ent().name().upper() not in choice_names:
+                    disqualified = True
+                    break
+
+                # An explicit reraise of the exact exception caught is only
+                # a pure relay if it carries no "with <message>" clause --
+                # attaching a message adds forensic value a bare relay
+                # does not have.
+                name_lex = r.file().lexer().lexeme(r.line(), r.column())
+                after_name = name_lex.next(True, True) if name_lex else None
+
+                if after_name and after_name.text().lower() == "with":
+                    disqualified = True
+                    break
+
+                saw_relay = True
+
+            if saw_relay and not disqualified:
+                check.violation(fn, handle_ref.file(), handle_ref.line(),
+                                 handle_ref.column(), ERR1)
