@@ -244,6 +244,8 @@ need:
 |---|---|
 | Unused-entity detection (`refs('Useby, Callby')`) | `STI_UNUSED` |
 | Recursion via the call graph (`refs('Callby')`) | `AC_01` |
+| Inheritance and friend analysis (`ents('derive', 'class')`) | `STI_FRIENDS` |
+| Whitespace rules via lexeme traversal | `JAVA_30` |
 | Naming-convention regex on `ent.name()` | `CPP_N002` |
 | Indentation from lexeme columns | `CPP_ST004` |
 | Comment alignment and placement | `CPP_CM000` |

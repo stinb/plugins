@@ -158,7 +158,8 @@ Kind, CheckID. `-reports all` generates every report, in csv, pdf and html.
 output. Typical false-positive shapes, depending on what the check does: the
 entity sitting on a different line than reported (scanner overrun), the wrong
 kind of entity flagged, an explicit cast not recognized, a literal misclassified
-(hex `0xF` matching a float suffix), operands that are actually the same type.
+(hex `0xF` matching a float suffix), operands that are actually the same type, a
+function's return type misread from a parameter type in its signature.
 
 **4.** Group failures by root cause rather than patching one-offs — usually
 depth-tracking bugs (the scanner doesn't stop at the right boundary),

@@ -20,11 +20,16 @@ rule and let the user pick — don't choose unilaterally.**
 | Constant expression evaluation | **Clang only** |
 | Templates, overload resolution, bit-field detection | **Clang only** |
 | Real expression structure / operator precedence | **Clang strongly preferred** — Python must walk lexemes and guess |
+| A sub-expression's type, e.g. bool operands | **Clang only** (`hasType(booleanType())`) — operators have no entity in Python, so no type either |
 | Type signedness, typedef resolution | Either (`isUnsignedIntegerType()` / `getCanonicalType()` vs `freetext('UnderlyingType')`) |
+
+Python has entity-level types but no expression-level types: `ent.type()` works on
+a variable or function, while an operator or sub-expression has no entity to ask.
 
 **The core tradeoff:** Python iterates in seconds (edit `.upy`, re-run `uvalid`)
 but its expression analysis is fragile. Clang has precise semantics but needs a
-recompile per change.
+recompile per change. Python also has the lower barrier to entry — no C++
+needed — where a Clang checker costs more to maintain.
 
 Rules that genuinely require Clang tend to share a shape: the violation depends
 on something the source text only implies — an inserted conversion, a computed
@@ -43,8 +48,10 @@ width, an evaluated constant, a resolved overload.
 
 Start from an existing checker rather than a blank file:
 `IntImplicitConversionSignednessChecker.cpp` (simple implicit-cast matching),
-`BoolOperators.cpp` (expression type checks), `InappropriateNumericAssignment.cpp`
-(complex, multiple matchers).
+`BoolOperators.cpp` (expression type checks), `ExpressionParentheses.cpp` (real
+operator-precedence ranking), `ImplicitCastOfOperation.cpp` (casts between nested
+arithmetic operations), `InappropriateNumericAssignment.cpp` (complex, multiple
+matchers).
 
 **Registration** — add to `ClangChecks.cpp`:
 
@@ -115,6 +122,10 @@ up new checkers:
 **Reducing false positives** — consider skipping constant expressions
 (`expr->isEvaluatable(Ctx)`), macros (`expr->getBeginLoc().isMacroID()`),
 bit-fields, and same-size type conversions.
+
+**Missing violations** — check whether you need several matchers for different AST
+patterns, recursive descent via `forEachDescendant()`, or to match the implicit
+casts rather than only what the source writes.
 
 **Build:** `ninja understand` (not individual targets like `ninja undcwork`).
 
