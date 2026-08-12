@@ -1,0 +1,253 @@
+ERR1 = 'This constructor should be replaced with an inheriting constructor declaration'
+
+
+def ids():
+    return ('A12-1-6',)
+
+
+def name(id):
+    return {
+        'A12-1-6': 'Published Standards/AUTOSAR/Derived classes that need \
+all base class constructors and no further initialization shall use inheriting constructors',
+    }[id]
+
+
+def tags(id):
+    return {
+        'A12-1-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: AUTOSAR',
+            'Category: Required',
+            'Automation: Automated',
+            'Constructors',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return """\
+<p><b>Rule</b></p>
+<p>Derived classes that do not need further explicit initialization and require all
+the constructors from the base class shall use inheriting constructors.</p>
+
+<p><b>Rationale</b></p>
+<p>Reimplementing constructors that do not need further initialization is error-prone and
+may lead to using wrong base class constructor accidentally.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">#include &lt;cstdint&gt;
+
+class Base
+{
+  public:
+    Base(std::int32_t a, std::int32_t b) : a_(a), b_(b) {}
+    explicit Base(std::int32_t a) : Base(a, 0) {}
+
+  private:
+    std::int32_t a_;
+    std::int32_t b_;
+};
+
+// Non-compliant - both constructors just forward to Base
+class Derived : public Base
+{
+  public:
+    Derived(std::int32_t a, std::int32_t b) : Base(a, b) {}
+    explicit Derived(std::int32_t a) : Base(a) {}
+};
+
+// Compliant
+class Derived : public Base
+{
+  public:
+    using Base::Base;
+};
+</code></pre>"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def _is_special_member_ctor(params, class_name):
+    params = (params or '').strip()
+    if params == '':
+        return True  # default constructor
+    if ',' in params:
+        return False
+    return class_name in params and '&' in params  # copy/move constructor
+
+
+def _own_parameter_names(lex):
+    """Starting at the '(' of a constructor's own parameter list, return the
+    list of parameter names, or None if any parameter has a default value or
+    the list is malformed."""
+    depth = 1
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    names = []
+    current_name = None
+    has_default = False
+    while lex and depth > 0:
+        text = lex.text()
+        if text == '(':
+            depth += 1
+        elif text == ')':
+            depth -= 1
+            if depth == 0:
+                if has_default:
+                    return None
+                if current_name:
+                    names.append(current_name)
+                return names, lex
+        elif depth == 1 and text == ',':
+            if has_default:
+                return None
+            if current_name:
+                names.append(current_name)
+            current_name = None
+            has_default = False
+        elif depth == 1 and text == '=':
+            has_default = True
+        elif depth == 1 and not has_default and lex.token() == 'Identifier':
+            current_name = text
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    return None
+
+
+def _forwards_purely(fref, base_name):
+    """True if the constructor at fref does nothing but forward its own
+    parameters, unchanged and in order, to a single base-class constructor
+    call, with an empty body and no other mem-initializers."""
+    lexer = fref.file().lexer()
+    lex = lexer.lexeme(fref.line(), fref.column())
+    if not lex:
+        return False
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)  # '('
+    if not lex or lex.text() != '(':
+        return False
+
+    result = _own_parameter_names(lex)
+    if not result:
+        return False
+    own_params, lex = result
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    # skip trailing qualifiers between ')' and the initializer list
+    while lex and lex.text() in ('const', 'noexcept'):
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+        if lex and lex.text() == '(':
+            depth = 1
+            lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+            while lex and depth > 0:
+                if lex.text() == '(':
+                    depth += 1
+                elif lex.text() == ')':
+                    depth -= 1
+                lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+
+    if not lex or lex.text() != ':':
+        return False  # no mem-initializer at all
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    last_ident = None
+    while lex and lex.text() != '(':
+        if lex.text() == '::':
+            pass
+        elif lex.token() == 'Identifier':
+            last_ident = lex.text()
+        else:
+            return False  # unexpected token before a qualified/plain base name
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    if not lex or last_ident != base_name:
+        return False  # doesn't call the base constructor by name
+
+    depth = 1
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    args = []
+    current_arg = []
+    while lex and depth > 0:
+        text = lex.text()
+        if text == '(':
+            depth += 1
+            current_arg.append(text)
+        elif text == ')':
+            depth -= 1
+            if depth == 0:
+                if current_arg:
+                    args.append(current_arg)
+                lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+                break
+            current_arg.append(text)
+        elif depth == 1 and text == ',':
+            args.append(current_arg)
+            current_arg = []
+        else:
+            current_arg.append(text)
+        lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    else:
+        return False
+
+    if len(args) != len(own_params):
+        return False
+    for arg_tokens, pname in zip(args, own_params):
+        if len(arg_tokens) != 1 or arg_tokens[0] != pname:
+            return False  # not a plain unchanged passthrough
+
+    if not lex or lex.text() != '{':
+        return False  # extra mem-initializer, or something else entirely
+
+    lex = lex.next(ignore_whitespace=True, ignore_comments=True)
+    return bool(lex) and lex.text() == '}'  # body must be empty
+
+
+def check(check, file):
+    for class_ref in file.filerefs('Define', 'Class'):
+        cls = class_ref.ent()
+
+        base_refs = cls.refs('Base')
+        if len(base_refs) != 1:
+            continue  # single inheritance only
+        base = base_refs[0].ent()
+
+        if any(r.ent().name() == base.name() for r in cls.refs('Using')):
+            continue  # already uses an inheriting constructor declaration
+
+        base_ctors = {}
+        for fref in base.refs('Define', 'Function'):
+            fn = fref.ent()
+            if fn.name() != base.name():
+                continue
+            params = fn.parameters(True)
+            if _is_special_member_ctor(params, base.name()):
+                continue
+            base_ctors[params] = False
+
+        if not base_ctors:
+            continue  # nothing but special members to inherit
+
+        matches = []
+        for fref in cls.refs('Define', 'Function'):
+            fn = fref.ent()
+            if fn.name() != cls.name():
+                continue
+            params = fn.parameters(True)
+            if params not in base_ctors:
+                continue
+            if _forwards_purely(fref, base.name()):
+                base_ctors[params] = True
+                matches.append(fref)
+
+        if all(base_ctors.values()):
+            for fref in matches:
+                check.violation(fref.ent(), fref.file(),
+                                fref.line(), fref.column(), ERR1)
