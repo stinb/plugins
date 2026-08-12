@@ -1,6 +1,6 @@
 # Published Standards Work
 
-Check IDs and categories are in [CLAUDE.md](CLAUDE.md).
+Check IDs and categories are in [CLAUDE.md](../CLAUDE.md).
 
 ## Aliasing an existing rule
 

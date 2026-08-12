@@ -12,24 +12,21 @@ legacy — don't write new ones).
 ## Read before you start
 
 This file holds only what applies to every task. **Read the file for the work you
-are about to do — don't work from this file alone.** If `CLAUDE-personal.md`
-exists in this directory, read it too, whatever the task.
+are about to do — don't work from this file alone.**
 
 | Doing this | Read first |
 |---|---|
-| Writing a new Python check | [CLAUDE-authoring.md](CLAUDE-authoring.md) |
-| Fixing or extending an existing check | [CLAUDE-authoring.md](CLAUDE-authoring.md) |
-| Choosing Python vs Clang, or writing a Clang check | [CLAUDE-clang.md](CLAUDE-clang.md) |
-| Writing test files, or running `uvalid` | [CLAUDE-testing.md](CLAUDE-testing.md) |
-| Investigating a false positive | [CLAUDE-testing.md](CLAUDE-testing.md) |
-| Adding an alias, or converting a noop to a real check | [CLAUDE-standards.md](CLAUDE-standards.md) |
-| Writing C/C++ in a Clang checker | [coding_standards.md](coding_standards.md) |
-| Anything needing local setup or machine-specific paths | `CLAUDE-personal.md`, if it exists |
+| Writing a new Python check | [CLAUDE-authoring.md](claude-docs/CLAUDE-authoring.md) |
+| Fixing or extending an existing check | [CLAUDE-authoring.md](claude-docs/CLAUDE-authoring.md) |
+| Choosing Python vs Clang, or writing a Clang check | [CLAUDE-clang.md](claude-docs/CLAUDE-clang.md) |
+| Writing test files, or running `uvalid` | [CLAUDE-testing.md](claude-docs/CLAUDE-testing.md) |
+| Investigating a false positive | [CLAUDE-testing.md](claude-docs/CLAUDE-testing.md) |
+| Adding an alias, or converting a noop to a real check | [CLAUDE-standards.md](claude-docs/CLAUDE-standards.md) |
+| Writing C/C++ in a Clang checker | [coding_standards.md](claude-docs/coding_standards.md) |
 
-`CLAUDE-personal.md` is the conventional home for local-only notes — environment
-setup, test-project locations, per-standard working notes. It is untracked, so
-each person keeps their own and it may not be there at all. Check for it, and for
-any other `CLAUDE-*.md`, when starting work one would cover.
+For local-only notes — environment setup, machine-specific paths, test-project
+locations — put them in a gitignored `CLAUDE.local.md` in this directory. Claude
+Code loads it automatically alongside this file, so it needs no reference here.
 
 ## Check IDs and categories
 

@@ -1,6 +1,6 @@
 # Clang AST Checks
 
-Shared conventions are in [CLAUDE.md](CLAUDE.md); tests work the same as for
+Shared conventions are in [CLAUDE.md](../CLAUDE.md); tests work the same as for
 Python checks, see [CLAUDE-testing.md](CLAUDE-testing.md).
 
 ## Clang AST vs Python

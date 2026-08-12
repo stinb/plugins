@@ -1,6 +1,6 @@
 # Writing a CodeCheck Check
 
-Conventions and check IDs are in [CLAUDE.md](CLAUDE.md). Tests are in
+Conventions and check IDs are in [CLAUDE.md](../CLAUDE.md). Tests are in
 [CLAUDE-testing.md](CLAUDE-testing.md).
 
 ## Anatomy of a Python check
