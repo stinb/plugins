@@ -76,6 +76,27 @@ def name(id):
     }[id]
 ```
 
+### No try/except
+
+Don't wrap check code in `try`/`except`. An exception means a broken database or
+a bug in the check, and catching it hides both — the check silently reports
+nothing for that file, which looks identical to a clean result. Guard the
+condition explicitly, or fix the cause. Of the 655 checks that lex a file,
+exactly one uses `try`/`except`; don't add the second.
+
+`file.lexer()` is the usual temptation, because it raises rather than returning
+`None` when a project file is missing from disk or the database was analyzed by
+an older build. That is a stale database — re-analyze it (`und analyze -all`),
+don't catch it. Three quarters of checks call it with no guard at all; the rest
+do:
+
+```python
+def check(check, file):
+    lexer = file.lexer()
+    if not lexer:
+        return
+```
+
 ## Where files live
 
 A check is one folder holding `check.upy` and its test files. **The folder is
