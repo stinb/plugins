@@ -39,3 +39,25 @@ void narrow_destination(void) {
   pOut = &dataPtr[(uint32_t)n >> 3U];  // UndCC_Valid
 }
 
+
+/* The operands of a composite expression are its own, not those of a call it
+   contains, and only a composite expression is covered by this rule */
+#define FLAG_A 1
+#define FLAG_B 2
+
+uint16_t crc16(const uint8_t *data, int32_t length);
+uint32_t slice(const uint8_t *data, uint32_t offset, uint32_t len);
+
+void compositeOperands(void) {
+  uint8_t  dataArr[4] = {0};
+  uint16_t crc;
+  uint32_t result;
+  uint32_t flags;
+  uint8_t *p;
+
+  crc = crc16(dataArr, 8) & 0x0FFU;   // UndCC_Valid - the uint8_t argument is not an operand
+  result = slice(dataArr, 7, 16) << 16; // UndCC_Valid - a shift keeps the left operand's type
+  result = slice(dataArr, 7, 16);     // UndCC_Valid - a call is not a composite expression
+  flags = FLAG_A | FLAG_B;            // UndCC_Valid - a constant expression is not composite
+  p = &dataArr[0];                    // UndCC_Valid - a pointer is outside the essential type model
+}

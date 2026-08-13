@@ -624,6 +624,10 @@ def cAssignments(file: Ent):
         if lexeme.token() != 'Operator' or lexeme.text() not in C_ASSIGNMENT_OPERATORS:
             continue
 
+        # Code the preprocessor excludes is not part of the translation unit
+        if lexeme.inactive():
+            continue
+
         target = cAssignmentTarget(lexeme)
         value = cAssignedExpression(lexeme)
         if not target or not value or value[0].text() == '{':
@@ -774,6 +778,9 @@ C_LIBRARY_TYPES = {
 
 # Tokens of a constant. Character and string constants are lexed as String
 C_LITERAL_TOKENS = ('Literal', 'String')
+
+# Operators whose result is a composite expression
+C_COMPOSITE_OPERATORS = {'+', '-', '*', '/', '%', '&', '|', '^', '<<', '>>'}
 
 # Operators whose result is essentially Boolean
 C_BOOLEAN_OPERATORS = {'==', '!=', '<', '>', '<=', '>=', '&&', '||', '!'}
@@ -1086,6 +1093,40 @@ def cEssentialTypeOfExpression(lexemes: list[Lexeme], depth: int = 0) -> tuple[s
     left = cEssentialTypeOfExpression(lexemes[:operator], depth + 1)
     right = cEssentialTypeOfExpression(lexemes[operator + 1:], depth + 1)
     return cBalanceEssentialTypes(left, right, text)
+
+# Whether an expression is a composite expression, meaning the non-constant
+# result of a composite operator. A constant expression is not composite, and
+# neither is an expression a cast covers in full.
+def cIsCompositeExpression(lexemes: list[Lexeme]) -> bool:
+    lexemes = cNormalizeExpression(lexemes)
+    if not lexemes:
+        return False
+
+    operator = cTopLevelOperator(lexemes)
+    if operator is None or lexemes[operator].text() not in C_COMPOSITE_OPERATORS:
+        return False
+
+    return not cIsConstantExpression(lexemes)
+
+# Whether every operand of an expression is a constant, so translation fixes its
+# value. Macros and enumeration constants count, whether or not the value can be
+# read, which folding it would need.
+def cIsConstantExpression(lexemes: list[Lexeme]) -> bool:
+    operands = False
+    for lexeme in cNormalizeExpression(lexemes):
+        token = lexeme.token()
+        if token in C_LITERAL_TOKENS:
+            operands = True
+            continue
+        if token != 'Identifier':
+            continue
+
+        ent = lexeme.ent()
+        if not ent or not ent.kind().check('Macro, Enumerator, Typedef, Type'):
+            return False
+        operands = True
+
+    return operands
 
 # True if an essential type came from a constant expression. Integer constants
 # exist only for int and wider, so the lowest rank the essential type model gives
