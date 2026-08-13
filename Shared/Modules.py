@@ -830,6 +830,25 @@ def cTypedefTarget(ent: Ent, text: str) -> tuple[str, Ent] | None:
 
     return None
 
+# The enumeration an entity belongs to, or None. An object reaches it through
+# the typedefs its type names, an enumerator through the enumeration defining
+# it. Two entities of one enumeration share this entity, which is what
+# distinguishes enumerated types from each other.
+def cEnumType(ent: Ent | None, depth: int = 0) -> Ent | None:
+    if not ent or depth > 8:
+        return None
+
+    if ent.kind().check('Enumerator'):
+        return ent.parent()
+    if ent.kind().check('Enum'):
+        return ent
+
+    typedRef = ent.ref('Typed')
+    if typedRef and typedRef.ent() != ent:
+        return cEnumType(typedRef.ent(), depth + 1)
+
+    return None
+
 # Classify a type that names no typedef, or None if it is not a base type
 def cEssentialTypeOfBase(text: str) -> tuple[str, int | None] | None:
     fixed = C_FIXED_WIDTH_TYPEDEF.match(text)

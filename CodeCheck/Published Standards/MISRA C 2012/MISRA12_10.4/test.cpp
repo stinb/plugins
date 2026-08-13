@@ -32,3 +32,18 @@ int main() {
   u8a -= cha; /* UndCC_Violation unsigned and char */
 }
 
+
+/* An enumeration reached through a typedef is still the same essential type */
+typedef enum exampleEnum_e { VALUE_1, VALUE_2 } exampleEnum_t;
+
+struct holder { exampleEnum_t field; };
+
+void enumThroughTypedef(void) {
+  exampleEnum_t e = VALUE_2;
+  struct holder h;
+  struct holder *hp = &h;
+
+  e == VALUE_1;             // UndCC_Valid - the typedef names the enum of VALUE_1
+  h.field == VALUE_1;       // UndCC_Valid - through a member
+  hp->field == VALUE_1;     // UndCC_Valid - through a pointer to a member
+}
