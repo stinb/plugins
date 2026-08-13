@@ -37,7 +37,7 @@ int main() {
   cf32a = f32a; /* By exception 4 */
   //cf64a = f64a; /* By exception 4 */
   
-  uint8_t u8f = f32a; // UndCC_FalseNeg
+  uint8_t u8f = f32a; // UndCC_Violation
   bool bla = s8a; // UndCC_Violation
   char cha1 = s8a; // UndCC_Violation
   u8a = cha; // UndCC_Violation

@@ -605,6 +605,692 @@ def cGetBitFieldWidth(ref: Ref) -> int | None:
 
 
 
+# Assignments
+
+# Operators that perform an assignment as defined in the Glossary
+C_ASSIGNMENT_OPERATORS = {'=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=',
+                          '<<=', '>>='}
+
+# Yield each assignment in a file as (operator, target lexemes, value lexemes,
+# target entity). An initializer list assigns each of its elements rather than
+# one value, and an enumerator is given its value rather than assigned one, so
+# neither is yielded.
+def cAssignments(file: Ent):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    for lexeme in lexer.lexemes():
+        if lexeme.token() != 'Operator' or lexeme.text() not in C_ASSIGNMENT_OPERATORS:
+            continue
+
+        target = cAssignmentTarget(lexeme)
+        value = cAssignedExpression(lexeme)
+        if not target or not value or value[0].text() == '{':
+            continue
+
+        ent = cAssignedEntity(target)
+        if ent and ent.kind().check('Enumerator'):
+            continue
+
+        yield (lexeme, target, value, ent)
+
+# The object being assigned to. Two adjacent primaries end the target, as does
+# anything naming a type, which keeps a declaration's type and an enclosing
+# condition out of it.
+def cAssignmentTarget(lexeme: Lexeme) -> list[Lexeme]:
+    lexemes = []
+    depth = 0
+    group = 0
+    declaration = False
+    lexeme = lexeme.previous(True, True)
+    while lexeme:
+        text = lexeme.text()
+        token = lexeme.token()
+        primary = token in ('Identifier', 'Literal') or text in (')', ']')
+        if lexemes and primary and (lexemes[-1].token() in ('Identifier', 'Literal')):
+            break
+        # A keyword or type name only appears before the object being declared,
+        # never within an lvalue
+        if lexemes and depth == 0 and (token == 'Keyword' or (lexeme.ent()
+                and lexeme.ent().kind().check('Typedef, Type'))):
+            declaration = True
+            break
+        if text in (')', ']'):
+            if depth == 0:
+                group = len(lexemes)
+            depth += 1
+        elif text in ('(', '['):
+            if depth == 0:
+                break
+            depth -= 1
+            # A group belongs to the target only as a call or a subscript, so
+            # anything else before it encloses the statement rather than the
+            # object being assigned to
+            previous = lexeme.previous(True, True)
+            if depth == 0 and not (previous and (previous.token() == 'Identifier'
+                    or previous.text() in (')', ']'))):
+                lexemes = lexemes[:group]
+                break
+        elif depth == 0:
+            # A colon ends a label or a case, neither of which is an lvalue
+            if text in (';', ',', ':', '{', '}') or token not in ('Identifier', 'Literal', 'Operator', 'Keyword'):
+                break
+        lexemes.append(lexeme)
+        lexeme = lexeme.previous(True, True)
+
+    # An unbalanced group means the walk stopped inside an enclosing expression
+    # rather than on a whole lvalue
+    if depth:
+        return []
+
+    lexemes.reverse()
+
+    # In a declaration a leading * declares a pointer, it does not dereference
+    while declaration and lexemes and lexemes[0].text() in ('*', '&'):
+        lexemes.pop(0)
+
+    return lexemes
+
+# The whole expression being assigned, which unlike an operand includes any
+# conditional expression
+def cAssignedExpression(lexeme: Lexeme) -> list[Lexeme]:
+    lexemes = []
+    depth = 0
+    lexeme = lexeme.next(True, True)
+    while lexeme:
+        text = lexeme.text()
+        if text in ('(', '[', '{'):
+            depth += 1
+        elif text in (')', ']', '}'):
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0 and text in (';', ','):
+            break
+        lexemes.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    return lexemes
+
+# The lexemes of an expression that no group encloses, so that call arguments
+# and subscripts are left out
+def cOuterLexemes(lexemes: list[Lexeme]) -> list[Lexeme]:
+    outer = []
+    depth = 0
+    for lexeme in lexemes:
+        text = lexeme.text()
+        if text in ('(', '['):
+            depth += 1
+        elif text in (')', ']'):
+            depth -= 1
+        elif depth == 0:
+            outer.append(lexeme)
+    return outer
+
+# The entity being assigned to, ignoring anything inside a subscript
+def cAssignedEntity(lexemes: list[Lexeme]) -> Ent | None:
+    for lexeme in reversed(cOuterLexemes(lexemes)):
+        if lexeme.ent():
+            return lexeme.ent()
+    return None
+
+
+
+# Essential types
+
+# MISRA essential type categories
+C_ESSENTIAL_BOOLEAN = 'boolean'
+C_ESSENTIAL_CHARACTER = 'character'
+C_ESSENTIAL_ENUM = 'enum'
+C_ESSENTIAL_SIGNED = 'signed'
+C_ESSENTIAL_UNSIGNED = 'unsigned'
+C_ESSENTIAL_FLOATING = 'floating'
+
+# Not an essential type. A pointer is outside the model, but an expression has to
+# carry that rather than lose it, so that a rule does not read the other operand
+# as the type of the whole
+C_ESSENTIAL_POINTER = 'pointer'
+
+# Type qualifiers and storage class specifiers that do not affect essential type
+C_TYPE_NOISE = re.compile(r'\b(const|volatile|restrict|_Atomic|static|register|extern|inline|_Noreturn)\b')
+
+# Fixed width typedefs, whose width is exact rather than a minimum. The least
+# and fast typedefs are excluded because they are only minimums, so they are
+# resolved through the typedef they name instead
+C_FIXED_WIDTH_TYPEDEF = re.compile(r'^_{0,2}(u?)int(8|16|32|64)_t$')
+
+# Standard library types whose width the source does not show, used only when
+# the typedef cannot be followed
+C_LIBRARY_TYPES = {
+    'size_t': (C_ESSENTIAL_UNSIGNED, 32),
+    'uintmax_t': (C_ESSENTIAL_UNSIGNED, 64),
+    'uintptr_t': (C_ESSENTIAL_UNSIGNED, 32),
+    'ptrdiff_t': (C_ESSENTIAL_SIGNED, 32),
+    'intmax_t': (C_ESSENTIAL_SIGNED, 64),
+    'intptr_t': (C_ESSENTIAL_SIGNED, 32),
+    'char16_t': (C_ESSENTIAL_UNSIGNED, 16),
+    'char32_t': (C_ESSENTIAL_UNSIGNED, 32),
+}
+
+# Tokens of a constant. Character and string constants are lexed as String
+C_LITERAL_TOKENS = ('Literal', 'String')
+
+# Operators whose result is essentially Boolean
+C_BOOLEAN_OPERATORS = {'==', '!=', '<', '>', '<=', '>=', '&&', '||', '!'}
+
+# Operators whose result takes the essential type of the left hand operand
+C_LEFT_TYPED_OPERATORS = {'<<', '>>'}
+
+# Given the text of a C type, return its essential type as
+# (category, width) where width is in bits, or None if it cannot be classified.
+# Widths are the minimums guaranteed by the C standard, so a target may be
+# wider; fixed width typedefs are exact. Pass the entity declared with the type
+# so unresolved typedefs can be followed.
+def cEssentialType(typeText: str | None, ent: Ent | None = None, depth: int = 0) -> tuple[str, int | None] | None:
+    if not typeText or depth > 8:
+        return None
+
+    text = C_TYPE_NOISE.sub('', str(typeText))
+    text = re.sub(r'\[[^\]]*\]', '', text)
+    text = ' '.join(text.split())
+
+    # Pointers and functions are not arithmetic types
+    if '*' in text:
+        return (C_ESSENTIAL_POINTER, None)
+    if '(' in text:
+        return None
+
+    if text.startswith('enum'):
+        return (C_ESSENTIAL_ENUM, None)
+    if text.startswith('struct') or text.startswith('union'):
+        return None
+
+    essential = cEssentialTypeOfBase(text)
+    if essential:
+        return essential
+
+    # Not a base type, so follow the typedef it names
+    if ent:
+        target = cTypedefTarget(ent, text)
+        if target:
+            return cEssentialType(target[0], target[1], depth + 1)
+
+    return C_LIBRARY_TYPES.get(text)
+
+# The next link in a typedef chain as (type text, entity), or None if there is
+# none. A cast or a declaration may name the type itself, in which case its own
+# definition is the next link.
+def cTypedefTarget(ent: Ent, text: str) -> tuple[str, Ent] | None:
+    if ent.kind().check('Typedef, Type') and ent.name() == text:
+        return (str(ent.type()), ent)
+
+    typedRef = ent.ref('Typed')
+    if typedRef and typedRef.ent() != ent:
+        return (str(typedRef.ent().type()), typedRef.ent())
+
+    return None
+
+# Classify a type that names no typedef, or None if it is not a base type
+def cEssentialTypeOfBase(text: str) -> tuple[str, int | None] | None:
+    fixed = C_FIXED_WIDTH_TYPEDEF.match(text)
+    if fixed:
+        signedness = C_ESSENTIAL_UNSIGNED if fixed[1] else C_ESSENTIAL_SIGNED
+        return (signedness, int(fixed[2]))
+
+    words = set(text.split())
+    if not words:
+        return None
+    if words - {'signed', 'unsigned', 'char', 'short', 'int', 'long', 'float',
+                'double', 'bool', '_Bool', '_Complex'}:
+        return None
+
+    if 'double' in words or 'float' in words:
+        if '_Complex' in words:
+            return None
+        return (C_ESSENTIAL_FLOATING, 64 if 'double' in words else 32)
+    if 'bool' in words or '_Bool' in words:
+        return (C_ESSENTIAL_BOOLEAN, 1)
+
+    # Plain char is essentially character; signed and unsigned char are not
+    if 'char' in words:
+        if 'signed' in words:
+            return (C_ESSENTIAL_SIGNED, 8)
+        if 'unsigned' in words:
+            return (C_ESSENTIAL_UNSIGNED, 8)
+        return (C_ESSENTIAL_CHARACTER, 8)
+
+    if 'short' in words:
+        width = 16
+    elif text.count('long') > 1:
+        width = 64
+    elif 'long' in words:
+        width = 32
+    elif 'int' in words or 'signed' in words or 'unsigned' in words:
+        width = 32
+    else:
+        return None
+
+    signedness = C_ESSENTIAL_UNSIGNED if 'unsigned' in words else C_ESSENTIAL_SIGNED
+    return (signedness, width)
+
+# Return the essential type of an integer or character literal, or None. The
+# result is flagged as constant, since the model gives a constant the lowest rank
+# able to represent its value rather than the rank of its standard type
+def cEssentialTypeOfLiteral(text: str) -> tuple[str, int | None, bool] | None:
+    if not text:
+        return None
+
+    # Character constants are essentially character, string literals are not
+    # arithmetic operands
+    if re.match(r"^(?:L|u8?|U)?'", text):
+        return (C_ESSENTIAL_CHARACTER, 8, True)
+    if re.match(r'^(?:L|u8?|U)?"', text):
+        return None
+
+    lower = text.lower()
+    # A hexadecimal exponent is p, since e is one of its digits
+    hexadecimal = lower.startswith('0x')
+    exponent = r'p[+\-]?[0-9]' if hexadecimal else r'[0-9]e[+\-]?[0-9]'
+    if '.' in text or re.search(exponent, lower):
+        return (C_ESSENTIAL_FLOATING, 32 if lower.endswith('f') else 64, True)
+
+    if not re.match(r"^(?:0[xXbB])?[0-9a-fA-F']+[uUlL]*$", text):
+        return None
+
+    suffix = re.search(r'[uUlL]*$', text)[0].lower()
+    signedness = C_ESSENTIAL_UNSIGNED if 'u' in suffix else C_ESSENTIAL_SIGNED
+
+    # The essential type of an integer constant is the narrowest type of that
+    # signedness able to represent its value
+    value = cParseIntLiteral(text)
+
+    # An unsuffixed constant that is not decimal takes an unsigned type when its
+    # value does not fit the signed type of the same rank
+    if (signedness == C_ESSENTIAL_SIGNED and value is not None
+            and value >= (1 << 31) and len(text) > 1 and text[0] == '0'):
+        signedness = C_ESSENTIAL_UNSIGNED
+
+    # An unreadable value falls back to the rank the suffix gives it, which for
+    # no suffix is int
+    if value is None:
+        return (signedness, 64 if 'll' in suffix else 32, True)
+
+    for width in (8, 16, 32, 64):
+        limit = (1 << width) if signedness == C_ESSENTIAL_UNSIGNED else (1 << (width - 1))
+        if value < limit:
+            return (signedness, width, True)
+    return (signedness, 64, True)
+
+# An expression's lexemes without whitespace or comments, and with any
+# parentheses enclosing the whole of it removed
+def cNormalizeExpression(lexemes: list[Lexeme]) -> list[Lexeme]:
+    lexemes = [lex for lex in lexemes if lex.token() not in ('Whitespace', 'Newline', 'Comment')]
+    while len(lexemes) > 2 and lexemes[0].text() == '(' and cIsMatchedPair(lexemes):
+        lexemes = lexemes[1:-1]
+    return lexemes
+
+# Fold an integer constant expression to its value, or None if it is not one
+def cConstantValue(lexemes: list[Lexeme], depth: int = 0) -> int | None:
+    lexemes = cNormalizeExpression(lexemes)
+    if not lexemes or depth > 16:
+        return None
+
+    if len(lexemes) == 1:
+        if lexemes[0].token() in C_LITERAL_TOKENS:
+            return cParseIntLiteral(lexemes[0].text())
+        # An object-like macro holding a constant behaves as that constant
+        ent = lexemes[0].ent()
+        if ent and ent.kind().check('Macro') and ent.value():
+            return cParseIntLiteral(str(ent.value()))
+        return None
+
+    operator = cTopLevelOperator(lexemes)
+
+    # No binary operator, so the expression may be a unary sign or complement
+    if operator is None:
+        if lexemes[0].text() not in ('-', '+', '~'):
+            return None
+        value = cConstantValue(lexemes[1:], depth + 1)
+        if value is None:
+            return None
+        return {'-': -value, '+': value, '~': ~value}[lexemes[0].text()]
+
+    text = lexemes[operator].text()
+    left = cConstantValue(lexemes[:operator], depth + 1)
+    right = cConstantValue(lexemes[operator + 1:], depth + 1)
+    if left is None or right is None:
+        return None
+
+    try:
+        if text == '+':
+            return left + right
+        if text == '-':
+            return left - right
+        if text == '*':
+            return left * right
+        if text == '/':
+            return int(left / right) if right else None
+        if text == '%':
+            return int(left % right) if right else None
+        if text == '<<':
+            return left << right if 0 <= right < 64 else None
+        if text == '>>':
+            return left >> right if 0 <= right < 64 else None
+        if text == '&':
+            return left & right
+        if text == '|':
+            return left | right
+        if text == '^':
+            return left ^ right
+    except (ValueError, OverflowError):
+        return None
+    return None
+
+# Return the essential type of the entity a lexeme resolves to, or None
+def cEssentialTypeOfEnt(ent: Ent | None) -> tuple[str, int | None] | None:
+    if not ent:
+        return None
+
+    if ent.kind().check('Enumerator'):
+        # An enumeration named by a typedef is an enumerated type like any other
+        parent = ent.parent()
+        if parent and (not parent.kind().check('Unnamed') or parent.ref('Typedby')):
+            return (C_ESSENTIAL_ENUM, None)
+        # A constant of an unnamed enumeration is essentially signed, and like
+        # an integer constant takes the width of the value it holds. A value
+        # that is not a literal falls back to the rank of int.
+        value = cEssentialTypeOfLiteral(str(ent.value())) if ent.value() else None
+        return (C_ESSENTIAL_SIGNED, value[1] if value else 32, True)
+
+    # An object-like macro holding a constant behaves as that constant
+    if ent.kind().check('Macro'):
+        return cEssentialTypeOfLiteral(str(ent.value())) if ent.value() else None
+
+    return cEssentialType(ent.type(), ent)
+
+# The essential type an entity has once dereferenced, or None if it does not
+# point to an arithmetic type. The pointer itself is outside the model, but the
+# object it designates is not.
+def cEssentialTypeOfPointee(ent: Ent | None) -> tuple[str, int | None] | None:
+    if not ent or not ent.type():
+        return None
+
+    text = str(ent.type())
+    if '*' not in text:
+        return None
+
+    return cEssentialType(text[:text.rindex('*')], ent)
+
+# Given the lexemes of a C expression, return its essential type as
+# (category, width), or None if it cannot be determined. A leading cast gives
+# the expression the essential type of the cast, per the essential type model.
+def cEssentialTypeOfExpression(lexemes: list[Lexeme], depth: int = 0) -> tuple[str, int | None] | None:
+    lexemes = cNormalizeExpression(lexemes)
+    if not lexemes or depth > 16:
+        return None
+
+    cast = cLeadingCast(lexemes)
+    if cast:
+        return cast
+
+    # A conditional expression takes the essential type of its second and third
+    # operands; the condition does not contribute
+    branches = cTernaryBranches(lexemes)
+    if branches:
+        return cConditionalEssentialType(
+            cEssentialTypeOfExpression(branches[0], depth + 1),
+            cEssentialTypeOfExpression(branches[1], depth + 1))
+
+    operator = cTopLevelOperator(lexemes)
+    if operator is None:
+        prefix = lexemes[0].text()
+        # A dereference designates what the pointer points to; the address of an
+        # object is a pointer, which is outside the model
+        if prefix == '*':
+            term = cTermLexeme(lexemes[1:])
+            return cEssentialTypeOfPointee(term.ent()) if term else None
+        if prefix == '&':
+            return None
+        if prefix == '!':
+            return (C_ESSENTIAL_BOOLEAN, 1)
+        if prefix in ('-', '+', '~', '++', '--'):
+            return cEssentialTypeOfExpression(lexemes[1:], depth + 1)
+        return cEssentialTypeOfTerm(lexemes)
+
+    text = lexemes[operator].text()
+    if text in C_BOOLEAN_OPERATORS:
+        return (C_ESSENTIAL_BOOLEAN, 1)
+    if text in C_LEFT_TYPED_OPERATORS:
+        return cShiftEssentialType(
+            cEssentialTypeOfExpression(lexemes[:operator], depth + 1))
+
+    left = cEssentialTypeOfExpression(lexemes[:operator], depth + 1)
+    right = cEssentialTypeOfExpression(lexemes[operator + 1:], depth + 1)
+    return cBalanceEssentialTypes(left, right, text)
+
+# True if an essential type came from a constant expression. Integer constants
+# exist only for int and wider, so the lowest rank the essential type model gives
+# them is not their rank for the usual arithmetic conversions.
+def cIsConstantType(essential) -> bool:
+    return len(essential) > 2 and bool(essential[2])
+
+# The essential type of a conditional expression. Operands of the same category
+# keep it, unlike the operands of an arithmetic operator, and anything else takes
+# the standard type.
+def cConditionalEssentialType(second, third):
+    if not second:
+        return third
+    if not third:
+        return second
+    if C_ESSENTIAL_POINTER in (second[0], third[0]):
+        return (C_ESSENTIAL_POINTER, None)
+
+    if second[0] == third[0]:
+        return cWiderEssentialType(second, third)
+
+    return cUsualArithmeticConversions(second, third)
+
+# Two operands of one category keep it, taking the wider of their widths
+def cWiderEssentialType(left, right):
+    constant = cIsConstantType(left) and cIsConstantType(right)
+    if left[1] is None or right[1] is None:
+        return (left[0], None, constant)
+    return (left[0], max(left[1], right[1]), constant)
+
+# The essential type of the result of a shift. An essentially unsigned left hand
+# operand keeps its essential type, anything else takes its standard type.
+def cShiftEssentialType(left):
+    if not left or left[0] in (C_ESSENTIAL_UNSIGNED, C_ESSENTIAL_POINTER):
+        return left
+    return cUsualArithmeticConversions(left, left)
+
+# The essential type of a composite expression. Signed, unsigned and floating
+# operands of the same category keep it, so integer promotion is ignored for
+# them; any other pairing takes the standard type of the expression.
+def cBalanceEssentialTypes(left, right, operator: str | None = None):
+    if not left:
+        return right
+    if not right:
+        return left
+
+    # Pointer arithmetic yields a pointer, whatever the other operand is
+    if C_ESSENTIAL_POINTER in (left[0], right[0]):
+        return (C_ESSENTIAL_POINTER, None)
+
+    # A shift is not balanced, its result follows the left hand operand
+    if operator in C_LEFT_TYPED_OPERATORS:
+        return cShiftEssentialType(left)
+
+    if left[0] == right[0] and left[0] in (C_ESSENTIAL_SIGNED,
+            C_ESSENTIAL_UNSIGNED, C_ESSENTIAL_FLOATING):
+        return cWiderEssentialType(left, right)
+
+    # Character arithmetic keeps its essential type when the other operand is
+    # numeric and of no higher rank than int, per the Rule 10.4 exceptions
+    numeric = (C_ESSENTIAL_SIGNED, C_ESSENTIAL_UNSIGNED)
+    if operator == '+':
+        if left[0] == C_ESSENTIAL_CHARACTER and right[0] in numeric and right[1] and right[1] <= 32:
+            return left
+        if right[0] == C_ESSENTIAL_CHARACTER and left[0] in numeric and left[1] and left[1] <= 32:
+            return right
+    elif operator == '-':
+        if left[0] == C_ESSENTIAL_CHARACTER and right[0] in numeric and right[1] and right[1] <= 32:
+            return left
+
+    return cUsualArithmeticConversions(left, right)
+
+# Operands that are not balanced by the essential type model take the standard
+# type of the expression, which is where integer promotion does apply
+def cUsualArithmeticConversions(left, right):
+    if C_ESSENTIAL_FLOATING in (left[0], right[0]):
+        widths = [t[1] for t in (left, right) if t[0] == C_ESSENTIAL_FLOATING and t[1]]
+        return (C_ESSENTIAL_FLOATING, max(widths) if widths else None)
+
+    promoted = []
+    for essential in (left, right):
+        category, width = essential[0], essential[1]
+        # Boolean, character and enumerated types promote to signed int, as do
+        # types of lower rank than int. A constant is never of lower rank, so
+        # only the width the model gave it is raised
+        if category in (C_ESSENTIAL_BOOLEAN, C_ESSENTIAL_CHARACTER, C_ESSENTIAL_ENUM):
+            promoted.append((C_ESSENTIAL_SIGNED, 32))
+        elif width and width < 32 and not cIsConstantType(essential):
+            promoted.append((C_ESSENTIAL_SIGNED, 32))
+        else:
+            promoted.append((category, max(width, 32) if width else 32))
+
+    if promoted[0][1] != promoted[1][1]:
+        return max(promoted, key=lambda t: t[1])
+    if C_ESSENTIAL_UNSIGNED in (promoted[0][0], promoted[1][0]):
+        return (C_ESSENTIAL_UNSIGNED, promoted[0][1])
+    return promoted[0]
+
+# Split a conditional expression into its second and third operands, or None
+def cTernaryBranches(lexemes: list[Lexeme]) -> tuple[list[Lexeme], list[Lexeme]] | None:
+    question = None
+    depth = 0
+    pending = 0
+    for i, lex in enumerate(lexemes):
+        text = lex.text()
+        if text in ('(', '[', '{'):
+            depth += 1
+        elif text in (')', ']', '}'):
+            depth -= 1
+        elif depth != 0:
+            continue
+        elif text == '?':
+            if question is None:
+                question = i
+            else:
+                pending += 1
+        elif text == ':' and question is not None:
+            # A nested conditional claims this colon
+            if pending:
+                pending -= 1
+                continue
+            return (lexemes[question + 1:i], lexemes[i + 1:])
+    return None
+
+# True if the first lexeme's parenthesis closes on the last lexeme
+def cIsMatchedPair(lexemes: list[Lexeme]) -> bool:
+    return cMatchingClose(lexemes) == len(lexemes) - 1
+
+# Index of the parenthesis closing the one the expression opens on, or None
+def cMatchingClose(lexemes: list[Lexeme]) -> int | None:
+    depth = 0
+    for i, lex in enumerate(lexemes):
+        if lex.text() == '(':
+            depth += 1
+        elif lex.text() == ')':
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+# If the expression begins with a cast, return the cast's essential type
+def cLeadingCast(lexemes: list[Lexeme]) -> tuple[str, int | None] | None:
+    if len(lexemes) < 4 or lexemes[0].text() != '(':
+        return None
+
+    # A cast must be followed by the expression it applies to
+    close = cMatchingClose(lexemes)
+    if close is None or close == len(lexemes) - 1:
+        return None
+
+    inner = lexemes[1:close]
+    if not inner or any(lex.token() in C_LITERAL_TOKENS for lex in inner):
+        return None
+
+    typeEnt = None
+    for lex in inner:
+        if lex.ent() and lex.ent().kind().check('Typedef, Type'):
+            typeEnt = lex.ent()
+        elif lex.token() not in ('Keyword', 'Identifier', 'Operator', 'Punctuation'):
+            return None
+
+    text = ' '.join(lex.text() for lex in inner)
+    return cEssentialType(text, typeEnt)
+
+# Index of the operator that binds least tightly, or None if there is none
+def cTopLevelOperator(lexemes: list[Lexeme]) -> int | None:
+    best = None
+    bestPrecedence = 0
+    depth = 0
+    for i, lex in enumerate(lexemes):
+        text = lex.text()
+        if text in ('(', '[', '{'):
+            depth += 1
+        elif text in (')', ']', '}'):
+            depth -= 1
+        elif depth == 0 and lex.token() == 'Operator':
+            # Member access, increment and decrement, and the operators of a
+            # declaration take no pair of operands
+            if text in ('.', '->', '::', '++', '--'):
+                continue
+            precedence = C_OPERATOR_PRECEDENCES.get(text)
+            # A prefix operator has no left operand to balance against
+            if precedence is None or (i == 0 and text in
+                    ('-', '+', '~', '!', '*', '&')):
+                continue
+            if precedence >= bestPrecedence:
+                best = i
+                bestPrecedence = precedence
+    return best
+
+# The essential type of an expression holding no top level operator
+def cEssentialTypeOfTerm(lexemes: list[Lexeme]) -> tuple[str, int | None] | None:
+    if lexemes[0].text() == 'sizeof':
+        return (C_ESSENTIAL_UNSIGNED, 32)
+
+    lex = cTermLexeme(lexemes)
+    if not lex:
+        return None
+    if not lex.ent():
+        return cEssentialTypeOfLiteral(lex.text())
+
+    # Subscripting a pointer designates what it points to, where an array's own
+    # type already gives the element type. The subscript is only this term's when
+    # it opens on it, not on an object it is a member of
+    index = next((i for i, l in enumerate(lexemes) if l is lex), None)
+    if index is not None and index + 1 < len(lexemes) and lexemes[index + 1].text() == '[':
+        pointee = cEssentialTypeOfPointee(lex.ent())
+        if pointee:
+            return pointee
+
+    return cEssentialTypeOfEnt(lex.ent())
+
+# The lexeme a term resolves to, or None. Call arguments and subscripts are not
+# part of the term, so a call ends on the function and a member access on the
+# member it names.
+def cTermLexeme(lexemes: list[Lexeme]) -> Lexeme | None:
+    for lex in reversed(cOuterLexemes(lexemes)):
+        if lex.ent() or lex.token() in C_LITERAL_TOKENS:
+            return lex
+
+    return None
+
+
+
 # Files
 
 # Given an ent and a set, build the translation unit of includes of a file

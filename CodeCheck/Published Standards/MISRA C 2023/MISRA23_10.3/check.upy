@@ -2,7 +2,6 @@
 # Written by Jason Quinn
 # 08-21-2025
 
-import re
 import Modules
 
 ERR1 = """\
@@ -142,6 +141,15 @@ return x; /* uint16_t to uint8_t */
 cf32a = f64a; /* complex floating and real floating */</code></pre>
 <p><b>See Also</b></p>
 <p>Rule 10.1</p>
+<p><b>Developer's Notes</b></p>
+<p>Assignments written with an assignment operator are reported. Arguments passed
+to a function, values returned from a function and the case labels of a switch
+statement are not.</p>
+<p>Type widths are the minimums the C Standard guarantees rather than those of
+your target, so an assignment that is narrowing only because a type such as
+<code>long</code> or <code>size_t</code> is wider on your target is not reported.
+Fixed width types such as <code>uint16_t</code> are exact.</p>
+<p>Assignments between two different enumerated types are not reported.</p>
 """
     return {
         'MISRA23_10.3': desc,
@@ -217,6 +225,10 @@ cf32a = f64a;             /* complex floating and real floating        */
 <p>Exception 2 permits the use of the <code>{ 0 }</code> initialiser for objects of any aggregate type:</p>
 <pre><code language="C">float array[5] = {0};    /* Compliant by Exception 2                  */
 </code></pre>
+<p><b>Developer's Notes</b></p>
+<p>Assignments written with an assignment operator are reported. Arguments passed to a function, values returned from a function and the case labels of a switch statement are not.</p>
+<p>Type widths are the minimums the C Standard guarantees rather than those of your target, so an assignment that is narrowing only because a type such as <code>long</code> or <code>size_t</code> is wider on your target is not reported. Fixed width types such as <code>uint16_t</code> are exact.</p>
+<p>Assignments between two different enumerated types are not reported.</p>
 """,
     }[id]
 
@@ -228,172 +240,43 @@ def test_language(language):
 
 
 def check(check, file):
-    lexer = None
-    refs = file.filerefs('Define', 'Object, Parameter')
-    types = ['long long', 'long', 'short', 'int', 'char', 'bool']
-
-    for ref in refs:
-        if not re.search(r'char|int|short|long|bool', str(ref.ent().type()).lower()):
+    for lexeme, leftLexemes, rightLexemes, target in Modules.cAssignments(file):
+        left = Modules.cEssentialTypeOfExpression(leftLexemes)
+        right = Modules.cEssentialTypeOfExpression(rightLexemes)
+        if not left or not right:
             continue
-        unsigned = False
-        signed = False
-        if re.search(r'unsigned|uint', str(ref.ent().type()).lower()):
-            unsigned = True
-        else:
-            signed = True
 
-        aRefs = ref.ent().refs('Assignby')
+        # Pointer conversions are covered by the Rule 11.x series
+        if Modules.C_ESSENTIAL_POINTER in (left[0], right[0]):
+            continue
 
-        
-        for aRef in aRefs:
-            ok = True
-
-            # Skip pointer types - pointer conversions are covered by Rule 11.x
-            if '*' in str(ref.ent().type()) or '*' in str(aRef.ent().type()):
+        # A compound assignment assigns the result of the operation, so the
+        # value assigned is the composite of both operands
+        if lexeme.text() != '=':
+            right = Modules.cBalanceEssentialTypes(left, right, lexeme.text()[:-1])
+            if not right:
                 continue
 
-            if not lexer:
-                lexer = file.lexer()
-            lexeme = lexer.lexeme(aRef.line(), aRef.column())
-            if checkBool(lexeme):
-                if 'bool' in str(aRef.ent().type()).lower():
-                    continue
-
-
-
-            # Check for signed to unsiged or unsigned to signed conversion
-            elif unsigned and re.search(r'(?<!un)signed|(?<!u)int', str(aRef.ent().type()).lower()):
-                ok = False
-            elif signed and re.search(r'unsigned|uint', str(aRef.ent().type()).lower()):
-                ok = False
-            # Check for potential data loss through type size change
-            elif re.search(r'long long', str(ref.ent().type()).lower()):
-                if checkType(types[1:], str(aRef.ent().type()).lower()):
-                    ok = False
-            elif re.search(r'long', str(ref.ent().type()).lower()):
-                if checkType(types[2:], str(aRef.ent().type()).lower()):
-                    ok = False
-            elif re.search(r'short|int', str(ref.ent().type()).lower()):
-                if checkType(types[4:], str(aRef.ent().type()).lower()):
-                    ok = False
-            if re.search(r'bool', str(ref.ent().type()).lower()):
-                if not re.search(r'bool', str(aRef.ent().type()).lower()):
-                    ok = False
-            elif re.search(r'char|short|int|long', str(ref.ent().type()).lower()):
-                if not re.search(r'char|short|int|long', str(aRef.ent().type()).lower()):
-                    ok = False
-            elif re.search(r'float|double', str(ref.ent().type()).lower()):
-                if not re.search(r'float|double', str(aRef.ent().type()).lower()):
-                    ok = False
-            else:
+        if left[0] != right[0]:
+            if signedConstantFits(rightLexemes, left, right):
                 continue
+        elif left[1] is None or right[1] is None or left[1] >= right[1]:
+            continue
 
-            # Check if checked in an 'if' statment
-            if not ok:
-                if not lexer:
-                    if file.lexer():
-                        lexer = file.lexer()
-                    else:
-                        return
-
-                lexeme = lexer.lexeme(aRef.line(), aRef.column())
-                if lexeme:
-                    lexeme = lexeme.previous(True, True)
-                    if lexeme and lexeme.text() == ')':
-                        lexeme = lexeme.previous(True, True)
-                        if lexeme and lexeme.text() == str(aRef.ent().type()):
-                            continue
-                if not checkIf(ref.ent(), lexer):
-                    check.violation(ref.ent(), file, aRef.line(), aRef.column(), ERR1)
+        check.violation(target, file, lexeme.line_begin(),
+                        lexeme.column_begin(), ERR1)
 
 
-
-
-
-# Check to see if int is able to be cast to signed or unsigned char depending on function
-def checkCast(lexeme, argNum, signed, lexer, types):
-    if signed:
-        lower = -128
-        upper = 127
-    else:
-        lower = 0
-        upper = 256
-
-    lexeme = lexeme.next(True, True)
-    if lexeme and lexeme.text() == '(':
-        close = Modules.findClose(lexeme)
-        lexeme = lexeme.next(True, True)
-        commas = 0
-        negative = False
-        while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
-            lastLex = lexeme
-            if lexeme.text() == '(':
-                lexeme = Modules.findClose(lexeme)
-            elif lexeme.text() == ',' and commas == argNum:
-                break
-            elif lexeme.text() == ',':
-                commas += 1
-            # Check for negative sign in separate lexeme
-            elif commas == argNum and lexeme.text() == '-':
-                negative = True
-            elif commas == argNum and not lexeme.ent() and re.search(r'[1-9]', lexeme.text()):
-                num = re.sub(r'[^-1-9]', '', lexeme.text())
-                if '-' not in num and negative:
-                    num = int(num)
-                    num *= -1
-                else:
-                    num = int(num)
-                if num > upper or num < lower:
-                    return True
-
-            elif commas == argNum and lexeme.ent() and checkIf(lexeme.ent(), lexer):
-                return False
-
-
-
-            elif commas == argNum and lexeme.ent() and lexeme.ent().type():
-                if checkType(types, str(lexeme.ent().type())) and not checkIf(lexeme.ent(), lexer):
-                    return True
-
-            elif commas == argNum and lexeme.ent() and lexeme.ent().value() and re.search(r'[1-9]', str(lexeme.ent().value())):
-                value = re.sub(r'[^-1-9]', '', lexeme.ent().value())
-                num = eval(value)
-                if num > upper or num < lower:
-                    return True
-
-
-
-
-
-            if lexeme and lexeme.line_begin() == lastLex.line_begin() and lexeme.column_begin() == lastLex.column_begin():
-                lexeme = lexeme.next(True, True)
-
+# Exception 1: an essentially signed integer constant expression may be assigned
+# to an essentially unsigned object when its value can be represented
+def signedConstantFits(lexemes, left, right):
+    if left[0] != Modules.C_ESSENTIAL_UNSIGNED or right[0] != Modules.C_ESSENTIAL_SIGNED:
+        return False
+    if left[1] is None or right[1] is None or right[1] > 32:
         return False
 
+    value = Modules.cConstantValue(lexemes)
+    if value is None:
+        return False
 
-def checkIf(ent, lexer):
-    uRefs = ent.refs('Useby')
-    for uRef in uRefs:
-        lexeme = lexer.lexeme(uRef.line(), uRef.column())
-        while lexeme and not re.search(r';|{|}', lexeme.text()):
-            if lexeme.text() == 'if':
-                return True
-            lexeme = lexeme.previous(True, True)
-
-
-
-def checkType(types, str):
-    for type in types:
-        if re.search(type, str):
-            return True
-
-def checkBool(lexeme):
-    if lexeme:
-        prevLex = lexeme.previous(True, True)
-        nextLex = lexeme.next(True, True)
-        if prevLex and re.search(r'<|>|==|!|&|\|', prevLex.text()):
-            return True
-        if nextLex and re.search(r'<|>|==|!|&|\|', nextLex.text()):
-            return True
-
-    return False
+    return 0 <= value < (1 << left[1])
