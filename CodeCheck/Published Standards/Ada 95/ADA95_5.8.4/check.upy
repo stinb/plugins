@@ -1,0 +1,182 @@
+ERR1 = "This handler translates the exception without preserving its detail"
+
+
+def ids():
+    return ("ADA95_5.8.4",)
+
+
+def name(id):
+    return {
+        "ADA95_5.8.4": "Published Standards/Ada 95/5.8.4 Localizing the Cause of an Exception",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.8.4": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Exception Handling",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.8.4": """
+<p><b>Guideline</b></p>
+<p>&#8226; Do not rely on being able to identify the fault-raising, predefined, or implementation-defined exceptions.</p>
+<p>&#8226; Use the facilities defined in Ada.Exceptions to capture as much information as possible about an exception.</p>
+<p>&#8226; Use blocks to associate localized sections of code with their own exception handlers.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">begin
+   Value := Table (Index);
+exception
+   when E : Constraint_Error =>
+      raise Lookup_Failed with Ada.Exceptions.Exception_Message (E);
+end;</code></pre>
+
+<p><b>Rationale</b></p>
+<p>In an exception handler, it is very difficult to determine exactly which statement and which operation within that statement raised an exception, particularly the predefined and implementation-defined exceptions.
+The predefined and implementation-defined exceptions are candidates for conversion and propagation to higher abstraction levels for handling there.
+User-defined exceptions, being more closely associated with the application, are better candidates for recovery within handlers.</p>
+<p>User-defined exceptions can also be difficult to localize.
+Associating handlers with small blocks of code helps to narrow the possibilities, making it easier to program recovery actions.
+The placement of handlers in small blocks within a subprogram or task body also allows resumption of the subprogram or task after the recovery actions.
+If you do not handle exceptions within blocks, the only action available to the handlers is to shut down the task or subprogram as prescribed in Guideline 5.8.3.</p>
+<p>As discussed in Guideline 5.8.2, you can log run-time system information about the exception.
+You can also attach a message to the exception. During code development, debugging, and maintenance, this information should be useful to localize the cause of the exception.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only one structural pattern is automated: a handler that catches a predefined exception (one declared in package <code>Standard</code> &#8212; <code>Constraint_Error</code>, <code>Program_Error</code>, <code>Storage_Error</code>, <code>Tasking_Error</code>) and raises a genuinely <em>different</em> exception, without calling <code>Exception_Name</code>, <code>Exception_Message</code>, <code>Exception_Information</code>, or <code>Save_Occurrence</code> anywhere in its own body, is flagged &#8212; it is discarding exactly the forensic detail this guideline calls out as worth capturing, at exactly the point (converting a predefined exception) where the guideline says to capture it.
+A handler that instead re-raises the same predefined exception unchanged is a pure relay, not a translation, and is <code>ADA95_5.8.3</code>'s concern, not this one.
+A handler catching a user-defined exception is out of scope regardless of what it does, since the guideline's own predefined-vs-user-defined distinction treats those as already well understood by the code that raises them. For a combined exception choice list (<code>when A | B =&gt;</code>), only the first-listed exception is checked for being predefined, the same limitation already accepted in <code>ADA95_5.8.2</code>/<code>5.8.3</code>.
+The other two guidelines &#8212; not overestimating your ability to localize a predefined exception's cause, and choosing an appropriately-sized block for a handler &#8212; are not automated: the first is a mental-model correction with no code shape to check, and the guide states outright that the right block size is application-dependent, so no fixed threshold would be meaningful.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+EXCEPTION_INFO_NAMES = {"Exception_Name", "Exception_Message",
+                        "Exception_Information", "Save_Occurrence"}
+BLOCK_OPENERS = {"if", "case", "loop", "begin", "select", "record"}
+
+
+def handler_choices_and_extent(handle_ref):
+    # See ADA95_5.8.3: a handler's own extent isn't reliably bounded by
+    # "the next Handle ref anywhere in the function" -- walk the lexer,
+    # tracking depth, to find the actual sibling "when" or enclosing "end".
+    # Along the way, collect the full choice-name set from the handler's
+    # own "when ... =>" text, since a single Handle ref only resolves to
+    # the first choice in a combined list.
+    lex = handle_ref.file().lexer().lexeme(handle_ref.line(), handle_ref.column())
+    choice_tokens = []
+
+    while lex and lex.text() != "=>":
+        choice_tokens.append(lex.text())
+        lex = lex.next(True, True)
+
+    if not lex:
+        return set(), None
+
+    if ":" in choice_tokens:
+        choice_tokens = choice_tokens[choice_tokens.index(":") + 1:]
+
+    choice_names = {t.upper() for t in choice_tokens if t != "|"}
+
+    lex = lex.next(True, True)
+    depth = 0
+
+    while lex:
+        t = lex.text()
+        tl = t.lower()
+
+        if tl in BLOCK_OPENERS:
+            depth += 1
+        elif tl == "end":
+            if depth == 0:
+                return choice_names, lex.line_begin()
+            depth -= 1
+            lex = lex.next(True, True)
+            if lex:
+                lex = lex.next(True, True)
+            continue
+        elif tl == "when" and depth == 0:
+            return choice_names, lex.line_begin()
+
+        lex = lex.next(True, True)
+
+    return choice_names, None
+
+
+def resolve_exception(exception_ent, seen=None):
+    # An exception caught by a renamed name (e.g. "Sub_CE renames
+    # Constraint_Error") resolves to a distinct "Ada Alias" entity of its
+    # own, whose parent is wherever the rename was declared, not Standard
+    # -- follow the "Rename" ref to the real exception before checking.
+    if seen is None:
+        seen = set()
+
+    if exception_ent.id() in seen:
+        return exception_ent
+
+    seen.add(exception_ent.id())
+    rename = exception_ent.ref("Rename")
+
+    if rename:
+        return resolve_exception(rename.ent(), seen)
+
+    return exception_ent
+
+
+def is_predefined(exception_ent):
+    parent = resolve_exception(exception_ent).parent()
+    return parent is not None and parent.longname().upper() == "STANDARD"
+
+
+def check(check, file):
+    for ref in file.filerefs("Declare Body", "Function, Procedure"):
+        fn = ref.ent()
+
+        # See ADA95_5.8.2: fn.refs() pools refs across every file the
+        # entity has a body in, so restrict to this file only.
+        all_handles = [h for h in fn.refs(
+            "Handle") if h.file().id() == file.id()]
+        calls_here = [c for c in fn.refs(
+            "Call") if c.file().id() == file.id()]
+        raises_here = [r for r in fn.refs(
+            "Raise, Raise Implicit") if r.file().id() == file.id()]
+
+        for handle_ref in all_handles:
+            # Only the first choice of a combined list is resolvable to
+            # an entity here -- accepted limitation, see Developer's Note.
+            if not is_predefined(handle_ref.ent()):
+                continue
+
+            choice_names, end_line = handler_choices_and_extent(handle_ref)
+
+            def in_range(r):
+                return r.line() >= handle_ref.line() and (end_line is None or r.line() < end_line)
+
+            raises_in_range = [r for r in raises_here if in_range(r)]
+
+            translates = any(
+                not r.kind().check("Implicit") and r.ent().name().upper() not in choice_names
+                for r in raises_in_range
+            )
+
+            if not translates:
+                continue
+
+            preserved = any(
+                c.ent().name() in EXCEPTION_INFO_NAMES
+                for c in calls_here if in_range(c)
+            )
+
+            if not preserved:
+                check.violation(fn, handle_ref.file(), handle_ref.line(),
+                                handle_ref.column(), ERR1)
