@@ -98,6 +98,11 @@ should be used in place of the basic numerical types.
 <p>To allow a certain type, the string to enter should be part or all of the
 freetext "UnderlyingType" of the entity. For example, the underlying type of
 <code>std::string</code> is <code>std::basic_string&lt;char&gt;</code>.</p>
+<p>The "Allowed regular expression patterns" option works the same way, matching
+the underlying type or the name of a typedef.</p>
+<p>A typedef of a fixed width integer needs no option, however many typedefs
+away it is. For example, <code>uint8</code> declared as
+<code>typedef uint8_t uint8;</code> is allowed.</p>
 <p>You may want to allow characters if they are treated as data rather than
 arthmetic numbers of variable length. The "Allow characters" option adds the
 following to the allowed types: <code>unsigned char; signed char; char</code>
@@ -133,12 +138,20 @@ def check(check, file):
     # Append as regex patterns
     allowedPatterns = [GOOD_TYPES]
     allowedNames = set()
+    allowedNamePatterns = []
     for allowedType in typesFromOptions:
+        allowedType = allowedType.strip()
+        if not allowedType:
+            continue
         allowedPatterns.append(re.compile(toPatternString(allowedType)))
         allowedNames.add(allowedType)
     for allowedPattern in patternsFromOptions:
-        allowedPattern = re.compile(addWordBoundaries(allowedPattern.strip()))
+        allowedPattern = allowedPattern.strip()
+        if not allowedPattern:
+            continue
+        allowedPattern = re.compile(addWordBoundaries(allowedPattern))
         allowedPatterns.append(allowedPattern)
+        allowedNamePatterns.append(allowedPattern)
 
     # Variables/parameters
     for ref in file.filerefs('Define', '~Unresolved ~Unknown Object, ~Unresolved Parameter', True):
@@ -169,7 +182,7 @@ def check(check, file):
             if not isinstance(underlyingTypePart, str):
                 continue
             # Skip if not on the whitelist
-            if not re.search(GOOD_TYPES, typedEnt.name()) and typedEnt.name() not in allowedNames:
+            if not isAllowedType(typedEnt, allowedNames, allowedNamePatterns):
                 continue
             # Remove the part from the underlying type once
             modifiedUnderlyingType = re.sub(toPatternString(underlyingTypePart), '', modifiedUnderlyingType, 1)
@@ -178,6 +191,26 @@ def check(check, file):
         if re.search(BAD_TYPES, modifiedUnderlyingType):
             check.violation(ent, file, ref.line(), ref.column(), ERR2, underlyingType)
             continue
+
+
+def isAllowedName(name: str, allowedNames: set, allowedNamePatterns: list) -> bool:
+    # A typedef is whitelisted by its name, an "allowed" entry, or a pattern
+    if re.search(GOOD_TYPES, name) or name in allowedNames:
+        return True
+    return any(pattern.search(name) for pattern in allowedNamePatterns)
+
+
+def isAllowedType(ent, allowedNames: set, allowedNamePatterns: list) -> bool:
+    # Follow simple aliases, so a typedef of a fixed width integer is allowed
+    seen = set()
+    while ent and ent.id() not in seen:
+        if isAllowedName(ent.name(), allowedNames, allowedNamePatterns):
+            return True
+        seen.add(ent.id())
+        # Only a single alias, never a composite type such as a pair
+        typedRefs = ent.refs('Typed')
+        ent = typedRefs[0].ent() if len(typedRefs) == 1 else None
+    return False
 
 
 def toPatternString(string: str) -> str:
