@@ -1,0 +1,138 @@
+ERR1 = "Isolate the use of the 'Unchecked_Access attribute in package bodies"
+ERR2 = "Use the 'Unchecked_Access attribute only on data whose lifetime/scope is library level"
+
+
+def ids():
+    return ("ADA95_5.9.3",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.3": "Published Standards/Ada 95/5.9.3 Unchecked Access",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Programming Practices",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Minimize the use of the attribute <code>Unchecked_Access</code>, preferably
+isolating it to package bodies.</p>
+<p>&#8226; Use the attribute <code>Unchecked_Access</code> only on data whose lifetime/scope
+is "library level."</p>
+
+<p><b>Rationale</b></p>
+<p>The accessibility rules are checked statically at compile time (except
+for access parameters, which are checked dynamically). These rules
+ensure that the access value cannot outlive the object it designates.
+Because these rules are not applied in the case of <code>Unchecked_Access</code>,
+an access path could be followed to an object no longer in scope.</p>
+<p>Isolating the use of the attribute <code>Unchecked_Access</code> means to isolate
+its use from clients of the package. You should not apply it to an
+access value merely for the sake of returning a now unsafe value to
+clients.</p>
+<p>When you use the attribute <code>Unchecked_Access</code>, you are creating access
+values in an unsafe manner. You run the risk of dangling references,
+which in turn lead to erroneous execution (Ada Reference Manual,
+&sect;13.9.1).</p>
+
+<p><b>Exceptions</b></p>
+<p>The Ada Reference Manual, &sect;13.10) defines
+the following potential use for this otherwise dangerous attribute.
+"This attribute is provided to support the situation where a local
+object is to be inserted into a global linked data structure, when the
+programmer knows that it will always be removed from the data structure
+prior to exiting the object's scope."</p>
+
+<p><b>Developer's Note</b></p>
+<p>Both structural bullets are automated: isolating a use of the
+<code>Unchecked_Access</code> attribute to a package body, and requiring that the
+data it is applied to be library level (declared directly within a package,
+at any nesting of enclosing packages, rather than inside a subprogram, task,
+entry, or protected object). "Minimize the use of the attribute" has no
+checkable threshold beyond that; every use is already reported by one or
+both of the structural bullets.</p>
+<p>The Ada Reference Manual &sect;13.10 exception — inserting a local object
+into a global linked data structure, guaranteed removed before the object's
+scope exits — is not automatable: it depends on a temporal guarantee about
+program behavior, not on the code's shape. A local object used this way is
+indistinguishable from a genuinely unsafe use and will still be flagged as
+not library level.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_NON_LIBRARY_LEVEL_KINDS = "Procedure, Function, Task, Entry"
+
+
+def _is_unchecked_access_use(file, lexer, use_ref):
+    lex = lexer.lexeme(use_ref.line(), use_ref.column())
+
+    # The prefix can be an indexed or selected component (Arr (I)'Attr,
+    # Rec.Field'Attr), so the tick is not necessarily the next token —
+    # scan forward for it, bounded so a stray statement isn't crossed.
+    n = 0
+    while lex and n < 30:
+        if lex.text() == ";":
+            return False
+
+        if lex.text() == "'":
+            next_lex = lex.next()
+            return bool(next_lex) and next_lex.text().lower() == "unchecked_access"
+
+        lex = lex.next()
+        n += 1
+
+    return False
+
+
+def _is_library_level(ent):
+    scope = ent.parent()
+
+    while scope is not None:
+        if scope.kind().check(_NON_LIBRARY_LEVEL_KINDS):
+            return False
+
+        if scope.kind().check("File"):
+            return True
+
+        scope = scope.parent()
+
+    return True
+
+
+def check(check, file):
+    is_spec_file = bool(file.filerefs("Declare Spec File"))
+    lexer = file.lexer(lookup_ents=False)
+
+    for use_ref in file.filerefs("Use Access"):
+        if not _is_unchecked_access_use(file, lexer, use_ref):
+            continue
+
+        obj_ent = use_ref.ent()
+
+        if is_spec_file:
+            check.violation(obj_ent, file, use_ref.line(),
+                            use_ref.column(), ERR1)
+
+        if not _is_library_level(obj_ent):
+            check.violation(obj_ent, file, use_ref.line(),
+                            use_ref.column(), ERR2)
