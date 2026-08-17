@@ -192,11 +192,42 @@ def check(check, file):
     focus_lex = None
     focus_ent = None
 
+    # The last function seen, which parameters of its own do not replace
+    func_ent = None
+
+    # An enum body gives literals symbolic names, so it is an initialization
+    saw_enum = False
+    in_enum = False
+    depth = 0
+
     while lex:
+        text = lex.text()
+
+        # Track the body of an enum, ignoring an enum used as a type. Only a
+        # name, a base clause or a keyword may come before the body, so
+        # anything else means the keyword is naming a type instead.
+        if text == 'enum':
+            saw_enum = True
+        elif saw_enum:
+            if text == '{':
+                saw_enum = False
+                in_enum = True
+                depth = 0
+            elif lex.token() not in ('Identifier', 'Keyword') and text != ':':
+                saw_enum = False
+        elif in_enum:
+            if text == '{':
+                depth += 1
+            elif text == '}':
+                in_enum = depth > 0
+                depth = max(depth - 1, 0)
+
         # Focus on the last ent/symbol seen
-        if lex.ent() or re.match(r'[<>!#]', lex.text()):
+        if lex.ent() or re.match(r'[<>!#]', text):
             focus_lex = lex
             focus_ent = lex.ent()
+            if focus_ent and focus_ent.kind().check('Function'):
+                func_ent = focus_ent
 
         # Skip if it's not a literal
         if lex.token() != 'Literal':
@@ -208,8 +239,20 @@ def check(check, file):
             lex = lex.next(True, True)
             continue
 
+        # Skip enumerator values
+        if in_enum:
+            lex = lex.next(True, True)
+            continue
+
         # Skip if the last ent was a macro
         if focus_ent and focus_ent.kind().check('Macro'):
+            lex = lex.next(True, True)
+            continue
+
+        # Skip the 0 of a pure virtual function, which is syntax, not a value
+        previous = lex.previous(True, True)
+        if text == '0' and func_ent and func_ent.kind().check('Pure') \
+        and previous and previous.text() == '=':
             lex = lex.next(True, True)
             continue
 
