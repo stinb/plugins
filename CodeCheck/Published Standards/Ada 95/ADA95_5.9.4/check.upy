@@ -1,0 +1,169 @@
+ERR1 = "Use Ada.Unchecked_Conversion instead of overlaying objects via an address clause"
+ERR2 = "Use Ada.Interrupts to associate handlers with interrupts instead of an address clause on an entry"
+ERR3 = "Avoid using an address clause on a subprogram that is not imported"
+
+
+def ids():
+    return ("ADA95_5.9.4",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.4": "Published Standards/Ada 95/5.9.4 Address Clauses",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.4": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Programming Practices",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.4": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use address clauses to map variables and entries to the hardware
+device or memory, not to model the FORTRAN "equivalence" feature.</p>
+<p>&#8226; Ensure that the address specified in an attribute definition clause is
+valid and does not conflict with the alignment.</p>
+<p>&#8226; If available in your Ada environment, use the package <code>Ada.Interrupts</code>
+to associate handlers with interrupts.</p>
+<p>&#8226; Avoid using the address clause for nonimported program units.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Ada">Single_Address : constant System.Address := System.Storage_Elements.To_Address(...);
+Interrupt_Vector_Table : Hardware_Array;
+for Interrupt_Vector_Table'Address use Single_Address;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>The result of specifying a single address for multiple objects or
+program units is undefined, as is specifying multiple addresses for a
+single object or program unit. Specifying multiple address clauses for
+an interrupt is also undefined. It does not necessarily overlay objects
+or program units, or associate a single entry with more than one
+interrupt.</p>
+<p>You are responsible for ensuring the validity of an address you specify.
+Ada requires that the object of an address be an integral multiple of
+its alignment.</p>
+<p>In Ada 83 (Ada Reference Manual 1983) you had to use values of type
+<code>System.Address</code> to attach an interrupt entry to an interrupt. While
+this technique is allowed in Ada 95, you are using an obsolete feature.
+You should use a protected procedure and the appropriate pragmas
+(Rationale 1995, &sect;C.3.2).</p>
+
+<p><b>Developer's Note</b></p>
+<p>Three of the four guideline bullets are automated: an address clause whose
+expression is (or derives from) another object's <code>'Address</code> attribute — the
+FORTRAN-"equivalence" overlay the guideline warns against, rather than a
+literal or converted address value; an address clause applied to a subprogram
+that has no corresponding import (<code>pragma Import</code>); and the obsolete Ada 83
+<code>for entry use at address;</code> form, which should use <code>Ada.Interrupts</code> and a
+protected procedure instead.</p>
+<p>"Ensure the address is valid and does not conflict with the alignment" is
+not automatable: whether an address is a real, valid hardware location
+depends on the target's memory map, which is external knowledge no source
+file contains.</p>
+<p>The overlay detection is a structural heuristic, not a full data-flow
+analysis: it flags any address clause whose expression contains a reference
+to another object's <code>'Address</code> anywhere in it, including a legitimate
+hardware-address computation derived from a known mapped register (e.g. a
+base address plus an offset). It cannot distinguish that case from an actual
+FORTRAN-equivalence-style overlay.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _is_imported(ent):
+    return ent.kind().check("External")
+
+
+def _rhs_is_address_overlay(lexer, addr_ref):
+    lex = lexer.lexeme(addr_ref.line(), addr_ref.column())
+
+    # Skip past the clause's own "'Address use" to reach the RHS —
+    # the LHS itself always has a tick-Address that must not match.
+    n = 0
+    while lex and n < 30:
+        if lex.token() == "Keyword" and lex.text().lower() == "use":
+            break
+        lex = lex.next()
+        n += 1
+    else:
+        return False
+
+    lex = lex.next()
+
+    n = 0
+    while lex and n < 30:
+        if lex.text() == ";":
+            return False
+
+        if lex.text() == "'":
+            next_lex = lex.next()
+            return bool(next_lex) and next_lex.text().lower() == "address"
+
+        lex = lex.next()
+        n += 1
+
+    return False
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _is_entry_use_at_clause(lexer, ref):
+    lex = lexer.lexeme(ref.line(), ref.column())
+
+    if not lex:
+        return False
+
+    lex = _next_significant(lex)
+
+    if not lex or lex.token() != "Keyword" or lex.text().lower() != "use":
+        return False
+
+    lex = _next_significant(lex)
+
+    return lex and lex.token() == "Keyword" and lex.text().lower() == "at"
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for addr_ref in file.filerefs("Address Representation Ref", ""):
+        ent = addr_ref.ent()
+
+        if ent.kind().check("Procedure, Function"):
+            if not _is_imported(ent):
+                check.violation(
+                    ent, file, addr_ref.line(), addr_ref.column(), ERR3
+                )
+            continue
+
+        if _rhs_is_address_overlay(lexer, addr_ref):
+            check.violation(ent, file, addr_ref.line(),
+                            addr_ref.column(), ERR1)
+
+    for ref in file.filerefs("Ref", "Entry"):
+        if _is_entry_use_at_clause(lexer, ref):
+            check.violation(ref.ent(), file, ref.line(), ref.column(), ERR2)
