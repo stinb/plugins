@@ -23,3 +23,12 @@ int main() {
     const int8_t y = -2;
     x << y;                 // UNDCC_Violation
 }
+
+
+// A typedef of a fixed width type keeps that width
+typedef uint32_t uint_t;
+
+void typedefChain(uint_t result) {
+    result << 16;           // UNDCC_Valid
+    result << 32;           // UNDCC_Violation
+}
