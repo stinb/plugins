@@ -779,7 +779,8 @@ C_LIBRARY_TYPES = {
 # Tokens of a constant. Character and string constants are lexed as String
 C_LITERAL_TOKENS = ('Literal', 'String')
 
-# Operators whose result is a composite expression
+# Binary operators whose result is a composite expression. Complement and the
+# conditional operator are also composite, but neither takes a pair of operands
 C_COMPOSITE_OPERATORS = {'+', '-', '*', '/', '%', '&', '|', '^', '<<', '>>'}
 
 # Operators whose result is essentially Boolean
@@ -1079,7 +1080,10 @@ def cEssentialTypeOfExpression(lexemes: list[Lexeme], depth: int = 0) -> tuple[s
             return None
         if prefix == '!':
             return (C_ESSENTIAL_BOOLEAN, 1)
-        if prefix in ('-', '+', '~', '++', '--'):
+        if prefix == '~':
+            return cShiftOrComplementEssentialType(
+                cEssentialTypeOfExpression(lexemes[1:], depth + 1))
+        if prefix in ('-', '+', '++', '--'):
             return cEssentialTypeOfExpression(lexemes[1:], depth + 1)
         return cEssentialTypeOfTerm(lexemes)
 
@@ -1087,7 +1091,7 @@ def cEssentialTypeOfExpression(lexemes: list[Lexeme], depth: int = 0) -> tuple[s
     if text in C_BOOLEAN_OPERATORS:
         return (C_ESSENTIAL_BOOLEAN, 1)
     if text in C_LEFT_TYPED_OPERATORS:
-        return cShiftEssentialType(
+        return cShiftOrComplementEssentialType(
             cEssentialTypeOfExpression(lexemes[:operator], depth + 1))
 
     left = cEssentialTypeOfExpression(lexemes[:operator], depth + 1)
@@ -1102,8 +1106,23 @@ def cIsCompositeExpression(lexemes: list[Lexeme]) -> bool:
     if not lexemes:
         return False
 
+    # A conditional is composite when either of the operands it selects is
+    branches = cTernaryBranches(lexemes)
+    if branches:
+        return (cIsCompositeExpression(branches[0])
+                or cIsCompositeExpression(branches[1]))
+
     operator = cTopLevelOperator(lexemes)
-    if operator is None or lexemes[operator].text() not in C_COMPOSITE_OPERATORS:
+    if operator is None:
+        # Complement is a composite operator, while a unary plus or minus is
+        # composite only where the operand it applies to already is
+        if lexemes[0].text() == '~':
+            return not cIsConstantExpression(lexemes)
+        if lexemes[0].text() in ('+', '-'):
+            return cIsCompositeExpression(lexemes[1:])
+        return False
+
+    if lexemes[operator].text() not in C_COMPOSITE_OPERATORS:
         return False
 
     return not cIsConstantExpression(lexemes)
@@ -1157,12 +1176,13 @@ def cWiderEssentialType(left, right):
         return (left[0], None, constant)
     return (left[0], max(left[1], right[1]), constant)
 
-# The essential type of the result of a shift. An essentially unsigned left hand
-# operand keeps its essential type, anything else takes its standard type.
-def cShiftEssentialType(left):
-    if not left or left[0] in (C_ESSENTIAL_UNSIGNED, C_ESSENTIAL_POINTER):
-        return left
-    return cUsualArithmeticConversions(left, left)
+# The essential type of the result of a shift or a complement, which follow the
+# same rule. An essentially unsigned operand, the left hand one for a shift,
+# keeps its essential type, and anything else takes its standard type.
+def cShiftOrComplementEssentialType(operand):
+    if not operand or operand[0] in (C_ESSENTIAL_UNSIGNED, C_ESSENTIAL_POINTER):
+        return operand
+    return cUsualArithmeticConversions(operand, operand)
 
 # The essential type of a composite expression. Signed, unsigned and floating
 # operands of the same category keep it, so integer promotion is ignored for
@@ -1179,7 +1199,7 @@ def cBalanceEssentialTypes(left, right, operator: str | None = None):
 
     # A shift is not balanced, its result follows the left hand operand
     if operator in C_LEFT_TYPED_OPERATORS:
-        return cShiftEssentialType(left)
+        return cShiftOrComplementEssentialType(left)
 
     if left[0] == right[0] and left[0] in (C_ESSENTIAL_SIGNED,
             C_ESSENTIAL_UNSIGNED, C_ESSENTIAL_FLOATING):

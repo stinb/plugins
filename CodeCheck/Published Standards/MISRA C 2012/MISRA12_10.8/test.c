@@ -40,3 +40,33 @@ int main() {
   return 0;
 }
 
+
+// A cast of a composite expression to a narrower type of the same essential
+// type category is permitted, a cast to a different category is not
+void narrowerAndDifferentCategory(uint32_t u32) {
+  uint8_t  u8;
+  int32_t  s32;
+  uint32_t a = 1, b = 2;
+
+  u8  = (uint8_t)(u32 >> 8);  // UndCC_Valid - same category and narrower
+  s32 = (int32_t)(a - b);     // UndCC_Violation - unsigned composite cast to signed
+}
+
+// A cast applies to the unary expression that follows it, which may be a
+// complement, a unary minus or a conditional
+void unaryAndConditionalOperands(uint32_t u32, uint16_t u16a, uint16_t u16b, int flag) {
+  uint8_t  u8;
+  int16_t  s16 = 0;
+  int32_t  s32;
+  uint32_t r;
+
+  u8  = (uint8_t)~u32;                         // UndCC_Valid - same category and narrower
+  s32 = (int32_t)~s16;                         // UndCC_Valid - a signed complement is already 32 bit
+  r   = (uint32_t)(flag ? u16a : u16b);        // UndCC_Valid - neither operand is composite
+  r   = (uint32_t)-u16a;                       // UndCC_Valid - the operand is not composite
+
+  s32 = (int32_t)~u32;                         // UndCC_Violation - different category
+  r   = (uint32_t)~u16a;                       // UndCC_Violation - cast to a wider type
+  r   = (uint32_t)-(u16a + u16b);              // UndCC_Violation - unary minus of a composite
+  r   = (uint32_t)(flag ? u16a + u16b : u16a); // UndCC_Violation - conditional with a composite operand
+}

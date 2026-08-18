@@ -137,4 +137,5 @@ void func9(int32_t s32, uint32_t u32, char *p, uint8_t *up, int cond) {
 
   i32 = s32 - 1U;               // UndCC_Violation - the constant is an unsigned int here
   *up = 'a';                    // UndCC_Violation - character through a pointer to unsigned
+  s8 = ~s8;                     // UndCC_Violation - a signed complement takes the standard type
 }

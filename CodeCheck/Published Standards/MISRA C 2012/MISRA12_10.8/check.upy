@@ -2,37 +2,9 @@
 # Written by Jason Quinn
 # 9/30/24
 
-import re
 import Modules
 
 ERR1 = 'The value of the expression was assigned to a wider or different essential type'
-
-
-def isComposite(openParen):
-    # True if the parenthesized expression has a top-level binary operator.
-    close = Modules.findClose(openParen)
-    if not close:
-        return False
-    alwaysBinary = ('/', '%', '|', '^', '<<', '>>', '?')
-    # +, -, *, & are binary only when they follow a value
-    ambiguous = ('+', '-', '*', '&')
-    depth = 0
-    prevValue = False
-    lex = openParen.next(True, True)
-    while lex and not (lex.line_begin() == close.line_begin() and lex.column_begin() == close.column_begin()):
-        text = lex.text()
-        if text in ('(', '[', '{'):
-            depth += 1
-            prevValue = False
-        elif text in (')', ']', '}'):
-            depth -= 1
-            prevValue = True
-        elif depth == 0 and (text in alwaysBinary or (text in ambiguous and prevValue)):
-            return True
-        else:
-            prevValue = lex.token() in ('Identifier', 'Literal')
-        lex = lex.next(True, True)
-    return False
 
 
 # The ID for the check
@@ -150,70 +122,93 @@ def test_language(language):
     return language == 'C++'
 
 def check(check, file):
-    # List of types to check
-    types = r'int|short|long|float|double'
-    lexer = None
-    # Go through each object ref
-    refs = file.filerefs("Cast Use", "Type")
-    for ref in refs:
-        found = False
-        # Skip if not in types
-        if not re.search(types, str(ref.ent().name())):
-            continue
+    lexer = file.lexer()
+    if not lexer:
+        return
 
-        # Grab size of type and skip if not found
-        size0 = re.sub(r'\[\d*\]', '', str(ref.ent().name()))
-        size0 = re.sub(r'[^\d]', '', size0)
-        type = re.search(r'(int|short|long|float|double)', str(ref.ent().name())).group()
-        if size0 == '':
-            continue
-        size0 = int(size0)
-        # Go through each set
-        if not lexer:
-            if not file.lexer():
-                return
-            lexer = file.lexer()
+    for ref in file.filerefs('Cast Use', 'Type'):
         lexeme = lexer.lexeme(ref.line(), ref.column())
-        if lexeme:
-            if lexeme.ent() and lexeme.ent().kind().check('Macro'):
-                continue
-
-            # Skip pointer casts - check if next lexeme is "*"
-            nextLex = lexeme.next(True, True)
-            if nextLex and nextLex.text() == '*':
-                continue
-
-            lexeme = nextLex
-
-        # Rule 10.8 only applies to composite expressions
-        operand = lexeme.next(True, True) if lexeme else None
-        if not (operand and operand.text() == '(' and isComposite(operand)):
+        if not lexeme:
             continue
 
-        ok = True
-        while lexeme and not re.match(r';|{|}', lexeme.text()):
-            # Find ents that have a smaller size than the defined ref
-            if lexeme.ent():
-                if type not in str(lexeme.ent().type()):
-                    nextLex = lexeme.next(True, True)
-                    if not (nextLex and nextLex.text() == ';'):
-                        ok = False
-                        break
-                size1 = re.sub(r'\[\d*\]', '', str(lexeme.ent().type()))
-                size1 = re.sub(r'[^\d]', '', size1)
-                if size1 == '':
-                    break
-                size1 = int(size1)
-                # Check if cast to wider type
-                if size1 < size0:
-                    nextLex = lexeme.next(True, True)
-                    if not (nextLex and nextLex.text() == ';'):
-                        ok = False
-                        break
+        closing = lexeme.next(True, True)
+        # A pointer cast is outside the essential type model
+        if not closing or closing.text() != ')':
+            continue
 
+        operand = castOperand(closing.next(True, True))
+        if not operand or not Modules.cIsCompositeExpression(operand):
+            continue
+
+        cast = Modules.cEssentialType(ref.ent().name(), ref.ent())
+        value = Modules.cEssentialTypeOfExpression(operand)
+        if not cast or not value:
+            continue
+        if Modules.C_ESSENTIAL_POINTER in (cast[0], value[0]):
+            continue
+
+        # A cast to a narrower type of the same category is permitted
+        if cast[0] == value[0]:
+            if cast[1] is None or value[1] is None or cast[1] <= value[1]:
+                continue
+
+        check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
+
+
+# The lexemes of the expression a cast applies to. A cast binds tighter than any
+# binary operator, so it covers a unary expression and no more.
+def castOperand(lexeme):
+    lexemes = []
+
+    # Whatever the cast applies to may be reached through prefix operators
+    while lexeme and lexeme.text() in ('~', '!', '-', '+', '*', '&', '++', '--'):
+        lexemes.append(lexeme)
+        lexeme = lexeme.next(True, True)
+
+    if not lexeme:
+        return []
+
+    # Then a single value, which a group encloses in full
+    if lexeme.text() == '(':
+        lexemes += group(lexeme)
+    elif lexeme.token() in ('Identifier', 'Literal', 'String', 'Keyword'):
+        lexemes.append(lexeme)
+    else:
+        return []
+
+    # Then whatever a call, a subscript or a member access adds to it
+    lexeme = lexemes[-1].next(True, True)
+    while lexeme:
+        if lexeme.text() in ('(', '['):
+            lexemes += group(lexeme)
+        elif lexeme.text() in ('.', '->'):
+            lexemes.append(lexeme)
             lexeme = lexeme.next(True, True)
+            if not lexeme:
+                break
+            lexemes.append(lexeme)
+        elif lexeme.text() in ('++', '--'):
+            lexemes.append(lexeme)
+        else:
+            break
+        lexeme = lexemes[-1].next(True, True)
 
-        if not ok:
-            check.violation(ref.ent(), ref.file(), ref.line(), ref.column(), ERR1)
-            continue
+    return lexemes
 
+
+# The lexemes of a group, from its opening bracket through the one that closes it
+def group(opening):
+    close = Modules.findClose(opening)
+    if not close:
+        return []
+
+    lexemes = []
+    lexeme = opening
+    while lexeme:
+        lexemes.append(lexeme)
+        if (lexeme.line_begin() == close.line_begin()
+                and lexeme.column_begin() == close.column_begin()):
+            break
+        lexeme = lexeme.next(True, True)
+
+    return lexemes
