@@ -1,0 +1,172 @@
+ERR1 = "Scope pragma Suppress to the smallest block of statements that can safely have exception checking removed"
+
+
+def ids():
+    return ("ADA95_5.9.5",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.5": "Published Standards/Ada 95/5.9.5 Suppression of Exception Check",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.5": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Programming Practices",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.5": """
+<p><b>Guideline</b></p>
+<p>&#8226; Do not suppress exception checks during development.</p>
+<p>&#8226; If necessary, during operation, introduce blocks that encompass the
+smallest range of statements that can safely have exception checking
+removed.</p>
+
+<p><b>Rationale</b></p>
+<p>If you disable exception checks and program execution results in a
+condition in which an exception would otherwise occur, the program
+execution is erroneous. The results are unpredictable. Further, you must
+still be prepared to deal with the suppressed exceptions if they are
+raised in and propagated from the bodies of subprograms, tasks, and
+packages you call.</p>
+<p>By minimizing the code that has exception checking removed, you
+increase the reliability of the program. There is a rule of thumb that
+suggests that 20% of the code is responsible for 80% of the CPU time. So,
+once you have identified the code that actually needs exception checking
+removed, it is wise to isolate it in a block (with appropriate comments)
+and leave the surrounding code with exception checking in effect.</p>
+
+<p><b>Developer's Note</b></p>
+<p>"Do not suppress exception checks during development" is not automatable:
+whether a given compile is a development or an operational build is a
+project-lifecycle fact, not something visible in a source file.</p>
+<p>"Introduce blocks that encompass the smallest range of statements" is
+approximated structurally: a <code>pragma Suppress</code> is flagged unless it is
+scoped inside a nested <code>declare</code> block, rather than applied at the level of
+an enclosing package, subprogram, task, entry, or protected construct — or,
+more broadly still, as a compilation-wide configuration pragma with no
+enclosing construct at all. "Smallest possible" is itself a graded judgment
+this check cannot fully capture; the narrow/broad distinction is a proxy for
+that intent, not a measurement of it.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_NAMED_CONSTRUCT_KINDS = "Procedure, Function, Package, Task, Entry"
+
+
+def _named_ranges(file):
+    ranges = []
+
+    for decl_ref in file.filerefs("Declare Spec, Declare Body", _NAMED_CONSTRUCT_KINDS):
+        ent = decl_ref.ent()
+        end_refs = ent.refs("End")
+
+        if not end_refs:
+            continue
+
+        ranges.append((decl_ref.line(), max(r.line() for r in end_refs)))
+
+    return ranges
+
+
+def _home_range(line, ranges):
+    home = None
+
+    for start, end in ranges:
+        if start <= line <= end:
+            if home is None or (end - start) < (home[1] - home[0]):
+                home = (start, end)
+
+    return home
+
+
+def _is_narrowly_scoped(lexer, pragma_line, ranges, home):
+    # A pragma is narrowly scoped if a "declare" for an enclosing block
+    # precedes it before reaching its home construct's own declaration
+    # line. Nested named constructs (their own subprograms/packages/etc.)
+    # are skipped wholesale so their own "is"/"begin" can't be mistaken
+    # for an enclosing scope of the pragma that follows them.
+    home_start = home[0]
+    nested = [
+        (start, end)
+        for start, end in ranges
+        if start > home_start and end <= pragma_line and (start, end) != home
+    ]
+
+    line = pragma_line - 1
+
+    while line > home_start:
+        skip_to = None
+
+        for start, end in nested:
+            if start <= line <= end:
+                skip_to = start - 1
+                break
+
+        if skip_to is not None:
+            line = skip_to
+            continue
+
+        lex = lexer.lexeme(line, 1)
+
+        while lex and lex.line_begin() == line:
+            if lex.token() == "Keyword" and lex.text().lower() == "declare":
+                return True
+
+            lex = lex.next()
+
+        line -= 1
+
+    return False
+
+
+def _find_pragma_suppress_locations(lexer):
+    locations = []
+    lex = lexer.first()
+
+    while lex:
+        if lex.token() == "Keyword" and lex.text().lower() == "pragma":
+            next_lex = lex.next()
+
+            while next_lex and next_lex.token() in ("Whitespace", "Newline", "Comment"):
+                next_lex = next_lex.next()
+
+            if next_lex and next_lex.text().lower() == "suppress":
+                locations.append((lex.line_begin(), lex.column_begin()))
+
+        lex = lex.next()
+
+    return locations
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    ranges = _named_ranges(file)
+
+    for pragma_line, pragma_col in _find_pragma_suppress_locations(lexer):
+        home = _home_range(pragma_line, ranges)
+
+        # No enclosing named construct at all means this is a compilation-
+        # wide configuration pragma — broader in scope than even a
+        # package-level one, so it is always a violation.
+        if home is not None and _is_narrowly_scoped(lexer, pragma_line, ranges, home):
+            continue
+
+        check.violation(None, file, pragma_line, pragma_col, ERR1)
