@@ -1,0 +1,206 @@
+ERR1 = "Do not initialize this object with a call to a function whose body is elaborated later in the same package"
+
+
+def ids():
+    return ("ADA95_5.9.6",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.6": "Published Standards/Ada 95/5.9.6 Initialization",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.6": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Programming Practices",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.6": """
+<p><b>Guideline</b></p>
+<p>&#8226; Initialize all objects prior to use.</p>
+<p>&#8226; Use caution when initializing access values.</p>
+<p>&#8226; Do not depend on default initialization that is not part of the
+language.</p>
+<p>&#8226; Derive from a controlled type and override the primitive procedure to
+ensure automatic initialization.</p>
+<p>&#8226; Ensure elaboration of an entity before using it.</p>
+<p>&#8226; Use function calls in declarations cautiously.</p>
+
+<p><b>Example</b></p>
+<p>The first example illustrates the potential problem with initializing
+access values:</p>
+<pre><code language="Ada">procedure Mix_Letters (Of_String : in out String) is
+   type String_Ptr is access String;
+   Ptr : String_Ptr := new String'(Of_String); -- could raise Storage_Error in caller
+begin -- Mix_Letters
+   ...
+exception
+   ... -- cannot trap Storage_Error raised during elaboration of Ptr declaration
+end Mix_Letters;
+</code></pre>
+<p>The second example illustrates the issue of ensuring the elaboration of
+an entity before its use:</p>
+<pre><code language="Ada">package Robot_Controller is
+   ...
+   function Sense return Position;
+   ...
+end Robot_Controller;
+
+package body Robot_Controller is
+...
+      Goal : Position := Sense;           -- This raises Program_Error
+      ...
+      function Sense return Position is
+      begin
+         ...
+      end Sense;
+...
+begin -- Robot_Controller
+   Goal := Sense;                         -- The function has been elaborated.
+   ...
+end Robot_Controller;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Ada does not define an initial default value for objects of any type
+other than access types, whose initial default value is null. If you are
+initializing an access value at the point at which it is declared and the
+allocation raises the exception Storage_Error, the exception is raised in
+the calling not the called procedure. The caller is unprepared to handle
+this exception because it knows nothing about the problem-causing
+allocation.</p>
+<p>Operating systems differ in what they do when they allocate a page in
+memory: one operating system may zero out the entire page; a second may
+do nothing. Therefore, using the value of an object before it has been
+assigned a value causes unpredictable (but bounded) behavior, possibly
+raising an exception. Objects can be initialized implicitly by
+declaration or explicitly by assignment statements. Initialization at
+the point of declaration is safest as well as easiest for maintainers.
+You can also specify default values for components of records as part of
+the type declarations for those records.</p>
+<p>Ensuring initialization does not imply initialization at the
+declaration. In the example above, Goal must be initialized via a
+function call. This cannot occur at the declaration because the function
+Sense has not yet been elaborated, but it can occur later as part of the
+sequence of statements of the body of the enclosing package.</p>
+<p>An unelaborated function called within a declaration (initialization)
+raises the exception, Program_Error, that must be handled outside of the
+unit containing the declarations. This is true for any exception the
+function raises even if it has been elaborated.</p>
+<p>If an exception is raised by a function call in a declaration, it is
+not handled in that immediate scope. It is raised to the enclosing
+scope. This can be controlled by nesting blocks.</p>
+<p>See also Guideline 9.2.3.</p>
+
+<p><b>Notes</b></p>
+<p>Sometimes, elaboration order can be dictated with pragma
+Elaborate_All. Pragma Elaborate_All applied to a library unit causes the
+elaboration of the transitive closure of the unit and its dependents. In
+other words, all bodies of library units reachable from this library
+unit's body are elaborated, preventing an access-before-elaboration
+error (Rationale 1995, &sect;10.3). Use the pragma Elaborate_Body when you
+want the body of a package to be elaborated immediately after its
+declaration.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only "Ensure elaboration of an entity before using it" is automated, and
+only for the specific structural shape shown in the guideline's own
+example: a package-level object initialized by a direct call to a function
+whose body is elaborated later — either textually later in the same file,
+or only in the corresponding package body when the object is declared in
+the spec (the spec always fully elaborates before the body does, so that
+case is unconditionally unsafe regardless of line position). A forward
+reference buried inside a more complex expression (e.g. a call wrapping
+another call) is not traced.</p>
+<p>The other five bullets are not automatable. "Initialize all objects
+prior to use," "use caution with access values," and "do not depend on
+default initialization outside the language" all require proving an
+object is never read before some write reaches it across every control
+flow path — flow-sensitive data-flow analysis, not a structural pattern,
+and flagging every declaration with no initializer would be extremely
+noisy since assigning on the very next line is completely ordinary Ada.
+"Derive from a controlled type for automatic initialization" is a positive
+recommendation with no natural violation shape: flagging every type that
+is not a controlled type with an overridden <code>Initialize</code> would fire on
+nearly every type in a real codebase. "Use function calls in declarations
+cautiously" restates the elaboration-order concern with no independent
+structural signal of its own.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _is_package_level(obj_ent):
+    for scope_ref in obj_ent.refs("Declarein"):
+        return scope_ref.ent().kind().check("Package")
+
+    return False
+
+
+def _function_body_lines(file):
+    lines = {}
+
+    for body_ref in file.filerefs("Declare Body", "Function"):
+        lines[body_ref.ent().id()] = body_ref.line()
+
+    return lines
+
+
+def _own_spec_function_ids(file):
+    ids = set()
+
+    for spec_ref in file.filerefs("Declare Spec", "Function"):
+        ids.add(spec_ref.ent().id())
+
+    return ids
+
+
+def check(check, file):
+    is_spec_file = bool(file.filerefs("Declare Spec File"))
+    body_lines = _function_body_lines(file)
+    own_spec_function_ids = _own_spec_function_ids(
+        file) if is_spec_file else set()
+
+    for obj_ref in file.filerefs("Declare", "Object"):
+        obj_ent = obj_ref.ent()
+
+        if not _is_package_level(obj_ent):
+            continue
+
+        for assign_ref in obj_ent.refs("Assign Value"):
+            if assign_ref.line() != obj_ref.line():
+                continue
+
+            func_ent = assign_ref.ent()
+
+            if not func_ent.kind().check("Function"):
+                continue
+
+            body_line = body_lines.get(func_ent.id())
+
+            if body_line is not None:
+                # Same file: elaboration follows textual order.
+                if body_line > obj_ref.line():
+                    check.violation(obj_ent, file, obj_ref.line(),
+                                    obj_ref.column(), ERR1)
+            elif func_ent.id() in own_spec_function_ids:
+                # Declared (but not defined) in this spec: the body can
+                # only be in the corresponding package body, which always
+                # elaborates after the spec — unconditionally too early.
+                check.violation(obj_ent, file, obj_ref.line(),
+                                obj_ref.column(), ERR1)
