@@ -1,0 +1,340 @@
+import und_lib.kind_util as kind_util
+import understand
+
+# Control flow nodes that mark the shape of a statement instead of being a
+# statement themselves. Anything starting with "end-" is also implicit.
+IMPLICIT_KINDS = frozenset([
+  "start",
+  "end",
+  "else",
+  "elsif",
+  "select-else",
+  "else-where",
+  "else-where-cond",
+  "try-else",
+  "while-for-else",
+  "loop",
+  "block-begin",
+  "accept-block-begin",
+  "do-while",
+  "repeat-until",
+  "until",
+  "passive-implicit",
+])
+
+# Labels the control flow graph uses for the branch not taken. Languages
+# differ, so accept both spellings.
+FALSE_LABELS = frozenset(["no", "false"])
+
+# References that read a variable's value. A variable without one of these was
+# never read, even if it was declared, initialized or assigned. Writing through
+# a pointer reads the pointer, so the deref kinds count as reads.
+READ_REF_KINDS = ("useby, modifyby, addr useby,"
+  "deref useby, deref setby, deref modifyby")
+
+# Local variables of a function. Parameters are excluded because an unused
+# parameter is usually required by the signature, not dead code.
+LOCAL_VARIABLE_KIND_STR = ("object ~parameter ~unknown ~unresolved,"
+  "variable ~parameter ~unknown ~unresolved")
+
+metDict = {
+  "CountUnreachableStmt" : "Unreachable Statements",
+  "CountUnusedVariable"  : "Unused Variables",
+  "CountDanglingElseIf"  : "Dangling Else-If Chains",
+}
+
+def ids():
+  return list(metDict.keys())
+
+def name(id):
+  return metDict.get(id, "")
+
+def description(id):
+  if id == "CountUnreachableStmt":
+    return '''<p>The number of statements a function can never reach</p>
+    <p>A statement is unreachable when no path through the function's control
+    flow graph arrives at it. Structural nodes such as <code>else</code> and
+    <code>end if</code> are not counted, so the value is a count of statements
+    rather than of control flow nodes.</p>
+
+    <p>Values inside conditions are not evaluated, so a branch guarded by a
+    condition that is always false still counts as reachable. Only code
+    excluded by control flow &mdash; such as code after a
+    <code>return</code> or an unlabeled <code>goto</code> target &mdash; is
+    counted.</p>
+
+    <p>A statement placed before the first case label of a switch is not
+    counted, because the control flow graph reaches it directly from the
+    switch.</p>
+
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int afterReturn(int x)      // CountUnreachableStmt = 1
+    {
+      return x;
+      x = 5;                    // +1 nothing reaches this
+    }
+
+    int afterGoto(int x)        // CountUnreachableStmt = 2
+    {
+      goto label;
+      x = 1;                    // +1
+      x = 2;                    // +1
+    label:
+      return x;
+    }
+
+    int reachable(int x)        // CountUnreachableStmt = 0
+    {
+      if (x > 0)
+        return 1;
+      return 0;
+    }
+    </code></pre>
+    <p>See also the <a href="und://plugin/check/RECOMMENDED_12">Unreachable
+    Code</a> check, which reports the first unreachable statement in each
+    function as a violation.</p>
+    '''
+  if id == "CountUnusedVariable":
+    return '''<p>The number of local variables a function never reads</p>
+    <p>A local variable is counted when nothing in the project reads its value.
+    Declaring, initializing and assigning a variable are all writes, so a
+    variable that is only ever written counts as unused. Writing through a
+    pointer reads the pointer, so <code>p-&gt;field = 0</code> counts as a read
+    of <code>p</code>. Parameters are not counted, because an unused parameter
+    is usually required by the signature.</p>
+
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int example()               // CountUnusedVariable = 2
+    {
+      int used = 1;             // read by the return statement
+      int declaredOnly;         // +1 never mentioned again
+      int writtenOnly = 2;      // +1 initialized, never read
+      return used;
+    }
+
+    int counter()               // CountUnusedVariable = 0
+    {
+      int i;
+      int sum = 0;
+      for (i = 0; i &lt; 10; i++) // both variables are read
+        sum += i;
+      return sum;
+    }
+    </code></pre>
+    '''
+  if id == "CountDanglingElseIf":
+    return '''<p>The number of if/else-if chains in a function that have no
+    final else</p>
+    <p>An if statement extended by at least one else-if but not closed by an
+    else leaves one case unhandled. Whether that case was overlooked is not
+    visible from the code, which is why several coding standards require the
+    final else. A plain if with no else-if is not counted, because a single
+    guarded statement is normal.</p>
+
+    <p>Chains are counted once each, at the leading if, so nested chains are
+    counted separately from the chain that contains them. An else that opens a
+    block and happens to start with an if, <code>else { if (x) ... }</code>, is
+    a terminating else and does not extend the chain.</p>
+
+    <h3>Example:</h3>
+    <pre><code language="C++">
+    int dangling(int x)         // CountDanglingElseIf = 1
+    {
+      if (x > 0)
+        return 1;
+      else if (x &lt; 0)          // +1 the chain never ends in an else
+        return 2;
+      return 0;
+    }
+
+    int closed(int x)           // CountDanglingElseIf = 0
+    {
+      if (x > 0)
+        return 1;
+      else if (x &lt; 0)
+        return 2;
+      else                      // the chain ends in an else
+        return 3;
+    }
+
+    int plainIf(int x)          // CountDanglingElseIf = 0
+    {
+      if (x > 0)                // no else-if, so no chain
+        return 1;
+      return 0;
+    }
+    </code></pre>
+    '''
+
+def tags(id):
+  return [
+    'Category: Statements',
+    'Target: Functions',
+    'Language: Any',
+  ]
+
+def is_integer(id):
+  return True
+
+def test_available(metric, entkindstr):
+  # Kind check if requested
+  if entkindstr:
+    my_kinds = set(understand.Kind.list_entity(kind_util.FUNCTION_KIND_STR))
+    test_kinds = set(understand.Kind.list_entity(entkindstr))
+    return len(my_kinds.intersection(test_kinds)) > 0
+
+  return True
+
+def test_entity(metric, ent):
+  if not ent.kind().check(kind_util.FUNCTION_KIND_STR):
+    return False
+  if metric.id() in ("CountUnreachableStmt", "CountDanglingElseIf"):
+    return bool(ent.control_flow_graph())
+  return True
+
+def value(metric, ent):
+  id = metric.id()
+  if id == "CountUnreachableStmt":
+    return unreachable_statements(ent)
+  if id == "CountDanglingElseIf":
+    return dangling_else_if_chains(ent)
+  if id == "CountUnusedVariable":
+    return unused_variables(ent)
+
+def is_implicit(kind):
+  """
+  True if a control flow node marks the shape of a statement instead of
+  being a statement itself.
+  """
+  return kind in IMPLICIT_KINDS or kind.startswith("end-")
+
+def unreachable_statements(ent):
+  cfg = ent.control_flow_graph()
+  if not cfg:
+    return
+  start = cfg.start()
+  if not start:
+    return
+
+  reached = set()
+  toVisit = [start]
+  while toVisit:
+    node = toVisit.pop()
+    if node in reached:
+      continue
+    reached.add(node)
+    toVisit.extend(node.children())
+
+  count = 0
+  for node in cfg.nodes():
+    if node not in reached and not is_implicit(node.kind()):
+      count += 1
+  return count
+
+def false_branch(node):
+  """
+  Return the child a conditional falls through to when its condition fails,
+  or None if the graph does not label the branches.
+  """
+  for child in node.children():
+    label = node.child_label(child)
+    if label and label.lower() in FALSE_LABELS:
+      return child
+  return None
+
+def is_else_if(lexer, innerIf):
+  """
+  True if the conditional inside an else is written "else if" rather than
+  opening a block, as in "else { if (x) ... }" or Pascal's "else begin if".
+  The control flow graph is the same shape either way, so the source is the
+  only thing that tells them apart.
+  """
+  line = innerIf.line_begin()
+  if not lexer or line is None:
+    return False
+
+  # An else and its if are usually on one line, but allow for a wrapped one.
+  previous = None
+  for lexeme in lexer.lexemes(max(1, line - 2), line):
+    if lexeme.token() in ("Whitespace", "Newline", "Comment"):
+      continue
+    if (lexeme.text().lower() == "if" and lexeme.line_begin() == line and
+        previous is not None and previous.text().lower() == "else"):
+      return True
+    previous = lexeme
+  return False
+
+def dangling_else_if_chains(ent):
+  cfg = ent.control_flow_graph()
+  if not cfg:
+    return
+
+  # The lexer is only needed to tell "else if" from "else {", so build it on
+  # first use and reuse it for the rest of the function.
+  cached = []
+  def lexer():
+    if not cached:
+      try:
+        cached.append(ent.lexer())
+      except understand.UnderstandError:
+        cached.append(None)
+    return cached[0]
+
+  count = 0
+  # Chains are walked from their leading if. Every following if in the chain
+  # is recorded so it isn't mistaken for the start of another chain. Nodes are
+  # in source order, so a chain is always walked before its own continuations
+  # are reached.
+  continuations = set()
+  for node in cfg.nodes():
+    if node.kind() != "if" or node in continuations:
+      continue
+
+    branches = 0
+    hasElse = False
+    current = node
+    while True:
+      nxt = false_branch(current)
+      if not nxt:
+        break
+
+      kind = nxt.kind()
+      if kind == "elsif":
+        # Ada, Fortran and Python give else-if its own node.
+        branches += 1
+        current = nxt
+        continue
+
+      if kind == "else":
+        # C++, C# and Java nest a new if inside the else instead. An else block
+        # that merely starts with an if is not an else-if, so require the inner
+        # if to close straight into this one rather than into more statements.
+        children = nxt.children()
+        if (len(children) == 1 and children[0].kind() == "if"
+            and is_else_if(lexer(), children[0])):
+          branches += 1
+          current = children[0]
+          continuations.add(current)
+          continue
+        hasElse = True
+      break
+
+    if branches and not hasElse:
+      count += 1
+  return count
+
+def unused_variables(ent):
+  count = 0
+  counted = set()
+  # Declarations can be seen more than once, such as an Ada variable declared
+  # in both a specification and a body.
+  for ref in ent.refs("define, declare", LOCAL_VARIABLE_KIND_STR, True):
+    var = ref.ent()
+    if var in counted:
+      continue
+    counted.add(var)
+    if not var.refs(READ_REF_KINDS):
+      count += 1
+  return count
