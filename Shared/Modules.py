@@ -1147,6 +1147,15 @@ def cIsConstantExpression(lexemes: list[Lexeme]) -> bool:
 
     return operands
 
+# An essential type as a report words it, such as "32 bit unsigned". A category
+# the model gives no width, such as an enumeration, is named on its own.
+def cDescribeEssentialType(essential) -> str:
+    if not essential:
+        return 'unknown'
+    if essential[1] is None:
+        return str(essential[0])
+    return f'{essential[1]} bit {essential[0]}'
+
 # True if an essential type came from a constant expression. Integer constants
 # exist only for int and wider, so the lowest rank the essential type model gives
 # them is not their rank for the usual arithmetic conversions.
