@@ -1,0 +1,155 @@
+ERR1 = 'A declaration should not declare more than one variable or member variable'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA23_10.0.1',)
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA23_10.0.1': 'Published Standards/MISRA C++ 2023/10.0.1 A declaration should not declare more than one variable or member variable',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_10.0.1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Advisory',
+            'Declarations and Definitions',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return {
+        'MISRA23_10.0.1': """
+<p><b>Amplification</b></p>
+<p>An init-declarator-list or a member-declarator-list should consist of a single init-declarator or member-declarator respectively.</p>
+<p>Structured bindings are permitted by this rule.</p>
+
+<p><b>Rationale</b></p>
+<p>Where multiple declarators appear in the same declaration, the type of an identifier may not meet
+developer expectations.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">int32_t i1; int32_t j1; // Compliant
+int32_t i2, * j2; // Non-compliant
+int32_t * i3,
+ & j3 = i2; // Non-compliant
+
+struct point
+{
+ int32_t x, y; // Non-compliant
+};
+
+std::map< char, char > map = f();
+
+auto [ loc, inserted ] =
+ map.insert( make_pair( 'A', 'a' ) ); // Compliant - structured binding
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>Commas inside a template argument list (e.g. <code>std::map&lt;int, int&gt;</code>) are not treated as nested. This cannot cause a missed violation, since it can only add to the comma count of a declaration that already has more than one declarator.</p>
+<p>Declarators wrapped in their own parentheses, such as function-pointer syntax (e.g. <code>void (*fp1)(int), (*fp2)(int);</code>), are not linked back to sibling declarators in the same declaration and will not be flagged.</p>
+<p>In Objective-C++ (<code>.mm</code>) files, an <code>@synthesize a, b;</code> directive naming more than one property may be misreported as a violation, since it is not distinguished from a comma-separated declarator list. Ordinary C++ declarations elsewhere in the same file are still checked correctly.</p>
+""",
+    }[id]
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+# Optional - Return True if this check should be run on the entire project
+# regardless of what files are selected. Should only be used for
+# project-level checks
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def is_opener(lex):
+    return (lex.token() == "Punctuation" and lex.text() in ("(", "{")) or \
+           (lex.token() == "Operator" and lex.text() == "[")
+
+
+def is_closer(lex):
+    return (lex.token() == "Punctuation" and lex.text() in (")", "}")) or \
+           (lex.token() == "Operator" and lex.text() == "]")
+
+
+def flush(check, file, ctx):
+    if len(ctx["group"]) > 1 and ctx["commas"] > 0:
+        ent, line, column = ctx["group"][0]
+        check.violation(ent, file, line, column, ERR1)
+    ctx["group"] = []
+    ctx["commas"] = 0
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    if not lexer:
+        return
+
+    declarators = {}
+    for def_ref in file.filerefs("Define ~Implicit, Declare ~Implicit", "Object ~TemplateParameter, Member Object"):
+        declarators[(def_ref.line(), def_ref.column())] = def_ref.ent()
+
+    if not declarators:
+        return
+
+    depth = 0
+    bracket_stack = []
+    contexts = [{"baseline": 0, "group": [], "commas": 0}]
+
+    lex = lexer.first()
+    while lex:
+        if is_opener(lex):
+            depth += 1
+            bracket_stack.append(lex.text())
+
+        elif is_closer(lex):
+            if bracket_stack:
+                bracket_stack.pop()
+            depth = max(0, depth - 1)
+            while len(contexts) > 1 and depth < contexts[-1]["baseline"]:
+                flush(check, file, contexts[-1])
+                contexts.pop()
+
+        elif lex.token() == "Punctuation" and lex.text() == ";":
+            if depth == contexts[-1]["baseline"]:
+                flush(check, file, contexts[-1])
+
+        elif lex.token() == "Operator" and lex.text() == ",":
+            if depth == contexts[-1]["baseline"]:
+                contexts[-1]["commas"] += 1
+
+        elif lex.token() == "Identifier":
+            key = (lex.line_begin(), lex.column_begin())
+            if key in declarators:
+                top = contexts[-1]
+                if depth == top["baseline"]:
+                    top["group"].append(
+                        (declarators[key], lex.line_begin(), lex.column_begin()))
+                elif depth > top["baseline"] and (not bracket_stack or bracket_stack[-1] != "["):
+                    contexts.append({
+                        "baseline": depth,
+                        "group": [(declarators[key], lex.line_begin(), lex.column_begin())],
+                        "commas": 0,
+                    })
+
+        lex = lex.next()
+
+    while contexts:
+        flush(check, file, contexts[-1])
+        contexts.pop()
