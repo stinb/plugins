@@ -1,0 +1,167 @@
+ERR1 = "Check the validity of scalar data read through Ada.Direct_IO or Ada.Sequential_IO with the 'Valid attribute"
+
+
+def ids():
+    return ("ADA95_5.9.7",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.7": "Published Standards/Ada 95/5.9.7 Direct_IO and Sequential_IO",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.7": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Programming Practices",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.7": """
+<p><b>Guideline</b></p>
+<p>&#8226; Ensure that values obtained from Ada.Direct_IO and Ada.Sequential_IO are
+in range.</p>
+<p>&#8226; Use the 'Valid attribute to check the validity of scalar values
+obtained through Ada.Direct_IO and Ada.Sequential_IO.</p>
+
+<p><b>Rationale</b></p>
+<p>The exception Data_Error can be propagated by the Read procedures
+found in these packages if the element read cannot be interpreted as a
+value of the required subtype (Ada Reference Manual 1995, &sect;A.13).
+However, if the associated check is too complex, an implementation need
+not propagate Data_Error. In cases where the element read cannot be
+interpreted as a value of the required subtype but Data_Error is not
+propagated, the resulting value can be abnormal, and subsequent
+references to the value can lead to erroneous execution.</p>
+
+<p><b>Notes</b></p>
+<p>It is sometimes difficult to force an optimizing compiler to perform
+the necessary checks on a value that the compiler believes is in range.
+Most compiler vendors allow the option of suppressing optimization, which
+can be helpful.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Both bullets are the same concern from two angles — the guideline's
+own mechanism for "ensure values are in range" is the <code>'Valid</code> check, and
+that only applies to a scalar element type — so this check flags a call
+to a <code>Direct_IO</code>/<code>Sequential_IO</code> instantiation's <code>Read</code> procedure whose
+result object has a scalar type and is never checked with <code>'Valid</code>. This
+reuses the same flow-insensitive <code>'Valid</code> detection as
+<code>ADA95_5.9.1</code>: it flags a value only if it is never checked anywhere in
+scope, not whether the check happens before the value is first used.</p>
+<p>A call to <code>Read</code> made through a rename of the instantiated procedure is
+not tracked: Understand does not attach a traceable rename reference for a
+rename of a generic-instantiated procedure (unlike a rename of a plain
+procedure, or a rename of an instantiated function, both of which do carry
+one), so there is no way to resolve the call back to the original
+instantiation.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_IO_GENERICS = ("Ada.Direct_IO", "Ada.Sequential_IO")
+_NON_SCALAR_KINDS = "Record, Array, Access, Task, Interface"
+
+
+def _is_io_read_item(param_ent):
+    if param_ent.name() != "Item":
+        return False
+
+    read_ent = param_ent.parent()
+
+    if read_ent is None or read_ent.name() != "Read":
+        return False
+
+    io_inst_ent = read_ent.parent()
+
+    if io_inst_ent is None:
+        return False
+
+    for generic_ref in io_inst_ent.refs("Instanceof"):
+        if str(generic_ref.ent().longname()) in _IO_GENERICS:
+            return True
+
+    return False
+
+
+def _item_type_ent(item_ent):
+    type_refs = item_ent.refs("Typed")
+
+    return type_refs[0].ent() if type_refs else None
+
+
+def _is_scalar_type(type_ent):
+    if type_ent is None:
+        return False
+
+    return not type_ent.kind().check(_NON_SCALAR_KINDS)
+
+
+def _is_valid_attribute_use(lexer, use_ref):
+    lex = lexer.lexeme(use_ref.line(), use_ref.column())
+
+    if not lex:
+        return False
+
+    lex = lex.next()
+
+    if not lex or lex.text() != "'":
+        return False
+
+    lex = lex.next()
+
+    return bool(lex) and lex.text().lower() == "valid"
+
+
+def _has_valid_check(obj_ent, lexer):
+    for use_ref in obj_ent.refs("Useby Attribute"):
+        if _is_valid_attribute_use(lexer, use_ref):
+            return True
+
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    # The formal (Item) and actual (the object read into) refs are two
+    # separate, file-scoped refs sharing the same call-site location —
+    # correlate them by (line, column) rather than walking from the
+    # (file-unscoped) parameter entity, which would also pick up calls
+    # in every other file that happens to call the same instantiation.
+    io_item_locations = set()
+
+    for formal_ref in file.filerefs("CallParamFormal Assignby Ref", "Parameter"):
+        param_ent = formal_ref.ent()
+
+        if not _is_io_read_item(param_ent):
+            continue
+
+        if not _is_scalar_type(_item_type_ent(param_ent)):
+            continue
+
+        io_item_locations.add((formal_ref.line(), formal_ref.column()))
+
+    for actual_ref in file.filerefs("CallParamFormalfor Assign Ref", "Object"):
+        if (actual_ref.line(), actual_ref.column()) not in io_item_locations:
+            continue
+
+        obj_ent = actual_ref.ent()
+
+        if not _has_valid_check(obj_ent, lexer):
+            check.violation(obj_ent, file, actual_ref.line(),
+                            actual_ref.column(), ERR1)
