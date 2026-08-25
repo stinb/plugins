@@ -3,7 +3,7 @@ ERR1 = 'Variable, function or enumeration declaration hides a class or enumerati
 
 # The ID for the check
 def ids():
-    return ('A2-10-6', 'CPP_I018')
+    return ('A2-10-6', 'CPP_I018', 'MISRA08_2-10-6')
 
 
 # The short name of the check
@@ -11,6 +11,7 @@ def name(id):
     return {
         'A2-10-6': 'Published Standards/AUTOSAR/A class or enumeration name shall not be hidden by a variable, function or enumerator declaration in the same scope',
         'CPP_I018': 'All Checks/Language Specific/C and C++/Identifiers/A class or enumeration name shall not be hidden by a variable, function or enumerator declaration in the same scope',
+        'MISRA08_2-10-6': 'Published Standards/MISRA-C++ 2008/2-10-6 If an identifier refers to a type, it shall not also refer to an object or a function in the same scope',
     }[id]
 
 
@@ -29,12 +30,19 @@ def tags(id):
             'Language: C++',
             'Identifiers',
         ],
+        'MISRA08_2-10-6': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Identifiers',
+        ],
     }.get(id)
 
 
 # The long description of the check
-def detailed_description():
-    return """
+def detailed_description(id):
+    default = """
 <p><b>Rule</b></p>
 <p>A class or enumeration name shall not be hidden by a variable, function or
 enumerator declaration in the same scope.</p>
@@ -87,6 +95,27 @@ to an object or a function in the same scope.</p>
 <p>• HIC++ v4.0 [9]: 3.1.1: Do not hide declarations.</p>
 """
 
+    misra08 = """
+<p><b>Rule</b></p>
+<p>If an identifier refers to a type, it shall not also refer to an object or a
+function in the same scope.</p>
+<p><b>Rationale</b></p>
+<p>For C compatibility, it is possible in C++ for a name to refer to both a type
+and object or a type and function. This can lead to confusion.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">typedef struct vector { uint16_t x ; uint16_t y; uint16_t z; } vector;
+// Non-compliant ^^                                Non-compliant ^^
+        struct vector { uint16_t x ; uint16_t y; uint16_t z; } vector;
+// Non-compliant ^^                                Non-compliant ^^
+</code></pre>
+"""
+
+    return {
+        'A2-10-6': default,
+        'CPP_I018': default,
+        'MISRA08_2-10-6': misra08,
+    }[id]
+
 
 # Tests the type of file
 def test_entity(file):
@@ -101,15 +130,30 @@ def test_language(language):
     return language == 'C++'
 
 
+# MISRA C++ 2008 2-10-6 covers only an object or a function sharing the name;
+# an enumerator is a constant, not an object, so AUTOSAR alone flags it.
+def define_options(check):
+    enumerators = check.id() != 'MISRA08_2-10-6'
+    check.options().checkbox(
+        'enumerators',
+        'Also flag enumerators that hide a type name',
+        enumerators)
+
+
 def check(check, file):
+    flag_enumerators = check.options().lookup('enumerators')
+
     def check_violation(ref):
         check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
 
-    for class_enum_ref in file.filerefs("Define, Declare", "Class ~Unnamed, Enum ~Unnamed"):
+    for class_enum_ref in file.filerefs("Define, Declare", "Class ~Unnamed, Struct ~Unnamed, Union ~Unnamed, Enum ~Unnamed"):
         for scope_ref in class_enum_ref.scope().refs("Define", "Object, Function, Enum"):
             if ((class_enum_ref.ent().id() != scope_ref.ent().id())
                     and (class_enum_ref.ent().name() == scope_ref.ent().name())):
                 check_violation(scope_ref)
+
+            if not flag_enumerators:
+                continue
 
             for enumerator_ref in scope_ref.ent().refs("Define", "Enumerator"):
                 if class_enum_ref.ent().name() == enumerator_ref.ent().name():

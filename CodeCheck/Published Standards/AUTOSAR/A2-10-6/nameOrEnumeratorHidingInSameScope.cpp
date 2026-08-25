@@ -26,7 +26,7 @@ namespace NS3
     };
     enum H //does not hide NS2::H, but non-compliant to A7-2-3
     {
-        J = 0, /// UndCC_Violation, hides class J
+        J = 0, /// UndCC_Violation(enums), hides class J
     };
 }
 
