@@ -1,0 +1,175 @@
+ERR1 = "Provide a handler for others at the end of this Finalize/Adjust procedure so no exception can propagate out"
+
+
+def ids():
+    return ("ADA95_5.9.8",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.8": "Published Standards/Ada 95/5.9.8 Exception Propagation",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.8": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Exception Handling",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.8": """
+<p><b>Guideline</b></p>
+<p>Prevent exceptions from propagating outside any user-defined Finalize
+or Adjust procedure by providing handlers for all predefined and
+user-defined exceptions at the end of each procedure.</p>
+
+<p><b>Rationale</b></p>
+<p>Using Finalize or Adjust to propagate an exception results in a
+bounded error (Ada Reference Manual 1995, &sect;7.6.1). Either the
+exception will be ignored or a Program_Error exception will be raised.</p>
+
+<p><b>Developer's Note</b></p>
+<p>A <code>Finalize</code> or <code>Adjust</code> procedure is identified by overriding
+<code>Ada.Finalization.Finalize</code>/<code>Adjust</code> (walking the override chain through
+any number of derivation levels, since a derived type's own override
+points only to its immediate parent's, not the root). It must have a
+<code>when others</code> handler that belongs to its own top-level exception part
+&#8212; one on a nested block only protects that block, not the rest of the
+procedure, and is not accepted &#8212; and that handler's own body must not
+itself contain a <code>raise</code> statement, bare or named, since either still
+lets an exception escape and defeats the guideline's purpose.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_CONTROLLED_CALLBACKS = ("Ada.Finalization.Finalize",
+                         "Ada.Finalization.Adjust")
+_NON_SCOPE_ENDS = ("if", "loop", "case", "record", "select", "return")
+
+
+def _overrides_controlled_callback(fn_ent, seen_ids=None):
+    # For multi-level type derivation, "Overrides" only points to the
+    # immediate parent's own override (e.g. Derived.Finalize overrides
+    # Base.Finalize, not Ada.Finalization.Finalize directly) — walk the
+    # chain until it bottoms out at the root callback or is exhausted.
+    if seen_ids is None:
+        seen_ids = set()
+
+    if fn_ent.id() in seen_ids:
+        return False
+
+    seen_ids.add(fn_ent.id())
+
+    for override_ref in fn_ent.refs("Overrides"):
+        overridden_ent = override_ref.ent()
+
+        if str(overridden_ent.longname()) in _CONTROLLED_CALLBACKS:
+            return True
+
+        if _overrides_controlled_callback(overridden_ent, seen_ids):
+            return True
+
+    return False
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _scope_depth_at_line(lexer, start_line, target_line):
+    # "begin" opens a new exception-handling scope (subprogram body or
+    # nested block); a bare/named "end" closes one. "end if/loop/case/
+    # record/select/return" close a different kind of construct, one
+    # that was never opened by a "begin", so they must not be counted.
+    lex = lexer.lexeme(start_line, 1)
+    depth = 0
+
+    while lex and lex.line_begin() < target_line:
+        if lex.token() == "Keyword":
+            text = lex.text().lower()
+
+            if text == "begin":
+                depth += 1
+            elif text == "end":
+                next_lex = _next_significant(lex)
+
+                if not (
+                    next_lex
+                    and next_lex.token() == "Keyword"
+                    and next_lex.text().lower() in _NON_SCOPE_ENDS
+                ):
+                    depth -= 1
+
+        lex = lex.next()
+
+    return depth
+
+
+def _handler_body_has_raise(lexer, handle_line, fn_end_line):
+    # A top-level "others" handler is always the last construct before
+    # the subprogram's own "end" (Ada requires "others" to be the last
+    # handler in its block), so its own body runs from its own line
+    # straight to the subprogram's end — no need to locate a "next
+    # handler" boundary the way a non-final handler would require.
+    lex = lexer.lexeme(handle_line, 1)
+
+    while lex and lex.line_begin() <= fn_end_line:
+        if lex.token() == "Keyword" and lex.text().lower() == "raise":
+            return True
+
+        lex = lex.next()
+
+    return False
+
+
+def _fn_end_line(fn, file):
+    end_refs = [r for r in fn.refs("End") if r.file().id() == file.id()]
+
+    return max(r.line() for r in end_refs) if end_refs else None
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for body_ref in file.filerefs("Declare Body", "Function, Procedure"):
+        fn = body_ref.ent()
+
+        if not _overrides_controlled_callback(fn):
+            continue
+
+        handles = [
+            h for h in fn.refs("Handle") if h.file().id() == file.id()
+        ]
+        others_handles = [
+            h for h in handles if h.ent().name().lower() == "others"
+        ]
+
+        fn_end_line = _fn_end_line(fn, file)
+
+        top_level_others = fn_end_line is not None and any(
+            _scope_depth_at_line(lexer, body_ref.line(), h.line()) == 1
+            and not _handler_body_has_raise(lexer, h.line(), fn_end_line)
+            for h in others_handles
+        )
+
+        if not top_level_others:
+            check.violation(fn, file, body_ref.line(), body_ref.column(), ERR1)
