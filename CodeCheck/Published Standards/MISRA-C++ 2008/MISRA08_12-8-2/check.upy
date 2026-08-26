@@ -1,0 +1,154 @@
+ERR1 = 'Copy assignment operator is public in abstract class "%1"'
+
+
+def ids():
+    return ('MISRA08_12-8-2', 'CPP_AO001')
+
+
+def name(id):
+    return {
+        'MISRA08_12-8-2': '''Published Standards/MISRA-C++ 2008/\
+12-8-2 The copy assignment operator shall be declared protected or private in \
+an abstract class''',
+        'CPP_AO001': '''All Checks/Language Specific/C and C++/Assignment Operators/\
+The copy assignment operator shall be declared protected or private in an \
+abstract class''',
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_12-8-2': [
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Required',
+            'Assignment Operators',
+        ],
+        'CPP_AO001': [
+            'Language: C++',
+            'Assignment Operators',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return '''\
+<p><b>Rule</b></p>
+<p>The copy assignment operator shall be declared protected or private in an
+abstract class.</p>
+
+<p><b>Rationale</b></p>
+<p>An abstract class represents the interface part of a hierarchy. Invoking the
+copy constructor from the top of such a hierarchy bypasses the underlying
+implementation resulting in only the base sub-objects being copied.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">class B1
+{
+public:
+  B1 ( );
+  virtual void f( ) = 0;
+  B1 &amp; operator= ( B1 const &amp; rhs );   // Non-compliant
+  int32_t getKind ( ) const { return kind; }
+private:
+  int32_t kind;
+};
+</code></pre>
+<p>As the assignment operator is public, a function taking B1 references can
+call the operator and so copies only the base sub-objects. Making the abstract
+copy assignment operator protected allows access from the derived classes but
+not from outside the hierarchy.</p>
+<pre><code language="C++">class B2
+{
+public:
+  B2 ( );
+  virtual void f ( ) = 0;
+  int32_t getKind ( ) const { return kind; }
+protected:
+  B2 &amp; operator= ( B2 const &amp; rhs );  // Compliant
+private:
+  int32_t kind;
+};
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>A copy assignment operator explicitly defined as <code>= delete</code> is not
+reported: it cannot be invoked, so it meets the intent of the rule. This also
+matches AUTOSAR A12-8-6 and HIC++ 12.5.8.</p>
+<p>Compiler-generated copy assignment operators are not reported.</p>
+'''
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    reported = set()
+
+    for class_ref in file.filerefs('Define', 'Abstract Class ~Unnamed, Abstract Struct ~Unnamed'):
+        cls = class_ref.ent()
+
+        # Declarations first, so an operator declared in this file and defined
+        # elsewhere is reported at its declaration
+        func_refs = (list(cls.refs('Declare ~Implicit ~Delete', 'Function')) +
+                     list(cls.refs('Define ~Implicit ~Delete', 'Function')))
+
+        for func_ref in func_refs:
+            ent = func_ref.ent()
+            if ent.name() != 'operator=':
+                continue
+            # An out-of-line definition lives in another file
+            if func_ref.file() != file:
+                continue
+            if ent.id() in reported:
+                continue
+            if not is_copy_assignment(ent, cls):
+                continue
+            if 'Public' not in ent.kind().longname():
+                continue
+
+            reported.add(ent.id())
+            check.violation(ent, file, func_ref.line(), func_ref.column(),
+                            ERR1, cls.name())
+
+
+def underlying_type(ent):
+    """Follow typedef and using-alias chains to the type they name."""
+    seen = set()
+    while ent and ent.kind().check('Typedef, Alias') and ent.id() not in seen:
+        seen.add(ent.id())
+        typed = ent.ref('Typed')
+        if not typed:
+            break
+        ent = typed.ent()
+    return ent
+
+
+def is_copy_assignment(ent, cls):
+    """[class.copy.assign]: one parameter of type X, X&, const X& or
+    volatile X& - never an rvalue reference."""
+    # A declaration and its definition each contribute a parameter ref
+    params = ent.ents('Define, Declare', 'Parameter')
+    if len(params) != 1:
+        return False
+
+    param = params[0]
+
+    # Entity identity cannot tell PP& from PP const * - a pointer resolves to
+    # its pointee - so reject declarator shapes that are not a plain reference:
+    # rvalue references (move assignment), pointers and arrays
+    text = str(param.type() or '')
+    if '&&' in text or '*' in text or '[' in text:
+        return False
+
+    typed = param.ref('Typed')
+    if not typed:
+        return False
+
+    resolved = underlying_type(typed.ent())
+    return bool(resolved) and resolved.id() == cls.id()
