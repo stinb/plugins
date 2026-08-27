@@ -1,0 +1,227 @@
+ERR1 = "Do not invoke a potentially blocking operation within a protected entry, procedure, or function"
+
+
+def ids():
+    return ("ADA95_5.9.9",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.9": "Published Standards/Ada 95/5.9.9 Protected Objects",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.9": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Programming Practices",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.9": """
+<p><b>Guideline</b></p>
+<p>Do not invoke a potentially blocking operation within a protected
+entry, a protected procedure, or a protected function.</p>
+
+<p><b>Rationale</b></p>
+<p>The Ada Reference Manual (1995, &sect;9.5.1) lists the potentially
+blocking operations:</p>
+<ul>
+<li>Select statement</li>
+<li>Accept statement</li>
+<li>Entry-call statement</li>
+<li>Delay statement</li>
+<li>Abort statement</li>
+<li>Task creation or activation</li>
+<li>External call on a protected subprogram (or an external requeue)
+with the same target object as that of the protected action</li>
+<li>Call on a subprogram whose body contains a potentially blocking
+operation</li>
+</ul>
+<p>Invoking any of these potentially blocking operations could lead
+either to a bounded error being detected or to a deadlock situation. In
+the case of bounded error, the exception Program_Error is raised. In
+addition, avoid calling routines within a protected entry, procedure, or
+function that could directly or indirectly invoke operating system
+primitives or similar operations that can cause blocking that is not
+visible to the Ada run-time system.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Five of the eight potentially blocking operations are automated
+directly: select, delay, and abort statements (detected as bare
+statement-starting keywords via the lexer, since none of these produce
+any entity reference at all); an entry-call statement (a <code>Call</code> ref to
+an <code>Entry</code>); and a local task declaration. The eighth &#8212; a call on a
+subprogram whose body itself contains one of these &#8212; is automated by
+walking the call graph from each protected operation (bounded against
+cycles, so mutual or self-recursion terminates cleanly rather than
+matching every reachable subprogram in the same file; a call to a
+subprogram whose body is not in the current file cannot be traced and is
+not followed).</p>
+<p>The accept statement is not automated: an accept statement cannot
+legally appear inside a protected operation in real Ada (only within an
+immediately enclosing task body), and Understand's own parser does not
+model it reliably in that illegal position &#8212; in testing it produced a
+spurious local entry declaration rather than any usable reference, so
+there is no reliable signal to detect it by.</p>
+<p>"External call on a protected subprogram (or an external requeue)
+with the same target object as that of the protected action" is not
+automated: determining that a call target is the very same protected
+object instance currently executing requires tracking object aliasing
+(a formal parameter, a renaming, a dereferenced access value all
+denoting "self"), which is beyond what this check's structural signals
+can resolve. Likewise, "avoid... operations that can cause blocking that
+is not visible to the Ada run-time system" is a call to auditor judgment
+about routines this check cannot see into (opaque library or
+system calls), not a structural pattern.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_BLOCKING_KEYWORDS = ("delay", "abort", "select", "accept")
+
+
+def _body_line_range(body_ref):
+    fn_ent = body_ref.ent()
+    end_refs = fn_ent.refs("End")
+
+    if not end_refs:
+        return None
+
+    return (body_ref.line(), max(r.line() for r in end_refs))
+
+
+def _is_statement_start(lex):
+    prev = lex.previous(True, True)
+
+    return prev is None or prev.text() in (";", "then", "else", "loop", "begin", "do")
+
+
+def _has_blocking_keyword(lexer, line_range):
+    start_line, end_line = line_range
+    lex = lexer.lexeme(start_line, 1)
+
+    while lex and lex.line_begin() <= end_line:
+        if lex.token() == "Keyword" and lex.text().lower() in _BLOCKING_KEYWORDS:
+            if _is_statement_start(lex):
+                return True
+
+        lex = lex.next()
+
+    return False
+
+
+def _has_entry_call(file, line_range):
+    start_line, end_line = line_range
+
+    for call_ref in file.filerefs("Call", "Entry"):
+        if start_line <= call_ref.line() <= end_line:
+            return True
+
+    return False
+
+
+def _has_task_declaration(file, line_range):
+    start_line, end_line = line_range
+
+    for decl_ref in file.filerefs("Declare", "Task"):
+        if start_line <= decl_ref.line() <= end_line:
+            return True
+
+    return False
+
+
+def _has_direct_blocking_operation(file, lexer, line_range):
+    return (
+        _has_blocking_keyword(lexer, line_range)
+        or _has_entry_call(file, line_range)
+        or _has_task_declaration(file, line_range)
+    )
+
+
+def _calls_in_range(file, line_range):
+    start_line, end_line = line_range
+    called = []
+
+    for call_ref in file.filerefs("Call", "Function, Procedure"):
+        if start_line <= call_ref.line() <= end_line:
+            called.append(call_ref.ent())
+
+    return called
+
+
+def _body_ranges_by_id(file):
+    # entity.refs("Declare Body") gives refs FROM that entity's own body
+    # (its local declarations), not a reverse-pointer to itself — the
+    # body's own declaration location can only be found from the file's
+    # own perspective.
+    ranges = {}
+
+    for body_ref in file.filerefs("Declare Body", "Function, Procedure"):
+        line_range = _body_line_range(body_ref)
+
+        if line_range:
+            ranges[body_ref.ent().id()] = line_range
+
+    return ranges
+
+
+def _reaches_blocking_operation(file, lexer, line_range, body_ranges, seen_ids):
+    if _has_direct_blocking_operation(file, lexer, line_range):
+        return True
+
+    for called_ent in _calls_in_range(file, line_range):
+        if called_ent.id() in seen_ids:
+            continue
+
+        seen_ids.add(called_ent.id())
+
+        called_range = body_ranges.get(called_ent.id())
+
+        if called_range and _reaches_blocking_operation(
+            file, lexer, called_range, body_ranges, seen_ids
+        ):
+            return True
+
+    return False
+
+
+def _is_protected_operation(body_ref):
+    fn_ent = body_ref.ent()
+    parent = fn_ent.parent()
+
+    return parent is not None and parent.kind().check("Protected")
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    body_ranges = _body_ranges_by_id(file)
+
+    for body_ref in file.filerefs("Declare Body", "Entry, Procedure, Function"):
+        if not _is_protected_operation(body_ref):
+            continue
+
+        line_range = _body_line_range(body_ref)
+
+        if line_range is None:
+            continue
+
+        seen_ids = {body_ref.ent().id()}
+
+        if _reaches_blocking_operation(file, lexer, line_range, body_ranges, seen_ids):
+            check.violation(
+                body_ref.ent(), file, body_ref.line(), body_ref.column(), ERR1
+            )
