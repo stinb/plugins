@@ -1,0 +1,188 @@
+ERR1 = "Do not use an asynchronous select statement within an abort-deferred operation"
+ERR2 = "Do not create a task whose master is entirely within an abort-deferred operation"
+
+
+def ids():
+    return ("ADA95_5.9.10",)
+
+
+def name(id):
+    return {
+        "ADA95_5.9.10": "Published Standards/Ada 95/5.9.10 Abort Statement",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_5.9.10": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Programming Practices",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_5.9.10": """
+<p><b>Guideline</b></p>
+<p>&#8226; Do not use an asynchronous select statement within abort-deferred
+operations.</p>
+<p>&#8226; Do not create a task that depends on a master that is included
+entirely within the execution of an abort-deferred operation.</p>
+
+<p><b>Rationale</b></p>
+<p>An abort-deferred operation is one of the following:</p>
+<ul>
+<li>Protected entry, protected procedure, or protected function</li>
+<li>User-defined Initialize procedure used as the last step of a default
+initialization of a controlled object</li>
+<li>User-defined Finalize procedure used in finalization of a
+controlled object</li>
+<li>User-defined Adjust procedure used in assignment of a controlled
+object</li>
+</ul>
+<p>The Ada Reference Manual (1995, &sect;9.8) states that the practices
+discouraged in the guidelines result in bounded error. The exception
+Program_Error is raised if the implementation detects the error. If the
+implementation does not detect the error, the operations proceed as they
+would outside an abort-deferred operation. An abort statement itself
+may have no effect.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Both bullets are automated. An abort-deferred operation is identified
+the same way <code>ADA95_5.9.9</code> identifies a protected entry/procedure/
+function, and the same way <code>ADA95_5.9.8</code> identifies a <code>Finalize</code>/
+<code>Adjust</code> override (walking the override chain through any number of
+derivation levels), extended here to also recognize <code>Initialize</code>, since
+this guideline &#8212; unlike 5.9.8 &#8212; names it as abort-deferred too.</p>
+<p>An asynchronous select statement is detected by the keyword pair
+<code>then</code> immediately followed by <code>abort</code>: Ada's grammar produces that
+exact adjacent pair nowhere else (a <code>requeue ... with abort;</code> pairs
+<code>with</code> and <code>abort</code>, never <code>then</code>, so it is not mistaken for one), so no
+select/end-select nesting needs to be tracked to find it. A task
+creation is detected the same way <code>ADA95_5.9.9</code> detects one: a task
+object declared directly within the operation's own declarative part,
+whose master is therefore that operation itself by Ada's own scoping
+rules.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_CONTROLLED_CALLBACKS = (
+    "Ada.Finalization.Initialize",
+    "Ada.Finalization.Finalize",
+    "Ada.Finalization.Adjust",
+)
+
+
+def _overrides_controlled_callback(fn_ent, seen_ids=None):
+    # For multi-level type derivation, "Overrides" only points to the
+    # immediate parent's own override, not the root — walk the chain
+    # until it bottoms out at one of the root callbacks or is exhausted.
+    if seen_ids is None:
+        seen_ids = set()
+
+    if fn_ent.id() in seen_ids:
+        return False
+
+    seen_ids.add(fn_ent.id())
+
+    for override_ref in fn_ent.refs("Overrides"):
+        overridden_ent = override_ref.ent()
+
+        if str(overridden_ent.longname()) in _CONTROLLED_CALLBACKS:
+            return True
+
+        if _overrides_controlled_callback(overridden_ent, seen_ids):
+            return True
+
+    return False
+
+
+def _is_protected_operation(fn_ent):
+    parent = fn_ent.parent()
+
+    return parent is not None and parent.kind().check("Protected")
+
+
+def _is_abort_deferred_operation(fn_ent):
+    return _overrides_controlled_callback(fn_ent) or _is_protected_operation(fn_ent)
+
+
+def _body_line_range(body_ref):
+    fn_ent = body_ref.ent()
+    end_refs = fn_ent.refs("End")
+
+    if not end_refs:
+        return None
+
+    return (body_ref.line(), max(r.line() for r in end_refs))
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _has_asynchronous_select(lexer, line_range):
+    # "then" immediately followed by "abort" is a unique, unambiguous
+    # marker: Ada's grammar never produces that keyword pair anywhere
+    # except the asynchronous form of a select statement, so no
+    # select/end-select nesting needs to be tracked to find it.
+    start_line, end_line = line_range
+    lex = lexer.lexeme(start_line, 1)
+
+    while lex and lex.line_begin() <= end_line:
+        if lex.token() == "Keyword" and lex.text().lower() == "then":
+            next_lex = _next_significant(lex)
+
+            if next_lex and next_lex.token() == "Keyword" and next_lex.text().lower() == "abort":
+                return True
+
+        lex = lex.next()
+
+    return False
+
+
+def _has_task_declaration(file, line_range):
+    start_line, end_line = line_range
+
+    for decl_ref in file.filerefs("Declare", "Task"):
+        if start_line <= decl_ref.line() <= end_line:
+            return True
+
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for body_ref in file.filerefs("Declare Body", "Entry, Procedure, Function"):
+        fn = body_ref.ent()
+
+        if not _is_abort_deferred_operation(fn):
+            continue
+
+        line_range = _body_line_range(body_ref)
+
+        if line_range is None:
+            continue
+
+        if _has_asynchronous_select(lexer, line_range):
+            check.violation(fn, file, body_ref.line(), body_ref.column(), ERR1)
+
+        if _has_task_declaration(file, line_range):
+            check.violation(fn, file, body_ref.line(), body_ref.column(), ERR2)
