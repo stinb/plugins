@@ -1,0 +1,125 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+
+ERR1 = 'Use of the #pragma directive is not documented'
+
+
+# The ID for the check
+def ids():
+    return ('MISRA08_16-6-1', 'CPP_PR048')
+
+
+# The short name of the check
+def name(id):
+    return {
+        'MISRA08_16-6-1': 'Published Standards/MISRA-C++ 2008/' + """\
+16-6-1 All uses of the #pragma directive shall be documented""",
+        'CPP_PR048': 'All Checks/Language Specific/C and C++/Preprocessor/' + """\
+Pragma Directive Usage not Documented""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA08_16-6-1': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C++ 2008',
+            'Category: Document',
+            'Preprocessor',
+        ],
+        'CPP_PR048': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+
+def detailed_description():
+    return """
+<p><b>Rule</b></p>
+<p>All uses of the #pragma directive shall be documented.</p>
+<p><b>Rationale</b></p>
+<p>The #pragma directive is implementation-defined, hence it is important to
+demonstrate that all uses are correct.</p>
+<p>This rule places a requirement on the user of this document to produce a list
+of any pragmas they choose to use in an application. The meaning of each pragma
+shall be documented. There shall be sufficient supporting description to
+demonstrate that the behaviour of the pragma and its implications for the
+application, have been fully understood.</p>
+<p>A directive is treated as documented when a comment appears on the same line,
+or on the line directly above it and starting that line. The _Pragma operator is
+not reported: the rule is about the #pragma directive, and _Pragma is not part of
+the C++03 language this standard is written against.</p>
+"""
+
+
+# Tests the type of file
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+def check(check, file):
+    # Inactive code is included: a pragma is commonly guarded by a compiler
+    # specific #if, and the rule is about its use in the source.
+    lexer = file.lexer(lookup_ents=False, show_inactive=True, expand_macros=False)
+
+    if not lexer:
+        return
+
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() != '#' or lex.token() != 'Preprocessor':
+            lex = lex.next(ignore_whitespace=True)
+            continue
+
+        directive = lex.next(ignore_whitespace=True, ignore_comments=True)
+        if not directive or directive.text() != 'pragma':
+            lex = lex.next(ignore_whitespace=True)
+            continue
+
+        pragma_lex = lex
+        line = lex.line_begin()
+        has_comment = False
+
+        # A comment ending on the line directly above the directive
+        prev_lex = lex
+        while prev_lex and prev_lex.line_begin() == line:
+            prev_lex = prev_lex.previous(ignore_whitespace=True)
+
+        if (prev_lex and prev_lex.token() == 'Comment'
+                and prev_lex.line_end() == line - 1
+                and begins_line(prev_lex)):
+            has_comment = documents(prev_lex)
+
+        # A comment on the same line as the directive
+        while lex and lex.line_begin() == line:
+            if lex.token() == 'Comment' and documents(lex):
+                has_comment = True
+            lex = lex.next()
+
+        if not has_comment:
+            check.violation(None, file, pragma_lex.line_begin(),
+                            pragma_lex.column_begin(), ERR1)
+
+
+# A comment that trails the code above documents that code, not the directive
+def begins_line(lex):
+    before = lex.previous(ignore_whitespace=True)
+    return not before or before.line_end() < lex.line_begin()
+
+
+# A test annotation is not documentation
+def documents(lex):
+    text = lex.text().lower()
+    return 'undcc_violation' not in text and 'undcc_valid' not in text
