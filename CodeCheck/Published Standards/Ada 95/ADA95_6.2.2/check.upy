@@ -1,0 +1,301 @@
+ERR1 = "Provide a handler for Program_Error since every alternative of this selective accept can become closed"
+
+
+def ids():
+    return ("ADA95_6.2.2",)
+
+
+def name(id):
+    return {
+        "ADA95_6.2.2": "Published Standards/Ada 95/6.2.2 Defensive Task Communication",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.2.2": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.2.2": """
+<p><b>Guideline</b></p>
+<p>&#8226; Provide a handler for exception Program_Error whenever you cannot
+avoid a selective accept statement whose alternatives can all be closed
+(Honeywell 1986).</p>
+<p>&#8226; Make systematic use of handlers for Tasking_Error.</p>
+<p>&#8226; Be prepared to handle exceptions during a rendezvous.</p>
+<p>&#8226; Consider using a when others exception handler.</p>
+
+<p><b>Example</b></p>
+<p>This block allows recovery from exceptions raised while attempting to
+communicate a command to another task:</p>
+<pre><code language="Ada">Accelerate:
+   begin
+      Throttle.Increase(Step);
+    exception
+       when Tasking_Error     =>          ...
+       when Constraint_Error =>           ...
+       when Throttle_Too_Wide =>          ...
+       ...
+    end Accelerate;
+</code></pre>
+<p>In this select statement, if all the guards happen to be closed, the
+program can continue by executing the else part. There is no need for a
+handler for Program_Error. Other exceptions can still be raised while
+evaluating the guards or attempting to communicate. You will also need to
+include an exception handler in the task Throttle so that it can continue
+to execute after an exception is raised during the rendezvous:</p>
+<pre><code language="Ada">...
+Guarded:
+    begin
+       select
+          when Condition_1 =>
+              accept Entry_1;
+       or
+            when Condition_2 =>
+               accept Entry_2;
+       else -- all alternatives closed
+          ...
+       end select;
+    exception
+       when Constraint_Error =>
+          ...
+    end Guarded;
+</code></pre>
+<p>In this select statement, if all the guards happen to be closed, exception
+Program_Error will be raised. Other exceptions can still be raised while
+evaluating the guards or attempting to communicate:</p>
+<pre><code language="Ada">Guarded:
+   begin
+      select
+         when Condition_1 =>
+             accept Entry_1;
+         or
+            when Condition_2 =>
+               delay Fraction_Of_A_Second;
+         end select;
+      exception
+         when Program_Error       =>   ...
+         when Constraint_Error    =>   ...
+      end Guarded;
+...
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>The exception Program_Error is raised if a selective accept statement
+(select statement containing accepts) is reached, all of whose
+alternatives are closed (i.e., the guards evaluate to False and there are
+no alternatives without guards), unless there is an else part. When all
+alternatives are closed, the task can never again progress, so there is
+by definition an error in its programming. You must be prepared to handle
+this error should it occur.</p>
+<p>Because an else part cannot have a guard, it can never be closed off as
+an alternative action; thus, its presence prevents Program_Error. However,
+an else part, a delay alternative, and a terminate alternative are all
+mutually exclusive, so you will not always be able to provide an else
+part. In these cases, you must be prepared to handle Program_Error.</p>
+<p>The exception Tasking_Error can be raised in the calling task whenever
+it attempts to communicate. There are many situations permitting this.
+Few of them are preventable by the calling task.</p>
+<p>If an exception is raised during a rendezvous and not handled in the
+accept statement, it is propagated to both tasks and must be handled in
+two places (see Guideline 5.8).</p>
+<p>The handling of the others exception can be used to avoid propagating
+unexpected exceptions to callers (when this is the desired effect) and to
+localize the logic for dealing with unexpected exceptions in the
+rendezvous. After handling, an unknown exception should normally be
+raised again because the final decision of how to deal with it might need
+to be made at the outermost scope of the task body.</p>
+
+<p><b>Notes</b></p>
+<p>There are other ways to prevent Program_Error at a selective accept.
+These involve leaving at least one alternative unguarded or proving that
+at least one guard will evaluate True under all circumstances. The point
+here is that you or your successors will make mistakes in trying to do
+this, so you should prepare to handle the inevitable exception.</p>
+
+<p><b>Developer's Note</b></p>
+<p>The first bullet is automated. A selective accept statement is
+identified structurally: it must contain at least one <code>accept</code>
+alternative (distinguishing it from a timed or conditional entry call,
+whose first alternative is instead an entry-call statement, and from an
+asynchronous select, marked by <code>then abort</code>). If that statement has no
+<code>else</code> part and every one of its alternatives carries a <code>when</code> guard
+(no unguarded <code>accept</code>, <code>delay</code>, or <code>terminate</code> to fall back on), it can
+raise <code>Program_Error</code>, and the enclosing task is checked for a handler
+for <code>Program_Error</code> or <code>others</code> anywhere in its own body &#8212; matching the
+same task-wide (not block-scoped) approach already used by
+<code>ADA95_5.9.8</code> for Finalize/Adjust handlers, since Understand reports a
+task's own exception handlers as a flat set regardless of which nested
+block declares them. This means a handler present anywhere in the task,
+even one that would not actually intercept this particular exception
+before it propagates past a different nested block, is accepted as
+satisfying the guideline; distinguishing that would require modeling
+exception propagation through nested block scopes, which this check does
+not attempt.</p>
+<p>The remaining three bullets are not automated. "Make systematic use of
+handlers for Tasking_Error" and "be prepared to handle exceptions during
+a rendezvous" have no violation shape: Ada allows an exception raised at
+any point to be legitimately handled by any enclosing scope up to the
+task body itself, so the absence of a handler at any specific call site
+or accept statement is not itself evidence of a defect. "Consider using a
+when others exception handler" is a design-choice recommendation with no
+corresponding violation.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_OPENER_KEYWORDS = ("if", "case", "loop", "select", "begin", "do")
+_ALTERNATIVE_KEYWORDS = ("accept", "delay", "terminate")
+_HANDLED_EXCEPTION_NAMES = ("program_error", "others")
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _is_statement_start(lex):
+    prev = lex.previous(True, True)
+
+    return prev is None or prev.text() in (";", "then", "else", "loop", "begin", "do")
+
+
+def _scan_alternative(lex):
+    # A guard is skipped by scanning to its alternative keyword directly,
+    # rather than hunting for its own "=>", since none of accept/delay/
+    # terminate can appear as an identifier inside a guard's expression.
+    guarded = False
+
+    if lex and lex.token() == "Keyword" and lex.text().lower() == "when":
+        guarded = True
+        lex = _next_significant(lex)
+
+        while lex and lex.text().lower() not in _ALTERNATIVE_KEYWORDS:
+            lex = _next_significant(lex)
+
+    alt_kind = lex.text().lower() if lex else None
+
+    return alt_kind, guarded, _next_significant(lex) if lex else None
+
+
+def _scan_select_alternatives(lex):
+    # lex is positioned right after the statement's own "select" keyword.
+    # A single depth counter is enough to skip nested if/case/loop/select/
+    # begin/do constructs: Ada requires each to be properly nested and
+    # closed by exactly one "end", so counting openers and "end" tokens
+    # (without checking which closes which) safely finds this select's
+    # own top-level "or"/"else"/"end select" among any of its own.
+    alt_kind, guarded, lex = _scan_alternative(lex)
+    alternatives = [(alt_kind, guarded)]
+    has_else = False
+    depth = 0
+
+    while lex:
+        text = lex.text().lower() if lex.token() == "Keyword" else None
+
+        if text in _OPENER_KEYWORDS:
+            depth += 1
+            lex = _next_significant(lex)
+            continue
+
+        if text == "end":
+            if depth == 0:
+                return alternatives, has_else
+
+            depth -= 1
+            lex = _next_significant(lex)
+            continue
+
+        if depth == 0 and text == "or":
+            lex = _next_significant(lex)
+            alt_kind, guarded, lex = _scan_alternative(lex)
+            alternatives.append((alt_kind, guarded))
+            continue
+
+        if depth == 0 and text == "else":
+            has_else = True
+
+        lex = _next_significant(lex)
+
+    return alternatives, has_else
+
+
+def _find_select_statements(lexer, start_line, end_line):
+    results = []
+    lex = lexer.lexeme(start_line, 1)
+
+    while lex and lex.line_begin() <= end_line:
+        if (
+            lex.token() == "Keyword"
+            and lex.text().lower() == "select"
+            and _is_statement_start(lex)
+        ):
+            select_line, select_col = lex.line_begin(), lex.column_begin()
+            alternatives, has_else = _scan_select_alternatives(
+                _next_significant(lex))
+            results.append((select_line, select_col, alternatives, has_else))
+
+        lex = lex.next()
+
+    return results
+
+
+def _needs_program_error_handler(alternatives, has_else):
+    is_selective_accept = any(kind == "accept" for kind, _ in alternatives)
+    all_guarded = all(guarded for _, guarded in alternatives)
+
+    return is_selective_accept and not has_else and all_guarded
+
+
+def _task_ranges(file):
+    ranges = []
+
+    for decl_ref in file.filerefs("Declare Body", "Task"):
+        ent = decl_ref.ent()
+        end_ref = ent.ref("Endby")
+
+        if not end_ref:
+            continue
+
+        ranges.append((decl_ref.line(), end_ref.line(), ent))
+
+    return ranges
+
+
+def _task_handles_program_error(task_ent):
+    return any(
+        h.ent().name().lower() in _HANDLED_EXCEPTION_NAMES
+        for h in task_ent.refs("Handle")
+    )
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for start, end, ent in _task_ranges(file):
+        for select_line, select_col, alternatives, has_else in _find_select_statements(
+            lexer, start, end
+        ):
+            if _needs_program_error_handler(
+                alternatives, has_else
+            ) and not _task_handles_program_error(ent):
+                check.violation(ent, file, select_line, select_col, ERR1)
