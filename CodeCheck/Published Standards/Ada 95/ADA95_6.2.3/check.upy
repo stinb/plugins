@@ -1,0 +1,177 @@
+ERR1 = "Do not depend on the value of 'Callable or 'Terminated since the state this task tested may already have changed"
+ERR2 = "Do not depend on the value of 'Count for a task entry since it can change asynchronously"
+
+
+def ids():
+    return ("ADA95_6.2.3",)
+
+
+def name(id):
+    return {
+        "ADA95_6.2.3": "Published Standards/Ada 95/6.2.3 Attributes 'Count, 'Callable, and 'Terminated",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.2.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.2.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Do not depend on the values of the task attributes 'Callable or
+'Terminated (Nissen and Wallis 1984).</p>
+<p>&#8226; Do not depend on attributes to avoid Tasking_Error on an entry
+call.</p>
+<p>&#8226; For tasks, do not depend on the value of the entry attribute
+'Count.</p>
+<p>&#8226; Using the 'Count attribute with protected entries is more
+reliable than using the 'Count attribute with task entries.</p>
+
+<p><b>Example</b></p>
+<p>In the following examples, Dispatch'Callable is a Boolean expression,
+indicating whether a call can be made to the task Intercept without
+raising the exception Tasking_Error. Dispatch'Count indicates the number
+of callers currently waiting at entry Transmit. Dispatch'Terminated is a
+Boolean expression, indicating whether the task Dispatch is in a
+terminated state.</p>
+<p>This task is badly programmed because it relies upon the values of the
+'Count attributes not changing between evaluating and acting upon them:</p>
+<pre><code language="Ada">---------------------------------------------------------------------
+task body Dispatch is
+...
+    select
+       when Transmit'Count > 0 and Receive'Count = 0 =>
+           accept Transmit;
+           ...
+    or
+       accept Receive;
+       ...
+    end select;
+...
+end Dispatch;
+---------------------------------------------------------------------
+</code></pre>
+<p>If the following code is preempted between evaluating the condition
+and initiating the call, the assumption that the task is still callable
+might no longer be valid:</p>
+<pre><code language="Ada">...
+if Dispatch'Callable then
+    Dispatch.Receive;
+end if;
+...
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Attributes 'Callable, 'Terminated, and 'Count are all subject to race
+conditions. Between the time you reference an attribute and the time you
+take action, the value of the attribute might change. Attributes
+'Callable and 'Terminated convey reliable information once they become
+False and True, respectively. If 'Callable is False, you can expect the
+callable state to remain constant. If 'Terminated is True, you can expect
+the task to remain terminated. Otherwise, 'Terminated and 'Callable can
+change between the time your code tests them and the time it responds to
+the result.</p>
+<p>The Ada Reference Manual (1995, &sect;9.9) itself warns about the
+asynchronous increase and decrease of the value of 'Count. A task can be
+removed from an entry queue due to execution of an abort statement as
+well as expiration of a timed entry call. The use of this attribute in
+guards of a selective accept statement might result in the opening of
+alternatives that should not be opened under a changed value of 'Count.</p>
+<p>The value of the attribute 'Count is stable for protected units
+because any change to an entry queue is itself a protected action, which
+will not occur while any other protected action is already proceeding.
+Nevertheless, when you use 'Count within an entry barrier of a protected
+unit, you should remember that the condition of the barrier is evaluated
+both before and after queueing a given caller.</p>
+
+<p><b>Developer's Note</b></p>
+<p>All three bullets that name a specific attribute are automated by
+recognizing <code>'Callable</code>, <code>'Terminated</code>, and <code>'Count</code> at the lexer
+level, since Understand does not model an attribute as a reference to any
+declared entity &#8212; only the attribute's prefix (the task, task type, or
+entry it is applied to) resolves to one. Every use of <code>'Callable</code> or
+<code>'Terminated</code> is flagged; the Rationale notes that testing the settled
+direction of each (<code>'Callable</code> reading False, <code>'Terminated</code> reading
+True) is actually safe, but the two attributes have opposite safe
+polarities and that safety depends on how the boolean result is later
+used, which can take arbitrarily many syntactic forms (negation, an
+explicit comparison, a variable assigned now and tested elsewhere).
+Reliably distinguishing the safe direction was judged too fragile to
+attempt, so this check accepts over-flagging the settled/reliable case as
+a known trade-off, the same way <code>ADA95_5.9.5</code> flags every broadly scoped
+<code>pragma Suppress</code> even though the Rationale allows for legitimate
+operational exceptions it does not model.</p>
+<p><code>'Count</code> is flagged only when its prefix resolves to an entry
+whose parent is a task, not a protected object, matching the fourth
+bullet's explicit exception for protected entries. "Do not depend on
+attributes to avoid Tasking_Error on an entry call" is not separately
+automated: it names no attribute of its own, and is the same
+check-then-act hazard as the first bullet, already covered by the
+<code>'Callable</code>/<code>'Terminated</code> detection above.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_CALLABLE_OR_TERMINATED = ("callable", "terminated")
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=True)
+    lex = lexer.first()
+
+    while lex:
+        if lex.text() == "'":
+            attr_lex = _next_significant(lex)
+            attr_name = attr_lex.text().lower() if attr_lex else None
+
+            if attr_name in _CALLABLE_OR_TERMINATED or attr_name == "count":
+                prev = lex.previous(True, True)
+                prefix_ent = prev.ent() if prev else None
+
+                if prefix_ent is not None:
+                    if attr_name in _CALLABLE_OR_TERMINATED:
+                        check.violation(
+                            prefix_ent, file, lex.line_begin(), lex.column_begin(), ERR1
+                        )
+                    else:
+                        parent = prefix_ent.parent()
+
+                        if (
+                            prefix_ent.kind().check("Entry")
+                            and parent is not None
+                            and parent.kind().check("Task")
+                        ):
+                            check.violation(
+                                prefix_ent,
+                                file,
+                                lex.line_begin(),
+                                lex.column_begin(),
+                                ERR2,
+                            )
+
+        lex = lex.next()
