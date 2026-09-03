@@ -1,0 +1,125 @@
+# Deviation Risk Assessment
+#
+# Deviations viewed the way a functional-safety assessor reads them
+# (ISO 26262, IEC 61508, IEC 62304): every accepted deviation is a risk
+# somebody signed up to, so each one must say what the risk is -- and the
+# ones that do not say are the finding. Reads the same records as the
+# Deviation Register (und_lib.deviations).
+
+import und_lib.deviations as deviations
+
+
+def name():
+  return "Deviation Risk Assessment"
+
+
+def description():
+  return '''Every deviation with its recorded risk, and the ones missing
+    one listed first.
+
+    <p>Functional-safety standards (ISO 26262, IEC 61508, IEC 62304)
+    require that a deviation from the coding guidelines documents its risk:
+    what could go wrong because this code stays as it is. This report
+    splits the inspection's deviations into the ones whose record carries a
+    <b>Risk Assessment</b> and the ones whose record does not -- the second
+    group is the assessor's work list, so it comes first.</p>
+
+    <p>The records are the ones suppressions already carry (see the
+    <a href="und://plugins/IReport/Deviation%20Register">Deviation
+    Register</a>).</p>
+    '''
+
+
+def tags():
+  return [
+    'Target: CodeCheck',
+    'Language: Any',
+  ]
+
+
+def is_enabled_by_default():
+  return True
+
+
+def test_inspection(inspection):
+  return True
+
+
+def init(report):
+  report.options().text("riskfield", "Risk field label", "Risk Assessment")
+
+
+def generate(report, inspection, page):
+  label = report.options().lookup("riskfield") or "Risk Assessment"
+  found = deviations.deviations(inspection)
+
+  report.heading(1)
+  report.print("Deviation Risk Assessment")
+  report.heading()
+
+  if not found:
+    report.print("No deviations recorded. Nothing in this inspection is "
+                 "suppressed, so no risk has been accepted.\n")
+    return
+
+  missing = [e for e in found if not e["fields"].get(label)]
+  assessed = [e for e in found if e["fields"].get(label)]
+
+  report.bold()
+  if missing:
+    report.fontcolor("#c62828")
+    report.print("{} of {} deviations carry no {}.\n".format(
+      len(missing), len(found), label.lower()))
+  else:
+    report.fontcolor("#2e7d32")
+    report.print("Every deviation records its risk.\n")
+  report.fontcolor()
+  report.nobold()
+  report.print("A deviation is a risk somebody accepted; the record has to "
+               "say what that risk is.\n\n")
+
+  def rows(entries, with_risk):
+    columns = ['{"name":"Check","filtertype":"string"}',
+               '{"name":"File","filtertype":"string"}',
+               '{"name":"Line","filtertype":"numeric"}',
+               '{"name":"Template","filtertype":"string"}',
+               '{"name":"Rationale","filtertype":"string"}']
+    if with_risk:
+      columns.append('{"name":"' + label.replace('"', "'") +
+                     '","filtertype":"string"}')
+    report.table("[" + ",".join(columns) + "]")
+    ordered = sorted(entries, key=lambda e: (e["violation"].file(),
+                                             e["violation"].line()))
+    for entry in ordered:
+      if report.is_aborted():
+        return
+      violation = entry["violation"]
+      report.tablecell()
+      report.print(violation.check_id())
+      report.tablecell()
+      report.print(violation.file().split("/")[-1].split("\\")[-1])
+      report.tablecell()
+      report.syncfile(violation.file(), violation.line(), violation.column())
+      report.print(str(violation.line()))
+      report.syncfile()
+      report.tablecell()
+      report.print(entry["template"])
+      report.tablecell()
+      report.print(entry["rationale"])
+      if with_risk:
+        report.tablecell()
+        report.print(entry["fields"].get(label, ""))
+    report.table()
+
+  if missing:
+    report.heading(2)
+    report.print("Missing a {}".format(label.lower()))
+    report.heading()
+    rows(missing, False)
+    report.print("\n")
+
+  if assessed:
+    report.heading(2)
+    report.print("Assessed")
+    report.heading()
+    rows(assessed, True)

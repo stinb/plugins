@@ -1,0 +1,92 @@
+# The shape of a project's deviation record, at a glance.
+
+import und_lib.deviations as deviations
+
+DOCUMENTED = "#569f38"   # green: defensible as it stands
+GAP = "#e45721"          # orange: a deviation missing part of its record
+OPEN = "#90c4e4"         # blue: a violation nobody deviated from
+
+
+def name():
+  return "Deviation Completeness"
+
+
+def description():
+  return '''Suppressed violations, split by how completely each one is
+    justified.
+
+    <p>A half donut over every violation in the inspection: the ones nobody
+    suppressed, the suppressions that carry a full deviation record, and the
+    suppressions that are missing part of theirs. The last slice is the work
+    list &mdash; those deviations cannot be defended in a review as they
+    stand.</p>
+
+    <p>A deviation counts as documented when it has a rationale and every
+    field its peers record, so the bar is the project's own practice rather
+    than a fixed list. The
+    <a href="und://plugins/InteractiveReport/Deviation%20Register">Deviation
+    Register</a> report names each one.</p>
+
+    <p>Note that graphs created from inspections are currently only accessible
+    from <a href="und://plugins?filter=%20Target%3A%22CodeCheck%22%20Kind%3A%22Interactive%20Report%22">
+    interactive reports</a>.</p>
+  '''
+
+
+def tags():
+  return [
+    'Target: CodeCheck',
+    'Language: Any',
+    'Layout: Half Donut',
+  ]
+
+
+def test_inspection(inspection):
+  return True
+
+
+def draw(graph, inspection):
+  graph.set("layout", "sunburst")
+  graph.set("r1", "72")
+  graph.set("sweep", "180")
+
+  found = deviations.deviations(inspection)
+  expected = deviations.expected_fields(found)
+  documented, incomplete = deviations.split(found, expected)
+
+  total = 0
+  suppressed = 0
+  for violation in inspection.violations():
+    total += 1
+    if violation.ignores():
+      suppressed += 1
+
+  # Slices in the order they are read: what is still open, what is deviated
+  # and defensible, what is deviated but not yet defensible. The first is
+  # counted over violations and the other two over suppressions, because one
+  # violation can be silenced by more than one ignore.
+  slices = [
+    ("Not deviated", total - suppressed, OPEN),
+    ("Deviation documented", len(documented), DOCUMENTED),
+    ("Deviation incomplete", len(incomplete), GAP),
+  ]
+  slices = [s for s in slices if s[1] > 0]
+  if not slices:
+    graph.node("No violations").set("shape", "none")
+    return
+
+  # The legend labels sit on the page, not on a filled swatch, so they keep
+  # the page's own text color -- setting one would put white on white.
+  legend = graph.cluster()
+  legend.set("legend", "top")
+  for label, count, color in slices:
+    entry = legend.node("{}: {}".format(label, count))
+    entry.set("color", color)
+    entry.set("fillcolor", color)
+
+  for label, count, color in slices:
+    wedge = graph.node()
+    wedge.set("area", str(count))
+    wedge.set("tooltip", "{}: {} of {}".format(label, count, total))
+    wedge.set("color", color)
+    wedge.set("fillcolor", color)

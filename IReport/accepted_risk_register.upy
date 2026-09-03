@@ -1,0 +1,135 @@
+# Accepted Risk Register
+#
+# The security auditor's log: every finding somebody chose to live with,
+# with its severity, its CWE, and who decided. Built from the same
+# suppression records the Deviation Register reads (und_lib.deviations);
+# the security-review shape (Severity / Status / CWE) comes from the
+# annotation template the ignore was written with.
+
+import und_lib.deviations as deviations
+
+# Highest first, unrecognized severities after, blank last.
+SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Informational"]
+
+
+def name():
+  return "Accepted Risk Register"
+
+
+def description():
+  return '''Every suppressed finding that carries a security disposition,
+    worst first.
+
+    <p>Security audits ask for a risk-acceptance log: which findings were
+    silenced on purpose, how severe each one is, what weakness class it
+    falls under, and whether the disposition was <i>Accepted</i>, a
+    <i>False Positive</i>, or something still open. This report lists every
+    suppression whose record carries a <b>Severity</b>, <b>Status</b> or
+    <b>CWE</b> field, ordered by severity, worst first. Suppressions with
+    no security disposition at all are counted so the log cannot silently
+    understate what was silenced.</p>
+
+    <p>The records are the ones suppressions already carry (see the
+    <a href="und://plugins/IReport/Deviation%20Register">Deviation
+    Register</a>).</p>
+    '''
+
+
+def tags():
+  return [
+    'Target: CodeCheck',
+    'Language: Any',
+  ]
+
+
+def is_enabled_by_default():
+  return True
+
+
+def test_inspection(inspection):
+  return True
+
+
+def generate(report, inspection, page):
+  found = deviations.deviations(inspection)
+
+  report.heading(1)
+  report.print("Accepted Risk Register")
+  report.heading()
+
+  if not found:
+    report.print("No suppressions in this inspection: no risk has been "
+                 "accepted.\n")
+    return
+
+  def is_security(entry):
+    fields = entry["fields"]
+    return bool(fields.get("Severity") or fields.get("Status") or
+                fields.get("CWE"))
+
+  security = [e for e in found if is_security(e)]
+  other = len(found) - len(security)
+
+  report.bold()
+  report.print("{} suppressed finding{} carry a security disposition.\n"
+               .format(len(security), "" if len(security) == 1 else "s"))
+  report.nobold()
+  if other:
+    report.print("{} other suppression{} carr{} none; the Deviation "
+                 "Register lists {}.\n".format(
+                   other, "" if other == 1 else "s",
+                   "ies" if other == 1 else "y",
+                   "it" if other == 1 else "them"))
+  report.print("\n")
+
+  if not security:
+    return
+
+  def severity_rank(entry):
+    severity = entry["fields"].get("Severity", "")
+    if severity in SEVERITY_ORDER:
+      return (SEVERITY_ORDER.index(severity), severity)
+    return (len(SEVERITY_ORDER), severity or "~")
+
+  report.table('[{"name":"Severity","filtertype":"string"},'
+               '{"name":"CWE","filtertype":"string"},'
+               '{"name":"Status","filtertype":"string"},'
+               '{"name":"Check","filtertype":"string"},'
+               '{"name":"File","filtertype":"string"},'
+               '{"name":"Line","filtertype":"numeric"},'
+               '{"name":"Rationale","filtertype":"string"},'
+               '{"name":"Notes","filtertype":"string"}]')
+  ordered = sorted(security,
+                   key=lambda e: (severity_rank(e),
+                                  e["violation"].file(),
+                                  e["violation"].line()))
+  for entry in ordered:
+    if report.is_aborted():
+      return
+    violation = entry["violation"]
+    fields = entry["fields"]
+    report.tablecell()
+    report.print(fields.get("Severity", ""))
+    report.tablecell()
+    report.print(fields.get("CWE", ""))
+    report.tablecell()
+    status = fields.get("Status", "")
+    if status and status not in ("Accepted", "False Positive", "Mitigated"):
+      report.fontcolor("#c62828")  # still open: this row is unresolved
+      report.print(status)
+      report.fontcolor()
+    else:
+      report.print(status)
+    report.tablecell()
+    report.print(violation.check_id())
+    report.tablecell()
+    report.print(violation.file().split("/")[-1].split("\\")[-1])
+    report.tablecell()
+    report.syncfile(violation.file(), violation.line(), violation.column())
+    report.print(str(violation.line()))
+    report.syncfile()
+    report.tablecell()
+    report.print(entry["rationale"])
+    report.tablecell()
+    report.print(fields.get("Notes", ""))
+  report.table()

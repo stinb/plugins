@@ -1,0 +1,370 @@
+# Interactive Report: Annotations by Template
+#
+# Structured-annotation coverage for the project (issue #4904). One page
+# per annotation template plus a Freeform page, grouped from the values
+# of each template's fields.
+#
+# Index    - per template: annotation count, annotated entities, and the
+#            number of required-field gaps
+# Template - value counts for each closed-set field, then one row per
+#            annotation: Entity | File | Line | <field columns> |
+#            Author | Date | Note. Required fields without a value show
+#            "(missing)" so classification gaps are visible and
+#            filterable.
+# Freeform - annotations without a template
+#
+# An annotation is read entirely from atn.text(): the record rides in the
+# note as "Label: value" lines opening with "Template: <name>", parsed
+# back with the shared und_lib readers -- the same way the deviation
+# reports read a suppression. The template definitions (which fields
+# exist, which are required) come from the project's
+# annotation_templates.json through und_lib.templates.
+#
+# Annotations whose template definition was deleted still appear: the
+# page keeps the recorded template name and the columns come from the
+# labels observed in the data.
+
+import und_lib.deviations as deviations
+import und_lib.templates as tdefs
+
+_INDEX = "Annotations"
+_FREEFORM = "Freeform"
+_MISSING = "(missing)"
+
+
+def name():
+  return "Annotations by Template"
+
+
+def description():
+  return '''Structured-annotation coverage grouped by annotation template.
+    <p>One page per template shows the value distribution of each
+    closed-set field and a filterable table of every annotation with its
+    field values. Required fields without a value are flagged
+    "(missing)" so classification gaps are easy to find. Freeform
+    annotations get their own page.</p>
+    <p>Templates are managed in Annotations &gt; Annotation Templates,
+    and values can be assigned in bulk with the und annotate command.</p>
+  '''
+
+
+def tags():
+  return [
+    'Target: Project',
+    'Language: Any',
+    'API',
+  ]
+
+
+def test_global(db):
+  return True
+
+
+def is_enabled_by_default():
+  return True
+
+
+def support_abort():
+  return True
+
+
+def pages(report, db):
+  # Page names only -- the full grouping (field values, gap counts) is
+  # deferred to generate() so listing the pages stays cheap.
+  _, buckets, freeform, names, order = _buckets(db)
+  result = [_INDEX] + [names[key] for key in order]
+  if freeform:
+    result.append(_FREEFORM)
+  return result
+
+
+def generate(report, db, page):
+  groups, freeform, gaps = _grouped(db)
+  if page == _FREEFORM:
+    report.breadcrumbs([_INDEX, page], 1)
+    _freeform_page(report, freeform)
+    return
+  for group in groups:
+    if page == group["page"]:
+      report.breadcrumbs([_INDEX, page], 1)
+      _template_page(report, group)
+      return
+  _index_page(report, groups, freeform, gaps)
+
+
+# ---------------------------------------------------------------------------
+# Data
+
+
+def _rows(db):
+  """Every annotation as (atn, template name, values, note): the record
+  parsed off atn.text(), the note being the text with the record lines
+  lifted out. A row with no template name and no note is an empty
+  freeform annotation and is dropped."""
+  rows = []
+  for atn in db.annotations():
+    values, note = deviations.fields_from_note(atn.text() or "")
+    template = values.pop("Template", "")
+    if template or note:
+      rows.append((atn, template, values, note))
+  return rows
+
+
+def _buckets(db):
+  """Rows bucketed per template name, the freeform list, each bucket's
+  page name, and the bucket names in page order."""
+  defs = {t["name"]: t for t in tdefs.load(db)}
+
+  buckets = {}
+  freeform = []
+  for row in _rows(db):
+    _, template, _, _ = row
+    if template:
+      buckets.setdefault(template, []).append(row)
+    else:
+      freeform.append(row)
+
+  names = {}
+  for template in buckets:
+    page = template
+    if template not in defs:
+      page = "{} (deleted)".format(template)
+    if page in (_INDEX, _FREEFORM):
+      page = "{} (template)".format(page)
+    names[template] = page
+
+  order = sorted(buckets, key=lambda template: names[template].lower())
+  return defs, buckets, freeform, names, order
+
+
+def _grouped(db):
+  """Rows bucketed per template, plus the freeform list and the total
+  required-gap count. Each group is a dict with the template definition
+  (None when deleted), its page name, rows, and gap count."""
+  defs, buckets, freeform, names, order = _buckets(db)
+
+  groups = []
+  total_gaps = 0
+  for template in order:
+    rows = buckets[template]
+    tdef = defs.get(template)
+    fields = tdef["fields"] if tdef else _observed_fields(rows)
+    fields = [f for f in fields if f["type"] != "label"]
+    gaps = 0
+    for _, _, values, _ in rows:
+      gaps += sum(1 for f in fields
+                  if f["required"] and not values.get(f["label"]))
+    total_gaps += gaps
+    groups.append({
+      "page": names[template],
+      "deleted": tdef is None,
+      "fields": fields,
+      "rows": rows,
+      "gaps": gaps,
+    })
+  return groups, freeform, total_gaps
+
+
+def _observed_fields(rows):
+  """Field stubs for a deleted template, from the labels present in its
+  annotations' records."""
+  labels = []
+  for _, _, values, _ in rows:
+    for label in values:
+      if label not in labels:
+        labels.append(label)
+  return [{"key": l, "label": l, "type": "text", "required": False}
+          for l in labels]
+
+
+def _entity_cells(report, atn):
+  """Emit the Entity | File | Line cells shared by all tables."""
+  ent = atn.ent()
+  report.tablecell()
+  if ent is not None:
+    report.entity(ent)
+    report.print(ent.name())
+    report.entity()
+  report.tablecell()
+  if ent is not None:
+    ref = ent.ref("definein, body declarein, declarein")
+    file = ent if ent.kind().check("file") else (ref.file() if ref else None)
+    if file is not None:
+      report.print(file.relname() or file.name())
+  report.tablecell()
+  line = atn.line()
+  if line > 0:  # 1-based; -1 when not line-anchored
+    report.print(str(line))
+
+
+def _row_sort_key(row):
+  atn = row[0]
+  ent = atn.ent()
+  return ((ent.longname().lower() if ent is not None else ""),
+          atn.line() if atn.line() >= 0 else -1)
+
+
+# ---------------------------------------------------------------------------
+# Pages
+
+
+def _index_page(report, groups, freeform, gaps):
+  report.heading(1)
+  report.print("Annotations")
+  report.heading()
+  report.print("Structured-annotation coverage grouped by template. "
+               "Required fields without a value count as gaps.\n\n")
+
+  report.table('''
+    [{
+      "name" : "Template",
+      "filtertype": "string"
+     },{
+      "name" : "Annotations",
+      "filtertype": "numeric",
+      "sort": "descending"
+     },{
+      "name" : "Entities",
+      "filtertype": "numeric"
+     },{
+      "name" : "Required Gaps",
+      "filtertype": "numeric"
+    }]''')
+  for group in groups:
+    report.tablecell()
+    report.pagelink(group["page"])
+    report.print(group["page"])
+    report.pagelink()
+    report.tablecell()
+    report.print(str(len(group["rows"])))
+    report.tablecell()
+    ents = {row[0].ent().uniquename() for row in group["rows"]
+            if row[0].ent() is not None}
+    report.print(str(len(ents)))
+    report.tablecell()
+    report.print(str(group["gaps"]))
+  if freeform:
+    report.tablecell()
+    report.pagelink(_FREEFORM)
+    report.print(_FREEFORM)
+    report.pagelink()
+    report.tablecell()
+    report.print(str(len(freeform)))
+    report.tablecell()
+    ents = {row[0].ent().uniquename() for row in freeform
+            if row[0].ent() is not None}
+    report.print(str(len(ents)))
+    report.tablecell()
+    report.print("0")
+  report.table()
+
+  if gaps:
+    report.print("\n{} required field value(s) missing across all "
+                 "templates.\n".format(gaps))
+
+
+def _template_page(report, group):
+  report.heading(1)
+  report.print(group["page"])
+  report.heading()
+
+  # Value distribution of the closed-set fields: what drives the
+  # generated Annotations architecture. Values are the record's display
+  # strings, so a multi-select counts as the combination it records.
+  closed = [f for f in group["fields"]
+            if f["type"] in ("droplist", "radio", "cascading", "checkbox")]
+  for field in closed:
+    counts = {}
+    for _, _, values, _ in group["rows"]:
+      value = values.get(field["label"], "")
+      if not value and field["required"]:
+        value = _MISSING
+      if value:
+        counts[value] = counts.get(value, 0) + 1
+    if not counts:
+      continue
+    parts = ["{}: {}".format(v, n) for v, n in
+             sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))]
+    report.bold()
+    report.print(field["label"])
+    report.nobold()
+    report.print(" — " + ", ".join(parts) + "\n")
+  if closed:
+    report.print("\n")
+
+  columns = [
+    '{"name": "Entity", "filtertype": "string"}',
+    '{"name": "File", "filtertype": "string"}',
+    '{"name": "Line", "filtertype": "string"}',
+  ]
+  for field in group["fields"]:
+    columns.append('{{"name": {}, "filtertype": "string"}}'
+                   .format(_json_string(field["label"])))
+  columns.append('{"name": "Author", "filtertype": "string"}')
+  columns.append('{"name": "Date", "filtertype": "string"}')
+  columns.append('{"name": "Note", "filtertype": "string"}')
+  report.table("[" + ",".join(columns) + "]")
+
+  total = max(1, len(group["rows"]))
+  for i, row in enumerate(sorted(group["rows"], key=_row_sort_key)):
+    report.progress(int(i / total * 100))
+    if report.is_aborted():
+      return
+    atn, _, values, note = row
+    _entity_cells(report, atn)
+    for field in group["fields"]:
+      report.tablecell()
+      value = values.get(field["label"], "")
+      if not value and field["required"]:
+        report.fontcolor("#e45721")
+        report.print(_MISSING)
+        report.fontcolor()
+      else:
+        report.print(value)
+    report.tablecell()
+    report.print(atn.author())
+    report.tablecell()
+    report.print(atn.date())
+    report.tablecell()
+    report.print(note)
+  report.table()
+
+
+def _freeform_page(report, freeform):
+  report.heading(1)
+  report.print(_FREEFORM)
+  report.heading()
+  report.table('''
+    [{
+      "name" : "Entity",
+      "filtertype": "string"
+     },{
+      "name" : "File",
+      "filtertype": "string"
+     },{
+      "name" : "Line",
+      "filtertype": "string"
+     },{
+      "name" : "Author",
+      "filtertype": "string"
+     },{
+      "name" : "Date",
+      "filtertype": "string"
+     },{
+      "name" : "Note",
+      "filtertype": "string"
+    }]''')
+  for row in sorted(freeform, key=_row_sort_key):
+    atn, _, _, note = row
+    _entity_cells(report, atn)
+    report.tablecell()
+    report.print(atn.author())
+    report.tablecell()
+    report.print(atn.date())
+    report.tablecell()
+    report.print(note)
+  report.table()
+
+
+def _json_string(text):
+  return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'

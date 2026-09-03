@@ -1,0 +1,143 @@
+# Deviation Approval Records
+#
+# The deviation register reshaped as quality-assurance evidence: one block
+# per deviation, approval front and center, the way DO-178C / DO-330
+# software QA records are handed to a certification authority. Content is
+# the same record the register reads (und_lib.deviations); only the
+# presentation changes.
+
+import und_lib.deviations as deviations
+
+
+def name():
+  return "Deviation Approval Records"
+
+
+def description():
+  return '''One record block per deviation, approval first -- the shape a
+    certification audit asks for.
+
+    <p>DO-178C and DO-330 expect coding-standard deviations to exist as
+    reviewable QA records: what was deviated from, where, why, and on whose
+    authority. This report prints each deviation as its own block with
+    <b>Approved By</b> and <b>Approval Date</b> leading, followed by the
+    full record. Deviations nobody has approved are grouped first, as the
+    open work.</p>
+
+    <p>The records are the ones suppressions already carry (see the
+    <a href="und://plugins/IReport/Deviation%20Register">Deviation
+    Register</a>); nothing needs to be re-entered for the audit.</p>
+    '''
+
+
+def tags():
+  return [
+    'Target: CodeCheck',
+    'Language: Any',
+  ]
+
+
+def is_enabled_by_default():
+  return True
+
+
+def test_inspection(inspection):
+  return True
+
+
+def generate(report, inspection, page):
+  found = deviations.deviations(inspection)
+
+  report.heading(1)
+  report.print("Deviation Approval Records")
+  report.heading()
+
+  if not found:
+    report.print("No deviations recorded. Nothing in this inspection is "
+                 "suppressed, so there is nothing to approve.\n")
+    return
+
+  unapproved = [e for e in found if not e["fields"].get("Approved By")]
+  approved = [e for e in found if e["fields"].get("Approved By")]
+
+  report.bold()
+  if unapproved:
+    report.fontcolor("#c62828")
+    report.print("{} of {} deviations await approval.\n".format(
+      len(unapproved), len(found)))
+  else:
+    report.fontcolor("#2e7d32")
+    report.print("Every deviation is approved.\n")
+  report.fontcolor()
+  report.nobold()
+  report.print("\n")
+
+  def block(entry, index):
+    violation = entry["violation"]
+    fields = entry["fields"]
+    report.heading(2)
+    report.print("Record {} - {} at {}:{}".format(
+      index,
+      violation.check_id(),
+      violation.file().split("/")[-1].split("\\")[-1],
+      violation.line()))
+    report.heading()
+
+    approver = fields.get("Approved By", "")
+    date = fields.get("Approval Date", "")
+    report.bold()
+    if approver:
+      report.print("Approved by {}{}\n".format(
+        approver, " on " + date if date else ""))
+    else:
+      report.fontcolor("#c62828")
+      report.print("Not yet approved\n")
+      report.fontcolor()
+    report.nobold()
+
+    report.table('[{"name":"","filtertype":"off"},'
+                 '{"name":"","filtertype":"off"}]')
+    rows = [("Template", entry["template"] or "(none)"),
+            ("Stored as", entry["source"]),
+            ("Location", "{} line {}".format(violation.file(),
+                                             violation.line())),
+            ("Rationale", entry["rationale"] or "(none recorded)")]
+    for label in sorted(fields):
+      if label in ("Approved By", "Approval Date"):
+        continue
+      rows.append((label, fields[label]))
+    for label, value in rows:
+      report.tablecell()
+      report.bold()
+      report.print(label)
+      report.nobold()
+      report.tablecell()
+      report.print(value)
+    report.table()
+    report.print("\n")
+
+  index = 1
+  if unapproved:
+    report.heading(2)
+    report.print("Awaiting approval")
+    report.heading()
+    for entry in sorted(unapproved,
+                        key=lambda e: (e["violation"].file(),
+                                       e["violation"].line())):
+      if report.is_aborted():
+        return
+      block(entry, index)
+      index += 1
+
+  if approved:
+    report.heading(2)
+    report.print("Approved")
+    report.heading()
+    for entry in sorted(approved,
+                        key=lambda e: (e["fields"].get("Approved By", ""),
+                                       e["violation"].file(),
+                                       e["violation"].line())):
+      if report.is_aborted():
+        return
+      block(entry, index)
+      index += 1

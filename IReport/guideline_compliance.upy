@@ -1,0 +1,147 @@
+# Guideline Compliance Summary
+#
+# The document MISRA Compliance:2020 requires for a compliance claim: one
+# row per guideline in the checked configuration, each judged Compliant,
+# Compliant with deviations, Compliant with violations, or Not compliant.
+#
+# A suppression counts as a deviation only when it carries a documented
+# record (rationale plus the fields its template requires -- see
+# und_lib.deviations); silencing a violation without one does not make a
+# guideline compliant, it hides the violation, and this report says so.
+
+import und_lib.deviations as deviations
+
+
+def name():
+  return "Guideline Compliance Summary"
+
+
+def description():
+  return '''One row per checked guideline, judged the way a compliance
+    auditor judges it.
+
+    <p>MISRA Compliance:2020 asks for a Guideline Compliance Summary: every
+    guideline of the claimed standard, each marked <b>Compliant</b> (no
+    violations), <b>Compliant with deviations</b> (every violation
+    suppressed by a documented deviation), <b>Compliant with violations</b>
+    (undeviated violations against an Advisory guideline only), or <b>Not
+    compliant</b>. This report builds that table from the inspection's own
+    configuration: one row per check, the check's name standing for the
+    guideline, its category read from the check's <i>Category:</i> tag.</p>
+
+    <p>A suppression is a <i>deviation</i> only when it carries a
+    documented record (see the
+    <a href="und://plugins/IReport/Deviation%20Register">Deviation
+    Register</a>); one that records nothing leaves its guideline
+    non-compliant. Deviations against a <b>Mandatory</b> guideline are
+    flagged: MISRA does not permit them at all.</p>
+    '''
+
+
+def tags():
+  return [
+    'Target: CodeCheck',
+    'Language: Any',
+  ]
+
+
+def is_enabled_by_default():
+  return True
+
+
+def test_inspection(inspection):
+  return inspection.config()
+
+
+def generate(report, inspection, page):
+  config = inspection.config()
+  found = deviations.deviations(inspection)
+  expected = deviations.expected_fields(found)
+
+  # Per check: open violations, documented deviations, and suppressions
+  # that carry no defensible record.
+  open_cnt = {}
+  deviated = {}
+  undocumented = {}
+  for violation in inspection.violations():
+    check = violation.check_id()
+    if not violation.ignores():
+      open_cnt[check] = open_cnt.get(check, 0) + 1
+  for entry in found:
+    check = entry["violation"].check_id()
+    if deviations.gaps_of(entry, expected):
+      undocumented[check] = undocumented.get(check, 0) + 1
+    else:
+      deviated[check] = deviated.get(check, 0) + 1
+
+  def category_of(check):
+    for tag in config.check_tags(check):
+      if tag.startswith("Category: "):
+        return tag[10:]
+    return ""
+
+  def verdict_of(check):
+    category = category_of(check)
+    if not open_cnt.get(check) and not undocumented.get(check):
+      if deviated.get(check):
+        if category == "Mandatory":
+          return "Not compliant"  # Mandatory guidelines cannot be deviated
+        return "Compliant with deviations"
+      return "Compliant"
+    if not undocumented.get(check) and category == "Advisory":
+      return "Compliant with violations"
+    return "Not compliant"
+
+  checks = sorted(config.checks(), key=lambda c: config.check_name(c))
+
+  bad = [c for c in checks if verdict_of(c) == "Not compliant"]
+  report.heading(1)
+  report.print("Guideline Compliance Summary")
+  report.heading()
+  report.bold()
+  if bad:
+    report.fontcolor("#c62828")
+    report.print("Not compliant: {} of {} guidelines.\n".format(
+      len(bad), len(checks)))
+  else:
+    report.fontcolor("#2e7d32")
+    report.print("Every checked guideline is compliant.\n")
+  report.fontcolor()
+  report.nobold()
+  report.print("A guideline with suppressed violations is compliant only "
+               "when every suppression is a documented deviation; a "
+               "Mandatory guideline may not be deviated at all.\n\n")
+
+  report.table('[{"name":"Guideline","filtertype":"string"},'
+               '{"name":"Category","filtertype":"string"},'
+               '{"name":"Open violations","filtertype":"numeric"},'
+               '{"name":"Deviations","filtertype":"numeric"},'
+               '{"name":"Suppressed without record","filtertype":"numeric"},'
+               '{"name":"Result","filtertype":"string"}]')
+  for check in checks:
+    if report.is_aborted():
+      return
+    verdict = verdict_of(check)
+    report.tablecell()
+    report.print(config.check_name(check))
+    report.tablecell()
+    report.print(category_of(check))
+    report.tablecell()
+    report.print(str(open_cnt.get(check, 0)))
+    report.tablecell()
+    report.print(str(deviated.get(check, 0)))
+    report.tablecell()
+    count = undocumented.get(check, 0)
+    if count:
+      report.fontcolor("#c62828")
+    report.print(str(count))
+    if count:
+      report.fontcolor()
+    report.tablecell()
+    if verdict == "Not compliant":
+      report.fontcolor("#c62828")
+    elif verdict == "Compliant":
+      report.fontcolor("#2e7d32")
+    report.print(verdict)
+    report.fontcolor()
+  report.table()

@@ -1,0 +1,529 @@
+# Deviation Register
+#
+# Every suppressed violation in an inspection, with the rationale and the
+# structured record behind it -- the document an auditor asks for when a
+# coding standard says deviations must be justified and approved.
+#
+# A suppression carries a record when it was written with an annotation
+# template ("Offer this template when ignoring a CodeCheck violation"):
+# fields like Guideline, Justification, Approved By. The record travels
+# inside the ignore's note text -- one "Label: value" line per field --
+# however the ignore was stored, and is parsed back off the note here, so
+# this report also works against ignores written by hand.
+
+# Reading a suppression's record, and judging whether it is a defensible
+# deviation, is shared with the Deviation Completeness chart so that both
+# count a deviation the same way.
+import collections
+
+import und_lib.deviations as deviations
+
+
+def name():
+  return "Deviation Register"
+
+
+def description():
+  return '''A register of every suppressed violation, with its justification
+    and approval record.
+
+    <p>When a coding standard requires that deviations be justified,
+    reviewed and approved, this is the document that shows it. Each
+    suppression is listed with the check it silences, where it is, who wrote
+    it, and the structured record it carries.</p>
+
+    <ul>
+    <li><b>Summary</b> How many deviations exist, how many are fully
+        documented, and which checks and files they cluster in.</li>
+    <li><b>Register</b> The full table &mdash; one row per suppression, one
+        column per field found in the records, sortable and filterable.</li>
+    <li><b>Gaps</b> The deviations that are not defensible yet: no
+        justification at all, or missing a field that comparable deviations
+        record. This is the work list.</li>
+    <li><b>By Check</b> Where deviations concentrate, and how completely
+        each check's deviations are documented.</li>
+    <li><b>By Field</b> Group the register by any field &mdash; Approved By,
+        Severity, Owner &mdash; to review one owner's deviations at a time.</li>
+    </ul>
+
+    <p>Deviations get their records from annotation templates offered in the
+    Ignore Violation dialog, and read the same whether the suppression was
+    stored as a comment in the code or as an annotation in the project. A
+    suppression written without a template still appears here, counted as
+    undocumented.</p>
+
+    <p>The Summary heads with the
+    <a href="und://plugins/Graph/Deviation%20Completeness">Deviation
+    Completeness</a> chart: the whole inspection split into what nobody
+    deviated from, what is deviated from and defensible, and what is deviated
+    from but not yet documented.</p>
+    '''
+
+
+def tags():
+  return [
+    'Target: CodeCheck',
+    'Language: Any',
+  ]
+
+
+def is_enabled_by_default():
+  return True
+
+
+def test_inspection(inspection):
+  return True
+
+
+def init(report):
+  report.options().checkbox_vert(
+    "sections", "Report Sections",
+    ["Summary", "Register", "Gaps", "By Check", "By Field"],
+    ["Summary", "Register", "Gaps", "By Check"])
+  report.options().text("groupby", "Group \"By Field\" on", "Approved By")
+  report.options().checkbox(
+    "incomplete", "Register lists only deviations with gaps", False)
+
+
+def pages(report):
+  pages = ["index"]
+  pages.extend(report.options().lookup("sections"))
+  return pages
+
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+def generate(report, inspection, page):
+  found = deviations.deviations(inspection)
+  expected = deviations.expected_fields(found)
+
+  if page == "Summary":
+    summary_page(report, inspection, found, expected)
+  elif page == "Register":
+    register_page(report, found, expected)
+  elif page == "Gaps":
+    gaps_page(report, found, expected)
+  elif page == "By Check":
+    by_check_page(report, found, expected)
+  elif page == "By Field":
+    by_field_page(report, found)
+  else:
+    toc_page(report, inspection, found, expected)
+
+
+def heading(report, text, level=1):
+  report.heading(level)
+  report.print(text)
+  report.heading()
+
+
+def verdict(report, found, expected):
+  """The one line someone reads before anything else."""
+  documented = [e for e in found if not deviations.gaps_of(e, expected)]
+  if not found:
+    report.bold()
+    report.print("No deviations recorded.\n")
+    report.nobold()
+    report.print("Nothing in this inspection is suppressed, so there is "
+                 "nothing to justify.\n\n")
+    return 0, 0
+
+  complete = len(documented)
+  total = len(found)
+  percent = (100 * complete) // total
+
+  report.bold()
+  if complete == total:
+    report.fontcolor("#2e7d32")
+    report.print("Every deviation is documented.\n")
+  else:
+    report.fontcolor("#c62828")
+    missing = total - complete
+    report.print("{} of {} {} missing part of {} record.\n".format(
+      missing, plural(total, "deviation"), "is" if missing == 1 else "are",
+      "its" if missing == 1 else "their"))
+  report.fontcolor()
+  report.nobold()
+  report.print("{}% complete. A deviation counts as documented when it "
+               "carries every field its peers record -- and, for a freeform "
+               "suppression, a rationale.\n\n".format(percent))
+  return complete, total
+
+
+def tiles(report, pairs):
+  """A row of counts, the way the compliance report heads its pages."""
+  report.table('[{"name":"","filtertype":"off"},{"name":"","filtertype":"off"}]')
+  for label, value in pairs:
+    report.tablecell()
+    report.bold()
+    report.print(str(value))
+    report.nobold()
+    report.tablecell()
+    report.print(label)
+  report.table()
+  report.print("\n")
+
+
+def located(entry):
+  """Where a deviation is, as a sort key: file, then line, then column. Two
+  runs over the same inspection list the register in the same order."""
+  violation = entry["violation"]
+  return (violation.file(), violation.line(), violation.column())
+
+
+def plural(count, singular, many=None):
+  """"1 file", "3 files" -- a count an auditor does not have to translate."""
+  if count == 1:
+    return "1 " + singular
+  return "{} {}".format(count, many or (singular + "s"))
+
+
+def toc_page(report, inspection, found, expected):
+  report.breadcrumbs(["index"], 0, ["Deviation Register"])
+  heading(report, "Deviation Register")
+  verdict(report, found, expected)
+
+  for section in report.options().lookup("sections"):
+    report.pagelink(section)
+    report.print(section + "\n")
+    report.pagelink()
+
+
+def summary_page(report, inspection, found, expected):
+  report.breadcrumbs(["index", "Summary"], 1, ["Deviation Register", "Summary"])
+  heading(report, "Summary")
+  complete, total = verdict(report, found, expected)
+  if not total:
+    return
+
+  checks = collections.Counter(e["violation"].check_id() for e in found)
+  files = set(e["violation"].file() for e in found)
+  sources = collections.Counter(e["source"] for e in found)
+
+  tiles(report, [
+    ("Deviations" if total != 1 else "Deviation", total),
+    ("Fully documented", complete),
+    ("With gaps", total - complete),
+    ("Checks deviated from" if len(checks) != 1 else "Check deviated from",
+     len(checks)),
+    ("Files affected" if len(files) != 1 else "File affected", len(files)),
+  ])
+
+  # Where the deviations sit in the inspection as a whole: an auditor's next
+  # question after "how many deviations" is "out of how much".
+  violations = 0
+  suppressed = 0
+  for violation in inspection.violations():
+    violations += 1
+    if violation.ignores():
+      suppressed += 1
+  if violations:
+    report.print("This inspection found {}: {} suppressed and listed here, "
+                 "{} still open.\n\n".format(plural(violations, "violation"),
+                                             suppressed,
+                                             violations - suppressed))
+    report.draw(inspection, "Deviation Completeness")
+    report.print("\n")
+
+  heading(report, "How they were recorded", 2)
+  report.print("A deviation stored as a comment travels with the code; one "
+               "stored as an annotation stays in the Understand project. Both "
+               "carry the same record.\n\n")
+  report.table('[{"name":"Stored as","filtertype":"string"},'
+               '{"name":"Deviations","filtertype":"numeric","sort":"descending"}]')
+  for source in sorted(sources, key=lambda s: -sources[s]):
+    report.tablecell()
+    report.print(source)
+    report.tablecell()
+    report.print(str(sources[source]))
+  report.table()
+
+  named = {t: labels for t, labels in expected.items() if labels}
+  if named:
+    heading(report, "What a complete deviation records here", 2)
+    report.print("Taken from what most deviations in this project already "
+                 "carry, not from a fixed list -- each one judged against "
+                 "its own template:\n")
+    for template in sorted(named):
+      report.print("  " + (template or "No template") + ": " +
+                   ", ".join(named[template]) + "\n")
+
+  repeated_justifications(report, found)
+
+
+def repeated_justifications(report, found):
+  """One justification standing in for many deviations. Each deviation is
+  supposed to be argued on its own facts, so a rationale that appears
+  verbatim across several of them is the first thing a reviewer questions --
+  and the first thing they ask to see when the register is handed over."""
+  shared = {}
+  for entry in found:
+    text = entry["rationale"].strip()
+    if text:
+      shared.setdefault(text.lower(), []).append(entry)
+
+  groups = [entries for entries in shared.values() if len(entries) > 1]
+  if not groups:
+    return
+
+  groups.sort(key=lambda entries: -len(entries))
+  heading(report, "Justifications used more than once", 2)
+  report.print("A deviation is argued on its own facts. The same words "
+               "covering several of them is worth a second look -- it may be "
+               "one decision correctly applied in several places, or one "
+               "decision that was never made twice.\n\n")
+  report.table('[{"name":"Justification","filtertype":"string"},'
+               '{"name":"Deviations","filtertype":"numeric","sort":"descending"},'
+               '{"name":"Checks","filtertype":"string"},'
+               '{"name":"Files","filtertype":"string"}]')
+  for entries in groups:
+    report.tablecell()
+    report.print(entries[0]["rationale"])
+    report.tablecell()
+    report.print(str(len(entries)))
+    report.tablecell()
+    report.print(", ".join(sorted(set(e["violation"].check_id()
+                                      for e in entries))))
+    report.tablecell()
+    report.print(", ".join(sorted(set(
+      e["violation"].file().replace("\\", "/").split("/")[-1]
+      for e in entries))))
+  report.table()
+
+
+def register_row_table(report, field_labels, show_template=False):
+  columns = ['{"name":"Check","filtertype":"string"}',
+             '{"name":"File","filtertype":"string"}',
+             '{"name":"Line","filtertype":"numeric"}',
+             '{"name":"Entity","filtertype":"string"}',
+             '{"name":"Stored as","filtertype":"string"}']
+  if show_template:
+    columns.append('{"name":"Template","filtertype":"string"}')
+  columns.append('{"name":"Rationale","filtertype":"string"}')
+  for label in field_labels:
+    columns.append('{"name":"' + label.replace('"', "'") + '","filtertype":"string"}')
+  columns.append('{"name":"Status","filtertype":"string"}')
+  report.table("[" + ",".join(columns) + "]")
+
+
+def register_row(report, entry, expected, field_labels, show_template=False):
+  violation = entry["violation"]
+
+  report.tablecell()
+  report.print(violation.check_id())
+
+  report.tablecell()
+  fileent = report.db().lookup_uniquename(violation.file())
+  if fileent:
+    report.entity(fileent)
+  report.print(violation.file().split("/")[-1].split("\\")[-1])
+  if fileent:
+    report.entity()
+
+  report.tablecell()
+  report.syncfile(violation.file(), violation.line(), violation.column())
+  report.print(str(violation.line()))
+  report.syncfile()
+
+  report.tablecell()
+  if violation.ent_uniquename():
+    ent = report.db().lookup_uniquename(violation.ent_uniquename())
+    if ent:
+      report.entity(ent)
+      report.print(ent.name())
+      report.entity()
+
+  report.tablecell()
+  report.print(entry["source"])
+
+  if show_template:
+    report.tablecell()
+    report.print(entry["template"])
+
+  report.tablecell()
+  report.print(entry["rationale"])
+
+  for label in field_labels:
+    report.tablecell()
+    report.print(entry["fields"].get(label, ""))
+
+  report.tablecell()
+  reasons = deviations.gaps_of(entry, expected)
+  if reasons:
+    report.fontcolor("#c62828")
+    report.print("; ".join(reasons))
+    report.fontcolor()
+  else:
+    report.fontcolor("#2e7d32")
+    report.print("documented")
+    report.fontcolor()
+
+
+def render_register(report, rows, expected, labels, show_template=False):
+  """One register table: build, fill abortably, close. The Register and
+  Gaps pages differ only in which rows arrive and in what order."""
+  register_row_table(report, labels, show_template)
+  for entry in rows:
+    if report.is_aborted():
+      return
+    register_row(report, entry, expected, labels, show_template)
+  report.table()
+
+
+def register_page(report, found, expected):
+  report.breadcrumbs(["index", "Register"], 1, ["Deviation Register", "Register"])
+  heading(report, "Register")
+
+  only_gaps = report.options().lookup("incomplete")
+  rows = [e for e in found if not only_gaps or deviations.gaps_of(e, expected)]
+  if not rows:
+    report.print("Nothing to list.\n")
+    return
+
+  report.print("{}. Sort or filter any column; the line number opens the "
+               "code.\n\n".format(plural(len(rows), "deviation")))
+
+  # One section per template, each table carrying exactly the fields its
+  # own deviations record -- a MISRA reviewer reads the MISRA table without
+  # eleven foreign columns. Named templates first, hand-written and
+  # freeform records last; a single-template project reads as one plain
+  # table, exactly as before.
+  groups = {}
+  for entry in rows:
+    groups.setdefault(entry["template"], []).append(entry)
+
+  for template in sorted(groups, key=lambda t: (t == "", t.lower())):
+    entries = sorted(groups[template], key=located)
+    if len(groups) > 1:
+      heading(report, template or "No template", 2)
+      report.print(plural(len(entries), "deviation") + ".\n\n")
+    labels = deviations.field_names(entries)
+    render_register(report, entries, expected, labels)
+    if report.is_aborted():
+      return
+
+
+def gaps_page(report, found, expected):
+  report.breadcrumbs(["index", "Gaps"], 1, ["Deviation Register", "Gaps"])
+  heading(report, "Gaps")
+
+  rows = [e for e in found if deviations.gaps_of(e, expected)]
+  if not rows:
+    report.fontcolor("#2e7d32")
+    report.bold()
+    # Nothing to fix reads two ways, and they are not the same news: a
+    # project with no deviations at all has not documented anything.
+    report.print("No deviations recorded.\n" if not found else
+                 "Every deviation is fully documented.\n")
+    report.nobold()
+    report.fontcolor()
+    report.print("Nothing in this inspection is suppressed.\n" if not found
+                 else "Every suppression carries the fields its peers "
+                      "record.\n")
+    return
+
+  report.print("{} not defensible as {} stand. Each line says what is "
+               "missing, worst first.\n\n".format(plural(len(rows), "deviation is",
+                                                         "deviations are"),
+                                                  "it" if len(rows) == 1 else "they"))
+  # Worst first. A suppression that records nothing at all heads the list --
+  # it is one reason, but the only one that cannot be argued at all -- then
+  # the deviations missing the most. Ties fall back to where the deviation
+  # is, so two runs over one inspection list it the same way.
+  def worst_first(entry):
+    reasons = deviations.gaps_of(entry, expected)
+    bare = reasons == ["no justification recorded"]
+    return (0 if bare else 1, -len(reasons), located(entry))
+
+  # One list, not per-template sections: this page is the work list, and
+  # its order is severity, not standard. The Template column says where
+  # each row belongs.
+  rows.sort(key=worst_first)
+  labels = deviations.field_names(rows)
+  render_register(report, rows, expected, labels, show_template=True)
+
+
+def by_check_page(report, found, expected):
+  report.breadcrumbs(["index", "By Check"], 1, ["Deviation Register", "By Check"])
+  heading(report, "By Check")
+
+  if not found:
+    report.print("No deviations recorded.\n")
+    return
+
+  totals = collections.Counter(e["violation"].check_id() for e in found)
+  documented = collections.Counter(
+    e["violation"].check_id() for e in found
+    if not deviations.gaps_of(e, expected))
+
+  report.print("Where deviations concentrate. A check with many deviations is "
+               "worth a conversation: either the rule does not fit this code, "
+               "or the code does not fit the rule.\n\n")
+  report.table('[{"name":"Check","filtertype":"string"},'
+               '{"name":"Deviations","filtertype":"numeric","sort":"descending"},'
+               '{"name":"Documented","filtertype":"numeric"},'
+               '{"name":"With gaps","filtertype":"numeric"}]')
+  for check in sorted(totals, key=lambda c: -totals[c]):
+    total, complete = totals[check], documented[check]
+    report.tablecell()
+    report.print(check)
+    report.tablecell()
+    report.print(str(total))
+    report.tablecell()
+    report.print(str(complete))
+    report.tablecell()
+    if total - complete:
+      report.fontcolor("#c62828")
+    report.print(str(total - complete))
+    if total - complete:
+      report.fontcolor()
+  report.table()
+
+
+def by_field_page(report, found):
+  report.breadcrumbs(["index", "By Field"], 1, ["Deviation Register", "By Field"])
+  label = report.options().lookup("groupby") or "Approved By"
+  heading(report, "By " + label)
+
+  if not found:
+    report.print("No deviations recorded.\n")
+    return
+
+  groups = {}
+  for entry in found:
+    # "Template" lives beside the fields, not among them -- but the user
+    # saw it as a field line in their comment, so grouping honors it.
+    if label == "Template":
+      value = entry["template"] or "(not recorded)"
+    else:
+      value = entry["fields"].get(label) or "(not recorded)"
+    groups.setdefault(value, []).append(entry)
+
+  if list(groups) == ["(not recorded)"]:
+    report.print("No deviation records a \"{}\" field. The \"Group By Field\" "
+                 "option names which field to group on; the Register page "
+                 "lists the fields these deviations carry.\n".format(label))
+    return
+
+  report.print("One row per value, so a reviewer can take their own "
+               "deviations in one pass.\n\n")
+  report.table('[{"name":"' + label.replace('"', "'") + '","filtertype":"string"},'
+               '{"name":"Deviations","filtertype":"numeric","sort":"descending"},'
+               '{"name":"Checks","filtertype":"string"}]')
+  for value in sorted(groups, key=lambda v: -len(groups[v])):
+    entries = groups[value]
+    report.tablecell()
+    if value == "(not recorded)":
+      report.fontcolor("#c62828")
+      report.print(value)
+      report.fontcolor()
+    else:
+      report.print(value)
+    report.tablecell()
+    report.print(str(len(entries)))
+    report.tablecell()
+    checks = sorted(set(e["violation"].check_id() for e in entries))
+    report.print(", ".join(checks))
+  report.table()
