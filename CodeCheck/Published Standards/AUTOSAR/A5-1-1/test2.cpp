@@ -28,7 +28,7 @@ public:
 
 void callPure(Base *b)
 {
-  b->withParams(0, 1); // UndCC_Violation - arguments are values
+  b->withParams(0, 1); // UndCC_Violation(default) - arguments are values
 }
 
 int add(int a, int b)

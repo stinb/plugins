@@ -41,7 +41,7 @@ int main()
 	char32_t string2[] = U"DEF"; // UndCC_Valid - assignment
 
 	unsigned char buffer[12]; // UndCC_Valid - array size
-	switch (buffer[0]) // UndCC_Violation
+	switch (buffer[0]) // UndCC_Violation(default)
 	{
 		case 0x01: // UndCC_Violation
 			cout << "buffer is 1";
@@ -64,7 +64,7 @@ int main()
           cout << "iter " << i << ':' << '\n'; // UndCC_Valid by exception
 	}
 
-	return 0; // UndCC_Violation
+	return 0; // UndCC_Violation(default)
 }
 
 // g++ -Wconversion-null -std=c++14 main_drive.cpp main_class.cpp main_class.hpp -o main_drive.exe
