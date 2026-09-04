@@ -8,7 +8,7 @@ std::map<char, char> f()
     return std::map<char, char>();
 }
 
-int i1; int j1;                                 // UndCC_Valid
+int i1; int _j1;                                 // UndCC_Valid
 
 int i2, *j2;                                    // UndCC_Violation
 
