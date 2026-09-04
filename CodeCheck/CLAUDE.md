@@ -95,6 +95,9 @@ Non-C/C++ languages use their own prefixes and ID space (`PYTH_*`, `JAVA_*`,
   `Checks: Added new <checkid>: <check name>`
   Don't describe how it was implemented ("noop", "compiler-enforced"). The
   convention names the check that was added, not how it was realized.
+- Commit message for a check fix names the ID and the wrong behavior users saw:
+  `Checks: Fixed: <checkid> <what it was wrongly doing> #NNNN`
+  Lead with the symptom, not the internal cause.
 - **Do standard-coverage work one check at a time.** Implement one, verify it with
   `uvalid`, present it with its commit message, then stop and wait for the commit
   before starting the next — even when several are mechanical and verified clean.
