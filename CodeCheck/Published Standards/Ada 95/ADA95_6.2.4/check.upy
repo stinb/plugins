@@ -1,0 +1,486 @@
+ERR1 = "Do not reference a variable outside this task in a selective accept guard"
+ERR2 = "Mark this variable pragma Volatile or Atomic, or use a protected object, since it is shared unprotected between tasks"
+
+
+def ids():
+    return ("ADA95_6.2.4",)
+
+
+def name(id):
+    return {
+        "ADA95_6.2.4": "Published Standards/Ada 95/6.2.4 Unprotected Shared Variables",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.2.4": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.2.4": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use calls on protected subprograms or entries to pass data
+between tasks rather than unprotected shared variables.</p>
+<p>&#8226; Do not use unprotected shared variables as a task
+synchronization device.</p>
+<p>&#8226; Do not reference nonlocal variables in a guard.</p>
+<p>&#8226; If an unprotected shared variable is necessary, use the pragma
+Volatile or Atomic.</p>
+
+<p><b>Example</b></p>
+<p>This code will either print the same line more than once, fail to
+print some lines, or print garbled lines (part of one line followed by
+part of another) nondeterministically. This is because there is no
+synchronization or mutual exclusion between the task that reads a
+command and the one that acts on it. Without knowledge about their
+relative scheduling, the actual results cannot be predicted:</p>
+<pre><code language="Ada">-----------------------------------------------------------------------
+task body Line_Printer_Driver is
+   ...
+begin
+   loop
+       Current_Line := Line_Buffer;
+       -- send to device
+   end loop;
+end Line_Printer_Driver;
+-----------------------------------------------------------------------
+
+task body Spool_Server is
+   ...
+begin
+   loop
+       Disk_Read (Spool_File, Line_Buffer);
+   end loop;
+end Spool_Server;
+-----------------------------------------------------------------------
+</code></pre>
+<p>The following example shows a vending machine that dispenses the
+amount requested into an appropriately sized container. The guards
+reference the global variables Num_Requested and Item_Count, leading to
+a potential problem in the wrong amount being dispensed into an
+inappropriately sized container:</p>
+<pre><code language="Ada">Num_Requested : Natural;
+Item_Count    : Natural := 1000;
+task type Request_Manager (Personal_Limit : Natural := 1) is
+   entry Make_Request (Num : Natural);
+   entry Get_Container;
+   entry Dispense;
+end Request_Manager;
+
+task body Request_Manager is
+begin
+   loop
+      select
+         accept Make_Request (Num : Natural) do
+             Num_Requested := Num;
+         end Make_Request;
+      or
+            when Num_Requested < Item_Count =>
+               accept Get_Container;
+               ...
+       or
+            when Num_Requested < Item_Count =>
+               accept Dispense do
+                  if Num_Requested <= Personal_Limit then
+                     Ada.Text_IO.Put_Line ("Please pick up items.");
+                  else
+                     Ada.Text_IO.Put_Line ("Sorry! Requesting too many items.");
+                  end if;
+               end Dispense;
+      end select;
+   end loop;
+end Request_Manager;
+R1 : Request_Manager (Personal_Limit => 10);
+R2 : Request_Manager (Personal_Limit => 2);
+</code></pre>
+<p>The interleaving of the execution of R1 and R2 can lead to
+Num_Requested being changed before the entry call to Dispense is
+accepted. Thus, R1 might receive fewer items than requested or R2's
+request might be bounced because the request manager thinks that what R2
+is requesting exceeds R2's personal limit. By using the local variable,
+you will dispense the correct amount. Furthermore, by using the pragma
+Volatile (Ada Reference Manual 1995, &sect;C.6), you ensure that the
+Item_Count is reevaluated when the guards are evaluated. Given that the
+variable Item_Count is not updated in this task body, the compiler might
+otherwise have optimized the code and not generated code to reevaluate
+Item_Count every time it is read:</p>
+<pre><code language="Ada">Item_Count : Natural := 1000;
+pragma Volatile (Item_Count);
+task body Request_Manager is
+   Local_Num_Requested : Natural := 0;
+begin
+   loop
+      select
+         accept Make_Request (Num : Natural) do
+             Local_Num_Requested := Num;
+         end Make_Request;
+       or
+            when Local_Num_Requested <= Personal_Limit =>
+               accept Get_Container;
+               ...
+        or
+             when Local_Num_Requested < Item_Count =>
+                accept Dispense do
+                   ... -- output appropriate message if couldn't service request
+                end Dispense;
+                Item_Count := Item_Count - Local_Num_Requested;
+        end select;
+     end loop;
+  end Request_Manager;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>There are many techniques for protecting and synchronizing data
+access. You must program most of them yourself to use them. It is
+difficult to write a program that shares unprotected data correctly. If
+it is not done correctly, the reliability of the program suffers.</p>
+<p>Ada provides protected objects that encapsulate and provide
+synchronized access to protected data that is shared between tasks.
+Protected objects are expected to provide better performance than the
+rendezvous that usually requires introduction of an additional task to
+manage the shared data. The use of unprotected shared variables is more
+error-prone than the protected objects or rendezvous because the
+programmer must ensure that the unprotected shared variables are
+independently addressable and that the actions of reading or updating
+the same unprotected shared variable are sequential (Ada Reference
+Manual 1995, &sect;9.10; Rationale 1995, &sect;II.9).</p>
+<p>The first example above has a race condition requiring perfect
+interleaving of execution. This code can be made more reliable by
+introducing a flag that is set by Spool_Server and reset by
+Line_Printer_Driver. An if (condition flag) then delay ... else would be
+added to each task loop in order to ensure that the interleaving is
+satisfied. However, notice that this approach requires a delay and the
+associated rescheduling. Presumably, this rescheduling overhead is what
+is being avoided by not using the rendezvous.</p>
+<p>You might need to use an object in shared memory to communicate data
+between (Rationale 1995, &sect;C.5):</p>
+<ul>
+<li>Ada tasks</li>
+<li>An Ada program and concurrent non-Ada processes</li>
+<li>An Ada program and hardware devices</li>
+</ul>
+<p>If your environment supports the Systems Programming Annex (Ada
+Reference Manual 1995, Annex C), you should indicate whether loads and
+stores to the shared object must be indivisible. If you specify the
+pragma Atomic, make sure that the object meets the underlying hardware
+requirements for size and alignment.</p>
+<p>Multiple tasks sharing the predefined random number generator and
+certain input/output subprograms can lead to problems with unprotected
+updates to shared state. The Ada Reference Manual (1995, &sect;A.5.2)
+points out the need for tasks to synchronize their access to the random
+number generators (packages Ada.Numerics.Float_Random and
+Ada.Numerics.Discrete_Random). See Guideline 7.7.5 for the I/O issue.</p>
+
+<p><b>Developer's Note</b></p>
+<p>"Do not reference nonlocal variables in a guard" is automated: each
+selective accept statement's guards are located the same way
+<code>ADA95_6.2.2</code> locates them, and every variable (excluding constants,
+which cannot change) referenced within a guard is checked against the
+enclosing task, the same way <code>ADA95_6.1.1</code> checks an entry barrier
+against its enclosing protected object &#8212; comparing by <code>longname()</code>
+rather than entity id for the same reason documented there.</p>
+<p>The other three bullets are automated together as one check: a
+package-level variable (excluding constants, and excluding an object of
+a protected or task type, since those are already synchronized and are
+themselves the guideline's own recommended fix) is flagged if it is
+referenced (read or written, ignoring its own initializer) from within
+two or more different tasks, or from within a task and from anywhere
+outside any task, unless it is the argument of a <code>pragma Volatile</code> or
+<code>pragma Atomic</code>. Since the variable's declaration, its pragma, and its
+task-body usages can each live in a different file (a package spec
+versus its body being the common case), this runs as a project-level
+check (rather than the usual once-per-file check) so it can walk every
+Ada file exactly once and correlate across them; <code>ent.refs()</code> from a
+variable's own perspective was found, empirically, to only see
+references local to whichever single file originated the query, so a
+per-file check has no way to see this on its own. This is a
+structural proxy, not a proof of an actual race: it does not attempt to
+reason about activation order, so a variable that is written once during
+elaboration and only read by a single task thereafter can still be
+flagged if some other, already-completed code also touched it. Whether
+the guideline's own preferred fix (routing the data through a protected
+object or rendezvous instead) or its fallback (marking the variable
+Volatile or Atomic) is more appropriate is a design decision left to the
+developer; the check only confirms that neither is currently in place.
+The nonlocal-guard check above, by contrast, still only sees references
+within the file being checked, so a guard referencing a variable
+declared in a different file is not detected.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return False
+
+
+def test_global():
+    return True
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_OPENER_KEYWORDS = ("if", "case", "loop", "select", "begin", "do")
+_ALTERNATIVE_KEYWORDS = ("accept", "delay", "terminate")
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _is_statement_start(lex):
+    prev = lex.previous(True, True)
+
+    return prev is None or prev.text() in (";", "then", "else", "loop", "begin", "do")
+
+
+def _scan_alternative(lex):
+    # A guard is skipped by scanning to its alternative keyword directly,
+    # rather than hunting for its own "=>", since none of accept/delay/
+    # terminate can appear as an identifier inside a guard's expression.
+    # The guard's own span (start of its condition through the token just
+    # before the alternative keyword) is recorded for the nonlocal-
+    # reference check.
+    guard_span = None
+
+    if lex and lex.token() == "Keyword" and lex.text().lower() == "when":
+        start = _next_significant(lex)
+        lex = start
+        last = start
+
+        while lex and lex.text().lower() not in _ALTERNATIVE_KEYWORDS:
+            last = lex
+            lex = _next_significant(lex)
+
+        if start:
+            guard_span = (
+                start.line_begin(),
+                start.column_begin(),
+                last.line_begin(),
+                last.column_end(),
+            )
+
+    alt_kind = lex.text().lower() if lex else None
+
+    return alt_kind, guard_span, _next_significant(lex) if lex else None
+
+
+def _scan_select_guards(lex):
+    # lex is positioned right after the statement's own "select" keyword.
+    # See ADA95_6.2.2 for the depth-counting rationale: a single counter
+    # over if/case/loop/select/begin/do, closed by any "end", is enough
+    # to skip nested constructs and find this select's own top-level
+    # "or"/"end select".
+    _, guard_span, lex = _scan_alternative(lex)
+    guard_spans = [guard_span] if guard_span else []
+    depth = 0
+
+    while lex:
+        text = lex.text().lower() if lex.token() == "Keyword" else None
+
+        if text in _OPENER_KEYWORDS:
+            depth += 1
+            lex = _next_significant(lex)
+            continue
+
+        if text == "end":
+            if depth == 0:
+                return guard_spans
+
+            depth -= 1
+            lex = _next_significant(lex)
+            continue
+
+        if depth == 0 and text == "or":
+            lex = _next_significant(lex)
+            _, guard_span, lex = _scan_alternative(lex)
+
+            if guard_span:
+                guard_spans.append(guard_span)
+
+            continue
+
+        lex = _next_significant(lex)
+
+    return guard_spans
+
+
+def _find_guard_spans(lexer, start_line, end_line):
+    spans = []
+    lex = lexer.lexeme(start_line, 1)
+
+    while lex and lex.line_begin() <= end_line:
+        if (
+            lex.token() == "Keyword"
+            and lex.text().lower() == "select"
+            and _is_statement_start(lex)
+        ):
+            spans.extend(_scan_select_guards(_next_significant(lex)))
+
+        lex = lex.next()
+
+    return spans
+
+
+def _task_ranges(file):
+    # A task type's spec and body each have their own "end X;" line, in
+    # whichever file declares that part; ent.refs("End") returns both, so
+    # the result must be filtered to this file before taking the max, or
+    # a spec's "end" in a different file can outrank the body's real one.
+    ranges = []
+
+    for decl_ref in file.filerefs("Declare Body", "Task"):
+        ent = decl_ref.ent()
+        end_refs = [r for r in ent.refs("End") if r.file().id() == file.id()]
+
+        if not end_refs:
+            continue
+
+        ranges.append((decl_ref.line(), max(r.line() for r in end_refs), ent))
+
+    return ranges
+
+
+def _in_span(ref, span):
+    start_line, start_col, end_line, end_col = span
+    line, col = ref.line(), ref.column()
+
+    if line < start_line or line > end_line:
+        return False
+
+    if line == start_line and col < start_col:
+        return False
+
+    if line == end_line and col > end_col:
+        return False
+
+    return True
+
+
+def _check_guards(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for start, end, task_ent in _task_ranges(file):
+        spans = _find_guard_spans(lexer, start, end)
+
+        if not spans:
+            continue
+
+        for use_ref in file.filerefs("Use, Set ~Init", "Object ~Constant"):
+            obj_ent = use_ref.ent()
+
+            if not any(_in_span(use_ref, span) for span in spans):
+                continue
+
+            obj_parent = obj_ent.parent()
+
+            if obj_parent is not None and str(obj_parent.longname()) != str(
+                task_ent.longname()
+            ):
+                check.violation(
+                    obj_ent, file, use_ref.line(), use_ref.column(), ERR1
+                )
+
+
+def _volatile_or_atomic_ids(lexer):
+    ids = set()
+    lex = lexer.first()
+
+    while lex:
+        if lex.token() == "Keyword" and lex.text().lower() == "pragma":
+            name_lex = _next_significant(lex)
+
+            if name_lex and name_lex.text().lower() in ("volatile", "atomic"):
+                paren = _next_significant(name_lex)
+
+                if paren and paren.text() == "(":
+                    arg_lex = _next_significant(paren)
+                    ent = arg_lex.ent() if arg_lex else None
+
+                    if ent:
+                        ids.add(ent.id())
+
+        lex = lex.next()
+
+    return ids
+
+
+def _package_level_variables(file):
+    variables = []
+
+    for decl_ref in file.filerefs("Declare", "Object ~Constant ~Protected ~Task"):
+        ent = decl_ref.ent()
+        parent = ent.parent()
+
+        if parent is not None and parent.kind().check("Package"):
+            variables.append((ent, decl_ref))
+
+    return variables
+
+
+def _location_key(ref, task_ranges):
+    for start, end, task_ent in task_ranges:
+        if start <= ref.line() <= end:
+            return task_ent.id()
+
+    return None
+
+
+def _project_wide_locations_and_protected_ids(files):
+    # A variable's declaration, its task-body usage, and a pragma
+    # Volatile/Atomic covering it can all live in different files (a
+    # package spec versus its body being the common case), so this walks
+    # every Ada file in the project once, rather than per file checked;
+    # this check runs as a project-level check (test_global) specifically
+    # so this scan happens exactly once, not once per file.
+    locations_by_id = {}
+    protected_ids = set()
+
+    for f in files:
+        task_ranges = _task_ranges(f)
+        protected_ids |= _volatile_or_atomic_ids(f.lexer(lookup_ents=True))
+
+        for use_ref in f.filerefs("Use, Set ~Init", "Object"):
+            var_id = use_ref.ent().id()
+            key = _location_key(use_ref, task_ranges)
+            locations_by_id.setdefault(var_id, set()).add(key)
+
+    return locations_by_id, protected_ids
+
+
+def _check_shared_variables(check, files):
+    locations_by_id, protected_ids = _project_wide_locations_and_protected_ids(
+        files)
+
+    for f in files:
+        for ent, decl_ref in _package_level_variables(f):
+            if ent.id() in protected_ids:
+                continue
+
+            locations = locations_by_id.get(ent.id(), set())
+
+            if len(locations) >= 2:
+                check.violation(ent, f, decl_ref.line(),
+                                decl_ref.column(), ERR2)
+
+
+def check(check):
+    files = list(check.db().ents("Ada File"))
+
+    for f in files:
+        _check_guards(check, f)
+
+    _check_shared_variables(check, files)
