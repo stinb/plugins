@@ -97,9 +97,10 @@ should be used in place of the basic numerical types.
 <p><b>Developer's Notes</b></p>
 <p>To allow a certain type, the string to enter should be part or all of the
 freetext "UnderlyingType" of the entity. For example, the underlying type of
-<code>std::string</code> is <code>std::basic_string&lt;char&gt;</code>.</p>
-<p>The "Allowed regular expression patterns" option works the same way, matching
-the underlying type or the name of a typedef.</p>
+<code>std::string</code> is <code>std::basic_string&lt;char&gt;</code>. An entry
+that is the full name of a typedef also allows that typedef.</p>
+<p>The "Allowed regular expression patterns" option works the same way, with
+patterns instead of plain text.</p>
 <p>A typedef of a fixed width integer needs no option, however many typedefs
 away it is. For example, <code>uint8</code> declared as
 <code>typedef uint8_t uint8;</code> is allowed.</p>
@@ -136,7 +137,7 @@ def check(check, file):
         typesFromOptions += CHAR_TYPES
 
     # Append as regex patterns
-    allowedPatterns = [GOOD_TYPES]
+    allowedPatterns = [re.compile(GOOD_TYPES)]
     allowedNames = set()
     allowedNamePatterns = []
     for allowedType in typesFromOptions:
@@ -152,6 +153,11 @@ def check(check, file):
         allowedPattern = re.compile(addWordBoundaries(allowedPattern))
         allowedPatterns.append(allowedPattern)
         allowedNamePatterns.append(allowedPattern)
+
+    # Longest first, so that an allowed type is never left in pieces by a
+    # shorter one, such as "char" matching part of "unsigned char". A pattern
+    # sorts by its text, which may be shorter than what it matches
+    allowedPatterns.sort(key=lambda pattern: len(pattern.pattern), reverse=True)
 
     # Variables/parameters
     for ref in file.filerefs('Define', '~Unresolved ~Unknown Object, ~Unresolved Parameter', True):
@@ -172,9 +178,9 @@ def check(check, file):
         if not isinstance(underlyingType, str):
             continue
 
-        # Each underlying type part
-        modifiedUnderlyingType: str = removePatterns(allowedPatterns, underlyingType)
-        modifiedUnderlyingType: str = removeAllocatorPart(modifiedUnderlyingType)
+        # Each underlying type part, removed before the allowed patterns so
+        # that a partial pattern cannot break a whole underlying type apart
+        modifiedUnderlyingType: str = underlyingType
         for typedRef in ent.refs('Typed'):
             typedEnt = typedRef.ent()
             # Skip if underlying type unknown
@@ -186,6 +192,8 @@ def check(check, file):
                 continue
             # Remove the part from the underlying type once
             modifiedUnderlyingType = re.sub(toPatternString(underlyingTypePart), '', modifiedUnderlyingType, 1)
+        modifiedUnderlyingType: str = removeAllocatorPart(modifiedUnderlyingType)
+        modifiedUnderlyingType: str = removePatterns(allowedPatterns, modifiedUnderlyingType)
 
         # Violation in underlying type
         if re.search(BAD_TYPES, modifiedUnderlyingType):

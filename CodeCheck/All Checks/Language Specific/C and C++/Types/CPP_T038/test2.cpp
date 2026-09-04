@@ -38,3 +38,12 @@ void test2_b()
   my_word a;  // UndCC_Violation(allow_char,allow_size_t,strict)
   raw_word b; // UndCC_Violation
 }
+
+// The "char" pattern matches part of the underlying type "unsigned char", so
+// it must not keep that type from being removed whole
+void test2_c()
+{
+  uint8 a;   // UndCC_Valid
+  uint8_t b; // UndCC_Valid
+  int8_t c;  // UndCC_Valid
+}
