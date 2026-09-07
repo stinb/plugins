@@ -1,0 +1,355 @@
+ERR1 = "Add a delay in this loop since a conditional entry call or selective accept with an else can otherwise busy-wait"
+
+
+def ids():
+    return ("ADA95_6.2.5",)
+
+
+def name(id):
+    return {
+        "ADA95_6.2.5": "Published Standards/Ada 95/6.2.5 Selective Accepts and Entry Calls",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.2.5": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.2.5": """
+<p><b>Guideline</b></p>
+<p>&#8226; Use caution with conditional entry calls to task entries.</p>
+<p>&#8226; Use caution with selective accepts with else parts.</p>
+<p>&#8226; Do not depend upon a particular delay in timed entry calls to
+task entries.</p>
+<p>&#8226; Do not depend upon a particular delay in selective accepts with
+delay alternatives.</p>
+<p>&#8226; Consider using protected objects instead of the rendezvous for
+data-oriented synchronization.</p>
+
+<p><b>Example</b></p>
+<p>The conditional entry call in the following code results in a
+potential race condition that might degenerate into a busy waiting loop
+(i.e., perform the same calculation over and over). The task
+Current_Position containing entry Request_New_Coordinates might never
+execute if the loop-containing task (shown in the following code
+fragment) has a higher priority than Current_Position because it does
+not release the processing resource:</p>
+<pre><code language="Ada">task body Calculate_Flightpath is
+begin
+   ...
+   loop
+
+         select
+            Current_Position.Request_New_Coordinates (X, Y);
+            -- calculate projected location based on new coordinates
+            ...
+
+         else
+            -- calculate projected location based on last locations
+            ...
+         end select;
+   end loop;
+   ...
+end Calculate_Flightpath;
+</code></pre>
+<p>The addition of a delay, as shown, may allow Current_Position to
+execute until it reaches an accept for Request_New_Coordinates:</p>
+<pre><code language="Ada">task body Calculate_Flightpath is
+begin
+   ...
+   loop
+
+         select
+            Current_Position.Request_New_Coordinates(X, Y);
+            -- calculate projected location based on new coordinates
+            ...
+         else
+            -- calculate projected location based on last locations
+            ...
+
+            delay until Time_To_Execute;
+            Time_To_Execute := Time_To_Execute + Period;
+         end select;
+   end loop;
+   ...
+end Calculate_Flightpath;
+</code></pre>
+<p>The following selective accept with else again does not degenerate
+into a busy wait loop only because of the addition of a delay statement:</p>
+<pre><code language="Ada">task body Buffer_Messages is
+   ...
+
+begin
+   ...
+
+   loop
+      delay until Time_To_Execute;
+
+         select
+            accept Get_New_Message (Message : in       String) do
+                -- copy message to parameters
+                ...
+            end Get_New_Message;
+         else -- Don't wait for rendezvous
+            -- perform built in test Functions
+            ...
+         end select;
+
+      Time_To_Execute := Time_To_Execute + Period;
+   end loop;
+
+   ...
+
+end Buffer_Messages;
+</code></pre>
+<p>The following timed entry call might be considered an unacceptable
+implementation if lost communications with the reactor for over 25
+milliseconds results in a critical situation:</p>
+<pre><code language="Ada">task body Monitor_Reactor is
+   ...
+begin
+   ...
+   loop
+
+      select
+         Reactor.Status(OK);
+
+      or
+         delay 0.025;
+         -- lost communication for more that 25 milliseconds
+         Emergency_Shutdown;
+      end select;
+       -- process reactor status
+       ...
+   end loop;
+   ...
+end Monitor_Reactor;
+</code></pre>
+<p>In the following &ldquo;selective accept with delay&rdquo; example, the
+accuracy of the coordinate calculation function is bounded by time. For
+example, the required accuracy cannot be obtained unless Period is
+within + or &#8211; 0.005 seconds. This period cannot be guaranteed
+because of the inaccuracy of the delay statement:</p>
+<pre><code language="Ada">task body Current_Position is
+begin
+   ...
+   loop
+
+      select
+         accept Request_New_Coordinates (X :          out Integer;
+                                          Y :         out Integer) do
+             -- copy coordinates to parameters
+             ...
+         end Request_New_Coordinates;
+      or
+         delay until Time_To_Execute;
+      end select;
+
+       Time_To_Execute := Time_To_Execute + Period;
+       -- Read Sensors
+       -- execute coordinate transformations
+   end loop;
+   ...
+end Current_Position;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Use of these constructs always poses a risk of race conditions. Using
+them in loops, particularly with poorly chosen task priorities, can have
+the effect of busy waiting.</p>
+<p>These constructs are very much implementation dependent. For
+conditional entry calls and selective accepts with else parts, the Ada
+Reference Manual (1995, &sect;9.7) does not define &ldquo;immediately.&rdquo;
+For timed entry calls and selective accepts with delay alternatives,
+implementors might have ideas of time that differ from each other and
+from your own. Like the delay statement, the delay alternative on the
+select construct might wait longer than the time required (see
+Guideline 6.1.7).</p>
+<p>Protected objects offer an efficient means for providing data-oriented
+synchronization. Operations on protected objects incur less execution
+overhead than tasks and are more efficient for data synchronization and
+communication than the rendezvous. See Guideline 6.1.1 for an example of
+this use of protected objects.</p>
+
+<p><b>Developer's Note</b></p>
+<p>The first two bullets are automated together as one check, following
+the guideline's own examples directly: a <code>select</code> statement with an
+<code>else</code> part (whether its first alternative is an entry call or an
+<code>accept</code> &#8212; the risk and the remedy are the same either way) is flagged
+when it sits inside a loop that contains no <code>delay</code> or <code>delay until</code>
+statement anywhere in its body, matching exactly the difference between
+the guideline's first (bad) and second (fixed by adding a delay)
+Calculate_Flightpath examples. This is a structural proxy, not a proof of
+actual busy-waiting: a <code>delay</code> anywhere in the loop is accepted even if
+it sits on a rarely taken path that would not actually pace the common
+case, and a loop with no <code>delay</code> is still flagged even if its <code>else</code>
+branch happens to do enough real work of its own (blocking I/O, for
+example) to avoid spinning in practice. A <code>select</code> with an <code>else</code> that
+is not inside any loop at all is not flagged, since a one-shot
+conditional entry call cannot busy-wait.</p>
+<p>The remaining three bullets are not automated. "Do not depend upon a
+particular delay" (in either the timed-entry-call or selective-accept-
+with-delay form) is the same caution as <code>ADA95_6.1.7</code>'s "do not depend on
+a particular delay being achievable," with no structural signal beyond
+the mere presence of a delay, which is not itself a defect. "Consider
+using protected objects instead of the rendezvous" is a design-choice
+recommendation with no violation shape, the same as <code>ADA95_6.1.1</code> and
+<code>ADA95_6.2.1</code>.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_OPENER_KEYWORDS = ("if", "case", "loop", "select", "begin", "do")
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _is_statement_start(lex):
+    prev = lex.previous(True, True)
+
+    return prev is None or prev.text() in (";", "then", "else", "loop", "begin", "do")
+
+
+def _loop_ranges(lexer):
+    # A single stack keyed only on "loop"/"end loop" correctly tracks loop
+    # nesting on its own, since Ada requires every construct to be
+    # properly nested regardless of what else (if/case/select/begin/do)
+    # is interleaved between a loop's own start and its own end.
+    ranges = []
+    stack = []
+    lex = lexer.first()
+
+    while lex:
+        if lex.token() == "Keyword" and lex.text().lower() == "loop":
+            prev = lex.previous(True, True)
+
+            if prev is None or prev.text().lower() != "end":
+                stack.append(lex.line_begin())
+        elif lex.token() == "Keyword" and lex.text().lower() == "end":
+            nxt = _next_significant(lex)
+
+            if nxt and nxt.text().lower() == "loop" and stack:
+                ranges.append((stack.pop(), lex.line_begin()))
+
+        lex = lex.next()
+
+    return ranges
+
+
+def _innermost_range(line, ranges):
+    home = None
+
+    for start, end in ranges:
+        if start <= line <= end:
+            if home is None or (end - start) < (home[1] - home[0]):
+                home = (start, end)
+
+    return home
+
+
+def _select_has_else(lex):
+    # lex is positioned right after the statement's own "select" keyword.
+    # See ADA95_6.2.2/ADA95_6.2.4 for the depth-counting rationale: a
+    # single counter over if/case/loop/select/begin/do, closed by any
+    # "end", is enough to skip nested constructs and find this select's
+    # own top-level "else"/"end select".
+    depth = 0
+    has_else = False
+
+    while lex:
+        text = lex.text().lower() if lex.token() == "Keyword" else None
+
+        if text in _OPENER_KEYWORDS:
+            depth += 1
+            lex = _next_significant(lex)
+            continue
+
+        if text == "end":
+            if depth == 0:
+                return has_else
+
+            depth -= 1
+            lex = _next_significant(lex)
+            continue
+
+        if depth == 0 and text == "else":
+            has_else = True
+
+        lex = _next_significant(lex)
+
+    return has_else
+
+
+def _find_selects_with_else(lexer):
+    selects = []
+    lex = lexer.first()
+
+    while lex:
+        if (
+            lex.token() == "Keyword"
+            and lex.text().lower() == "select"
+            and _is_statement_start(lex)
+        ):
+            select_line, select_col = lex.line_begin(), lex.column_begin()
+
+            if _select_has_else(_next_significant(lex)):
+                selects.append((select_line, select_col))
+
+        lex = lex.next()
+
+    return selects
+
+
+def _has_delay(lexer, start_line, end_line):
+    lex = lexer.lexeme(start_line, 1)
+
+    while lex and lex.line_begin() <= end_line:
+        if (
+            lex.token() == "Keyword"
+            and lex.text().lower() == "delay"
+            and _is_statement_start(lex)
+        ):
+            return True
+
+        lex = lex.next()
+
+    return False
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    loop_ranges = _loop_ranges(lexer)
+
+    for select_line, select_col in _find_selects_with_else(lexer):
+        enclosing_loop = _innermost_range(select_line, loop_ranges)
+
+        if enclosing_loop is None:
+            continue
+
+        start, end = enclosing_loop
+
+        if not _has_delay(lexer, start, end):
+            check.violation(None, file, select_line, select_col, ERR1)
