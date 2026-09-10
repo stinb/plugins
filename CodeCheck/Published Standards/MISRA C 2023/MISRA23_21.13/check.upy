@@ -3,8 +3,11 @@
 # 11-10-2025
 import re
 import Modules
+from Modules import cParseIntLiteral
 
 ERR1 = "Argument to <ctype.h> function was not an unsigned char or the value EOF"
+
+UNSIGNED_CHAR_TYPES = {'unsigned char', 'uint8_t', 'std::uint8_t'}
 
 CTYPE_FUNCS = {
     "isalnum", "isalpha", "isblank", "iscntrl", "isdigit", "isgraph",
@@ -13,16 +16,14 @@ CTYPE_FUNCS = {
 }
 
 def ids():
-    return ('MISRA23_21.13', 'CPP_L040',
-               'MISRA25_21.13'
-    )
+    return ('MISRA23_21.13', 'CPP_L036', 'MISRA25_21.13')
 
 def name(id):
     return {
         'MISRA23_21.13': 'Published Standards/MISRA C 2023/' + """\
 21.13 Any value passed to a function in <ctype.h> shall be representable as an \
 unsigned char or be the value EOF""",
-        'CPP_L040': """\
+        'CPP_L036': """\
 All Checks/Language Specific/C and C++/Libraries/\
 Any value passed to a function in <ctype.h> shall be representable as an \
 unsigned char or be the value EOF""",
@@ -38,7 +39,7 @@ def tags(id):
             'Category: Mandatory',
             'Libraries',
         ],
-        'CPP_L040': [
+        'CPP_L036': [
             'Language: C',
             'Language: C++',
             'Libraries',
@@ -74,7 +75,7 @@ return ( isdigit ( ( int32_t ) a ) /* Compliant */
 """
     return {
         'MISRA23_21.13': desc,
-        'CPP_L040': desc,
+        'CPP_L036': desc,
 
         'MISRA25_21.13': """<p><b>Rationale</b></p>
 <p>The relevant functions from <code>&lt;ctype.h&gt;</code> are defined to take an <em>int</em> argument where the expected value is either in the range of an <em>unsigned char</em> or is a negative value equivalent to <code>EOF</code>. The use of any other values results in <em>undefined behaviour</em>.</p>
@@ -97,121 +98,81 @@ def test_language(language):
 
 
 def check(check, file):
-    lexer = file.lexer()
-    if not lexer:
-        return
+    lexer = None
 
-    refs = file.filerefs("Call ~Inactive", "Function")
+    # ctype entries are often macros rather than functions
+    refs = file.filerefs('Call ~Inactive', '~Member Function')
+    refs += file.filerefs('Use ~Inactive', 'Functional Macro, Unresolved Macro')
+
     for ref in refs:
-        func_ent = ref.ent()
-        if not func_ent or func_ent.name() not in CTYPE_FUNCS:
+        ent = ref.ent()
+        if ent.name() not in CTYPE_FUNCS:
             continue
 
-        lexeme = lexer.lexeme(ref.line(), ref.column())
-        if not lexeme:
+        if ent.kind().check('Function') and ent.library() != 'standard':
             continue
 
-        # find '(' and matching ')'
-        open_paren = lexeme.next(True, True)
-        if not open_paren or open_paren.text() != '(':
+        if not lexer:
+            lexer = file.lexer()
+            if not lexer:
+                return
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex or lex.text() != ent.name():
             continue
-        close_paren = Modules.findClose(open_paren)
-        if not close_paren:
+        lex = lex.next(True, True)
+        if not lex or lex.text() != '(':
             continue
+        lex = lex.next(True, True)
 
-        # gather first argument lexemes
-        arg_lexemes = []
-        lexeme = open_paren.next(True, True)
-        paren_level = 0
-        while lexeme and (lexeme.line_begin(), lexeme.column_begin()) < \
-              (close_paren.line_begin(), close_paren.column_begin()):
-            if lexeme.text() == ',' and paren_level == 0:
-                break
-            if lexeme.text() == '(':
-                paren_level += 1
-            elif lexeme.text() == ')':
-                if paren_level == 0:
-                    break
-                paren_level -= 1
-            arg_lexemes.append(lexeme)
-            lexeme = lexeme.next(True, True)
-
-        arg_text = ' '.join(l.text() for l in arg_lexemes).strip()
-        if not arg_text:
-            check.violation(func_ent, file, ref.line(), ref.column(), ERR1)
-            continue
-
-        if re.search(r'\(\s*unsigned\s+char\s*\)', arg_text):
-            continue
-        if re.search(r'\(\s*uint8_t\s*\)', arg_text, re.IGNORECASE):
-            continue
-        if arg_text.strip() == 'EOF':
-            continue
-
-        # character literal
-        if re.match(r"^'([^'\\]|\\.)+'$", arg_lexemes[-1].text()) or \
-           re.match(r"^'\S+'$", arg_text):
-            continue
-
-        # numeric literal check
-        num_match = re.match(r'^\(*\s*(-?\d+)\s*\)*$', arg_text)
-        if num_match:
-            val = int(num_match.group(1))
-            if 0 <= val <= 255:
-                continue
-            check.violation(func_ent, file, ref.line(), ref.column(), ERR1)
-            continue
-
-        # handle explicit casts more precisely:
-        # if cast is to a signed/wider int, accept when operand is known
-        # uint8/unsigned char
-        m_cast = re.match(r'^\s*\(\s*([A-Za-z_0-9]+)\s*\)\s*([A-Za-z_]\w*)\s*$', arg_text)
-        if m_cast:
-            cast_type = m_cast.group(1).lower()
-            operand_name = m_cast.group(2)
-            # try to resolve operand entity
-            operand_ent = None
-            for lexeme in arg_lexemes:
-                if lexeme.text() == operand_name:
-                    operand_ent = lexeme.ent()
-                    break
-            operand_is_u8 = False
-            if operand_ent:
-                try:
-                    et = str(operand_ent.type()).lower()
-                except Exception:
-                    et = ''
-                if ('uint8' in et) or ('unsigned char' in et):
-                    operand_is_u8 = True
-
-            # signed/wider integer casts
-            if re.search(r'^(int|int8_t|int16_t|int32_t|long|long int)$', cast_type, re.I):
-                # skip widening an unsigned 8-bit value
-                if operand_is_u8:
-                    continue  
-                check.violation(func_ent, file, ref.line(), ref.column(), ERR1)
-                continue
-
-            # unsigned wider casts (may still exceed 255)
-            if re.search(r'^(unsigned|unsigned\s+int|uint32_t|uint16_t)$', cast_type, re.I):
-                if operand_is_u8:
-                    continue
-                check.violation(func_ent, file, ref.line(), ref.column(), ERR1)
-                continue
-
-        # try to resolve identifier type
-        for lexeme in arg_lexemes:
-            txt = lexeme.text()
-            if re.match(r'^[A-Za-z_]\w*$', txt):
-                ent = lexeme.ent()
-                if ent:
-                    t = str(ent.type()).lower()
-                    if ('uint8_t' in t) or ('unsigned char' in t):
-                        # valid
+        # Split the argument into the cast it is written with, if any, and the
+        # expression the cast applies to
+        cast = []
+        arg = []
+        paren = 1
+        i = 0
+        inCast = False
+        endOfCast = False
+        while lex:
+            match lex.text():
+                case '(':
+                    if i == 0:
+                        inCast = True
+                    paren += 1
+                case ')':
+                    paren -= 1
+                    if paren == 1:
+                        endOfCast = True
+                    elif paren == 0:
                         break
-                check.violation(func_ent, file, ref.line(),
-                                ref.column(), ERR1)
-                break
-        else:
-            # flag expressions
-            check.violation(func_ent, file, ref.line(), ref.column(), ERR1)
+            if endOfCast:
+                inCast = False
+                endOfCast = False
+            elif inCast:
+                cast.append(lex)
+            else:
+                arg.append(lex)
+            lex = lex.next(True, True)
+            i += 1
+
+        # A cast to an unsigned character type makes any operand compliant
+        castText = ' '.join(l.text() for l in cast if l.text() != '(')
+        if castText in UNSIGNED_CHAR_TYPES:
+            continue
+
+        if len(arg) != 1:
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
+            continue
+
+        text = arg[0].text()
+        if text.startswith("'") or text == 'EOF':
+            continue
+
+        argEnt = arg[0].ent()
+        if argEnt and argEnt.freetext('UnderlyingType') in UNSIGNED_CHAR_TYPES:
+            continue
+
+        num = cParseIntLiteral(text)
+        if num != None and num >= 0 and num <= 255:
+            continue
+
+        check.violation(ent, file, ref.line(), ref.column(), ERR1)
