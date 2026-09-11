@@ -1,0 +1,189 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+
+ERR1 = "Thread-specific storage pointer %1 is accessed before it is created"
+
+SYNC_TYPES = {'tss_t'}
+
+INIT_FUNCS = {'tss_create'}
+
+ACCESS_FUNCS = {'tss_get', 'tss_set', 'tss_delete'}
+
+
+def ids():
+    return ('MISRA23_22.20', 'MISRA25_22.20', 'CPP_L050')
+
+
+def name(id):
+    return {
+        'MISRA23_22.20': 'Published Standards/MISRA C 2023/' + """\
+22.20 Thread-specific storage pointers shall be created before being accessed""",
+        'MISRA25_22.20': 'Published Standards/MISRA C 2025/' + """\
+22.20 Thread-specific storage pointers shall be created before being accessed""",
+        'CPP_L050': 'All Checks/Language Specific/C and C++/Libraries/' + """\
+Thread-specific storage pointers shall be created before being accessed""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_22.20': [
+            'Language: C',
+            'Language: C++',
+            'Standard: MISRA C 2023',
+            'Category: Mandatory',
+            'Libraries',
+        ],
+        'MISRA25_22.20': [
+            'Language: C',
+            'Standard: MISRA C 2025',
+            'Category: Mandatory',
+            'Libraries',
+        ],
+        'CPP_L050': [
+            'Language: C',
+            'Language: C++',
+            'Libraries',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """
+<p><b>Amplification</b></p>
+<p>Objects of type <code>tss_t</code> shall be explicitly created by
+<code>tss_create()</code> before being accessed.</p>
+
+<p><b>Rationale</b></p>
+<p>Thread-specific storage pointers have to be explicitly created before
+accessing them. Creating them inside of threads creates dependencies on thread
+execution and ordering which are hard to maintain and check. Creating them
+before creating the threads accessing them is a deterministic way to prevent
+threads from accessing thread-specific storage pointers with indeterminate
+state.</p>
+
+<p><b>What this check reports</b></p>
+<p>A pointer accessed before it is created within the same function.</p>
+<p>It does not report the ordering the example below turns on: whether a
+pointer was created before the threads that access it were created. That is a
+property of the whole program, so a pointer of wider scope, or one passed to
+another function that may create it, is not reported.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">tss_t   key1;
+tss_t   key2;
+thrd_t  id1;
+thrd_t  id2;
+int32_t g1;
+int32_t g2;
+
+int32_t t2( void *ignore )          /* Thread t2 entry */
+{
+  tss_create( &amp;key1, NULL );        /* Non-compliant - thread t1 might already
+                                       have tried to access key1 */
+}
+
+int32_t t1( void *ignore )          /* Thread t1 entry */
+{
+  tss_set( key1, &amp;g1 );             /* Non-compliant - might not yet be created */
+  tss_set( key2, &amp;g2 );             /* Compliant */
+
+  int32_t *v1 = tss_get( key1 );
+  int32_t *v2 = tss_get( key2 );
+  *v1 = computeG1();
+  *v2 = computeG2();
+}
+
+void main( void )
+{
+  tss_create( &amp;key2, NULL );        /* Compliant */
+  thrd_create( &amp;id1, t1, NULL );
+  thrd_create( &amp;id2, t2, NULL );
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 4.13</p>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# The thread-specific storage pointer an argument list refers to, and whether
+# its address was taken
+def call_object(lexer, ref):
+    lex = lexer.lexeme(ref.line(), ref.column())
+    if not lex:
+        return None, False
+
+    depth = 0
+    addressed = False
+    while lex:
+        text = lex.text()
+        if text == '(':
+            depth += 1
+        elif text == ')':
+            depth -= 1
+            if not depth:
+                break
+        elif depth >= 1:
+            if text == '&':
+                addressed = True
+            else:
+                ent = lex.ent()
+                if ent and str(ent.type()) in SYNC_TYPES:
+                    return ent, addressed
+                addressed = False
+        lex = lex.next(True, True)
+
+    return None, False
+
+
+def check(check, file):
+    lexer = None
+
+    for func_ref in file.filerefs('Define', 'Function'):
+        func = func_ref.ent()
+
+        contents = str(func.contents())
+        if not any(name in contents for name in INIT_FUNCS | ACCESS_FUNCS):
+            continue
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+            if not lexer:
+                return
+
+        # An object of wider scope may be initialized elsewhere
+        local = {ref.ent().id() for ref in func.refs('Define', 'Object')}
+        initialized = set()
+
+        escaped = set()
+
+        for call in sorted(func.refs('Call ~Inactive', 'Function'),
+                           key=lambda ref: (ref.line(), ref.column())):
+            called = call.ent().name()
+            known = called in INIT_FUNCS or called in ACCESS_FUNCS
+
+            obj, addressed = call_object(lexer, call)
+            if obj is None:
+                continue
+
+            # Only an address lets another function create the object; passing
+            # the pointer by value cannot
+            if not known:
+                if addressed:
+                    escaped.add(obj.id())
+                continue
+
+            if called in INIT_FUNCS:
+                initialized.add(obj.id())
+            elif (obj.id() in local and obj.id() not in escaped
+                    and obj.id() not in initialized):
+                check.violation(obj, file, call.line(), call.column(), ERR1,
+                                obj.name())
