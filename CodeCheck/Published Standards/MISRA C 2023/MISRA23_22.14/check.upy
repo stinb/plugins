@@ -137,14 +137,16 @@ def test_language(language):
     return language == 'C++'
 
 
-# The synchronization object an argument list refers to, and the tokens making
-# up the argument that follows it, each with its token kind
+# The synchronization object an argument list refers to, whether its address
+# was taken, and the tokens making up the argument that follows it
 def call_arguments(lexer, ref):
     lex = lexer.lexeme(ref.line(), ref.column())
     if not lex:
-        return None, []
+        return None, False, []
 
     obj = None
+    addressed = False
+    taken = False
     rest = []
     depth = 0
     seen_comma = False
@@ -160,14 +162,19 @@ def call_arguments(lexer, ref):
             seen_comma = True
         elif depth >= 1:
             if not seen_comma:
-                ent = lex.ent()
-                if obj is None and ent and str(ent.type()) in SYNC_TYPES:
-                    obj = ent
+                if text == '&':
+                    addressed = True
+                else:
+                    ent = lex.ent()
+                    if obj is None and ent and str(ent.type()) in SYNC_TYPES:
+                        obj = ent
+                        taken = addressed
+                    addressed = False
             elif lex.token() in ('Identifier', 'Literal', 'Keyword', 'Macro'):
                 rest.append((text, lex.token()))
         lex = lex.next(True, True)
 
-    return obj, rest
+    return obj, taken, rest
 
 
 # mtx_init's type argument is only judged when every token is a known constant
@@ -209,13 +216,15 @@ def check(check, file):
             called = call.ent().name()
             known = called in INIT_FUNCS or called in ACCESS_FUNCS
 
-            obj, rest = call_arguments(lexer, call)
+            obj, addressed, rest = call_arguments(lexer, call)
             if obj is None:
                 continue
 
-            # A call to any other function may initialize the object
+            # Only an address lets another function initialize the object;
+            # passing it by value, or using it in a nested call, cannot
             if not known:
-                escaped.add(obj.id())
+                if addressed:
+                    escaped.add(obj.id())
                 continue
 
             if called in INIT_FUNCS:

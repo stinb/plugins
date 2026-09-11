@@ -101,6 +101,17 @@ void standard_example(void)
   thrd_join(id2, NULL);
 }
 
+void use(void *p) { (void)p; }
+
+void nested_access(void)
+{
+  mtx_t m;
+  use(&m);                           /* UndCC_Valid - the address escapes */
+  mtx_t n;
+  mtx_lock(&n);                      /* UndCC_Violation(lin, win) - nothing has escaped n */
+  mtx_unlock(&n);                    /* UndCC_Violation(lin, win) - still not initialized */
+}
+
 void escape_after_access(void)
 {
   mtx_t m;
