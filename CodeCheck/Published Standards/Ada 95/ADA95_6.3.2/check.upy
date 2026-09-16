@@ -1,0 +1,424 @@
+ERR1 = "Consider adding a terminate alternative to this selective accept since it has no else, delay, or terminate alternative"
+ERR2 = "Confirm this task is terminated, such as with 'Terminated, before freeing it with Unchecked_Deallocation"
+
+
+def ids():
+    return ("ADA95_6.3.2",)
+
+
+def name(id):
+    return {
+        "ADA95_6.3.2": "Published Standards/Ada 95/6.3.2 Normal Termination",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.3.2": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.3.2": """
+<p><b>Guideline</b></p>
+<p>&#8226; Do not create nonterminating tasks unintentionally.</p>
+<p>&#8226; Explicitly shut down tasks that depend on library packages.</p>
+<p>&#8226; Confirm that a task is terminated before freeing it with
+<code>Ada.Unchecked_Deallocation</code>.</p>
+<p>&#8226; Consider using a select statement with a terminate alternative
+rather than an accept statement alone.</p>
+<p>&#8226; Consider providing a terminate alternative for every selective
+accept that does not require an else part or a delay.</p>
+<p>&#8226; Do not declare or create a task within a user-defined Finalize
+procedure after the environment task has finished waiting for other
+tasks.</p>
+
+<p><b>Example</b></p>
+<p>This task will never terminate:</p>
+<pre><code language="Ada">---------------------------------------------------------------------
+task body Message_Buffer is
+   ...
+begin  -- Message_Buffer
+   loop
+      select
+         when Head /= Tail => -- Circular buffer not empty
+            accept Retrieve (Value :    out Element) do
+               ...
+            end Retrieve;
+
+      or
+         when not ((Head  = Index'First and then
+                    Tail  = Index'Last) or else
+                   (Head /= Index'First and then
+                    Tail  = Index'Pred(Head))    )
+                 => -- Circular buffer not full
+            accept Store (Value : in     Element);
+      end select;
+   end loop;
+...
+end Message_Buffer;
+---------------------------------------------------------------------
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>The implicit environment task does not terminate until all other
+tasks have terminated. The environment task serves as a master for all
+other tasks created as part of the execution of the partition; it
+awaits termination of all such tasks in order to perform finalization
+of any remaining objects of the partition. Thus, a partition will exist
+until all library tasks are terminated.</p>
+<p>A nonterminating task is a task whose body consists of a
+nonterminating loop with no selective accept with terminate or a task
+that depends on a library package. Execution of a subprogram or block
+containing a task cannot complete until the task terminates. Any task
+that calls a subprogram containing a nonterminating task will be
+delayed indefinitely.</p>
+<p>A task that depends on a library package cannot be forced to
+terminate using a selective accept construct with alternative and
+should be terminated explicitly during program shutdown. One way to
+explicitly shut down tasks that depend on library packages is to
+provide them with exit entries and have the main subprogram call the
+exit entry just before it terminates.</p>
+<p>The Ada Reference Manual, &sect;13.1.2 states that a bounded error
+results from freeing a discriminated, unterminated task object. The
+danger lies in deallocating the discriminants as a result of freeing
+the task object. The effect of unterminated tasks containing bounded
+errors at the end of program execution is undefined.</p>
+<p>Execution of an accept statement or of a selective accept statement
+without an else part, a delay, or a terminate alternative cannot
+proceed if no task ever calls the entry(s) associated with that
+statement. This could result in deadlock. Following the guideline to
+provide a terminate alternative for every selective accept without an
+else or a delay entails programming multiple termination points in the
+task body. A reader can easily &ldquo;know where to look&rdquo; for the
+normal termination points in a task body. The termination points are
+the end of the body's sequence of statements and alternatives to select
+statements.</p>
+<p>When the environment task has been terminated, either normally or
+abnormally, the language does not specify whether to await a task
+activated during finalization of the controlled objects in a
+partition. While the environment task is waiting for all other tasks
+in the partition to complete, starting up a new task during
+finalization results in a bounded error (Ada Reference Manual,
+&sect;10.2). The exception Program_Error can be raised during creation
+or activation of such a task.</p>
+
+<p><b>Exceptions</b></p>
+<p>If you are implementing a cyclic executive, you might need a
+scheduling task that does not terminate. It has been said that no
+real-time system should be programmed to terminate. This is extreme.
+Systematic shutdown of many real-time systems is a desirable safety
+feature.</p>
+<p>If you are considering programming a task not to terminate, be
+certain that it is not a dependent of a block or subprogram from which
+the task's caller(s) will ever expect to return. Because entire
+programs can be candidates for reuse (see Chapter 8), note that the
+task (and whatever it depends upon) will not terminate. Also be certain
+that for any other task that you do wish to terminate, its termination
+does not await this task's termination. Reread and fully understand the
+Ada Reference Manual, &sect;9.3 on &ldquo;Task Dependence-Termination of
+Tasks.&rdquo;</p>
+
+<p><b>Developer's Note</b></p>
+<p>"Do not create nonterminating tasks unintentionally" and "consider
+providing a terminate alternative for every selective accept that does
+not require an else part or a delay" are automated together, as one
+check: a selective accept (a <code>select</code> with at least one <code>accept</code>
+alternative) that has none of an <code>else</code> part, a <code>delay</code> alternative,
+or a <code>terminate</code> alternative is flagged. The Exceptions section
+explicitly allows a deliberately nonterminating scheduling task, which
+this check cannot distinguish from an accidental omission, so this is
+accepted as a known, documented over-flag rather than a proof of a
+defect.</p>
+<p>"Confirm that a task is terminated before freeing it with
+<code>Ada.Unchecked_Deallocation</code>" is automated for the direct case: a
+procedure instantiating <code>Ada.Unchecked_Deallocation</code> whose object
+parameter designates a task type is identified structurally (the
+generic's actual parameters are found from the instantiated procedure's
+own formal parameter and its type), and each call to it is flagged
+unless a use of <code>'Terminated</code> appears earlier in the same enclosing
+subprogram. This does not verify that the <code>'Terminated</code> check applies
+to the same object being freed, nor does it recognize a task embedded
+as a component of a record being deallocated (only a direct access-to-
+task-type case); it also does not recognize any other way of confirming
+termination (an explicit shutdown rendezvous, for example) besides
+<code>'Terminated</code> itself. The instantiation and the calls to it commonly
+live in different files (a package spec versus its body, or a client
+package entirely), so once the declaring package is found, every file
+that could legally call the instantiated procedure is checked: the
+package's own spec and body, plus every file that names it in a with
+clause &#8212; the complete set Ada visibility rules allow, found directly
+from the package entity's own references, without needing to scan the
+whole project.</p>
+<p>The remaining three bullets are not automated. "Explicitly shut down
+tasks that depend on library packages" and "do not declare or create a
+task within a user-defined Finalize procedure after the environment
+task has finished waiting for other tasks" both require whole-program,
+runtime-lifecycle knowledge (what shuts the task down, and when during
+finalization a given call occurs) that no structural check can see.
+"Consider using a select statement with a terminate alternative rather
+than an accept statement alone" is a design-choice recommendation with
+no violation shape, distinct from the more concrete "missing terminate
+on an existing selective accept" signal automated above.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_OPENER_KEYWORDS = ("if", "case", "loop", "select", "begin", "do")
+_ALTERNATIVE_KEYWORDS = ("accept", "delay", "terminate")
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _is_statement_start(lex):
+    prev = lex.previous(True, True)
+
+    return prev is None or prev.text() in (";", "then", "else", "loop", "begin", "do")
+
+
+def _scan_alternative(lex):
+    if lex and lex.token() == "Keyword" and lex.text().lower() == "when":
+        lex = _next_significant(lex)
+
+        while lex and lex.text().lower() not in _ALTERNATIVE_KEYWORDS:
+            lex = _next_significant(lex)
+
+    alt_kind = lex.text().lower() if lex else None
+
+    return alt_kind, _next_significant(lex) if lex else None
+
+
+def _scan_select_alternatives(lex):
+    # See ADA95_6.2.2/ADA95_6.2.4/ADA95_6.2.5 for the depth-counting
+    # rationale: a single counter over if/case/loop/select/begin/do,
+    # closed by any "end", is enough to skip nested constructs and find
+    # this select's own top-level "or"/"else"/"end select".
+    alt_kind, lex = _scan_alternative(lex)
+    alt_kinds = [alt_kind]
+    has_else = False
+    depth = 0
+
+    while lex:
+        text = lex.text().lower() if lex.token() == "Keyword" else None
+
+        if text in _OPENER_KEYWORDS:
+            depth += 1
+            lex = _next_significant(lex)
+            continue
+
+        if text == "end":
+            if depth == 0:
+                return alt_kinds, has_else
+
+            depth -= 1
+            lex = _next_significant(lex)
+
+            # "end if"/"end case"/"end loop"/"end select" must not have
+            # their own completer keyword mistaken for a fresh opener.
+            if (
+                lex
+                and lex.token() == "Keyword"
+                and lex.text().lower() in ("if", "case", "loop", "select")
+            ):
+                lex = _next_significant(lex)
+
+            continue
+
+        if depth == 0 and text == "or":
+            lex = _next_significant(lex)
+            alt_kind, lex = _scan_alternative(lex)
+            alt_kinds.append(alt_kind)
+            continue
+
+        if depth == 0 and text == "else":
+            has_else = True
+
+        lex = _next_significant(lex)
+
+    return alt_kinds, has_else
+
+
+def _find_selects_missing_terminate(lexer, start_line, end_line):
+    results = []
+    lex = lexer.lexeme(start_line, 1)
+
+    while lex and lex.line_begin() <= end_line:
+        if (
+            lex.token() == "Keyword"
+            and lex.text().lower() == "select"
+            and _is_statement_start(lex)
+        ):
+            select_line, select_col = lex.line_begin(), lex.column_begin()
+            alt_kinds, has_else = _scan_select_alternatives(_next_significant(lex))
+
+            is_selective_accept = "accept" in alt_kinds
+            has_terminate_or_delay = "terminate" in alt_kinds or "delay" in alt_kinds
+
+            if is_selective_accept and not has_else and not has_terminate_or_delay:
+                results.append((select_line, select_col))
+
+        lex = lex.next()
+
+    return results
+
+
+def _task_ranges(file):
+    # A task type's spec and body each have their own "end X;" line, in
+    # whichever file declares that part; ent.refs("End") returns both, so
+    # the result must be filtered to this file before taking the max, or
+    # a spec's "end" in a different file can outrank the body's real one.
+    ranges = []
+
+    for decl_ref in file.filerefs("Declare Body", "Task"):
+        ent = decl_ref.ent()
+        end_refs = [r for r in ent.refs("End") if r.file().id() == file.id()]
+
+        if not end_refs:
+            continue
+
+        ranges.append((decl_ref.line(), max(r.line() for r in end_refs), ent))
+
+    return ranges
+
+
+def _check_missing_terminate(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for start, end, task_ent in _task_ranges(file):
+        for select_line, select_col in _find_selects_missing_terminate(
+            lexer, start, end
+        ):
+            check.violation(task_ent, file, select_line, select_col, ERR1)
+
+
+def _instantiates_unchecked_deallocation(ent):
+    for generic_ref in ent.refs("Instanceof"):
+        if str(generic_ref.ent().longname()) == "Ada.Unchecked_Deallocation":
+            return True
+
+    return False
+
+
+def _frees_a_task(proc_ent):
+    for param_ref in proc_ent.refs("Define, Declare", "Parameter"):
+        param_ent = param_ref.ent()
+
+        for typed_ref in param_ent.refs("Typed"):
+            access_ent = typed_ref.ent()
+
+            for designated_ref in access_ent.refs("Typed"):
+                if designated_ref.ent().kind().check("Task"):
+                    return True
+
+    return False
+
+
+def _candidate_caller_files(proc_ent):
+    # Any file that can call this procedure must have visibility to the
+    # package that declares it: either it is that package's own spec or
+    # body, or it names the package in a with clause. Ada requires a
+    # direct "with" for direct name visibility, so this is the complete
+    # set of files that could possibly call it, not a heuristic subset -
+    # and both ref kinds are available straight from the package entity,
+    # without needing to scan every file in the project.
+    pkg_ent = proc_ent.parent()
+    files = {}
+
+    for ref in pkg_ent.refs("Declare Spec, Declare Body, Withby"):
+        files[ref.file().id()] = ref.file()
+
+    return files.values()
+
+
+def _subprogram_ranges(file):
+    ranges = []
+
+    for decl_ref in file.filerefs(
+        "Declare Body", "Procedure, Function, Task, Entry"
+    ):
+        ent = decl_ref.ent()
+        end_refs = [r for r in ent.refs("End") if r.file().id() == file.id()]
+
+        if not end_refs:
+            continue
+
+        ranges.append((decl_ref.line(), max(r.line() for r in end_refs)))
+
+    return ranges
+
+
+def _innermost_range(line, ranges):
+    home = None
+
+    for start, end in ranges:
+        if start <= line <= end:
+            if home is None or (end - start) < (home[1] - home[0]):
+                home = (start, end)
+
+    return home
+
+
+def _has_terminated_check_before(lexer, start_line, before_line):
+    lex = lexer.lexeme(start_line, 1)
+
+    while lex and lex.line_begin() < before_line:
+        if lex.text() == "'":
+            next_lex = _next_significant(lex)
+
+            if next_lex and next_lex.text().lower() == "terminated":
+                return True
+
+        lex = lex.next()
+
+    return False
+
+
+def _check_calls_to(check, proc_ent):
+    for call_file in _candidate_caller_files(proc_ent):
+        lexer = call_file.lexer(lookup_ents=False)
+        subprogram_ranges = _subprogram_ranges(call_file)
+
+        for call_ref in call_file.filerefs("Call", "Procedure"):
+            if call_ref.ent().id() != proc_ent.id():
+                continue
+
+            enclosing = _innermost_range(call_ref.line(), subprogram_ranges)
+            start = enclosing[0] if enclosing else call_ref.line()
+
+            if not _has_terminated_check_before(lexer, start, call_ref.line()):
+                check.violation(
+                    None, call_file, call_ref.line(), call_ref.column(), ERR2
+                )
+
+
+def _check_unconfirmed_free(check, file):
+    for decl_ref in file.filerefs("Declare", "Procedure"):
+        ent = decl_ref.ent()
+
+        if _instantiates_unchecked_deallocation(ent) and _frees_a_task(ent):
+            _check_calls_to(check, ent)
+
+
+def check(check, file):
+    _check_missing_terminate(check, file)
+    _check_unconfirmed_free(check, file)
