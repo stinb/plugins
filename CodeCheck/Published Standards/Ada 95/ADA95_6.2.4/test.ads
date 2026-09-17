@@ -1,4 +1,4 @@
-package Test is
+package Test_6_2_4 is
 
    Max_Limit : constant Natural := 100;
 
@@ -48,4 +48,18 @@ package Test is
    -- even though it is shared between Reader and Writer.
    Single_Task : Test_And_Set;
 
-end Test;
+   Nested_Guard_Flag : Boolean := False;
+
+   task type Nested_Then_Guard is
+      entry Go;
+      entry Retrieve;
+   end Nested_Then_Guard;
+
+   -- Shared between a task (in test.adb) and a separate client file: ERR2.
+   Cross_File_Shared : Natural := 0;  -- UndCC_Violation
+
+   task type Cross_File_Toucher is
+      entry Go;
+   end Cross_File_Toucher;
+
+end Test_6_2_4;

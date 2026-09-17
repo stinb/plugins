@@ -1,4 +1,4 @@
-package body Test is
+package body Test_6_2_4 is
 
    task body Bad_Manager is
    begin
@@ -76,4 +76,29 @@ package body Test is
       Outside_Shared := Outside_Shared + 1;
    end Touch_Outside_Shared;
 
-end Test;
+   task body Nested_Then_Guard is
+      Cond : Boolean := False;
+   begin
+      loop
+         select
+            accept Go do
+               if Cond then
+                  null;
+               else
+                  null;
+               end if;
+            end Go;
+         or
+            when Nested_Guard_Flag =>  -- UndCC_Violation
+               accept Retrieve;
+         end select;
+      end loop;
+   end Nested_Then_Guard;
+
+   task body Cross_File_Toucher is
+   begin
+      accept Go;
+      Cross_File_Shared := Cross_File_Shared + 1;
+   end Cross_File_Toucher;
+
+end Test_6_2_4;

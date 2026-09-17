@@ -193,14 +193,13 @@ themselves the guideline's own recommended fix) is flagged if it is
 referenced (read or written, ignoring its own initializer) from within
 two or more different tasks, or from within a task and from anywhere
 outside any task, unless it is the argument of a <code>pragma Volatile</code> or
-<code>pragma Atomic</code>. Since the variable's declaration, its pragma, and its
-task-body usages can each live in a different file (a package spec
-versus its body being the common case), this runs as a project-level
-check (rather than the usual once-per-file check) so it can walk every
-Ada file exactly once and correlate across them; <code>ent.refs()</code> from a
-variable's own perspective was found, empirically, to only see
-references local to whichever single file originated the query, so a
-per-file check has no way to see this on its own. This is a
+<code>pragma Atomic</code>. The variable's task-body usages can live in any file
+with visibility to it, not just the file that declares it, but this
+does not need a project-wide scan to find them: <code>ent.refs("Useby,
+Setby")</code> &#8212; the "used/set by" direction, the correct one for asking a
+variable who references it, as opposed to the nonsensical "a variable
+uses/sets something" direction &#8212; returns every such reference
+project-wide directly from the variable's own entity. This is a
 structural proxy, not a proof of an actual race: it does not attempt to
 reason about activation order, so a variable that is written once during
 elaboration and only read by a single task thereafter can still be
@@ -217,11 +216,7 @@ declared in a different file is not detected.</p>
 
 
 def test_entity(file):
-    return False
-
-
-def test_global():
-    return True
+    return file.kind().check("Ada File")
 
 
 def test_language(language):
@@ -302,6 +297,16 @@ def _scan_select_guards(lex):
 
             depth -= 1
             lex = _next_significant(lex)
+
+            # "end if"/"end case"/"end loop"/"end select" must not have
+            # their own completer keyword mistaken for a fresh opener.
+            if (
+                lex
+                and lex.token() == "Keyword"
+                and lex.text().lower() in ("if", "case", "loop", "select")
+            ):
+                lex = _next_significant(lex)
+
             continue
 
         if depth == 0 and text == "or":
@@ -344,7 +349,8 @@ def _task_ranges(file):
 
     for decl_ref in file.filerefs("Declare Body", "Task"):
         ent = decl_ref.ent()
-        end_refs = [r for r in ent.refs("End") if r.file().id() == file.id()]
+        end_refs = [r for r in ent.refs(
+            "End Body") if r.file().id() == file.id()]
 
         if not end_refs:
             continue
@@ -439,48 +445,36 @@ def _location_key(ref, task_ranges):
     return None
 
 
-def _project_wide_locations_and_protected_ids(files):
-    # A variable's declaration, its task-body usage, and a pragma
-    # Volatile/Atomic covering it can all live in different files (a
-    # package spec versus its body being the common case), so this walks
-    # every Ada file in the project once, rather than per file checked;
-    # this check runs as a project-level check (test_global) specifically
-    # so this scan happens exactly once, not once per file.
-    locations_by_id = {}
-    protected_ids = set()
+def _locations(ent):
+    # A variable's uses/sets can be in any file that has visibility to
+    # it, not just the file that declares it - but ent.refs("Useby,
+    # Setby") (the "used/set by" direction, as opposed to the nonsensical
+    # "a variable uses/sets something" direction) returns every such
+    # reference project-wide directly from the variable's own entity, so
+    # no project-wide file scan is needed to find them.
+    locations = set()
 
-    for f in files:
-        task_ranges = _task_ranges(f)
-        protected_ids |= _volatile_or_atomic_ids(f.lexer(lookup_ents=True))
+    for ref in ent.refs("Useby, Setby ~Init"):
+        task_ranges = _task_ranges(ref.file())
+        locations.add(_location_key(ref, task_ranges))
 
-        for use_ref in f.filerefs("Use, Set ~Init", "Object"):
-            var_id = use_ref.ent().id()
-            key = _location_key(use_ref, task_ranges)
-            locations_by_id.setdefault(var_id, set()).add(key)
-
-    return locations_by_id, protected_ids
+    return locations
 
 
-def _check_shared_variables(check, files):
-    locations_by_id, protected_ids = _project_wide_locations_and_protected_ids(
-        files)
+def _check_shared_variables(check, file):
+    # A pragma Volatile/Atomic must appear in the same declarative list
+    # as the variable it covers, so this stays scoped to the current file.
+    protected_ids = _volatile_or_atomic_ids(file.lexer(lookup_ents=True))
 
-    for f in files:
-        for ent, decl_ref in _package_level_variables(f):
-            if ent.id() in protected_ids:
-                continue
+    for ent, decl_ref in _package_level_variables(file):
+        if ent.id() in protected_ids:
+            continue
 
-            locations = locations_by_id.get(ent.id(), set())
-
-            if len(locations) >= 2:
-                check.violation(ent, f, decl_ref.line(),
-                                decl_ref.column(), ERR2)
+        if len(_locations(ent)) >= 2:
+            check.violation(ent, file, decl_ref.line(),
+                            decl_ref.column(), ERR2)
 
 
-def check(check):
-    files = list(check.db().ents("Ada File"))
-
-    for f in files:
-        _check_guards(check, f)
-
-    _check_shared_variables(check, files)
+def check(check, file):
+    _check_guards(check, file)
+    _check_shared_variables(check, file)
