@@ -1,0 +1,430 @@
+ERR1 = "Avoid the abort statement"
+ERR2 = "Mark this variable pragma Atomic before assigning to it from a task or an abortable part"
+
+
+def ids():
+    return ("ADA95_6.3.3",)
+
+
+def name(id):
+    return {
+        "ADA95_6.3.3": "Published Standards/Ada 95/6.3.3 The Abort Statement",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.3.3": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.3.3": """
+<p><b>Guideline</b></p>
+<p>&#8226; Avoid using the abort statement.</p>
+<p>&#8226; Consider using the asynchronous select statement rather than
+the abort statement.</p>
+<p>&#8226; Minimize uses of the asynchronous select statement.</p>
+<p>&#8226; Avoid assigning nonatomic global objects from a task or from
+the abortable part of an asynchronous select statement.</p>
+
+<p><b>Example</b></p>
+<p>If required in the application, provide a task entry for orderly
+shutdown.</p>
+<p>The following example of asynchronous transfer of control shows a
+database transaction. The database operation may be cancelled (through
+a special input key) unless the commit transaction has begun. The code
+is extracted from the Rationale (1995, &sect;9.4):</p>
+<pre><code language="Ada">with Ada.Finalization;
+package Txn_Pkg is
+   type Txn_Status is (Incomplete, Failed, Succeeded);
+   type Transaction is new Ada.Finalization.Limited_Controlled with private;
+   procedure Finalize (Txn : in out transaction);
+   procedure Set_Status (Txn    : in out Transaction;
+                         Status : in     Txn_Status);
+private
+   type Transaction is new Ada.Finalization.Limited_Controlled with
+      record
+         Status : Txn_Status := Incomplete;
+         pragma Atomic (Status);
+         . . . -- More components
+      end record;
+end Txn_Pkg;
+-----------------------------------------------------------------------------
+package body Txn_Pkg is
+   procedure Finalize (Txn : in out Transaction) is
+   begin
+      -- Finalization runs with abort and ATC deferred
+      if Txn.Status = Succeeded then
+         Commit (Txn);
+      else
+         Rollback (Txn);
+      end if;
+   end Finalize;
+   . . . -- body of procedure Set_Status
+end Txn_Pkg;
+----------------------------------------------------------------------------
+-- sample code block showing how Txn_Pkg could be used:
+declare
+   Database_Txn : Transaction;
+   -- declare a transaction, will commit or abort during finalization
+begin
+   select  -- wait for a cancel key from the input device
+      Input_Device.Wait_For_Cancel;
+      -- the Status remains Incomplete, so that the transaction will not commit
+   then abort  -- do the transaction
+      begin
+         Read (Database_Txn, . . .);
+         Write (Database_Txn, . . .);
+         . . .
+         Set_Status (Database_Txn, Succeeded);
+         -- set status to ensure the transaction is committed
+      exception
+         when others =>
+            Ada.Text_IO.Put_Line ("Operation failed with unhandled exception:");
+            Set_Status (Database_Txn, Failed);
+      end;
+   end select;
+   -- Finalize on Database_Txn will be called here and, based on the recorded
+   -- status, will either commit or abort the transaction.
+end;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>When an abort statement is executed, there is no way to know what the
+targeted task was doing beforehand. Data for which the target task is
+responsible might be left in an inconsistent state. The overall effect
+on the system of aborting a task in such an uncontrolled way requires
+careful analysis. The system design must ensure that all tasks
+depending on the aborted task can detect the termination and respond
+appropriately.</p>
+<p>Tasks are not aborted until they reach an abort completion point such
+as beginning or end of elaboration, a delay statement, an accept
+statement, an entry call, a select statement, task allocation, or the
+execution of an exception handler. Consequently, the abort statement
+might not release processor resources as soon as you might expect. It
+also might not stop a runaway task because the task might be executing
+an infinite loop containing no abort completion points. There is no
+guarantee that a task will not abort until an abort completion point in
+multiprocessor systems, but the task will almost always stop running
+right away.</p>
+<p>An asynchronous select statement allows an external event to cause a
+task to begin execution at a new point, without having to abort and
+restart the task (Rationale 1995, &sect;9.3). Because the triggering
+statement and the abortable statement execute in parallel until one of
+them completes and forces the other to be abandoned, you need only one
+thread of control. The asynchronous select statement improves
+maintainability because the abortable statements are clearly delimited
+and the transfer cannot be mistakenly redirected.</p>
+<p>In task bodies and in the abortable part of an asynchronous select,
+you should avoid assigning to nonatomic global objects, primarily
+because of the risk of an abort occurring before the nonatomic
+assignment completes. If you have one or more abort statements in your
+application and the assignment is disrupted, the target object can
+become abnormal, and subsequent uses of the object lead to erroneous
+execution (Ada Reference Manual, &sect;9.8). In the case of scalar
+objects, you can use the attribute 'Valid, but there is no equivalent
+attribute for nonscalar objects. (See Guideline 5.9.1 for a discussion
+of the 'Valid attribute.) You also can still safely assign to local
+objects and call operations of global protected objects.</p>
+
+<p><b>Developer's Note</b></p>
+<p>The first bullet is automated: a bare <code>abort</code> statement is a
+distinct lexer signature from the <code>then abort</code> keyword pair that marks
+an asynchronous select's abortable part (disambiguated by checking
+whether the token immediately before <code>then</code> is a <code>;</code>, which only
+happens for the async-select form &#8212; an <code>if</code>/<code>elsif</code> condition
+never ends a statement with a semicolon before its own <code>then</code>). Every
+occurrence is flagged. The second bullet ("consider an asynchronous
+select instead") is not a separate check &#8212; it is simply the recommended
+fix for whatever the first bullet flags, so it has no violation shape of
+its own.</p>
+<p>The fourth bullet is automated for the direct case: a package-level
+variable (excluding constants, and excluding one marked <code>pragma
+Atomic</code>) is flagged at each <code>:=</code> assignment that falls within a task
+body or within the abortable part of an asynchronous select &#8212; found the
+same way <code>ADA95_6.2.4</code> finds cross-file usage, via
+<code>ent.refs("Setby")</code> directly from the variable's own entity, so no
+project-wide scan is needed. <code>Setby</code> also fires when the variable is
+passed as an out or in-out parameter to a call, which is not what the
+guideline means by "assigning" (the callee owns its own atomicity, not
+the caller), so each occurrence is confirmed by checking that a
+<code>:=</code> immediately follows it before being flagged. This does not follow
+assignments to a record component or an
+array element (only a directly named object), and it does not attempt
+to prove an abort statement actually exists anywhere in the program to
+make the risk real &#8212; the guideline itself says to avoid the pattern
+regardless.</p>
+<p>"Minimize uses of the asynchronous select statement" is not automated:
+it is the same bare "minimize a count, no threshold given" pattern
+already found non-automatable for <code>ADA95_6.2.1</code> and
+<code>ADA95_6.2.6</code>.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_OPENER_KEYWORDS = ("if", "case", "loop", "select", "begin", "do")
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _previous_significant(lex):
+    lex = lex.previous(True, True)
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.previous(True, True)
+
+    return lex
+
+
+def _is_statement_start(lex):
+    prev = _previous_significant(lex)
+
+    return prev is None or prev.text() in (";", "then", "else", "loop", "begin", "do")
+
+
+def _is_async_select_then(lex):
+    # An async select's "then" follows the triggering statement's own
+    # ";" - unlike an if/elsif's "then", which always follows a boolean
+    # expression and can never be preceded by a bare ";".
+    prev = _previous_significant(lex)
+
+    return prev is not None and prev.text() == ";"
+
+
+def _find_abort_statements(lexer):
+    results = []
+    lex = lexer.first()
+
+    while lex:
+        if (
+            lex.token() == "Keyword"
+            and lex.text().lower() == "abort"
+            and _is_statement_start(lex)
+        ):
+            prev = _previous_significant(lex)
+
+            if not (prev and prev.text().lower() == "then" and _is_async_select_then(prev)):
+                results.append((lex.line_begin(), lex.column_begin()))
+
+        lex = lex.next()
+
+    return results
+
+
+def _skip_balanced(lex):
+    # Advance past one fully nested if/case/loop/select/begin/do
+    # construct, landing just after its own matching "end" (and that
+    # end's completer keyword, if any).
+    depth = 1
+    lex = _next_significant(lex)
+
+    while lex and depth > 0:
+        text = lex.text().lower() if lex.token() == "Keyword" else None
+
+        if text in _OPENER_KEYWORDS:
+            depth += 1
+        elif text == "end":
+            depth -= 1
+            lex = _next_significant(lex)
+
+            if (
+                lex
+                and lex.token() == "Keyword"
+                and lex.text().lower() in ("if", "case", "loop", "select")
+            ):
+                lex = _next_significant(lex)
+
+            continue
+
+        lex = _next_significant(lex)
+
+    return lex
+
+
+def _find_abortable_part_ranges(lexer):
+    # For each "select ... then abort ... end select;" in the file,
+    # returns the (start_line, end_line) of the abortable part (from
+    # "abort" up to, but not including, the terminating "end select").
+    ranges = []
+    lex = lexer.first()
+
+    while lex:
+        if (
+            lex.token() == "Keyword"
+            and lex.text().lower() == "select"
+            and _is_statement_start(lex)
+        ):
+            depth = 0
+            inner = _next_significant(lex)
+            abortable_start = None
+
+            while inner:
+                text = inner.text().lower() if inner.token() == "Keyword" else None
+
+                if text in _OPENER_KEYWORDS:
+                    depth += 1
+                    inner = _next_significant(inner)
+                    continue
+
+                if text == "end":
+                    if depth == 0:
+                        if abortable_start is not None:
+                            ranges.append((abortable_start, inner.line_begin()))
+                        break
+
+                    depth -= 1
+                    inner = _next_significant(inner)
+
+                    if (
+                        inner
+                        and inner.token() == "Keyword"
+                        and inner.text().lower() in ("if", "case", "loop", "select")
+                    ):
+                        inner = _next_significant(inner)
+
+                    continue
+
+                if (
+                    depth == 0
+                    and abortable_start is None
+                    and text == "then"
+                    and _is_async_select_then(inner)
+                ):
+                    abort_kw = _next_significant(inner)
+
+                    if abort_kw and abort_kw.text().lower() == "abort":
+                        abortable_start = abort_kw.line_begin()
+                        inner = _next_significant(abort_kw)
+                        continue
+
+                inner = _next_significant(inner)
+
+        lex = lex.next()
+
+    return ranges
+
+
+def _package_level_variables(file):
+    variables = []
+
+    for decl_ref in file.filerefs("Declare", "Object ~Constant ~Protected ~Task"):
+        ent = decl_ref.ent()
+        parent = ent.parent()
+
+        if parent is not None and parent.kind().check("Package"):
+            variables.append((ent, decl_ref))
+
+    return variables
+
+
+def _atomic_ids(lexer):
+    ids = set()
+    lex = lexer.first()
+
+    while lex:
+        if lex.token() == "Keyword" and lex.text().lower() == "pragma":
+            name_lex = _next_significant(lex)
+
+            if name_lex and name_lex.text().lower() == "atomic":
+                paren = _next_significant(name_lex)
+
+                if paren and paren.text() == "(":
+                    arg_lex = _next_significant(paren)
+                    ent = arg_lex.ent() if arg_lex else None
+
+                    if ent:
+                        ids.add(ent.id())
+
+        lex = lex.next()
+
+    return ids
+
+
+def _task_ranges(file):
+    # A task type's spec and body each have their own "end X;" line, in
+    # whichever file declares that part; ent.refs("End") returns both, so
+    # the result must be filtered to this file before taking the max, or
+    # a spec's "end" in a different file can outrank the body's real one.
+    ranges = []
+
+    for decl_ref in file.filerefs("Declare Body", "Task"):
+        ent = decl_ref.ent()
+        end_refs = [r for r in ent.refs("End") if r.file().id() == file.id()]
+
+        if not end_refs:
+            continue
+
+        ranges.append((decl_ref.line(), max(r.line() for r in end_refs)))
+
+    return ranges
+
+
+def _in_any_range(line, ranges):
+    return any(start <= line <= end for start, end in ranges)
+
+
+def _check_abort_statements(check, file):
+    lexer = file.lexer(lookup_ents=False)
+
+    for line, col in _find_abort_statements(lexer):
+        check.violation(None, file, line, col, ERR1)
+
+
+def _is_assignment_target(lexer, ref):
+    # "Setby" also fires for an out/in-out parameter passed to a call
+    # (the callee is responsible for its own atomicity, not the caller),
+    # which is not what the guideline means by "assigning" - only a
+    # ":=" immediately after this occurrence is a genuine assignment.
+    lex = lexer.lexeme(ref.line(), ref.column())
+    lex = _next_significant(lex) if lex else None
+
+    return lex is not None and lex.text() == ":="
+
+
+def _check_nonatomic_assignments(check, file):
+    atomic_ids = _atomic_ids(file.lexer(lookup_ents=True))
+
+    for ent, decl_ref in _package_level_variables(file):
+        if ent.id() in atomic_ids:
+            continue
+
+        for set_ref in ent.refs("Setby ~Init"):
+            set_file = set_ref.file()
+            lexer = set_file.lexer(lookup_ents=False)
+
+            if not _is_assignment_target(lexer, set_ref):
+                continue
+
+            task_ranges = _task_ranges(set_file)
+            abortable_ranges = _find_abortable_part_ranges(lexer)
+
+            if _in_any_range(set_ref.line(), task_ranges) or _in_any_range(
+                set_ref.line(), abortable_ranges
+            ):
+                check.violation(ent, set_file, set_ref.line(), set_ref.column(), ERR2)
+
+
+def check(check, file):
+    _check_abort_statements(check, file)
+    _check_nonatomic_assignments(check, file)
