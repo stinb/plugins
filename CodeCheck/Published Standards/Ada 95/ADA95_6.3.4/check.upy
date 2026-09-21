@@ -1,0 +1,131 @@
+ERR1 = "Place a handler for others at the end of this task body"
+
+
+def ids():
+    return ("ADA95_6.3.4",)
+
+
+def name(id):
+    return {
+        "ADA95_6.3.4": "Published Standards/Ada 95/6.3.4 Abnormal Termination",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.3.4": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.3.4": """
+<p><b>Guideline</b></p>
+<p>&#8226; Place an exception handler for others at the end of a task
+body.</p>
+<p>&#8226; Consider having each exception handler at the end of a task
+body report the task's demise.</p>
+<p>&#8226; Do not rely on the task status to determine whether a
+rendezvous can be made with the task.</p>
+
+<p><b>Example</b></p>
+<p>This is one of many tasks updating the positions of blips on a radar
+screen. When started, it is given part of the name by which its parent
+knows it. Should it terminate due to an exception, it signals the fact
+in one of its parent's data structures:</p>
+<pre><code language="Ada">task type Track (My_Index : Track_Index) is
+   ...
+end Track;
+---------------------------------------------------------------------
+task body Track is
+     Neutral : Boolean := True;
+begin  -- Track
+   select
+      accept ...
+      ...
+   or
+      terminate;
+   end select;
+   ...
+exception
+   when others =>
+      if not Neutral then
+         Station(My_Index).Status := Dead;
+      end if;
+end Track;
+---------------------------------------------------------------------
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>A task will terminate if an exception is raised within it for which
+it has no handler. In such a case, the exception is not propagated
+outside of the task (unless it occurs during a rendezvous). The task
+simply dies with no notification to other tasks in the program.
+Therefore, providing exception handlers within the task, and
+especially a handler for others, ensures that a task can regain
+control after an exception occurs. If the task cannot proceed normally
+after handling an exception, this affords it the opportunity to shut
+itself down cleanly and to notify tasks responsible for error recovery
+necessitated by the abnormal termination of the task.</p>
+<p>You should not use the task status to determine whether a
+rendezvous can be made with the task. If Task A depends on Task B and
+Task A checks the status flag before it rendezvouses with Task B,
+there is a potential that Task B fails between the status test and the
+rendezvous. In this case, Task A must provide an exception handler to
+handle the Tasking_Error exception raised by the call to an entry of an
+abnormal task (see Guideline 6.3.1).</p>
+
+<p><b>Developer's Note</b></p>
+<p>The first bullet is automated: each task body is checked for a
+handler covering <code>others</code>, the same way <code>ADA95_5.9.8</code> checks a
+controlled type's <code>Finalize</code>/<code>Adjust</code> procedure for one, using
+<code>ent.refs("Handle")</code> on the task's own entity. Unlike
+<code>ADA95_5.9.8</code>, this guideline does not forbid the handler from
+re-raising, so a handler that lets the exception escape again is still
+accepted &#8212; the guideline only asks that one be present. As with
+<code>ADA95_6.2.2</code>, Understand reports a task's own handlers as a flat set
+regardless of which nested block declares them, so an <code>others</code> handler
+on an inner named block is accepted as satisfying this check even
+though it would not catch an exception raised elsewhere in the task's
+own top-level statements &#8212; the guideline's own intent is a handler at
+the task body's own level specifically, which this check does not
+distinguish from one on a nested block.</p>
+<p>The second bullet ("consider having the handler report the task's
+demise") is not automated: whether a handler's body actually reports
+anything is a semantic judgment about what its statements do, not a
+structural pattern &#8212; a deliberate, silent swallow of the exception is
+just as valid a handler body as one that logs or signals it.</p>
+<p>The third bullet ("do not rely on the task status to determine
+whether a rendezvous can be made") is not automated here because it is
+already automated by <code>ADA95_6.2.3</code>, which flags every use of
+<code>'Terminated</code> or <code>'Callable</code> regardless of context &#8212; the same
+race condition this bullet describes, not a separate one.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _task_handles_others(task_ent):
+    return any(
+        h.ent().name().lower() == "others" for h in task_ent.refs("Handle")
+    )
+
+
+def check(check, file):
+    for decl_ref in file.filerefs("Declare Body", "Task"):
+        ent = decl_ref.ent()
+
+        if not _task_handles_others(ent):
+            check.violation(ent, file, decl_ref.line(),
+                            decl_ref.column(), ERR1)
