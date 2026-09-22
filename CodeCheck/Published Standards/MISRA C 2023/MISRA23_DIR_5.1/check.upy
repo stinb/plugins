@@ -1,0 +1,365 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+
+import re
+
+ERR1 = "%1 is used by thread %2 and thread %3 without synchronization"
+
+CREATE_FUNCS = {'thrd_create': 1, 'pthread_create': 2}
+
+JOIN_FUNCS = {'thrd_join', 'pthread_join'}
+
+LOCK_FUNCS = {
+    'mtx_lock', 'mtx_trylock', 'mtx_timedlock',
+    'pthread_mutex_lock', 'pthread_mutex_trylock', 'pthread_mutex_timedlock',
+    'cnd_wait', 'cnd_timedwait', 'pthread_cond_wait', 'pthread_cond_timedwait',
+    'call_once', 'pthread_once',
+}
+
+UNLOCK_FUNCS = {'mtx_unlock', 'pthread_mutex_unlock'}
+
+# Synchronization objects are the protection, not the data it protects.
+SYNC_TYPES = {
+    'mtx_t', 'cnd_t', 'thrd_t', 'tss_t', 'once_flag', 'atomic_flag',
+    'pthread_mutex_t', 'pthread_cond_t', 'pthread_t', 'pthread_once_t',
+    'pthread_rwlock_t', 'pthread_spinlock_t', 'pthread_barrier_t', 'sem_t',
+}
+
+
+def ids():
+    return ('MISRA23_DIR_5.1', 'MISRA25_DIR_5.1', 'CPP_CF012')
+
+
+def name(id):
+    return {
+        'MISRA23_DIR_5.1': 'Published Standards/MISRA C 2023/' + """\
+Directive 5.1 There shall be no data races between threads (Partial)""",
+        'MISRA25_DIR_5.1': 'Published Standards/MISRA C 2025/' + """\
+Directive 5.1 There shall be no data races between threads (Partial)""",
+        'CPP_CF012': 'All Checks/Language Specific/C and C++/Control Flow/' + """\
+There shall be no data races between threads (Partial)""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_DIR_5.1': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA25_DIR_5.1': [
+            'Language: C',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'CPP_CF012': [
+            'Language: C',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """
+<p><b>Amplification</b></p>
+<p>Two expression evaluations conflict if one of them modifies a memory
+location and the other one reads or modifies the same memory location. The
+execution of a program contains a data race if it contains two conflicting
+actions in different threads, at least one of which is not atomic, and neither
+happens before the other. To prevent data races, objects shared between
+different threads shall be protected by an appropriate synchronization
+mechanism.</p>
+
+<p><b>Rationale</b></p>
+<p>Any such data race results in undefined behaviour. Depending on the timing
+of the threads the wrong value might be used, and a read or write implemented
+by several machine instructions can be interrupted part way, leaving an object
+holding halves written by different threads. Data races typically manifest
+sporadically and are very hard to reproduce.</p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check covers part of the directive, not all of it. It finds a race
+only between threads it can see being started, on objects it can name, and
+only where no lock is involved at all. A project whose threads are started
+through a wrapper such as an RTOS or framework API, or whose shared state is
+reached through pointers, will report nothing &mdash; that is the check being
+unable to see the threads, not a clean result. Treat a clean report as
+covering the cases listed below and no more.</p>
+
+<p><b>Analysis</b></p>
+<p>An object is reported when all of the following hold, which is the shape of
+the rule's own example:</p>
+<ul>
+<li>It has static storage duration and is neither atomic nor const.</li>
+<li>Two threads started by <code>thrd_create</code> or
+<code>pthread_create</code> in one function both reach it, through the entry
+function or anything it calls.</li>
+<li>At least one of the two threads writes it.</li>
+<li>The access is not covered by a lock. A function's own lock and unlock
+calls bound a region, and every access inside one is treated as covered. A
+function that reaches a lock only through what it calls is left alone
+entirely, since that locking cannot be followed to the access it covers.</li>
+</ul>
+<p>A join ends the group of threads compared against one another, so threads
+started after one are not compared with those started before it. A
+synchronization object such as an <code>mtx_t</code> is the protection rather
+than the data, and is not itself reported.</p>
+<p><b>Known limitations (false negatives):</b> a thread started other than by
+these two functions, a race on an object reached through a pointer, a race
+between a thread and the code that started it, and an object whose two
+accessing threads are created in different functions. A join is also not
+matched to the thread it waits on, so a thread still running across a join of
+some other thread is not compared with what follows.</p>
+<p>The lock model has two blind spots of its own, because a covered access is
+dropped rather than remembered. Two threads that guard one object with
+<i>different</i> mutexes exclude nothing, yet both accesses sit in a region
+and neither is reported. One thread that guards an object while another does
+not is the same shape: the guarded access drops out, leaving the unguarded one
+with no partner to conflict with. Both are races that this check reads as
+synchronized.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">int32_t x;
+
+int32_t t1( void *ignore )
+{
+  x = -1;                    /* Non-compliant - write-write race with t2 */
+  return 0;
+}
+
+int32_t t2( void *ignore )
+{
+  x = 0;                     /* Non-compliant - write-write race with t1 */
+  return 0;
+}
+
+void f( void )
+{
+  thrd_t id1, id2;
+
+  thrd_create( &amp;id1, t1, NULL );
+  thrd_create( &amp;id2, t2, NULL );
+  thrd_join( id1, NULL );
+  thrd_join( id2, NULL );
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 9.7, Rule 12.6, Dir 5.2</p>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# The function named as a thread's entry point, taken from the argument that
+# follows the thread object.
+def entry_function(lexer, call_ref, index):
+    lex = lexer.lexeme(call_ref.line(), call_ref.column())
+    if not lex:
+        return None
+
+    depth = 0
+    argument = 0
+    while lex:
+        text = lex.text()
+        if text == '(':
+            depth += 1
+        elif text == ')':
+            depth -= 1
+            if not depth:
+                break
+        elif text == ',' and depth == 1:
+            argument += 1
+        elif depth == 1 and argument == index:
+            ent = lex.ent()
+            if ent and ent.kind().check('function'):
+                return ent
+        lex = lex.next(True, True)
+
+    return None
+
+
+# Everything a thread can run: its entry function and whatever that calls.
+def reachable(entry):
+    seen = {entry.id()}
+    funcs = [entry]
+    queue = [entry]
+
+    while queue:
+        func = queue.pop()
+        for ref in func.refs('Call', 'Function'):
+            called = ref.ent()
+            if called.id() in seen:
+                continue
+            seen.add(called.id())
+            funcs.append(called)
+            queue.append(called)
+
+    return funcs
+
+
+# Whether a function has anything to do with locking, directly or through
+# what it calls. One that does is left alone where its locking cannot be
+# followed, so a lock taken behind a wrapper is not mistaken for no lock.
+def reaches_a_lock(funcs):
+    for func in funcs:
+        for ref in func.refs('Call', 'Function'):
+            if ref.ent().name() in LOCK_FUNCS:
+                return True
+    return False
+
+
+# An object two threads can share is one that outlives them both and that the
+# language does not already make safe.
+def shared_object(ent):
+    return (has_static_storage(ent) and not is_atomic(ent)
+            and not is_sync_object(ent))
+
+
+def is_sync_object(ent):
+    text = str(ent.freetext('UnderlyingType') or ent.type() or '')
+    return any(word in SYNC_TYPES for word in re.split(r'\W+', text))
+
+
+def has_static_storage(ent):
+    return (ent.kind().check('object ~local ~parameter ~member ~unknown')
+            or ent.kind().check('static local object'))
+
+
+# An atomic object is already safe, but a pointer to one is not, so the
+# qualifier only counts when it applies to the object itself. The resolved
+# type is read rather than the declared spelling, so that atomic_int and the
+# rest of <stdatomic.h>, and any typedef of _Atomic, are recognised.
+#
+# Nothing is excluded for const: an object that is never written cannot race,
+# which the write requirement already decides.
+def is_atomic(ent):
+    text = str(ent.freetext('UnderlyingType') or ent.type() or '')
+    return '_Atomic' in text and '*' not in text
+
+
+# The accesses a function makes while holding a lock. Calls to lock and unlock
+# open and close a region, and every object reference inside one is covered.
+def locked_refs(func):
+    events = []
+    for ref in func.refs('Call ~Inactive', 'Function'):
+        name = ref.ent().name()
+        if name in LOCK_FUNCS:
+            events.append((ref.line(), ref.column(), 1, None))
+        elif name in UNLOCK_FUNCS:
+            events.append((ref.line(), ref.column(), -1, None))
+    for ref in func.refs('Use, Set, Modify, Addr Use', 'Object'):
+        events.append((ref.line(), ref.column(), 0, ref))
+
+    covered = set()
+    depth = 0
+    for line, column, change, ref in sorted(events, key=lambda e: (e[0], e[1])):
+        if change:
+            depth = max(0, depth + change)
+        elif depth:
+            covered.add((line, column))
+
+    return covered
+
+
+# The static objects a thread touches without a lock, and whether it ever
+# writes them. A function whose own lock regions are visible is judged by
+# them; one that reaches a lock only through what it calls is left alone
+# entirely, since that locking cannot be followed to the access it covers.
+def touched(funcs, locking):
+    objects = {}
+    for func in funcs:
+        covered = locked_refs(func)
+        if not covered and locking(func):
+            continue
+
+        for ref in func.refs('Use, Set, Modify, Addr Use', 'Object'):
+            ent = ref.ent()
+            if (not shared_object(ent)
+                    or (ref.line(), ref.column()) in covered):
+                continue
+            writes = ref.kind().check('set, modify, addr use')
+            written, refs = objects.get(ent.id(), (False, []))
+            objects[ent.id()] = (written or writes, refs + [ref])
+    return objects
+
+
+# Threads compared against one another. Any join ends a group, which is only
+# exactly right when the join covers every thread started so far; a join is
+# not matched to the thread id it waits on.
+def concurrent_groups(lexer, func):
+    groups = [[]]
+
+    for ref in sorted(func.refs('Call ~Inactive', 'Function'),
+                      key=lambda r: (r.line(), r.column())):
+        called = ref.ent().name()
+        if called in CREATE_FUNCS:
+            entry = entry_function(lexer, ref, CREATE_FUNCS[called])
+            if entry:
+                groups[-1].append(entry)
+        elif called in JOIN_FUNCS and groups[-1]:
+            groups.append([])
+
+    return [g for g in groups if len(g) > 1]
+
+
+def check(check, file):
+    lexer = None
+    locks = {}
+
+    def locking(func):
+        if func.id() not in locks:
+            locks[func.id()] = reaches_a_lock(reachable(func))
+        return locks[func.id()]
+
+    for func_ref in file.filerefs('Define', 'Function'):
+        func = func_ref.ent()
+
+        contents = str(func.contents())
+        if not any(name in contents for name in CREATE_FUNCS):
+            continue
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+            if not lexer:
+                return
+
+        for group in concurrent_groups(lexer, func):
+            threads = []
+            for entry in group:
+                threads.append((entry, touched(reachable(entry), locking)))
+
+            report(check, threads)
+
+
+def report(check, threads):
+    reported = set()
+
+    for i, (entry, objects) in enumerate(threads):
+        for other, others in threads[i + 1:]:
+            for obj_id, (written, refs) in objects.items():
+                if obj_id not in others:
+                    continue
+                if not written and not others[obj_id][0]:
+                    continue
+
+                for ref in refs + others[obj_id][1]:
+                    key = (ref.file().id(), ref.line(), ref.column())
+                    if key in reported:
+                        continue
+                    reported.add(key)
+                    check.violation(ref.ent(), ref.file(), ref.line(),
+                                    ref.column(), ERR1, ref.ent().name(),
+                                    entry.name(), other.name())
