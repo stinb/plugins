@@ -1,0 +1,207 @@
+ERR1 = "This entry call is part of a circular chain of task entry calls, which can deadlock"
+
+
+def ids():
+    return ("ADA95_6.3.5",)
+
+
+def name(id):
+    return {
+        "ADA95_6.3.5": "Published Standards/Ada 95/6.3.5 Circular Task Calls",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.3.5": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.3.5": """
+<p><b>Guideline</b></p>
+<p>Do not call a task entry that directly or indirectly results in a
+call to an entry of the original calling task.</p>
+
+<p><b>Rationale</b></p>
+<p>A software failure known as task deadlock will occur if a task calls
+one of its own entries directly or indirectly via a circular chain of
+calls.</p>
+
+<p><b>Developer's Note</b></p>
+<p>This is automated as a call-graph cycle detection: for each task, the
+accept statements it services are located (the same way <code>ADA95_5.9.9</code>
+locates them), and every entry call reachable from within each accept
+body &#8212; directly, or transitively through a subprogram called from
+within it, bounded against cycles in that inner walk the same way
+<code>ADA95_5.9.9</code> is &#8212; is recorded as an edge from the servicing task to
+the called entry's own task. A depth-first search over this graph then
+finds any cycle, including the degenerate case of a task calling one of
+its own entries directly, and every entry call that participates in a
+detected cycle is flagged, not just the one that happens to close the
+loop, since any of them could equally be described as "the call that
+shouldn't have been made."</p>
+<p>Like <code>ADA95_5.9.9</code>, this only traces calls within the file being
+checked: a call to a subprogram whose body is not in the current file
+cannot be followed, so a cycle running through another file is not
+found. It also does not reason about whether a guard or a runtime
+condition would prevent a particular call from ever actually executing
+&#8212; the mere structural existence of the call is what is flagged, matching
+the guideline's own unconditional wording.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _accept_ranges(file):
+    # Each accept statement with a "do ... end" body is a "Declare Body"
+    # of its entry, the same as ADA95_5.9.9 locates one; a bodyless
+    # "accept E;" has no matching "End" and is skipped, since there is
+    # no code inside it to search.
+    ranges = []
+
+    for decl_ref in file.filerefs("Declare Body", "Entry"):
+        entry_ent = decl_ref.ent()
+        task_ent = entry_ent.parent()
+
+        if task_ent is None or not task_ent.kind().check("Task"):
+            continue
+
+        end_refs = [r for r in entry_ent.refs(
+            "End") if r.file().id() == file.id()]
+
+        if not end_refs:
+            continue
+
+        ranges.append((decl_ref.line(), max(r.line()
+                      for r in end_refs), task_ent))
+
+    return ranges
+
+
+def _body_ranges_by_id(file):
+    # entity.refs("Declare Body") gives refs FROM that entity's own body
+    # (its own local declarations), not a reverse-pointer to itself - the
+    # body's own declaration location can only be found from the file's
+    # own perspective (see ADA95_5.9.9).
+    ranges = {}
+
+    for body_ref in file.filerefs("Declare Body", "Function, Procedure"):
+        ent = body_ref.ent()
+        end_refs = [r for r in ent.refs("End") if r.file().id() == file.id()]
+
+        if end_refs:
+            ranges[ent.id()] = (body_ref.line(), max(r.line()
+                                                     for r in end_refs))
+
+    return ranges
+
+
+def _calls_in_range(file, start, end, kinds):
+    calls = []
+
+    for call_ref in file.filerefs("Call", kinds):
+        if start <= call_ref.line() <= end:
+            calls.append(call_ref)
+
+    return calls
+
+
+def _reachable_entry_calls(file, start, end, body_ranges, seen_ids, found):
+    for call_ref in _calls_in_range(file, start, end, "Entry"):
+        found.append(call_ref)
+
+    for call_ref in _calls_in_range(file, start, end, "Function, Procedure"):
+        called_ent = call_ref.ent()
+
+        if called_ent.id() in seen_ids:
+            continue
+
+        seen_ids.add(called_ent.id())
+        called_range = body_ranges.get(called_ent.id())
+
+        if called_range:
+            _reachable_entry_calls(
+                file, called_range[0], called_range[1], body_ranges, seen_ids, found
+            )
+
+
+def _build_task_call_graph(file):
+    # edges[task_id] is a list of (target_task_id, call_ref) - the call
+    # made from within a task's own accept body to another task's entry.
+    edges = {}
+    body_ranges = _body_ranges_by_id(file)
+
+    for start, end, task_ent in _accept_ranges(file):
+        found = []
+        _reachable_entry_calls(file, start, end, body_ranges, set(), found)
+
+        for call_ref in found:
+            target_ent = call_ref.ent().parent()
+
+            if target_ent is None or not target_ent.kind().check("Task"):
+                continue
+
+            edges.setdefault(task_ent.id(), []).append(
+                (target_ent.id(), call_ref))
+
+    return edges
+
+
+def _find_cyclic_call_refs(edges):
+    flagged = []
+    node_stack = []
+    edge_stack = []
+    finished = set()
+
+    def visit(node):
+        node_stack.append(node)
+
+        for target, call_ref in edges.get(node, []):
+            edge_stack.append(call_ref)
+
+            if target in node_stack:
+                start_index = node_stack.index(target)
+
+                for i in range(start_index, len(edge_stack)):
+                    flagged.append(edge_stack[i])
+            elif target not in finished:
+                visit(target)
+
+            edge_stack.pop()
+
+        node_stack.pop()
+        finished.add(node)
+
+    for node in list(edges.keys()):
+        if node not in finished:
+            visit(node)
+
+    return flagged
+
+
+def check(check, file):
+    edges = _build_task_call_graph(file)
+    seen = set()
+
+    for call_ref in _find_cyclic_call_refs(edges):
+        key = (call_ref.line(), call_ref.column())
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        check.violation(call_ref.ent(), file, call_ref.line(),
+                        call_ref.column(), ERR1)
