@@ -1,0 +1,360 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+
+import re
+
+ERR1 = "Thread %1 takes %2 while holding %3, the reverse of another thread"
+ERR2 = "Thread %1 takes %2 while holding %3, and takes them the other way\
+ round elsewhere"
+
+CREATE_FUNCS = {'thrd_create': 1, 'pthread_create': 2}
+
+JOIN_FUNCS = {'thrd_join', 'pthread_join'}
+
+# A blocking acquire can be the waiting end of a deadlock. A timed one is
+# included: it waits, and a cycle there hangs until the timeout rather than
+# never, which is still the hazard the directive is about.
+LOCK_FUNCS = {
+    'mtx_lock', 'mtx_timedlock',
+    'pthread_mutex_lock', 'pthread_mutex_timedlock',
+}
+
+# A try returns instead of waiting, so it can hold a mutex that another thread
+# wants but can never be the one waiting. Taking a lock and then trying for
+# the next is how a cycle is deliberately avoided.
+TRY_LOCK_FUNCS = {'mtx_trylock', 'pthread_mutex_trylock'}
+
+UNLOCK_FUNCS = {'mtx_unlock', 'pthread_mutex_unlock'}
+
+SYNC_TYPES = {
+    'mtx_t', 'pthread_mutex_t', 'pthread_rwlock_t', 'pthread_spinlock_t',
+}
+
+
+def ids():
+    return ('MISRA23_DIR_5.2', 'MISRA25_DIR_5.2', 'CPP_CF013')
+
+
+def name(id):
+    return {
+        'MISRA23_DIR_5.2': 'Published Standards/MISRA C 2023/' + """\
+Directive 5.2 There shall be no deadlocks between threads (Partial)""",
+        'MISRA25_DIR_5.2': 'Published Standards/MISRA C 2025/' + """\
+Directive 5.2 There shall be no deadlocks between threads (Partial)""",
+        'CPP_CF013': 'All Checks/Language Specific/C and C++/'
+                     'Control Flow/' + """\
+There shall be no deadlocks between threads (Partial)""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_DIR_5.2': [
+            'Language: C',
+            'Standard: MISRA C 2023',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'MISRA25_DIR_5.2': [
+            'Language: C',
+            'Standard: MISRA C 2025',
+            'Category: Required',
+            'Control Flow',
+        ],
+        'CPP_CF013': [
+            'Language: C',
+            'Control Flow',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>A deadlock occurs when there is a circular chain of threads, each of which
+holding a locked synchronization resource, and trying to lock a
+synchronization resource held by the next element in the chain. To prevent
+deadlocks, synchronization mechanisms between threads shall not introduce
+cyclic dependencies.</p>
+
+<p><b>Rationale</b></p>
+<p>An example for a deadlock between two threads T1 and T2 is when T1 enters
+the waiting state because it requests a mutex Ra which is locked by thread T2,
+and T2 in turn is waiting for another mutex Rb held by thread T1.</p>
+<p>Possible solutions to avoid deadlocks include locking and unlocking
+synchronization resources in a fixed global non-cyclic order, or associating
+synchronization resources with appropriate priorities.</p>
+
+<p><b>Analysis</b></p>
+<p>Each thread started by <code>thrd_create</code> or
+<code>pthread_create</code> gives a lock order. Walking the calls its entry
+function reaches, a mutex taken while another is already held records that the
+first is ordered before the second. The orders of threads that can run at the
+same time are put together, and a cycle among them is reported: two threads
+that take Ra then Rb and Rb then Ra can each end up holding what the other
+waits for.</p>
+<p>Only a mutex named directly in the call is followed, so
+<code>mtx_lock( &amp;Ra )</code> is ordered but a mutex reached through a
+pointer or an array is not. A <code>trylock</code> returns rather than waits,
+so it can hold a mutex another thread wants but is never treated as the
+waiting end of a cycle; a timed lock does wait and is treated as blocking. A
+thread that takes the same two mutexes in both orders is reported against
+itself, since a second copy of it would deadlock.</p>
+<p><b>Known limitations (false negatives):</b> a thread started other than by
+those two functions, a cycle that closes through a lock this check cannot
+name, a cycle formed with a condition variable or a join rather than a mutex,
+and threads created in different functions. A recursive mutex taken twice is
+not a cycle and is not reported.</p>
+<p>Held mutexes are tracked within one function only, so a lock taken in a
+caller is not held across the call: <code>f</code> locking Ra and then calling
+<code>g</code>, which locks Rb, records no order between them. That is the
+common shape in real code, and it is the largest gap here.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C">mtx_t Ra;
+mtx_t Rb;
+
+int32_t t1( void *ignore )
+{
+  mtx_lock( &amp;Ra );
+  mtx_lock( &amp;Rb );           /* Non-compliant - deadlock may occur here */
+  mtx_unlock( &amp;Rb );
+  mtx_unlock( &amp;Ra );
+  return 0;
+}
+
+int32_t t2( void *ignore )
+{
+  mtx_lock( &amp;Rb );
+  mtx_lock( &amp;Ra );           /* Non-compliant - deadlock may occur here */
+  mtx_unlock( &amp;Ra );
+  mtx_unlock( &amp;Rb );
+  return 0;
+}</code></pre>
+
+<p><b>See also</b></p>
+<p>Dir 5.1</p>
+
+<p><b>Developer's Notes</b></p>
+<p>The one deadlock this analysis can decide is two or more threads taking the
+same mutexes in conflicting orders. A project whose threads are started through
+a
+wrapper such as an RTOS or framework API, or that deadlocks through condition
+variables, joins or resources other than a named mutex, will report nothing
+&mdash; that is the check being unable to see the locking, not a clean
+result.</p>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# The entity named as an argument of a call, when it is one this check can
+# follow: a thread's entry function, or the mutex a lock is taken on.
+def call_argument(lexer, call_ref, index, wanted):
+    lex = lexer.lexeme(call_ref.line(), call_ref.column())
+    if not lex:
+        return None
+
+    depth = 0
+    argument = 0
+    while lex:
+        text = lex.text()
+        if text == '(':
+            depth += 1
+        elif text == ')':
+            depth -= 1
+            if not depth:
+                break
+        elif text == ',' and depth == 1:
+            argument += 1
+        elif depth == 1 and argument == index:
+            ent = lex.ent()
+            if ent and wanted(ent):
+                return ent
+        lex = lex.next(True, True)
+
+    return None
+
+
+def is_function(ent):
+    return ent.kind().check('function')
+
+
+def is_mutex(ent):
+    text = str(ent.freetext('UnderlyingType') or ent.type() or '')
+    return any(word in SYNC_TYPES for word in re.split(r'\W+', text))
+
+
+# Everything a thread can run: its entry function and whatever that calls.
+def reachable(entry):
+    seen = {entry.id()}
+    funcs = [entry]
+    queue = [entry]
+
+    while queue:
+        func = queue.pop()
+        for ref in func.refs('Call', 'Function'):
+            called = ref.ent()
+            if called.id() in seen:
+                continue
+            seen.add(called.id())
+            funcs.append(called)
+            queue.append(called)
+
+    return funcs
+
+
+# Threads compared against one another. Any join ends a group, which is only
+# exactly right when the join covers every thread started so far; a join is
+# not matched to the thread id it waits on.
+def concurrent_groups(lexer, func):
+    groups = [[]]
+
+    for ref in sorted(func.refs('Call ~Inactive', 'Function'),
+                      key=lambda r: (r.line(), r.column())):
+        called = ref.ent().name()
+        if called in CREATE_FUNCS:
+            entry = call_argument(lexer, ref, CREATE_FUNCS[called], is_function)
+            if entry:
+                groups[-1].append(entry)
+        elif called in JOIN_FUNCS and groups[-1]:
+            groups.append([])
+
+    return [g for g in groups if len(g) > 1]
+
+
+# The order a thread takes its mutexes in: an edge from a mutex already held
+# to one taken while holding it, with the call that takes it.
+def lock_order(funcs, lexers):
+    edges = {}
+
+    for func in funcs:
+        lexer = lexers(func)
+        if not lexer:
+            continue
+
+        held = []
+        for ref in sorted(func.refs('Call ~Inactive', 'Function'),
+                          key=lambda r: (r.line(), r.column())):
+            called = ref.ent().name()
+            if called in LOCK_FUNCS or called in TRY_LOCK_FUNCS:
+                mutex = call_argument(lexer, ref, 0, is_mutex)
+                if not mutex:
+                    continue
+                if called in LOCK_FUNCS:
+                    for earlier in held:
+                        if earlier.id() != mutex.id():
+                            edges.setdefault((earlier.id(), mutex.id()),
+                                             (earlier, mutex, ref))
+                held.append(mutex)
+            elif called in UNLOCK_FUNCS:
+                mutex = call_argument(lexer, ref, 0, is_mutex)
+                held = [m for m in held if not mutex or m.id() != mutex.id()]
+
+    return edges
+
+
+# A cycle in the orders of threads that run together is a deadlock: each
+# thread can hold what the next one waits for.
+def cycle(edges):
+    graph = {}
+    for first, second in edges:
+        graph.setdefault(first, set()).add(second)
+
+    colour = {}
+    stack = []
+
+    def walk(node):
+        colour[node] = 1
+        stack.append(node)
+        for nxt in graph.get(node, ()):
+            if colour.get(nxt) == 1:
+                return stack[stack.index(nxt):]
+            if not colour.get(nxt):
+                found = walk(nxt)
+                if found:
+                    return found
+        stack.pop()
+        colour[node] = 2
+        return None
+
+    for node in list(graph):
+        if not colour.get(node):
+            found = walk(node)
+            if found:
+                return found
+
+    return None
+
+
+def check(check, file):
+    lexer = None
+    lexers = {}
+
+    def lexer_for(func):
+        ref = func.ref('Definein')
+        if not ref:
+            return None
+        other = ref.file()
+        if other.id() not in lexers:
+            lexers[other.id()] = other.lexer(lookup_ents=True)
+        return lexers[other.id()]
+
+    for func_ref in file.filerefs('Define', 'Function'):
+        func = func_ref.ent()
+
+        contents = str(func.contents())
+        if not any(name in contents for name in CREATE_FUNCS):
+            continue
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+            if not lexer:
+                return
+            lexers[file.id()] = lexer
+
+        for group in concurrent_groups(lexer, func):
+            report(check, group, lexer_for)
+
+
+def report(check, group, lexer_for):
+    edges = {}
+    owner = {}
+    for entry in group:
+        for key, value in lock_order(reachable(entry), lexer_for).items():
+            if key not in edges:
+                edges[key] = value
+                owner[key] = entry
+
+    # One lock-order bug rarely travels alone, so every cycle is reported, not
+    # just the first one found.
+    while True:
+        found = cycle(edges)
+        if not found:
+            return
+
+        keys = [(node, found[(i + 1) % len(found)])
+                for i, node in enumerate(found)]
+        keys = [key for key in keys if key in edges]
+
+        # A thread inconsistent with itself deadlocks against another copy of
+        # itself, not against the threads it was compared with.
+        alone = len({owner[key].id() for key in keys}) == 1
+        message = ERR2 if alone else ERR1
+
+        for key in keys:
+            earlier, mutex, ref = edges[key]
+            check.violation(mutex, ref.file(), ref.line(), ref.column(),
+                            message, owner[key].name(), mutex.name(),
+                            earlier.name())
+            del edges[key]
