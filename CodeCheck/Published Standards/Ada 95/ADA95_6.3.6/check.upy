@@ -1,0 +1,121 @@
+ERR1 = "Encapsulate and serialize calls to Ada.Command_Line.Set_Exit_Status since it is called from more than one task or context"
+
+
+def ids():
+    return ("ADA95_6.3.6",)
+
+
+def name(id):
+    return {
+        "ADA95_6.3.6": "Published Standards/Ada 95/6.3.6 Setting Exit Status",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_6.3.6": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Concurrency",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_6.3.6": """
+<p><b>Guideline</b></p>
+<p>&#8226; Avoid race conditions in setting an exit status code from the
+main program when using the procedure Ada.Command_Line.Set_Exit_Status.</p>
+<p>&#8226; In a program with multiple tasks, encapsulate, serialize, and
+check calls to the procedure Ada.Command_Line.Set_Exit_Status.</p>
+
+<p><b>Rationale</b></p>
+<p>In accordance with the rules of Ada, tasks in library-level packages
+may terminate after the main program task. If the program permits
+multiple tasks to use Set_Exit_Status, then there can be no guarantee
+that any particular status value is the one actually returned.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Both bullets are automated together: every direct call to
+<code>Ada.Command_Line.Set_Exit_Status</code> is located, the same way
+<code>ADA95_5.9.2</code> identifies a specific library entity by
+<code>longname()</code> rather than by name alone, and its own
+<code>refs("Callby")</code> &#8212; the "called by" direction, which returns
+every call project-wide directly from the called entity, the same
+technique <code>ADA95_6.2.4</code> uses for a shared variable's
+<code>Useby</code>/<code>Setby</code> &#8212; gives every call site anywhere in the
+program. Each call site is classified by which task's body contains it
+(the same way <code>ADA95_6.2.4</code> classifies a variable's uses), or as
+outside any task. If two or more distinct locations call
+<code>Set_Exit_Status</code>, every one of those calls is flagged, since any
+of them could race against any other; a program in which every call is
+funneled through a single serializing subprogram (the guideline's own
+recommended fix) naturally has only one direct call site to
+<code>Set_Exit_Status</code> itself and is not flagged. A call made through
+a rename of <code>Set_Exit_Status</code> is also detected, since Understand
+resolves the call directly to the renamed-to entity.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _task_ranges(file):
+    ranges = []
+
+    for decl_ref in file.filerefs("Declare Body", "Task"):
+        ent = decl_ref.ent()
+        end_ref = ent.ref("Endby Body")
+
+        if not end_ref:
+            continue
+
+        ranges.append((decl_ref.line(), end_ref.line(), ent))
+
+    return ranges
+
+
+def _location_key(ref, task_ranges):
+    for start, end, task_ent in task_ranges:
+        if start <= ref.line() <= end:
+            return task_ent.id()
+
+    return None
+
+
+def _direct_calls(file):
+    calls = []
+
+    for call_ref in file.filerefs("Call", "Procedure"):
+        if str(call_ref.ent().longname()) == "Ada.Command_Line.Set_Exit_Status":
+            calls.append(call_ref)
+
+    return calls
+
+
+def _locations(ent):
+    locations = set()
+
+    for ref in ent.refs("Callby"):
+        locations.add(_location_key(ref, _task_ranges(ref.file())))
+
+    return locations
+
+
+def check(check, file):
+    local_calls = _direct_calls(file)
+
+    if not local_calls:
+        return
+
+    if len(_locations(local_calls[0].ent())) >= 2:
+        for call_ref in local_calls:
+            check.violation(call_ref.ent(), file, call_ref.line(),
+                            call_ref.column(), ERR1)
