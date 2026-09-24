@@ -1,4 +1,4 @@
-package body Test is
+package body Test_6_2_2 is
 
    task body No_Handler is
       Condition_1, Condition_2 : Boolean := False;
@@ -118,6 +118,24 @@ package body Test is
       end loop;
    end Tricky_Nested;
 
+   task body Else_After_Nested_If is
+      Condition_1 : Boolean := False;
+   begin
+      loop
+         select  -- UndCC_Valid
+            accept Entry_1 do
+               if Condition_1 then
+                  null;
+               else
+                  null;
+               end if;
+            end Entry_1;
+         else
+            null;
+         end select;
+      end loop;
+   end Else_After_Nested_If;
+
    task body Async_Select is
       Condition_1 : Boolean := False;
    begin
@@ -135,4 +153,4 @@ package body Test is
       end select;
    end Async_Select;
 
-end Test;
+end Test_6_2_2;

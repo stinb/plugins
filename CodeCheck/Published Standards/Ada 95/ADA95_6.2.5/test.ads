@@ -30,4 +30,8 @@ package Test_6_2_5 is
       entry Dummy;
    end Delay_In_Outer_Loop_Only;
 
+   task type Nested_If_Before_Else is
+      entry Dummy;
+   end Nested_If_Before_Else;
+
 end Test_6_2_5;

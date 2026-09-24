@@ -1,4 +1,4 @@
-package Test is
+package Test_6_2_2 is
 
    task type No_Handler is
       entry Entry_1;
@@ -34,9 +34,13 @@ package Test is
       entry Entry_2;
    end Tricky_Nested;
 
+   task type Else_After_Nested_If is
+      entry Entry_1;
+   end Else_After_Nested_If;
+
    task type Async_Select is
    end Async_Select;
 
    Target : No_Handler;
 
-end Test;
+end Test_6_2_2;

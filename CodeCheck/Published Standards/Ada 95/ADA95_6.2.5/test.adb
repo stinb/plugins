@@ -101,4 +101,22 @@ package body Test_6_2_5 is
       end loop;
    end Delay_In_Outer_Loop_Only;
 
+   task body Nested_If_Before_Else is
+      Cond : Boolean := False;
+   begin
+      loop
+         select  -- UndCC_Violation
+            accept Dummy do
+               if Cond then
+                  null;
+               else
+                  null;
+               end if;
+            end Dummy;
+         else
+            null;
+         end select;
+      end loop;
+   end Nested_If_Before_Else;
+
 end Test_6_2_5;
