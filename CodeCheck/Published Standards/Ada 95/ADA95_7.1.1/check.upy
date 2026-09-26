@@ -1,0 +1,162 @@
+ERR1 = "Use the full library-unit name instead of this obsolescent short renaming"
+ERR2 = "Avoid the obsolescent 'Constrained attribute on an object of a private type"
+ERR3 = "Avoid using the obsolescent predefined package ASCII"
+ERR4 = "Avoid using the obsolescent exception Numeric_Error"
+
+
+def ids():
+    return ("ADA95_7.1.1",)
+
+
+def name(id):
+    return {
+        "ADA95_7.1.1": "Published Standards/Ada 95/7.1.1 Obsolescent Features",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_7.1.1": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Portability",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_7.1.1": """
+<p><b>Guideline</b></p>
+<p>&#8226; In programs or components intended to have a long life, avoid
+using the features of Ada declared as "obsolescent" by Annex J of the
+Ada Reference Manual (1995), unless the use of the feature is needed for
+backward compatibility with Ada 83 (Ada Reference Manual 1983). Document
+the use of any obsolescent features.</p>
+<p>&#8226; Avoid using the following features:</p>
+<ul>
+<li>The short renamings of the packages in the predefined environment
+(e.g., Text_IO as opposed to Ada.Text_IO)</li>
+<li>The character replacements of ! for |, : for #, and % for
+quotation marks</li>
+<li>Reduced accuracy subtypes of floating-point types</li>
+<li>The 'Constrained attribute as applied to private types</li>
+<li>The predefined package ASCII</li>
+<li>The exception Numeric_Error</li>
+<li>Various representation specifications, including at clauses, mod
+clauses, interrupt entries, and the Storage_Size attribute</li>
+</ul>
+
+<p><b>Rationale</b></p>
+<p>Ten years of reflection on the use of Ada 83 led to the conclusion that
+some features of the original language are not as useful as originally
+intended. These features have been replaced with others in the Ada 95
+revision. It would have been desirable to remove the obsolescent
+features completely, but that would have prevented the upward compatible
+transition of programs from Ada 83 to Ada 95. Thus, the obsolescent
+features remain in the language and are explicitly labeled as such in
+Annex J of the Ada Reference Manual (1995). The features listed in Annex
+J are candidates for removal from the language during its next revision.
+If a program's lifetime may extend beyond the next language revision, it
+should avoid the obsolescent language features unless backward
+compatibility with Ada 83 forces their use.</p>
+
+<p><b>Exceptions</b></p>
+<p>When you instantiate Ada.Text_IO.Float_IO, the values of the
+Default_Fore and Default_Aft fields are set from the values of the 'Fore
+and 'Aft attributes of the actual floating-point type used in the
+instantiation. If you declare a reduced accuracy floating-point type
+that you then use to instantiate Ada.Text_IO.Float_IO, the output field
+widths are determined from the reduced accuracy type, although the
+implementation accuracy is unchanged (Rationale 1995, &sect;3.3).</p>
+
+<p><b>Developer's Note</b></p>
+<p>Four of the seven listed features are automated: the short predefined-
+package renamings (<code>Text_IO</code>, <code>Sequential_IO</code>, <code>Direct_IO</code>,
+<code>IO_Exceptions</code>, <code>Calendar</code>, <code>Unchecked_Conversion</code>,
+<code>Unchecked_Deallocation</code>), <code>'Constrained</code> applied to a private
+type, the predefined package <code>ASCII</code>, and the exception
+<code>Numeric_Error</code>.</p>
+<p>Not automated: the character replacements (<code>!</code>/<code>:</code>/<code>%</code>) and the
+old-style representation clauses (<code>at</code>/<code>mod</code> clauses, interrupt
+entries, obsolescent <code>Storage_Size</code>) need more research into whether
+and how Understand represents that legacy syntax. Reduced accuracy
+floating-point subtypes have no fixed syntax to key off &#8212; just a
+target-hardware-dependent judgment call. Whether a use is documented, or
+genuinely required for Ada 83 compatibility, is a determination about
+intent with no structural signature to check.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_OBSOLESCENT_RENAMES = (
+    "Text_IO",
+    "Sequential_IO",
+    "Direct_IO",
+    "IO_Exceptions",
+    "Calendar",
+    "Unchecked_Conversion",
+    "Unchecked_Deallocation",
+)
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _check_obsolescent_renames(check, file):
+    for with_ref in file.filerefs("With"):
+        ent = with_ref.ent()
+
+        if str(ent.longname()) in _OBSOLESCENT_RENAMES:
+            check.violation(ent, file, with_ref.line(),
+                            with_ref.column(), ERR1)
+
+
+def _check_lexer_based(check, file):
+    lexer = file.lexer(lookup_ents=True)
+    lex = lexer.first()
+
+    while lex:
+        if lex.token() == "Identifier" and lex.text().lower() == "numeric_error":
+            check.violation(None, file, lex.line_begin(),
+                            lex.column_begin(), ERR4)
+
+        if lex.token() == "Identifier" and lex.ent():
+            if str(lex.ent().longname()) == "STANDARD.ASCII":
+                check.violation(None, file, lex.line_begin(),
+                                lex.column_begin(), ERR3)
+
+        if lex.text() == "'":
+            attr_lex = _next_significant(lex)
+
+            if attr_lex and attr_lex.text().lower() == "constrained":
+                prev = lex.previous(True, True)
+                prefix_ent = prev.ent() if prev else None
+                type_ref = prefix_ent.ref(
+                    "Typed", "Type") if prefix_ent else None
+
+                if type_ref and type_ref.ent().kind().check("Private"):
+                    check.violation(
+                        prefix_ent, file, lex.line_begin(), lex.column_begin(), ERR2
+                    )
+
+        lex = lex.next()
+
+
+def check(check, file):
+    _check_obsolescent_renames(check, file)
+    _check_lexer_based(check, file)
