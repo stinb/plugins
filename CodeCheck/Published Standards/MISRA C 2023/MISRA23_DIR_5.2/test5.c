@@ -1,5 +1,16 @@
-#include <threads.h>
 #include <stdint.h>
+#include <stddef.h>
+
+/* <threads.h> is missing on macOS, so declare what the tests use */
+typedef unsigned long thrd_t;
+typedef struct { int opaque; } mtx_t;
+typedef int (*thrd_start_t)( void * );
+enum { thrd_success, thrd_busy, thrd_error };
+int thrd_create( thrd_t *thr, thrd_start_t func, void *arg );
+int thrd_join( thrd_t thr, int *res );
+int mtx_lock( mtx_t *mtx );
+int mtx_trylock( mtx_t *mtx );
+int mtx_unlock( mtx_t *mtx );
 
 mtx_t Ta;
 mtx_t Tb;
