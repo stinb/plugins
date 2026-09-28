@@ -22,6 +22,18 @@ class DbCache:
     def __init__(self):
         self.entEntsCache: dict[str, list[Ent]] = dict()
         self.entRefCache: dict[str, Ref | DictResult] = dict()
+        self.useSitesCache: dict[int, dict[tuple[int, int], list[Ref]]] = dict()
+
+    # Useby refs of ent from functions, by file and line
+    def useSites(self, ent: Ent, fileId: int, line: int) -> list[Ref]:
+        sites = self.useSitesCache.get(ent.id())
+        if sites == None:
+            sites = dict()
+            for ref in ent.refs('Useby'):
+                if checkIsCallable(ref.ent()):
+                    sites.setdefault((ref.file().id(), ref.line()), []).append(ref)
+            self.useSitesCache[ent.id()] = sites
+        return sites.get((fileId, line), [])
 
     # Call ent.ents
     def entEnts(self, ent: Ent, refKind: str = '', entKind: str = '') -> list[Ent]:
@@ -441,6 +453,117 @@ def globalObjRefs(cache: DbCache, function: Ent, options: dict[str, str | bool] 
     return result
 
 
+# Caller, use ref and use kind where a pointer was assigned, e.g. update(&g)
+def pointerAssignSite(cache: DbCache, src: Ent, assignRef: Ref) -> tuple[Ent, Ref, str] | None:
+    sites = cache.useSites(src, assignRef.file().id(), assignRef.line())
+    if not sites:
+        return None
+    ref = next((r for r in sites if r.column() == assignRef.column()), sites[0])
+    return (ref.ent(), ref, ref.kind().longname())
+
+
+def pointerLevel(ent: Ent) -> int:
+    return (ent.freetext('UnderlyingType') or ent.type() or '').count('*')
+
+
+# Globals a pointer may point to, with the call sites that passed it. Only
+# callers visited from root count.
+def pointerTargets(
+        cache: DbCache,
+        visited: set[str],
+        root: Ent,
+        pointer: Ent,
+        path: list[tuple[Ent, Ref]],
+        seen: set[int]) -> list[tuple[Ent, list[tuple[Ent, Ref]]]]:
+    results = []
+    for assignRef in pointer.refs('Assign Ptr ~Deref'):
+        src = assignRef.ent()
+        site = pointerAssignSite(cache, src, assignRef)
+        if not site:
+            continue
+        caller, siteRef, siteKind = site
+        if f'{root.id()} {caller.id()}' not in visited:
+            continue
+        srcPath = path + [(caller, siteRef)]
+        srcKind = src.kind()
+        addrTaken = 'Addr' in siteKind
+        isArray = '[' in (src.type() or '')
+        # Follow p and &p[i], not *pp
+        if srcKind.check('Parameter, Local Object'):
+            if not addrTaken and not isArray and src.id() not in seen \
+            and pointerLevel(src) == pointerLevel(pointer):
+                results += pointerTargets(cache, visited, root, src, srcPath, seen | {src.id()})
+            continue
+        # A global pointer's value points elsewhere
+        if not addrTaken and not isArray:
+            continue
+        # &arr[i] points into arr; arr[i] of a pointer array points elsewhere
+        if not addrTaken and 'Deref' in siteKind \
+        and pointerLevel(pointer) <= pointerLevel(src):
+            continue
+        if srcKind.check('Global Object') \
+        or (srcKind.check('Member Object') and isMemberOfGlobal(cache, src)):
+            results.append((src, srcPath))
+    return results
+
+
+def addObjEdge(
+        tasks: dict,
+        incoming: dict,
+        outgoing: dict,
+        edgeInfo: dict,
+        root: Ent,
+        scope: Ent,
+        ent: Ent,
+        kindname: str,
+        ref: Ref) -> dict:
+    edgeKey = f'{scope.id()} {ent.id()}'
+    if edgeKey not in edgeInfo:
+        edgeInfo[edgeKey] = {
+            'root': scope in tasks,
+            'scope': scope,
+            'ent': ent,
+            'kindnames': set(),
+            'from': set(),
+            'filtered': False,
+            'ref': ref,
+            'direct': False,
+            'pointerPaths': [],
+        }
+    edgeObj = edgeInfo[edgeKey]
+    edgeObj['kindnames'].add(kindname)
+    edgeObj['from'].add(root)
+
+    incoming.setdefault(ent, set()).add(edgeKey)
+    outgoing.setdefault(scope, set()).add(edgeKey)
+    return edgeObj
+
+
+# Edges for *p = x where a caller passed &global. Runs after the traversal.
+def addPointerDerefEdges(
+        cache: DbCache,
+        visited: set[str],
+        tasks: dict,
+        incoming: dict,
+        outgoing: dict,
+        edgeInfo: dict,
+        pointerDerefs: list[tuple[Ent, Ent, Ref]],
+        options: dict[str, str | bool]):
+    targetsCache: dict[tuple[int, int], list[tuple[Ent, list[tuple[Ent, Ref]]]]] = dict()
+    for root, fun, ref in pointerDerefs:
+        kindname = memberAccessKind(ref)
+        if not kindname:
+            continue
+        pointer = ref.ent()
+        key = (root.id(), pointer.id())
+        if key not in targetsCache:
+            targetsCache[key] = pointerTargets(cache, visited, root, pointer, [], {pointer.id()})
+        scope = root if options[REFERENCE] == 'Simple' else fun
+        for target, sites in targetsCache[key]:
+            edgeObj = addObjEdge(tasks, incoming, outgoing, edgeInfo, root, scope, target, kindname, ref)
+            edgeObj['pointerPaths'].append([(fun, ref)] + sites)
+
+
 def getEdgeInfo(
         cache: DbCache,
         visited: set[str],
@@ -449,6 +572,7 @@ def getEdgeInfo(
         outgoing: dict,
         edgeInfo: dict,
         arrayMemberEdges: dict,
+        pointerDerefs: list[tuple[Ent, Ent, Ref]],
         root: Ent,
         fun: Ent,
         options: dict[str, str | bool],
@@ -470,8 +594,6 @@ def getEdgeInfo(
         scope = root if options[REFERENCE] == 'Simple' else fun
         ent = ref.ent()
 
-        edgeKey = f'{scope.id()} {ent.id()}'
-
         kindname = ref.kind().longname()
         if 'Use' in kindname:
             kindname = 'Use'
@@ -482,30 +604,13 @@ def getEdgeInfo(
         elif 'Call' in kindname:
             kindname = 'Call'
 
-        # Add to edge info
-        if edgeKey not in edgeInfo:
-            edgeInfo[edgeKey] = {
-                'root': scope in tasks,
-                'scope': scope,
-                'ent': ent,
-                'kindnames': set(),
-                'from': set(),
-                'filtered': False,
-                'ref': ref,
-            }
-        edgeObj = edgeInfo[edgeKey]
-        edgeObj['kindnames'].add(kindname)
-        edgeObj['from'].add(root)
+        edgeObj = addObjEdge(tasks, incoming, outgoing, edgeInfo, root, scope, ent, kindname, ref)
+        edgeObj['direct'] = True
 
-        # Add to incoming node edges
-        if ent not in incoming:
-            incoming[ent] = set()
-        incoming[ent].add(edgeKey)
-
-        # Add to outgoing node edges
-        if scope not in outgoing:
-            outgoing[scope] = set()
-        outgoing[scope].add(edgeKey)
+    # Resolved to globals by addPointerDerefEdges
+    if options.get(POINTERS_TO_GLOBALS):
+        for ref in fun.refs('Deref Set, Deref Modify, Deref Use', 'Parameter, Local Object'):
+            pointerDerefs.append((root, fun, ref))
 
     # Array element member accesses (e.g. gDat.ST2[].mem_C). Kept in a separate
     # collection: these are informational-only synthetic (array, member) nodes
@@ -573,9 +678,9 @@ def getEdgeInfo(
                     targets += [r.ent() for r in inst.ent().refs("Assign FunctionPtr")]
             for target in targets:
                 getEdgeInfo(cache, visited, tasks, incoming, outgoing,
-                            edgeInfo, arrayMemberEdges, root, target, options, depth + 1)
+                            edgeInfo, arrayMemberEdges, pointerDerefs, root, target, options, depth + 1)
 
-        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, root, call.ent(), options, depth + 1)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, pointerDerefs, root, call.ent(), options, depth + 1)
 
 
 def filterIncomingEdges(
@@ -698,16 +803,21 @@ def buildEdgeInfo(
                       #     'kindnames': set,
                       #     'from': set,
                       #     'filtered': boolean,
-                      #     'ref': ref
+                      #     'ref': ref,
+                      #     'direct': boolean,
+                      #     'pointerPaths': list,
+                      #     'pointerLocked': boolean,
                       # }, ... }
     arrayMemberEdges = dict() # { key: { 'scope', 'array', 'member',
                               #     'displayName', 'kindnames', 'from', 'ref',
                               #     'root' }, ... } - informational-only
+    pointerDerefs: list[tuple[Ent, Ent, Ref]] = [] # (root, function, deref ref)
     tasks, enableDisableFunctions, foundFields = parseArch(arch)
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
-        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, ent, ent, options, 0)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, pointerDerefs, ent, ent, options, 0)
+    addPointerDerefEdges(cache, visited, tasks, incoming, outgoing, edgeInfo, pointerDerefs, options)
 
     # See which edges are filtered out
     if options[FILTER_MODIFY_SET_ONLY] or options[FILTER_USE_ONLY]:
@@ -905,6 +1015,18 @@ def find_interrupt_disabled_refs(options: TraversalOptions, global_objects: list
                 continue
             result.add(refStr(edge.ref))
     return result
+
+
+# Pointer accesses are checked per call site
+def edgeInterruptProtected(edgeObj: dict, interruptDisabledRefs: set[str], simple: bool) -> bool:
+    if edgeObj.get('direct', True):
+        if simple:
+            key = str(FnAndObj(edgeObj['scope'], edgeObj['ent']))
+        else:
+            key = refStr(edgeObj['ref'])
+        if key not in interruptDisabledRefs:
+            return False
+    return edgeObj.get('pointerLocked', True)
 
 
 def is_directly_interrupt_protected(disable_fns: set[Ent], enable_fns: set[Ent], fn_with_ref: Ent, ref: Ref) -> bool:
@@ -1241,16 +1363,16 @@ def compute_entry_locks(tasks: set[Ent],
     return entry
 
 
-def effective_locks_for_ref(ref: Ref, entry_locks: dict[Ent, set],
-                            pair_id_map: dict[Ent, int],
-                            acquire_fns: set[Ent],
-                            release_fns: set[Ent]) -> set:
-    """Locks guaranteed held at ref: enclosing function's entry locks,
-    plus locks acquired locally before the ref in that function."""
-    fn = ref.scope()
-    fn_entry = entry_locks.get(fn, set())
-    local = locks_held_at_ref_locally(fn, ref, pair_id_map, acquire_fns, release_fns)
-    return fn_entry | local
+def effective_locks_for_path(path: list[tuple[Ent, Ref]],
+                             entry_locks: dict[Ent, set],
+                             pair_id_map: dict[Ent, int],
+                             acquire_fns: set[Ent],
+                             release_fns: set[Ent]) -> set:
+    """Locks held at path[0]. Each later step is a call site in a caller."""
+    locks = set(entry_locks.get(path[-1][0], set()))
+    for fn, ref in path:
+        locks |= locks_held_at_ref_locally(fn, ref, pair_id_map, acquire_fns, release_fns)
+    return locks
 
 
 def classify_shared_objects(edge_info: dict, tasks: dict,
@@ -1268,11 +1390,19 @@ def classify_shared_objects(edge_info: dict, tasks: dict,
         ent = edge['ent']
         if not ent.kind().check(OBJ_ENT_KINDS):
             continue
+        pointer_locks = [
+            effective_locks_for_path(path, entry_locks, pair_id_map, acquire_fns, release_fns)
+            for path in edge.get('pointerPaths', ())]
+        edge['pointerLocked'] = all(pointer_locks)
         if edge.get('filtered'):
             continue
-        eff = effective_locks_for_ref(
-            edge['ref'], entry_locks, pair_id_map, acquire_fns, release_fns)
-        per_obj_locks.setdefault(ent, []).append((eff, edge['from']))
+        lock_sets = pointer_locks
+        if edge.get('direct', True):
+            direct_path = [(edge['ref'].scope(), edge['ref'])]
+            lock_sets = lock_sets + [effective_locks_for_path(
+                direct_path, entry_locks, pair_id_map, acquire_fns, release_fns)]
+        for eff in lock_sets:
+            per_obj_locks.setdefault(ent, []).append((eff, edge['from']))
 
     shared: dict[Ent, bool] = {}
     for ent, records in per_obj_locks.items():
