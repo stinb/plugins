@@ -2,6 +2,9 @@
 
 enum E { A = 0, B = 1 };
 
+/* Windows reads enum E : in a generic association as an enum-base */
+typedef enum E E_t;
+
 void f( int16_t s16, int32_t i32, int64_t i64, uint16_t u16, float f32,
         enum E e, char c )
 {
@@ -102,6 +105,6 @@ void enum_listed_as_itself( enum E e )
 {
   /* Reported whichever of the two indistinguishable types is listed. */
   ( void ) _Generic( e,                 /* UndCC_Violation */
-    enum E    : 1,
+    E_t       : 1,
     default   : 2 );
 }
