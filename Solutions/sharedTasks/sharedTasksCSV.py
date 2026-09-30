@@ -3,19 +3,18 @@
 # framework's export (und report -format csv / GUI), not by this script.
 
 
-import functools
-
 from understand import Arch, Db, Ent, ReportContext
 from sharedTasks import *
 
 
-def entComparator(a: Ent, b: Ent) -> int:
-    if a.name() < b.name():
-        return -1
-    if a.name() > b.name():
-        return 1
-    return 0
-entComparator = functools.cmp_to_key(entComparator)
+# Sort by name. Entity ids change between analyses, so never sort on them.
+def entKey(ent: Ent) -> tuple[str, str, str]:
+    return (ent.name(), ent.longname(), ent.uniquename())
+
+
+def edgeSortKey(edgeObj: dict) -> tuple:
+    ref = edgeObj['ref']
+    return (entKey(edgeObj['scope']), ref.file().relname(), ref.line(), ref.column())
 
 
 # Emit one table cell. The report renders a real report.table(), so the
@@ -54,15 +53,14 @@ def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: Repo
     # ptr(gDat.ST2).mem_D); otherwise keep the legacy short-name ordering.
     objects = list(objects)
     if options.get(POINTERS_TO_GLOBALS):
-        objects.sort(key=lambda obj: getLongName(obj, options))
+        objects.sort(key=lambda obj: (getLongName(obj, options), entKey(obj)))
     else:
-        objects.sort(key=entComparator)
+        objects.sort(key=entKey)
 
     # Sort the edge keys
     edgeKeysForObjects = dict()
     for obj in objects:
-        edgeKeysForObjects[obj] = list(incoming[obj])
-        edgeKeysForObjects[obj].sort()
+        edgeKeysForObjects[obj] = sorted(incoming[obj], key=lambda key: edgeSortKey(edgeInfo[key]))
 
     # Table columns
     headerFields = [field for field in TASK_FIELDS if field in foundFields]
@@ -114,7 +112,7 @@ def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: Repo
             file = edgeObj['ref'].file()
 
             # Make a single row for each task the edges are from
-            for task in sorted(edgeObj['from'], key=entComparator):
+            for task in sorted(edgeObj['from'], key=entKey):
                 entFields = [tasks[task].get(field, '') for field in headerFields]
 
                 cellEnt(report, obj, options)
@@ -129,11 +127,11 @@ def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: Repo
 
     # Array element member rows (informational, e.g. gDat.ST2[].mem_C). These are
     # synthesized (array, member) accesses with no shared/protected status.
-    for edge in sorted(arrayMemberEdges, key=lambda e: (e['displayName'], e['scope'].name())):
+    for edge in sorted(arrayMemberEdges, key=lambda e: (e['displayName'], edgeSortKey(e))):
         reference = ''.join(sorted(k[0] for k in edge['kindnames']))
         file = edge['ref'].file()
 
-        for task in sorted(edge['from'], key=entComparator):
+        for task in sorted(edge['from'], key=entKey):
             entFields = [tasks[task].get(field, '') for field in headerFields]
 
             cellText(report, edge['displayName'])
