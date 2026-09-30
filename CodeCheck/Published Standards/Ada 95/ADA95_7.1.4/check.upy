@@ -1,0 +1,183 @@
+ERR1 = "Encapsulate calls to Ada.Command_Line since it is called from more than one place"
+
+
+def ids():
+    return ("ADA95_7.1.4",)
+
+
+def name(id):
+    return {
+        "ADA95_7.1.4": "Published Standards/Ada 95/7.1.4 Main Subprogram",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_7.1.4": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Portability",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_7.1.4": """
+<p><b>Guideline</b></p>
+<p>&#8226; Consider using only a parameterless procedure as the main
+subprogram.</p>
+<p>&#8226; Consider using Ada.Command_Line for accessing values from the
+environment, but recognize that this package's behavior and even its
+specification are nonportable (see Guideline 7.1.6).</p>
+<p>&#8226; Encapsulate and document all uses of package Ada.Command_Line.</p>
+
+<p><b>Example</b></p>
+<p>The following example encapsulates the arguments for a hypothetical
+"execution mode" argument passed from the environment. It encapsulates
+both the expected position and the expected values of the argument, as
+well as provides a default in cases where the environment was unable to
+provide the information:</p>
+<pre><code language="Ada">package Environment is
+
+   type Execution_Mode is (Unspecified, Interactive, Batch);
+
+   function Execution_Argument return Execution_Mode;
+
+   ...
+
+end Environment;
+
+----------------------------------------------------------------------
+
+with Ada.Command_Line;       use Ada.Command_Line;
+with Ada.Strings.Unbounded;  use Ada.Strings.Unbounded;
+
+package body Environment is
+
+   function Execution_Argument return Execution_Mode is
+
+      Execution_Argument_Number : constant := 1;
+
+      Interactive_Mode_String : constant String := "-i";
+      Batch_Mode_String       : constant String := "-b";
+
+   begin
+      if Argument_Count < Execution_Argument_Number then
+         return Unspecified;
+      elsif To_Unbounded_String (Argument (Execution_Argument_Number)) =
+               Interactive_Mode_String then
+         return Interactive;
+      elsif To_Unbounded_String (Argument (Execution_Argument_Number)) =
+               Batch_Mode_String then
+         return Batch;
+      else
+         return Unspecified;
+      end if;
+   end Execution_Argument;
+
+end Environment;
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>The predefined language environment declares the package
+Ada.Command_Line, providing a standardized way for a program to obtain
+the values of a command line. Because all Ada compilers must implement
+the packages in the predefined language environment, you can create a
+program that is more portable, maintainable, and readable by using this
+package. You should, however, be aware that even though the language
+defines the objects and type profiles of this package, it does not force
+a relationship between the function results and any other entity or
+operation, and thus, allows the possibility of a nonportable behavior
+and specification.</p>
+<p>The value returned by the function Ada.Command_Line.Argument_Count is
+implementation-dependent. Different operating systems follow different
+conventions regarding the parsing and meaning of command line
+parameters. To enhance your program's portability, assume the simplest
+case: that the external execution environment does not support passing
+arguments to a program.</p>
+<p>Some operating systems are capable of acquiring and interpreting
+returned integer values near 0 from a function, but many others cannot.
+Further, many real-time, embedded systems will not be designed to
+terminate, so a function or a procedure having parameters with modes out
+or in out will be inappropriate to such applications.</p>
+<p>This leaves procedures with in parameters. Although some operating
+systems can pass parameters into a program as it starts, others are not.
+Also, an implementation may not be able to perform type checking on such
+parameters even if the surrounding environment is capable of providing
+them.</p>
+
+<p><b>Notes</b></p>
+<p>Real-time, embedded applications may not have an "operator" initiating
+the program to supply the parameters, in which case it would be more
+appropriate for the program to have been compiled with a package
+containing the appropriate constant values or for the program to read
+the necessary values from switch settings or a downloaded auxiliary
+file. In any case, the variation in surrounding initiating environments
+is far too great to depend upon the kind of last-minute (program)
+parameterization implied by (subprogram) parameters to the main
+subprogram. POSIX 5 provides a standard operating system command line
+interface that might be a more appropriate alternative to the Ada
+command line facility depending on the implementation family of an
+application.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only the "encapsulate" half of the third bullet is automated: a direct
+call to <code>Ada.Command_Line.Argument</code>, <code>Argument_Count</code>, or
+<code>Command_Name</code> is flagged when the same file calls one of them from
+two or more different enclosing subprograms. This is scoped to one file
+at a time rather than project-wide, since a database can hold several
+unrelated executables that each legitimately call these once from their
+own main &#8212; pooling project-wide would flag all of them just for
+coexisting in the same database. Scattering across separate files of the
+same program is not detected.</p>
+<p>Not automated: "document... all uses" and "recognize... nonportable"
+are content/awareness judgments with no structural signature. "Consider
+using only a parameterless main subprogram" is not automated either &#8212;
+which procedure is the designated main is a project-file property, not
+something a per-file check can resolve.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_COMMAND_LINE_SUBPROGRAMS = (
+    "Ada.Command_Line.Argument",
+    "Ada.Command_Line.Argument_Count",
+    "Ada.Command_Line.Command_Name",
+)
+
+
+def _direct_calls(file):
+    calls = []
+
+    for call_ref in file.filerefs("Call", "Function"):
+        if str(call_ref.ent().longname()) in _COMMAND_LINE_SUBPROGRAMS:
+            calls.append(call_ref)
+
+    return calls
+
+
+def check(check, file):
+    calls = _direct_calls(file)
+
+    if not calls:
+        return
+
+    locations = set()
+
+    for call_ref in calls:
+        scope = call_ref.scope()
+        locations.add(scope.id() if scope else None)
+
+    if len(locations) >= 2:
+        for call_ref in calls:
+            check.violation(call_ref.ent(), file, call_ref.line(),
+                            call_ref.column(), ERR1)
