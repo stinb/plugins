@@ -107,7 +107,7 @@ class ColorScale:
 
     color_node = legendCluster.node(lbl.format(self.min_val, self.max_val))
     color_node.set("color", "none")
-    color_node.set("fillcolor", '#%02x%02x%02x;#%02x%02x%02x' % tuple(self.min_color + self.max_color))
+    color_node.set("fillcolor", '#%02x%02x%02x:#%02x%02x%02x' % tuple(self.min_color + self.max_color))
 
     return legendCluster
 
@@ -126,4 +126,4 @@ def graph_gradient_color_string(r, g, b):
   light = [ int(255*x) for x in colorsys.hsv_to_rgb(h, sLight, vLight) ]
   dark =  [ int(255*x) for x in colorsys.hsv_to_rgb(h, s, v*0.714) ] # 40% (140/100) darker
 
-  return '#%02x%02x%02x;#%02x%02x%02x' % tuple(light + dark)
+  return '#%02x%02x%02x:#%02x%02x%02x' % tuple(light + dark)
