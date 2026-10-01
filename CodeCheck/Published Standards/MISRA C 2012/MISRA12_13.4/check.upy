@@ -11,7 +11,7 @@ ERR1 = 'Result of an assignment operator was used'
 # The ID for the check
 def ids():
     return ('MISRA12_13.4', 'MISRA23_13.4', 'CPP_E085',
-               'MISRA25_13.4'
+               'MISRA25_13.4', 'MISRA23_8.18.2'
     )
 
 # The short name of the check
@@ -24,6 +24,7 @@ def name(id):
         'CPP_E085': 'All Checks/Language Specific/C and C++/Expressions/' + """\
 The result of an assignment operator should not be used""",
         'MISRA25_13.4': 'Published Standards/MISRA C 2025/13.4 The result of an assignment operator should not be used',
+        'MISRA23_8.18.2': 'Published Standards/MISRA C++ 2023/8.18.2 The result of an assignment operator should not be used',
     }[id]
 
 
@@ -53,6 +54,12 @@ def tags(id):
         'MISRA25_13.4': [
             'Language: C',
             'Standard: MISRA C 2025',
+            'Category: Advisory',
+            'Expressions',
+        ],
+        'MISRA23_8.18.2': [
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
             'Category: Advisory',
             'Expressions',
         ],
@@ -105,6 +112,49 @@ a = b = c = 0;</code></pre>
         'MISRA23_13.4': desc,
         'CPP_E085': desc,
 
+        'MISRA23_8.18.2': """<p><b>Amplification</b></p>
+<p>This rule applies to simple and compound assignments, built-in or
+overloaded, even if they occur in an infeasible path. It does not apply to
+assignments within an unevaluated operand.</p>
+<p><b>Rationale</b></p>
+<p>The use of assignment operators, simple or compound, in combination with
+other arithmetic operators is not recommended because:</p>
+<ul>
+<li>It can significantly impair the readability of the code;</li>
+<li>It introduces additional side effects into a statement, making it more
+difficult to avoid the undefined behaviour covered by Rule 4.6.1.</li>
+</ul>
+<p><b>Developer's Notes</b></p>
+<p>A declaration in the condition of an <code>if</code>, <code>while</code> or
+<code>for</code> initializes rather than assigns, so
+<code>if ( uint8_t i = y )</code> is not reported, as the rule requires.</p>
+<p>Two forms are not reported. A compound assignment other than
+<code>+=</code> or <code>-=</code> is not recognised, so
+<code>a[ b *= c ] = a[ b ]</code> is missed; and the result of an overloaded
+<code>operator=</code> used as a value is not seen, this check reading the
+token stream rather than resolving the operator.</p>
+<p><b>Example</b></p>
+<pre><code language="C++">x = y;                       // Compliant
+a[ x ] = a[ x = y ];         // Non-compliant - value of x = y is used
+
+if ( bool_a = bool_b )       // Non-compliant - bool_a == bool_b was
+{                            //                 probably intended
+}
+
+if ( uint8_t i = y )         // Rule does not apply - not an assignment
+{
+}
+
+if ( ( x = f( ) ) != 0 )     // Non-compliant - value of x = f( ) is used
+{
+}
+
+a[ b += c ] = a[ b ];        // Non-compliant - value of b += c is used
+a = b = c = 0;               // Non-compliant - values of c = 0, b = c = 0
+                             //                 are used</code></pre>
+<p><b>See also</b></p>
+<p>Rule 4.6.1</p>
+""",
         'MISRA25_13.4': """<p><b>Amplification</b></p>
 <p>This rule applies even if the expression containing the assignment operator is not evaluated.</p>
 <p><b>Rationale</b></p>
@@ -154,6 +204,38 @@ def test_global():
 def test_language(language):
     return language == 'C++'
 
+# C++ allows a declaration in the condition of an if, while or for. The rule
+# does not apply to one: "if ( uint8_t i = y )" initializes rather than
+# assigns.
+def initializes_a_declaration(lexeme):
+    previous = lexeme.previous(True, True)
+    if not previous:
+        return False
+
+    ref = previous.ref()
+    if not ref:
+        return False
+
+    # The reference at the declared name is an inverse kind, "C Definein".
+    kind = ref.kind().longname()
+    return 'Define' in kind or 'Declare' in kind
+
+
+# The lexeme after an unevaluated operand, when this one starts such an
+# operand. The rule does not apply to an assignment inside it.
+def end_of_unevaluated(lexeme):
+    if lexeme.text() not in ('sizeof', 'decltype', 'noexcept', 'typeid',
+                             'alignof', '_Alignof'):
+        return None
+
+    opening = lexeme.next(True, True)
+    if not opening or opening.text() != '(':
+        return None
+
+    close = Modules.findClose(opening)
+    return close.next(True, True) if close else None
+
+
 def check(check, file):
     if not file.lexer():
         return
@@ -163,6 +245,12 @@ def check(check, file):
     assigns = ['=', '+=', '-=']
     while lexeme:
         lastLex = lexeme
+
+        # The rule does not apply to an assignment in an unevaluated operand.
+        jump = end_of_unevaluated(lexeme)
+        if jump:
+            lexeme = jump
+            continue
         if lexeme.token() == 'Preprocessor':
             line = lexeme.line_begin()
             while lexeme and line == lexeme.line_begin():
@@ -182,7 +270,12 @@ def check(check, file):
                 if lexeme and lexeme.text() in ['(', '[']:
                     close = Modules.findClose(lexeme)
                     while lexeme and close and not (lexeme.line_begin() == close.line_begin() and lexeme.column_begin() == close.column_begin()):
-                        if lexeme.text() in assigns:
+                        jump = end_of_unevaluated(lexeme)
+                        if jump:
+                            lexeme = jump
+                            continue
+                        if (lexeme.text() in assigns
+                                and not initializes_a_declaration(lexeme)):
                             ok = False
                             break
                         lexeme = lexeme.next(True, True)
@@ -199,7 +292,12 @@ def check(check, file):
                             if count > 1:
                                 break
                         if count == 1:
-                            if lexeme.text() in assigns:
+                            jump = end_of_unevaluated(lexeme)
+                            if jump:
+                                lexeme = jump
+                                continue
+                            if (lexeme.text() in assigns
+                                    and not initializes_a_declaration(lexeme)):
                                 ok = False
                                 break
                         lexeme = lexeme.next(True, True)
@@ -212,7 +310,12 @@ def check(check, file):
                     continue
                 # Stop at comma to avoid flagging designated initializers like {.x = 1, .y = 2}
                 while lexeme and not lexeme.text() in [';', '{', '}', ',']:
-                    if lexeme.text() in assigns:
+                    jump = end_of_unevaluated(lexeme)
+                    if jump:
+                        lexeme = jump
+                        continue
+                    if (lexeme.text() in assigns
+                            and not initializes_a_declaration(lexeme)):
                         ok = False
                         break
                     lexeme = lexeme.next(True, True)
