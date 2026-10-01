@@ -12,6 +12,8 @@ extern std::int32_t a[ 10 ];
 void g( bool bool_a, bool bool_b, std::int32_t x, std::int32_t y,
         std::int32_t b, std::int32_t c, S s1, S s2 )
 {
+  std::int32_t e2;
+  std::int32_t r2;
   x = y;                                /* UndCC_Valid */
   a[ x ] = a[ x = y ];                  /* UndCC_Violation */
 
@@ -44,7 +46,7 @@ void g( bool bool_a, bool bool_b, std::int32_t x, std::int32_t y,
   using T = decltype( x = y );          /* UndCC_Valid */
   ( void ) noexcept( x = y );           /* UndCC_Valid */
   T r = x;
-  ( void ) r;
+  ( void ) r2;
 
   /* The same declaration form in the other two conditions. */
   while ( std::int32_t i = f( ) )       /* UndCC_Valid */
@@ -59,6 +61,27 @@ void g( bool bool_a, bool bool_b, std::int32_t x, std::int32_t y,
 
   std::int32_t m = ( x = y );           /* UndCC_Violation - the inner value is used */
   ( void ) m;
+
+  /* Each assignment is split onto its own line: one annotation covers a whole
+     line, so a second violation on a shared line would go unnoticed. */
+  e2 = b
+      = c                               /* UndCC_Violation */
+      = 0;                              /* UndCC_Violation */
+
+  a[ x = y ]                            /* UndCC_Violation */
+      = 0;                              /* UndCC_Valid - the result is discarded */
+
+  a[ x = y ]                            /* UndCC_Violation */
+      = a[ b = c ];                     /* UndCC_Violation */
+
+  r2 = ( x = y )                         /* UndCC_Violation */
+      + ( b = c );                      /* UndCC_Violation */
+
+  ( void ) ( ( x = y )                  /* UndCC_FalseNeg - only the last operand is seen */
+      + ( b = c ) );                    /* UndCC_Violation */
+
+  ( void ) e2;
+  ( void ) r2;
 
   ( void ) !( s1 = s2 );                /* UndCC_FalseNeg - overloaded operator= */
 }

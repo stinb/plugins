@@ -27,6 +27,15 @@ int main() {
   e = b = c = 0;  // UndCC_Violation - values of c = 0 and b = c = 0 are used
 
 
+
+  /* Each assignment is split onto its own line: one annotation covers a whole
+     line, so a second violation on a shared line would go unnoticed. */
+  e = b
+      = c                             /* UndCC_Violation */
+      = 0;                            /* UndCC_Violation */
+
+  a[ x = y ]                          /* UndCC_Violation */
+      = 0;                            /* UndCC_Valid - the result is discarded */
   return 0;
 }
 
