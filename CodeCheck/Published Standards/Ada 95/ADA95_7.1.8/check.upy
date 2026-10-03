@@ -1,0 +1,288 @@
+ERR1 = "This parameter shares its subtype with another writable parameter, a bounded error if the same actual is passed for both"
+
+
+def ids():
+    return ("ADA95_7.1.8",)
+
+
+def name(id):
+    return {
+        "ADA95_7.1.8": "Published Standards/Ada 95/7.1.8 Dependence on Parameter Passing Mechanism",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_7.1.8": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Portability",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_7.1.8": """
+<p><b>Guideline</b></p>
+<p>&#8226; Do not write code whose correct execution depends on the
+particular parameter passing mechanism used by an implementation (Ada
+Reference Manual, &sect;6.2; Cohen 1986).</p>
+<p>&#8226; If a subprogram has more than one formal parameter of a given
+subtype, at least one of which is [in] out, make sure that the
+subprogram can properly handle the case when both formal parameters
+denote the same actual object.</p>
+
+<p><b>Example</b></p>
+<p>The output of this program depends on the particular parameter
+passing mechanism that was used:</p>
+<pre><code language="Ada">------------------------------------------------------------------------
+with Ada.Integer_Text_IO;
+procedure Outer is
+   type Coordinates is
+      record
+         X : Integer := 0;
+         Y : Integer := 0;
+      end record;
+   Outer_Point : Coordinates;
+   ---------------------------------------------------------------------
+   procedure Inner (Inner_Point : in out Coordinates) is
+   begin
+      Inner_Point.X := 5;
+      -- The following line causes the output of the program to
+      -- depend on the parameter passing mechanism.
+      Ada.Integer_Text_IO.Put(Outer_Point.X);
+   end Inner;
+   ---------------------------------------------------------------------
+begin  -- Outer
+   Ada.Integer_Text_IO.Put(Outer_Point.X);
+   Inner(Outer_Point);
+   Ada.Integer_Text_IO.Put(Outer_Point.X);
+end Outer;
+------------------------------------------------------------------------
+</code></pre>
+<p>If the parameter passing mechanism is by copy, the results on the
+standard output file are:</p>
+<p>0 0 5</p>
+<p>If the parameter passing mechanism is by reference, the results are:</p>
+<p>0 5 5</p>
+<p>The following code fragment shows where there is a potential for
+bounded error when a procedure is called with actual parameters denoting
+the same object:</p>
+<pre><code language="Ada">procedure Test_Bounded_Error (Parm_1 : in out    Integer;
+                              Parm_2 : in out Integer) is
+   procedure Inner (Parm : in out Integer) is
+   begin
+      Parm := Parm * 10;
+   end Inner;
+begin
+   Parm_2 := 5;
+   Inner (Parm_1);
+end Test_Bounded_Error;
+</code></pre>
+<p>In executing the procedure Test_Bounded_Error, both Parm_1 and Parm_2
+denote the object Actual_Parm. After executing the first statement, the
+object Actual_Parm has the value 5. When the procedure Inner is called,
+its formal parameter Parm denotes Actual_Parm. It cannot be determined
+whether it denotes the old value of Parm_1, in this case 1, or the new
+value, in this case 5.</p>
+<pre><code language="Ada">Actual_Parm : Integer := 1;
+...
+Test_Bounded_Error (Actual_Parm, Actual_Parm);  -- potential bounded error
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Certain composite types (untagged records and arrays) can be passed
+either by copy or by reference. If there are two or more formal
+parameters of the same type, one or more of which is writable, then you
+should document whether you assume that these formal parameters do not
+denote the same actual object. Similarly, if a subprogram that has a
+formal parameter of a given subtype also makes an up-level reference to
+an object of this same type, you should document whether you assume that
+the formal parameter denotes a different object from the object named in
+the up-level reference. In these situations where an object can be
+accessed through distinct formal parameter paths, the exception
+Program_Error may be raised, the new value may be read, or the old value
+of the object may be used (Ada Reference Manual, &sect;6.2).</p>
+<p>See also Guideline 8.2.7.</p>
+
+<p><b>Exceptions</b></p>
+<p>Frequently, when interfacing Ada to foreign code, dependence on
+parameter-passing mechanisms used by a particular implementation is
+unavoidable. In this case, isolate the calls to the foreign code in an
+interface package that exports operations that do not depend on the
+parameter-passing mechanism.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only the second bullet is automated: a procedure or entry with two or
+more formal parameters of the same subtype, at least one of which is
+<code>out</code> or <code>in out</code>, is a candidate, using the same mode-detection
+technique <code>ADA95_5.2.4</code> uses (Understand's Ada parameter entity does
+not expose its mode through <code>kind()</code>, so the lexer is scanned past
+the parameter's <code>:</code> for an explicit <code>in</code>/<code>out</code> keyword). This
+matches the guideline's own wording literally: the hazard it names
+applies to two formal parameters sharing a subtype regardless of
+whether that subtype happens to be a record, array, or scalar type
+&#8212; the guideline's own example uses plain <code>Integer</code> parameters. An
+<code>access</code> parameter is not counted as writable for this purpose,
+since the aliasing it names is a mechanism ambiguity in how the
+designated object is reached, not something an access value (always
+passed by copy of the pointer itself) is subject to.</p>
+<p>Within a candidate group, only the specific parameters that show an
+<code>Assignby Ref</code> reference (such as <code>CallParamFormal Assignby
+Ref</code>) are flagged, not every parameter in the group regardless of use.
+Understand produces this kind when a parameter is accessed through a
+reference-capable path &#8212; passed on as an actual to another call's
+writable parameter (the guideline's own <code>Inner (Parm_1)</code> example), or
+referenced up-level from a nested subprogram, as happens when a record
+or array <code>out</code> parameter is sliced and assigned from within a local
+procedure defined inside the body. A bare <code>Ref</code> kind (without
+<code>Assignby</code>) also exists but is deliberately not used, since it can
+appear for unrelated reasons, such as on an imported/foreign
+subprogram's own parameter declaration. An ordinary direct read or
+write of the parameter itself, a read-only pass-through to another
+call's <code>in</code> parameter, or access to one of its own components,
+does not produce <code>Assignby Ref</code>. This narrows the check to
+parameters that actually
+participate in the hazard shape rather than every same-subtype
+parameter regardless of whether it is used at all, at the cost of
+still not proving that any specific call site passes the same actual
+object to two of them, nor that the subprogram's body would actually
+misbehave if it did &#8212; proving either would require tracing every call
+site and the body's own data flow, matching how <code>ADA95_6.2.4</code> flags a
+shared variable as a structural proxy without proving an actual race.</p>
+<p>The first bullet is not automated: the hazard in its own example (an
+up-level reference inside a nested subprogram that may or may not denote
+the same object as an enclosing <code>in out</code> parameter) can only be
+proven by tracing whether a specific call site's actual object is the
+very one being referenced up-level, which is an interprocedural
+alias/data-flow problem, not a structural pattern.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _mode(lexer, line, col):
+    lex = lexer.lexeme(line, col)
+
+    if not lex:
+        return "in"
+
+    while lex and not (lex.token() == "Punctuation" and lex.text() == ":"):
+        lex = lex.next(True, True)
+
+    if not lex:
+        return "in"
+
+    lex = lex.next(True, True)
+
+    if not lex:
+        return "in"
+
+    if lex.token() == "Keyword" and lex.text() == "access":
+        return "access"
+
+    if lex.token() == "Keyword" and lex.text() == "out":
+        return "out"
+
+    if lex.token() == "Keyword" and lex.text() == "in":
+        nxt = lex.next(True, True)
+
+        if nxt and nxt.token() == "Keyword" and nxt.text() == "out":
+            return "in out"
+
+        return "in"
+
+    return "in"
+
+
+def _is_writable(mode):
+    return mode in ("out", "in out")
+
+
+def _passed_by_ref(param_ent):
+    # "Assignby Ref" (e.g. "CallParamFormal Assignby Ref") only appears
+    # when a parameter is accessed through a reference-capable path, such
+    # as being passed on to another call's writable parameter or referenced
+    # up-level from a nested subprogram - the same aliasing shape as the
+    # guideline's own Inner(Parm_1) example. A bare "Ref" (without
+    # "Assignby") also exists but can appear for unrelated reasons, such as
+    # on an imported/foreign subprogram's own parameter declaration, so it
+    # is deliberately not used here. Ordinary direct reads/writes of the
+    # parameter, a read-only pass-through, or access to one of its own
+    # components, never produce "Assignby Ref", so this narrows the check
+    # to parameters that actually participate in the hazard instead of
+    # every parameter in a same-subtype group regardless of use.
+    return bool(param_ent.refs("Assignby Ref"))
+
+
+def check(check, file):
+    filename = file.longname()
+    lexer = None
+    checked = set()
+
+    for decl_ref in file.filerefs("Declare", "Procedure, Entry", False):
+        subprog_ent = decl_ref.ent()
+        ent_id = subprog_ent.id()
+
+        if ent_id in checked:
+            continue
+
+        checked.add(ent_id)
+
+        has_spec_elsewhere = any(
+            r.file().longname().endswith(".ads") and r.file().longname() != filename
+            for r in subprog_ent.refs("Declare", "Parameter", False)
+        )
+
+        if has_spec_elsewhere:
+            continue
+
+        seen_param_ids = set()
+        params = []
+
+        for r in sorted(
+            subprog_ent.refs("Declare", "Parameter", False),
+            key=lambda r: (r.line(), r.column()),
+        ):
+            if r.file().longname() != filename or r.ent().id() in seen_param_ids:
+                continue
+
+            seen_param_ids.add(r.ent().id())
+            params.append(r)
+
+        if not params:
+            continue
+
+        if lexer is None:
+            lexer = file.lexer(lookup_ents=False)
+
+        groups = {}
+
+        for param_ref in params:
+            type_ref = param_ref.ent().ref("Typed", "Type")
+
+            if not type_ref:
+                continue
+
+            mode = _mode(lexer, param_ref.line(), param_ref.column())
+            groups.setdefault(type_ref.ent().id(), []).append((param_ref, mode))
+
+        for entries in groups.values():
+            if len(entries) < 2:
+                continue
+
+            if not any(_is_writable(mode) for _, mode in entries):
+                continue
+
+            for param_ref, _ in entries:
+                if _passed_by_ref(param_ref.ent()):
+                    check.violation(param_ref.ent(), file, param_ref.line(),
+                                    param_ref.column(), ERR1)
