@@ -1,0 +1,287 @@
+ERR1 = "This impure function is called again as a sibling within the same expression, whose evaluation order Ada leaves unspecified"
+
+
+def ids():
+    return ("ADA95_7.1.9",)
+
+
+def name(id):
+    return {
+        "ADA95_7.1.9": "Published Standards/Ada 95/7.1.9 Arbitrary Order Dependencies",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_7.1.9": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Portability",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_7.1.9": """
+<p><b>Guideline</b></p>
+<p>&#8226; Avoid depending on the order in which certain constructs in Ada
+are evaluated.</p>
+
+<p><b>Example</b></p>
+<p>The output of this program depends upon the order of evaluation of
+subprogram parameters, but the Ada Reference Manual, &sect;6.4 specifies
+that these evaluations are done in an arbitrary order:</p>
+<pre><code language="Ada">package Utilities is
+   function Unique_ID return Integer;
+end Utilities;
+
+package body Utilities is
+
+   ID : Integer := 0;
+
+   function Unique_ID return Integer is
+   begin
+      ID := ID + 1;
+      return ID;
+   end Unique_ID;
+
+end Utilities;
+--------------------------------------------------------------------------------
+with Ada.Text_IO;
+with Utilities; use Utilities;
+procedure P is
+begin
+   Ada.Text_IO.Put_Line (Integer'Image(Unique_ID) & Integer'Image(Unique_ID));
+end P;
+</code></pre>
+<p>If the parameters to the "&amp;" function are evaluated in textual
+order, the output is:</p>
+<p>1 2</p>
+<p>If the parameters are evaluated in the reverse order, the output is:</p>
+<p>2 1</p>
+
+<p><b>Rationale</b></p>
+<p>The Ada language defines certain evaluations to occur in arbitrary
+order (e.g., subprogram parameters). While a dependency on the order of
+evaluation may not adversely affect the program on a certain
+implementation, the code might not execute correctly when it is ported.
+For example, if two actual parameters of a subprogram call have side
+effects, the effect of the program could depend on the order of
+evaluation (Ada Reference Manual, &sect;1.1.4). Avoid arbitrary order
+dependencies, but also recognize that even an unintentional error of
+this kind could prohibit portability.</p>
+
+<p><b>Developer's Note</b></p>
+<p>This is automated for the shape in the guideline's own example: the
+same function, with a side effect, called two or more times as sibling
+operands within one expression whose relative evaluation order Ada
+leaves unspecified. A function is treated as having a side effect when
+its own body writes to an object that is not local to it (a
+package-level or other outer-scope object, the same way the example's
+<code>Unique_ID</code> writes to <code>ID</code>); a write performed only through a
+further call it makes is not traced, to keep this a structural check of
+the function's own body rather than an interprocedural one. "Sibling
+operands" are found by scanning the argument list of every call in the
+file and splitting it, at the top nesting level only, on both commas and
+binary operators (<code>&amp;</code>, <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>**</code>, <code>mod</code>,
+<code>rem</code>, <code>and</code>, <code>or</code>, <code>xor</code>, <code>in</code>, and the relational operators) &#8212;
+this is what lets the check find the two <code>Unique_ID</code> calls on either
+side of the example's own <code>&amp;</code> as well as two calls passed as separate
+actual parameters of an ordinary call. It is not a full expression
+parser: a binary operator is distinguished from its unary form only by
+checking that the previous significant token could end an operand, so
+an unusual or deeply nested expression could be mis-split. Two calls to
+different impure functions, or a dependency that only shows up through
+a call several levels removed from the direct body (not detected as
+impure here), are also not detected &#8212; proving either would need
+deeper interprocedural data-flow analysis than a structural check of a
+single function body can do.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+_BINARY_OPERATOR_TEXTS = {
+    "&", "+", "-", "*", "/", "**",
+    "mod", "rem", "and", "or", "xor", "in",
+    "=", "/=", "<", "<=", ">", ">=",
+}
+
+_OPERAND_BOUNDARY_TEXTS = {
+    "(", ",", ":=", "=>", "..", "return", "then", "else", "when",
+    "and", "or", "xor", "not", "in", "mod", "rem",
+    "&", "+", "-", "*", "/", "**",
+    "=", "/=", "<", "<=", ">", ">=",
+}
+
+
+def _next_significant(lex):
+    lex = lex.next()
+
+    while lex and lex.token() in ("Whitespace", "Newline", "Comment"):
+        lex = lex.next()
+
+    return lex
+
+
+def _find_open_paren(name_lex):
+    # A call ref's own position can point anywhere within a dotted name
+    # (e.g. at "Text_IO" for a call to "Ada.Text_IO.Put_Line"), not
+    # necessarily at the final identifier, so the rest of the dotted name
+    # is skipped before looking for the argument list's "(".
+    lex = _next_significant(name_lex)
+
+    while lex and (lex.token() == "Identifier" or lex.text() == "."):
+        lex = _next_significant(lex)
+
+    if lex and lex.text() == "(":
+        return lex
+
+    return None
+
+
+def _is_binary_split(lex):
+    text = lex.text().lower()
+
+    if text not in _BINARY_OPERATOR_TEXTS:
+        return False
+
+    prev = lex.previous(True, True)
+    prev_text = prev.text().lower() if prev else None
+
+    return prev is not None and prev_text not in _OPERAND_BOUNDARY_TEXTS
+
+
+def _impure_function_ids(file):
+    impure = set()
+
+    for decl_ref in file.filerefs("Declare Body", "Function"):
+        for set_ref in decl_ref.ent().refs("Set ~Init", "Object"):
+            if set_ref.ent().ref("Declarein", "Package"):
+                impure.add(decl_ref.ent().id())
+
+    return impure
+
+
+def _argument_regions(lexer, open_paren):
+    # open_paren is the "(" lexeme right after a call's name. Splits its
+    # argument list, at the top nesting level only, on commas and binary
+    # operators, returning a list of (start_line, start_col, end_line, end_col).
+    regions = []
+    depth = 1
+    lex = _next_significant(open_paren)
+    region_start = lex
+    last = lex
+
+    while lex and depth > 0:
+        text = lex.text()
+
+        if text == "(":
+            depth += 1
+        elif text == ")":
+            depth -= 1
+
+            if depth == 0:
+                break
+        elif depth == 1 and (text == "," or _is_binary_split(lex)):
+            if region_start:
+                regions.append((
+                    region_start.line_begin(), region_start.column_begin(),
+                    last.line_begin(), last.column_end(),
+                ))
+            region_start = _next_significant(lex)
+            lex = region_start
+            continue
+
+        last = lex
+        lex = _next_significant(lex)
+
+    if region_start and last:
+        regions.append((
+            region_start.line_begin(), region_start.column_begin(),
+            last.line_begin(), last.column_end(),
+        ))
+
+    return regions
+
+
+def _in_region(ref, region):
+    start_line, start_col, end_line, end_col = region
+    line, col = ref.line(), ref.column()
+
+    if line < start_line or line > end_line:
+        return False
+
+    if line == start_line and col < start_col:
+        return False
+
+    if line == end_line and col > end_col:
+        return False
+
+    return True
+
+
+def check(check, file):
+    impure_ids = _impure_function_ids(file)
+
+    if not impure_ids:
+        return
+
+    impure_calls = [
+        ref for ref in file.filerefs("Call", "Function")
+        if ref.ent().id() in impure_ids
+    ]
+
+    if len(impure_calls) < 2:
+        return
+
+    lexer = file.lexer(lookup_ents=False)
+    seen = set()
+
+    for call_ref in file.filerefs("Call"):
+        name_lex = lexer.lexeme(call_ref.line(), call_ref.column())
+
+        if not name_lex:
+            continue
+
+        open_paren = _find_open_paren(name_lex)
+
+        if not open_paren:
+            continue
+
+        regions = _argument_regions(lexer, open_paren)
+
+        if len(regions) < 2:
+            continue
+
+        region_calls = {}
+
+        for i, region in enumerate(regions):
+            for impure_ref in impure_calls:
+                if _in_region(impure_ref, region):
+                    region_calls.setdefault(
+                        impure_ref.ent().id(), []).append((i, impure_ref))
+
+        for entries in region_calls.values():
+            region_indices = {i for i, _ in entries}
+
+            if len(region_indices) < 2:
+                continue
+
+            for _, impure_ref in entries:
+                key = (impure_ref.line(), impure_ref.column())
+
+                if key in seen:
+                    continue
+
+                seen.add(key)
+                check.violation(impure_ref.ent(), file, impure_ref.line(),
+                                impure_ref.column(), ERR1)
