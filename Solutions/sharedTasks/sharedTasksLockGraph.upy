@@ -1,0 +1,167 @@
+# Lock-order graph of shared tasks, highlighting possible deadlocks
+
+
+import understand
+
+from sharedTasks import *
+
+
+red    = '#d62728'
+gray   = '#777777'
+
+opacity = '55'
+
+LOCKS_OPTION = 'Locks'
+LOCKS_ALL = 'All'
+LOCKS_DEADLOCK = 'Deadlock cycles only'
+
+
+def name():
+    return 'Shared Tasks'
+
+def style():
+    return 'Lock Order'
+
+def description():
+    return '''Find possible deadlocks between tasks that take the same locks in
+    different orders.
+
+    <p>Each node is a lock. An edge from one lock to another means a task
+    takes the second lock while it may still hold the first. The edge is
+    labeled with the task. Locks and edges that form a possible deadlock are
+    red.</p>
+
+    <p>Dashed red edges are the suggested fix for their deadlock: change
+    those tasks to take the two locks in the opposite order, matching the
+    other tasks. It is the order used at the fewest call sites.</p>
+
+    <p>A cycle is a possible deadlock when its edges come from different
+    tasks. If those tasks always hold another common lock at the same time,
+    that lock serializes them and the cycle is not reported.</p>
+
+    <h2>Architecture Structure</h2>
+
+    <p>The architecture lists the tasks and the lock and unlock functions.
+    Each lock and unlock pair goes in its own group:</p>
+
+    <ul><li>Name of root architecture can be anything
+      <ul><li>Any name containing the word tasks (case insensitive)
+        <ul>
+          <li>thread1()</li>
+          <li>thread2()</li>
+        </ul></li>
+      <li>Any name containing the word control (case insensitive)
+        <ul><li>Mutex
+          <ul>
+            <li>Lock
+              <ul><li>pthread_mutex_lock()</li></ul></li>
+            <li>Unlock
+              <ul><li>pthread_mutex_unlock()</li></ul></li>
+          </ul></li>
+        </ul></li>
+      </ul></li>
+    </ul>
+
+    <p>Locks are told apart by the object whose address is passed to the
+    lock function, like <code>pthread_mutex_lock(&amp;mutex)</code>. A lock
+    reached through a pointer, a parameter, an array element or a struct
+    member, or on a line that also takes the address of another object,
+    can't be identified, so it is left out. List only lock functions that
+    wait: <code>pthread_mutex_trylock</code> returns instead, so it can't
+    deadlock.</p>
+
+    <p>Calls carry held locks into a function. A function passed by
+    address, like a callback, runs later, so it is checked with no locks
+    held. List each function started as a thread, like one passed to
+    <code>pthread_create</code>, as its own task.</p>
+
+    <p>A large number of locks taken in many orders can make the search for
+    deadlocks slow. If it stops early, the graph says so.</p>
+
+    <p>See also the shared tasks graph by
+    <a href="und://plugin/graph/Shared%20Tasks-By%20Function">function</a>.
+    Also related are <a href="und://plugins?filter=Tags%3A%22Concurrency%22">
+    concurrency</a> plugins. </p>
+   '''
+
+def tags():
+    return [
+        'Solution: Shared Tasks',
+        'Target: Architectures',
+        'Language: Any',
+        'Concurrency'
+    ]
+
+def test_architecture(arch):
+    return True
+
+
+def init(graph, target):
+    graph.options().define(LOCKS_OPTION, [LOCKS_ALL, LOCKS_DEADLOCK], LOCKS_ALL)
+
+    graph.legend().define('lock', 'ellipse', 'Lock', '', gray + opacity, 0, 0)
+    graph.legend().define('deadlockLock', 'ellipse', 'Lock in Possible Deadlock', red, red + opacity, 1, 0)
+    graph.legend().define('order', 'arrow', 'Taken While Holding', '', '', 0, 1)
+    graph.legend().define('deadlockOrder', 'arrow', 'Possible Deadlock Order', red, red, 1, 1)
+    graph.legend().define('fixOrder', 'dasharrow', 'Order to Reverse', red, red, 2, 1)
+
+
+def draw(graph, target):
+    tasks, enableDisableFunctions, _ = parseArch(target)
+    edges, lockEnts = lock_order_edges(tasks, enableDisableFunctions)
+    cycles, complete = find_lock_cycles(edges)
+
+    deadlockLocks: set = set()
+    deadlockEdges: set = set()
+    fixEdges: set = set()
+    siteCounts = lock_order_site_counts(edges)
+    for cycle in cycles:
+        deadlockLocks.update(cycle.locks)
+        for edge in cycle.participants:
+            deadlockEdges.add((edge.held, edge.acquired, edge.task))
+        fix = cycle_fix_edge(cycle, siteCounts)
+        for edge in cycle.participants:
+            if (edge.held, edge.acquired) == (fix.held, fix.acquired):
+                fixEdges.add((edge.held, edge.acquired, edge.task))
+
+    onlyDeadlocks = graph.options().lookup(LOCKS_OPTION) == LOCKS_DEADLOCK
+
+    # One drawn edge per lock order and task, synced to the first call site
+    grouped: dict[tuple, list[LockOrderEdge]] = {}
+    for edge in edges:
+        key = (edge.held, edge.acquired, edge.task)
+        if onlyDeadlocks and key not in deadlockEdges:
+            continue
+        grouped.setdefault(key, []).append(edge)
+
+    graph.set('rankdir', 'LR')
+    if not complete:
+        graph.set('label', 'The deadlock search stopped early, so some possible deadlocks may not be shown.')
+        graph.set('labelloc', 't')
+    nodes = dict()
+
+    def lockNode(lid):
+        if lid not in nodes:
+            node = graph.node(lockEnts[lid].longname(), lockEnts[lid])
+            if lid in deadlockLocks:
+                node.set('fillcolor', red + opacity)
+                node.set('color', red)
+                node.set('penwidth', '2')
+            else:
+                node.set('fillcolor', gray + opacity)
+            nodes[lid] = node
+        return nodes[lid]
+
+    for key, group in sorted(grouped.items(), key=lambda item: item[0][2].longname()):
+        held, acquired, task = key
+        refs = {refStr(ref): ref for edge in group for ref in edge.refs}
+        label = task.longname()
+        if len(refs) > 1:
+            label += f' ({len(refs)} sites)'
+        drawn = graph.edge(lockNode(held), lockNode(acquired), label)
+        drawn.sync(min(refs.values(), key=refComparator))
+        if key in deadlockEdges:
+            drawn.set('color', red)
+            drawn.set('penwidth', '2')
+        if key in fixEdges:
+            drawn.set('style', 'dashed')

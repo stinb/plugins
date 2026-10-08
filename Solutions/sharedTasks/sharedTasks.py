@@ -755,9 +755,9 @@ def parseArch(arch: Arch) -> tuple[dict[Ent, dict[str, str]], dict[Ent, dict[str
                     ent = ents[0]
                     if not ent.kind().check('Function, Macro'):
                         continue
-                    if 'disable' in name:
+                    if 'disable' in name or re.search(r'\b(acquire|lock)', name):
                         disable = ent
-                    elif 'enable' in name:
+                    elif 'enable' in name or re.search(r'\b(release|unlock)', name):
                         enable = ent
                 if not disable or not enable:
                     continue
@@ -1220,15 +1220,15 @@ def build_lock_maps(enable_disable_functions: dict[Ent, dict[str, bool | Ent]]):
 
 def extract_lock_arg(call_ref: Ref) -> Ent | None:
     """Return the Object entity that is the first argument to a lock/unlock
-    call, identified as the unique Addr Use ref to an Object on the same
+    call, identified as the only Object with an Addr Use ref on the same
     (caller, file, line). Returns None if zero or multiple candidates."""
     caller = call_ref.scope()
     fid = call_ref.file().id()
     line = call_ref.line()
-    candidates = [r.ent() for r in caller.refs('Addr Use', 'Object')
-                  if r.file().id() == fid and r.line() == line]
+    candidates = {r.ent() for r in caller.refs('Addr Use', 'Object')
+                  if r.file().id() == fid and r.line() == line}
     if len(candidates) == 1:
-        return candidates[0]
+        return candidates.pop()
     return None
 
 
@@ -1416,3 +1416,288 @@ def classify_shared_objects(edge_info: dict, tasks: dict,
         intersection = set.intersection(*lock_sets) if lock_sets else set()
         shared[ent] = len(intersection) == 0
     return shared
+
+
+# ---------------
+# Lock-order analysis
+#
+# Tasks that take the same locks in opposite orders can deadlock. Every
+# acquire adds held -> acquired edges, and a cycle is reported when its edges
+# can be taken by distinct tasks at the same time.
+#
+# Each edge carries a gate: the locks held on every path where the held lock
+# is held. Two tasks that both hold a lock at their edges can't be there at
+# once, so a cycle needs edges with pairwise disjoint gates. Held locks are
+# tracked per function and task, merging all calling contexts; merging only
+# shrinks gates, so it can add reports but never hide one.
+#
+# A lock state is (always, given): always is the set of locks held on every
+# path; given maps each lock held on some path to the locks held on every
+# path where it is held (including itself). See stinb/und-issues#703.
+# ---------------
+
+
+# Calls pass held locks on. A function whose address is taken, like a
+# callback, runs later wherever it is called, so it is entered with nothing
+# held; a task's address isn't followed, since it runs as its own thread.
+LOCK_WALK_REF_KIND = (
+    'ada call,'
+    'c call ~inactive, c use ptr ~inactive,'
+    'cobol call,'
+    'csharp call, csharp use ptr,'
+    'fortran call,'
+    'java call,'
+    'jovial call,'
+    'pascal call,'
+    'vhdl call,'
+    'php call')
+
+_EMPTY_LOCK_STATE = (frozenset(), {})
+
+
+@dataclass
+class LockOrderEdge:
+    held: tuple        # lock_id held at the acquire
+    acquired: tuple    # lock_id being acquired
+    task: Ent
+    gate: frozenset    # lock_ids held on every path where held is held
+    refs: list[Ref]    # the acquire calls
+
+
+@dataclass
+class LockCycle:
+    locks: list[tuple]                 # lock_ids; edges[i] goes locks[i] -> locks[i + 1]
+    edges: list[LockOrderEdge]         # one set of edges that can deadlock
+    participants: list[LockOrderEdge]  # every edge in some set that can deadlock
+
+
+def _meet_lock_states(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    given = dict(a[1])
+    for lid, gate in b[1].items():
+        given[lid] = given[lid] & gate if lid in given else gate
+    return (a[0] & b[0], given)
+
+
+def _acquire_lock_state(state, lid):
+    always, given = state
+    given = {held: gate | {lid} for held, gate in given.items()}
+    given[lid] = always | {lid}
+    return (always | {lid}, given)
+
+
+def _release_lock_state(state, lid):
+    always, given = state
+    return (always - {lid}, {held: gate - {lid} for held, gate in given.items() if held != lid})
+
+
+class _FnLockOps:
+    """A function's CFG with its lock, unlock and call refs per node, in order."""
+
+    def __init__(self, fn: Ent, pair_id_map, acquire_fns, release_fns, tasks=()):
+        self.nodes: list[CFNode] = []
+        self.children: list[list[int]] = []
+        self.ops: list[list[tuple]] = []  # (kind, lock_id or callee Ent, ref)
+        self.start = None
+        cfg = fn.control_flow_graph()
+        if not cfg:
+            return
+        self.nodes = cfg.nodes()
+        index = {node: i for i, node in enumerate(self.nodes)}
+        self.children = [[index[c] for c in node.children() if c in index] for node in self.nodes]
+        self.ops = [[] for _ in self.nodes]
+        self.start = index.get(cfg.start(), 0)
+
+        for call in sorted(fn.refs(LOCK_WALK_REF_KIND), key=refComparator):
+            node = ref_to_node(self.nodes, call)
+            if not node:
+                continue
+            callee = call.ent()
+            if callee in acquire_fns or callee in release_fns:
+                arg = extract_lock_arg(call)
+                if not arg:
+                    continue
+                kind = 'acquire' if callee in acquire_fns else 'release'
+                self.ops[index[node]].append((kind, (pair_id_map[callee], arg.id()), call, arg))
+            elif not call.kind().check('Use Ptr'):
+                self.ops[index[node]].append(('call', callee, call, None))
+            elif callee not in tasks:
+                self.ops[index[node]].append(('callback', callee, call, None))
+
+    def run(self, entry, visit):
+        """Propagate the entry state through the CFG, then call visit(op, state)
+        for every op with the state just before it."""
+        if self.start is None:
+            return
+        state_in: list = [None] * len(self.nodes)
+        state_in[self.start] = entry
+        worklist = [self.start]
+        while worklist:
+            i = worklist.pop()
+            state = self._through(i, state_in[i])
+            for child in self.children[i]:
+                merged = _meet_lock_states(state_in[child], state)
+                if merged != state_in[child]:
+                    state_in[child] = merged
+                    worklist.append(child)
+        for i, state in enumerate(state_in):
+            if state is not None:
+                self._through(i, state, visit)
+
+    def _through(self, i, state, visit=None):
+        for op in self.ops[i]:
+            if visit:
+                visit(op, state)
+            if op[0] == 'acquire':
+                state = _acquire_lock_state(state, op[1])
+            elif op[0] == 'release':
+                state = _release_lock_state(state, op[1])
+        return state
+
+
+def lock_order_edges(tasks, enable_disable_functions: dict) -> tuple[list[LockOrderEdge], dict[tuple, Ent]]:
+    """Every held -> acquired edge reachable from the task roots, one per
+    (held, acquired, task, gate), and the lock object for each lock_id.
+    Locks whose object can't be identified are left out."""
+    pair_id_map, acquire_fns, release_fns = build_lock_maps(enable_disable_functions)
+    fn_ops: dict[Ent, _FnLockOps] = {}
+    lock_ents: dict[tuple, Ent] = {}
+    edges: dict[tuple, LockOrderEdge] = {}
+
+    def ops_for(fn):
+        if fn not in fn_ops:
+            fn_ops[fn] = _FnLockOps(fn, pair_id_map, acquire_fns, release_fns, tasks)
+        return fn_ops[fn]
+
+    for task in tasks:
+        entry: dict = {task: _EMPTY_LOCK_STATE}
+        worklist = [task]
+
+        def propagate(op, state):
+            if op[0] not in ('call', 'callback'):
+                return
+            callee = op[1]
+            if op[0] == 'callback':
+                state = _EMPTY_LOCK_STATE
+            merged = _meet_lock_states(entry.get(callee), state)
+            if merged != entry.get(callee):
+                entry[callee] = merged
+                worklist.append(callee)
+
+        while worklist:
+            fn = worklist.pop()
+            ops_for(fn).run(entry[fn], propagate)
+
+        def record(op, state):
+            if op[0] != 'acquire':
+                return
+            acquired = op[1]
+            lock_ents[acquired] = op[3]
+            for held, gate in state[1].items():
+                if held == acquired:
+                    continue
+                key = (held, acquired, task, gate - {acquired})
+                if key not in edges:
+                    edges[key] = LockOrderEdge(held, acquired, task, key[3], [])
+                edges[key].refs.append(op[2])
+
+        for fn, state in entry.items():
+            ops_for(fn).run(state, record)
+
+    for edge in edges.values():
+        unique = {refStr(ref): ref for ref in edge.refs}
+        edge.refs = sorted(unique.values(), key=refComparator)
+    return list(edges.values()), lock_ents
+
+
+def _cycles_of_length(adjacency: dict[tuple, set[tuple]], length: int, order: dict, budget: list[int]):
+    """Elementary cycles with exactly length nodes, each from its smallest node.
+    Each search step spends one from budget[0]; yields None when it runs out."""
+    for start in sorted(adjacency, key=order.get):
+        path = [start]
+        on_path = {start}
+        stack = [iter(sorted(adjacency[start], key=order.get))]
+        while stack:
+            budget[0] -= 1
+            if budget[0] < 0:
+                yield None
+                return
+            nxt = next(stack[-1], None)
+            if nxt is None:
+                stack.pop()
+                on_path.discard(path.pop())
+                continue
+            if nxt == start and len(path) == length:
+                yield list(path)
+            elif nxt not in on_path and order[nxt] > order[start] and len(path) < length:
+                path.append(nxt)
+                on_path.add(nxt)
+                stack.append(iter(sorted(adjacency[nxt], key=order.get)))
+
+
+def _pick_cycle_edges(options: list[list[LockOrderEdge]]) -> list[LockOrderEdge] | None:
+    """One edge per cycle step, from distinct tasks with disjoint gates."""
+    chosen: list[LockOrderEdge] = []
+
+    def search(i: int) -> bool:
+        if i == len(options):
+            return True
+        for edge in options[i]:
+            if all(edge.task != other.task and not (edge.gate & other.gate) for other in chosen):
+                chosen.append(edge)
+                if search(i + 1):
+                    return True
+                chosen.pop()
+        return False
+
+    return chosen if search(0) else None
+
+
+def find_lock_cycles(edges: list[LockOrderEdge], steps: int = 250_000) -> tuple[list[LockCycle], bool]:
+    """Lock-order cycles that two or more tasks could deadlock on, shortest
+    first, and whether the search finished within steps. The budget counts
+    steps, not time, so every machine gives the same result."""
+    budget = [steps]
+
+    # Only an edge's task and gate matter to the search, and a larger gate
+    # for the same task never allows more
+    by_pair: dict[tuple, list[LockOrderEdge]] = {}
+    for edge in edges:
+        by_pair.setdefault((edge.held, edge.acquired), []).append(edge)
+    adjacency: dict[tuple, set[tuple]] = {}
+    for (held, acquired), group in by_pair.items():
+        by_pair[(held, acquired)] = [edge for edge in group if not any(
+            other.task == edge.task and other.gate < edge.gate for other in group)]
+        adjacency.setdefault(held, set()).add(acquired)
+        adjacency.setdefault(acquired, set())
+
+    order = {lid: i for i, lid in enumerate(sorted(adjacency))}
+    result: list[LockCycle] = []
+    for length in range(2, len(adjacency) + 1):
+        for locks in _cycles_of_length(adjacency, length, order, budget):
+            if locks is None:
+                return result, False
+            options = [by_pair[(locks[i], locks[(i + 1) % length])] for i in range(length)]
+            chosen = _pick_cycle_edges(options)
+            if not chosen:
+                continue
+            participants = [edge for i, step in enumerate(options) for edge in step
+                            if edge is chosen[i] or _pick_cycle_edges(options[:i] + [[edge]] + options[i + 1:])]
+            result.append(LockCycle(locks, chosen, participants))
+    return result, True
+
+
+def lock_order_site_counts(edges: list[LockOrderEdge]) -> dict[tuple, int]:
+    """The number of call sites using each (held, acquired) lock order."""
+    sites: dict[tuple, set[str]] = {}
+    for edge in edges:
+        sites.setdefault((edge.held, edge.acquired), set()).update(refStr(ref) for ref in edge.refs)
+    return {pair: len(refs) for pair, refs in sites.items()}
+
+
+def cycle_fix_edge(cycle: LockCycle, site_counts: dict[tuple, int]) -> LockOrderEdge:
+    """The cycle edge to reverse: the lock order used at the fewest call sites."""
+    return min(reversed(cycle.edges), key=lambda e: site_counts[(e.held, e.acquired)])

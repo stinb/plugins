@@ -2,7 +2,7 @@ Calls graphs with global objects are useful for finding all global objects acces
 
 ![image](shared_tasks.png)
 
-Architectures are used to tag the root functions definng the call trees. Then shared global objects can be found by [graphing](und://plugin/graph/Shared%20Tasks-By%20Function) or [exporting](und://plugin/ireport/Shared%20Tasks%20CSV) the architecture. It's also possible to start from an object and find the root functions with the [Shared Tasks - By Object](und://plugin/graph/Shared%20Tasks-By%20Object) graph.
+Architectures are used to tag the root functions defining the call trees. Then shared global objects can be found by [graphing](und://plugin/graph/Shared%20Tasks-By%20Function) or [exporting](und://plugin/ireport/Shared%20Tasks%20CSV) the architecture. It's also possible to start from an object and find the root functions with the [Shared Tasks - By Object](und://plugin/graph/Shared%20Tasks-By%20Object) graph. The [Shared Tasks - Lock Order](und://plugin/graph/Shared%20Tasks-Lock%20Order) graph finds possible deadlocks, where tasks take the same locks in different orders.
 
 ## Architecture Structure
 
@@ -31,6 +31,8 @@ Finally, the architecture can be used to identify functions that enable and disa
         - enableFunction()
       - disable
         - disableFunction()
+
+The same pairs work for mutexes and semaphores, named `lock` and `unlock` (or `acquire` and `release`) instead of `disable` and `enable`.
 
 
 More documentation and scripts are available in the [README &#8599;](https://github.com/stinb/plugins/blob/main/Solutions/sharedTasks/README.md) file in the repository and in the two blog articles [Finding Shared Global Objects &#8599;](https://blog.scitools.com/finding-shared-global-objects/) and [Visualizing Shared Tasks &#8599;](https://blog.scitools.com/visualizing-shared-tasks/). Also check out [concurrency](und://plugins?filter=Tags%3A%22Concurrency%22) plugins.

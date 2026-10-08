@@ -40,6 +40,22 @@ Finally, the architecture can be used to identify functions that enable and disa
       - disable
         - disableFunction()
 
+The same pairs work for mutexes and semaphores. The pair names can also be `lock` and `unlock`, or `acquire` and `release`:
+
+- Name of root architecture can be anything
+  - name containing the word `control` (case insensitive)
+    - Mutex
+      - lock
+        - pthread_mutex_lock()
+      - unlock
+        - pthread_mutex_unlock()
+
+# Lock Order
+
+The plugin [sharedTasksLockGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksLockGraph.upy) finds possible deadlocks. It draws each lock as a node, with an edge when a task takes one lock while it may still hold another. When tasks take the same locks in different orders, the cycle is drawn in red. Locks are told apart by the object whose address is passed to the lock function, like `pthread_mutex_lock(&mutex)`.
+
+# Building Architectures
+
 There are a lot of options for building an architecture:
 
 - Use the Architecture Designer in the GUI
