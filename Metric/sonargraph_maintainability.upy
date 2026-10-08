@@ -1,0 +1,136 @@
+import und_lib.kind_util as kind_util
+import und_lib.graph_algorithms as graph_algorithms
+import understand
+
+def ids():
+  return ["SonargraphMaintainability"]
+
+def name(id):
+  return "Sonargraph's Maintainability Level"
+
+def description(id):
+  return '''<p>The percentage a system is maintainable based on dependencies, with higher values better.</p>
+  <p>Sonargraph defines their Maintainability Level metric in their blog article
+  <a href="https://blog.hello2morrow.com/2018/12/a-promising-new-metric-to-track-maintainability/">
+  A Promising New Metric To Track Maintainability</a>. It is calculated from a dependency
+  graph of system components, with higher values indicating more independent
+  components. Sonargraph recommends aiming for a value higher than 70%,
+  and avoiding values lower than 50%.</p>
+
+  <p>Given a dependency graph of system components, the calculation first
+  combines strongly connected components into a single node to get a directed
+  acyclic graph. The graph is then split into levels.</p>
+
+  <p>Each node's value is <code>1 - (influenced_components / components_in_higher_levels)</code>.
+  The idea is to reflect how easily a component can be changed. The more
+  incoming dependencies, the harder it is to change a given component.
+  A component in the highest layer is not depended on by anything so it
+  can be easily changed (value = 1). In contrast, a component
+  on a lower level is less maintainable based on how much of the system depends
+  on it.</p>
+
+  <p>For a node representing multiple components (a cycle), the value is multiplied
+  by the number of components in the cycle. Cycles bigger than 5 have an additional
+  penalty of <code> 5 / size</code> multiplied with the node score.</p>
+
+  <p>The final value is the average of each node's value, multiplied by 100
+  to convert it to a percentage. For example, consider a system with 10 nodes:
+  A-J. Suppose C, D, E, F, G and H form a cycle and A->C, B->I, H->J, and I->J.</p>
+  <br>
+  <img src=".doc/sonargraph_maintainability.svg"/>
+  <p>Then:</p>
+  <ul>
+    <li>A and B on the highest layer each have no incoming dependencies. They
+    each get the full weight of 1.</li>
+    <li>I is in the middle layer. There are 2 higher components (A and B) and 1 of
+    them depends on I. So its weight is <code>1 - (1/2) = 0.5</code></li>
+    <li>CDEFGH is also in the middle layer so there are 2 higher components (A and B),
+    1 of which depends on CDEFGH. So the initial weight is 0.5, like I. But
+    there are 6 components in the node, so that value is multiplied by 6, giving
+    3.0. Finally, the cycle is bigger than 5, so a penalty of 5/6 is applied,
+    giving a final value of 2.5.</li>
+    <li>J is on the lowest level, with 9 components higher. All 9 depend on J
+    so its weight is <code>1 - (9/9) = 0</code></li>
+  </ul>
+  <p>So the final value is <code>(1 + 1 + 0.5 + 2.5 + 0) / 10 = 0.5 = 50%</code>.</p>
+
+  <p>This implementation is likely to differ from Sonargraph in the following
+  ways:</p>
+  <ul>
+    <li>A component is always a file. In Sonargraph, the definition of a
+    component can vary by language. For C/C++ specifically, header and code
+    files are combined in Sonargraph and not in Understand.</li>
+    <li>Understand's file dependency graph is used, and likely differs from
+    dependencies calculated by Sonargraph.</li>
+    <li>The implementation uses the ML2 formula from the blog article,
+    not the final ML4 formula. ML3 adds a sliding minimum for systems with
+    fewer than 100 components. The ML4 formula also considers package
+    cyclicity for some languages.</li>
+  </ul>
+
+  <p>For a similar metric not influenced by level, see
+  <a href="und://plugin/metric/PropagationCost">PropagationCost.</a></p>
+  '''
+
+def tags(id):
+  return [
+    'Category: Coupling',
+    'Solution: Project Quality',
+    'Language: Any',
+    'Dependencies',
+    'Target: Architectures',
+    'Target: Project'
+  ]
+
+
+def test_available(metric,entkindstr):
+  if entkindstr:
+    return False # not available for entities
+
+  return True
+
+def test_architecture(metric, arch):
+  return kind_util.can_contain_files(arch)
+
+def test_global(metric, db):
+  return kind_util.can_contain_files(db)
+
+def value(metric, target):
+  files = kind_util.list_files(target)
+  if not files:
+    return 100 # no files are maintainable
+
+  allowed = set(files)
+  total = len(allowed)
+
+  components, condensed = graph_algorithms.sccList(lambda file: allowed.intersection(file.depends().keys()), files, True)
+  order = range(len(components) - 1, -1, -1)
+  layers = graph_algorithms.layers(condensed.get, order)
+  reachIn = graph_algorithms.reachability(condensed.get, order)
+
+  nodeCnts = [ nodeCount(indices, components) for indices in layers ]
+  higherCnts = [0] * len(layers)
+  for i in range(len(higherCnts)):
+    higher = total if i == 0 else higherCnts[i-1]
+    # whatever was previously higher minus the what's in the current level
+    higherCnts[i] = higher - nodeCnts[i]
+
+  ml = 0
+  for layer, nodes in enumerate(layers):
+    for idx in nodes:
+      weight = 1
+      if higherCnts[layer] > 0:
+        weight -= (nodeCount(reachIn[idx], components) / higherCnts[layer])
+      compSize = len(components[idx])
+      c =  compSize * weight * cyclePenalty(compSize) / total
+      ml += c
+
+  return ml * 100
+
+def nodeCount(indexes, components):
+  return sum(len(components[i]) for i in indexes)
+
+def cyclePenalty(componentSize):
+  if componentSize > 5:
+    return 5 / componentSize
+  return 1
