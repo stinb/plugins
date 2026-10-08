@@ -1,4 +1,5 @@
 import und_lib.kind_util as kind_util
+from und_lib.graph_algorithms import sccList
 import understand
 
 def name():
@@ -23,43 +24,19 @@ def define_options(arch):
   arch.options().text("refkindstr", "References", "call ~inactive")
 
 def build(arch, db):
-  # Tarjan's algorithm for finding strongly connected components
-  # https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
-  index = 0
-  indices = dict()
-  lowlink = dict()
-  stack = list()
-  direct = set()
   cycleCount = dict()
 
   refKindStr = arch.options().lookup("refkindstr")
   entKindStr = arch.options().lookup("entkindstr")
 
-  def connectRecursive(ent):
-    nonlocal index
-    indices[ent] = index
-    lowlink[ent] = index
-    index += 1
-    stack.append(ent)
+  def byName(ents):
+    return sorted(ents, key= lambda ent: ent.name())
 
-    for toEnt in sorted(ent.ents(refKindStr, entKindStr), key= lambda ent: ent.name()):
-      if toEnt not in indices:
-        connectRecursive(toEnt)
-        lowlink[ent] = lowlink[ent] if lowlink[ent] < lowlink[toEnt] else lowlink[toEnt]
-      elif toEnt in stack:
-        lowlink[ent] = lowlink[ent] if lowlink[ent] < lowlink[toEnt] else lowlink[toEnt]
-
-    if lowlink[ent] == indices[ent]:
-      idx = stack.index(ent)
-      cycle_size = len(stack[idx:])
-      if cycle_size > 1:
-        cycleId = cycleCount.get(cycle_size, 0)
-        cycleCount[cycle_size] = cycleId + 1
-        for cycle_ent in stack[idx:]:
-          arch.map(cycle_ent, '{:03d}/{:03d}'.format(cycle_size, cycleId))
-        cycleId += 1
-      del stack[idx:]
-
-  for ent in sorted(db.ents(entKindStr), key= lambda ent: ent.name()):
-    if ent not in indices:
-      connectRecursive(ent)
+  components, _ = sccList(lambda ent: byName(ent.ents(refKindStr, entKindStr)), byName(db.ents(entKindStr)))
+  for component in components:
+    cycle_size = len(component)
+    if cycle_size > 1:
+      cycleId = cycleCount.get(cycle_size, 0)
+      cycleCount[cycle_size] = cycleId + 1
+      for cycle_ent in component:
+        arch.map(cycle_ent, '{:03d}/{:03d}'.format(cycle_size, cycleId))

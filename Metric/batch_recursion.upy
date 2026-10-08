@@ -1,4 +1,5 @@
 import und_lib.kind_util as kind_util
+from und_lib.graph_algorithms import sccList
 import understand
 
 def ids():
@@ -86,13 +87,6 @@ def value(metric, ent):
     return und_cache.value(ent=ent,value=0)
 
   # Cache was empty, build cache by finding all recursive functions
-
-  # Tarjan's algorithm for finding strongly connected components
-  # https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
-  index = 0
-  indices = dict()
-  lowlink = dict()
-  stack = list()
   direct = set()
   indirect = set()
 
@@ -115,33 +109,16 @@ def value(metric, ent):
                   "vhdl call,"
                   "web call")
 
-  def connectRecursive(func):
-    nonlocal index
-    indices[func] = index
-    lowlink[func] = index
-    index += 1
-    stack.append(func)
+  def calls(func):
+    calledFuncs = func.ents(refKindStr, entKindStr)
+    if func in calledFuncs:
+      direct.add(func)
+    return calledFuncs
 
-    for calledFunc in func.ents(refKindStr, entKindStr):
-      if calledFunc not in indices:
-        connectRecursive(calledFunc)
-        lowlink[func] = lowlink[func] if lowlink[func] < lowlink[calledFunc] else lowlink[calledFunc]
-      elif calledFunc in stack:
-        lowlink[func] = lowlink[func] if lowlink[func] < lowlink[calledFunc] else lowlink[calledFunc]
-
-      if calledFunc == func:
-        direct.add(func)
-
-    if lowlink[func] == indices[func]:
-      idx = stack.index(func)
-      if len(stack[idx:]) > 1:
-        for cycle_func in stack[idx:]:
-          indirect.add(cycle_func)
-      del stack[idx:]
-
-  for func in metric.db().ents(entKindStr):
-    if func not in indices:
-      connectRecursive(func)
+  components, _ = sccList(calls, metric.db().ents(entKindStr))
+  for component in components:
+    if len(component) > 1:
+      indirect |= component
 
   for func in direct:
     und_cache.insert(1, ent=func)

@@ -4,6 +4,7 @@
 # It's meant to be imported
 
 import understand
+from und_lib.graph_algorithms import sccList
 from statistics import median
 from functools import cmp_to_key
 
@@ -113,37 +114,7 @@ class DepMatrix:
     if "core_size" in self.values:
       return
 
-
-    # Tarjan's algorithm for finding strongly connected components
-    # https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
-    index = 0
-    indices = dict()
-    lowlink = dict()
-    stack = list()
-    components = list()
-
-    def connectRecursive(file):
-      nonlocal index
-      indices[file] = index
-      lowlink[file] = index
-      index += 1
-      stack.append(file)
-
-      for toFile in self.graph[file].direct:
-        if toFile not in indices:
-          connectRecursive(toFile)
-          lowlink[file] = lowlink[file] if lowlink[file] < lowlink[toFile] else lowlink[toFile]
-        elif toFile in stack:
-          lowlink[file] = lowlink[file] if lowlink[file] < lowlink[toFile] else lowlink[toFile]
-
-      if lowlink[file] == indices[file]:
-        idx = stack.index(file)
-        components.append(stack[idx:])
-        del stack[idx:]
-
-    for file in self.order:
-      if file not in indices:
-        connectRecursive(file)
+    components, _ = sccList(lambda file: self.graph[file].direct, self.order)
 
     if not components:
       return components
