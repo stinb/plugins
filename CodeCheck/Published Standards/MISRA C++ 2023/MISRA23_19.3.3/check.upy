@@ -1,0 +1,204 @@
+# This script is designed to run with Understand - CodeCheck
+# Written by Jason Quinn
+
+import re
+
+ERR1 = "Argument to the mixed-use macro parameter %1 of %2 is itself a macro"
+
+# A literal is taken whole so that a # inside it is not read as an operator,
+# and ## comes before # so the longer operator wins.
+TOKENS = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|##|#|[A-Za-z_]\w*|\S')
+
+
+def ids():
+    return ('MISRA23_19.3.3', 'CPP_PR049')
+
+
+def name(id):
+    return {
+        'MISRA23_19.3.3': 'Published Standards/MISRA C++ 2023/' + """\
+19.3.3 The argument to a mixed-use macro parameter shall not be subject to \
+further expansion""",
+        'CPP_PR049': 'All Checks/Language Specific/C and C++/Preprocessor/' + """\
+The argument to a mixed-use macro parameter shall not be subject to further \
+expansion""",
+    }[id]
+
+
+def tags(id):
+    return {
+        'MISRA23_19.3.3': [
+            'Language: C++',
+            'Standard: MISRA C++ 2023',
+            'Category: Required',
+            'Preprocessor',
+        ],
+        'CPP_PR049': [
+            'Language: C',
+            'Language: C++',
+            'Preprocessor',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    return """\
+<p><b>Amplification</b></p>
+<p>A mixed-use macro parameter is a macro parameter that is used both as an
+operand to <code>#</code> or <code>##</code>, and not as an operand to these
+operators.</p>
+<p>This rule prohibits invoking a macro with a mixed-use macro parameter when
+the corresponding macro argument is itself subject to further macro
+replacement.</p>
+
+<p><b>Rationale</b></p>
+<p>A macro parameter that is used as an operand of a <code>#</code> or
+<code>##</code> operator is not expanded prior to being used, whilst the same
+parameter appearing elsewhere in the replacement text is expanded. This causes
+a macro to exhibit different behaviour depending on whether or not its
+arguments are subject to macro replacement.</p>
+
+<p><b>Analysis</b></p>
+<p>An argument is treated as subject to further replacement when it names a
+macro. The whole argument is examined, so a macro name appearing anywhere
+within a larger expression is found.</p>
+<p>A macro is classified from its own definition, so one declared in a header
+is judged where it is invoked. A <code>#</code> appearing inside a string or
+character literal in the replacement list is part of the literal and is not
+read as a stringize operator.</p>
+
+<p><b>Example</b></p>
+<pre><code language="C++">#define SCALE( X ) ( ( X ) * X ## _scale )
+
+int32_t speed;
+int32_t speed_scale;
+int32_t scaled_speed = SCALE( speed );   // Compliant - speed is not a macro
+
+#define AA BB
+int32_t AA_scale = 1;
+int32_t BB = 42;
+int32_t BB_scale = 2;
+int32_t scaled_AA = SCALE( AA );         // Non-compliant - AA is expanded,
+                                         // giving ( ( BB ) * AA_scale )</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 19.3.1, Rule 19.3.2</p>
+"""
+
+
+def test_entity(file):
+    return file.kind().check('code file, header file')
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'C++'
+
+
+# The parameters a macro uses both as an operand of # or ## and on their own.
+#
+# Requiring both is the rule's definition. It cannot be observed to matter:
+# an argument to a parameter that is only ever an operand is never expanded,
+# so the lexer leaves it unresolved and it could not be reported anyway.
+def mixed_use_parameters(ent):
+    names = [p.strip() for p in str(ent.parameters() or '').split(',')]
+    names = [n for n in names if n]
+    if not names:
+        return set()
+
+    tokens = TOKENS.findall(str(ent.value() or ''))
+    operand = set()
+    plain = set()
+
+    for i, token in enumerate(tokens):
+        if token not in names:
+            continue
+
+        before = tokens[i - 1] if i else ''
+        after = tokens[i + 1] if i + 1 < len(tokens) else ''
+
+        if before in ('#', '##') or after == '##':
+            operand.add(token)
+        else:
+            plain.add(token)
+
+    return operand & plain
+
+
+# The arguments of a call, as lists of lexemes.
+def call_arguments(lexer, ref):
+    lex = lexer.lexeme(ref.line(), ref.column())
+    if not lex:
+        return []
+
+    lex = lex.next(True, True)
+    if not lex or lex.text() != '(':
+        return []
+
+    args = [[]]
+    depth = 0
+    while lex:
+        text = lex.text()
+        if text in ('(', '['):
+            depth += 1
+            if depth == 1:
+                lex = lex.next(True, True)
+                continue
+        elif text in (')', ']'):
+            depth -= 1
+            if not depth:
+                break
+        elif depth == 1 and text == ',':
+            args.append([])
+            lex = lex.next(True, True)
+            continue
+
+        args[-1].append(lex)
+        lex = lex.next(True, True)
+
+    return args
+
+
+def expands_further(lexemes):
+    for lex in lexemes:
+        ent = lex.ent()
+        if ent and ent.kind().check('macro'):
+            return ent
+    return None
+
+
+def check(check, file):
+    uses = file.filerefs('Use', 'Macro Functional')
+    if not uses:
+        return
+
+    lexer = file.lexer(lookup_ents=True)
+    if not lexer:
+        return
+
+    # Classified from the macro entity rather than a definition in this file,
+    # so a macro declared in a header is judged where it is invoked.
+    macros = {}
+
+    for ref in uses:
+        ent = ref.ent()
+        if ent.id() not in macros:
+            names = [p.strip() for p in str(ent.parameters() or '').split(',')]
+            macros[ent.id()] = ([n for n in names if n],
+                                mixed_use_parameters(ent))
+
+        names, mixed = macros[ent.id()]
+        if not mixed:
+            continue
+        for i, argument in enumerate(call_arguments(lexer, ref)):
+            if i >= len(names) or names[i] not in mixed:
+                continue
+
+            expanded = expands_further(argument)
+            if expanded:
+                check.violation(ref.ent(), file, ref.line(), ref.column(),
+                                ERR1, names[i], ref.ent().name())
+                break
