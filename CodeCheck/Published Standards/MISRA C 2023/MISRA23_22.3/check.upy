@@ -32,6 +32,7 @@ def tags(id):
         ],
         'MISRA25_22.3': [
             'Language: C',
+            'Language: C++',
             'Standard: MISRA C 2025',
             'Category: Required',
             'Libraries',
@@ -86,6 +87,12 @@ void fn ( void )
   FILE *fw = fopen ( "tmp", "r+" );    /* "r+" opens for read/write */
   FILE *fr = fopen ( "tmp", "r" );    /* Non-compliant             */
 }</code></pre>
+
+<p><b>See also</b></p>
+<p>Rule 21.6</p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check can only flag violations that happen in the same function.</p>
 """,
         'MISRA12_22.3': """
 <p><b>Amplification</b></p>
@@ -188,10 +195,19 @@ def get_closed_stream(ref):
     return None
 
 
+# A mode with no "r" still reads when it has "+", and "w" and "a" are the only
+# leading letters that write.
+def opens_for_read(mode):
+    return bool(mode) and ("r" in mode or "+" in mode)
+
+
+def opens_for_write(mode):
+    return bool(mode) and (mode[0] in "wa" or "+" in mode)
+
+
 def check(check, file):
     for func_ref in file.filerefs("Define", "Function"):
-        open_files = {}  # key: file name, value: mode
-        streams = {}  # key: stream ent id, value: file name
+        open_files = {}  # key: file name, value: list of (stream id, reads, writes)
 
         for call_ref in sorted(func_ref.ent().refs("Call", "Function"), key=lambda x: x.line()):
             if call_ref.ent().name() in ["fopen", "freopen"]:
@@ -200,21 +216,27 @@ def check(check, file):
 
                 if not fname:
                     continue
-                elif fname not in open_files:
-                    open_files[fname] = mode
 
-                    if stream:
-                        streams[stream.id()] = fname
-                elif fname in open_files:
-                    if ((open_files[fname] == "r" and mode == "r")
-                            or (stream and stream.id() in streams and streams[stream.id()] == fname)):
-                        pass
-                    else:
-                        check.violation(call_ref.ent(), file,
-                                        call_ref.line(), call_ref.column(), ERR1)
+                reads = opens_for_read(mode)
+                writes = opens_for_write(mode)
+                open_streams = open_files.setdefault(fname, [])
+                sid = stream.id() if stream else None
+
+                # Reassigning a pointer replaces its stream instead of adding one.
+                if sid is not None:
+                    open_streams[:] = [s for s in open_streams if s[0] != sid]
+
+                if any((w and reads) or (r and writes) for _, r, w in open_streams):
+                    check.violation(call_ref.ent(), file,
+                                    call_ref.line(), call_ref.column(), ERR1)
+
+                open_streams.append((sid, reads, writes))
             elif call_ref.ent().name() == "fclose":
                 stream = get_closed_stream(call_ref)
 
-                if stream and stream.id() in streams and streams[stream.id()] in open_files:
-                    del open_files[streams[stream.id()]]
-                    del streams[stream.id()]
+                if stream:
+                    for fname, open_streams in list(open_files.items()):
+                        open_streams[:] = [s for s in open_streams if s[0] != stream.id()]
+
+                        if not open_streams:
+                            del open_files[fname]
