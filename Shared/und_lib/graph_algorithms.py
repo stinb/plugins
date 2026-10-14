@@ -80,6 +80,47 @@ def sccList(successorFunc, roots, calcCondensedGraph = False):
 
   return components, condensed
 
+def disjointParts(successorFunc, roots):
+  '''
+  Find the weakly connected components reachable from roots: groups of nodes
+  linked by edges in either direction. Uses union-find, so edges are only
+  followed forwards and no reverse adjacency is built.
+  https://en.wikipedia.org/wiki/Disjoint-set_data_structure
+
+  successorFunc(node) returns an iterable of the nodes that node points to. It
+  is called once per node. Nodes must be hashable.
+
+  Returns a list of sets, in no particular order.
+  '''
+  parent = dict()
+
+  def find(x):
+    while parent[x] != x:
+      parent[x] = parent[parent[x]]
+      x = parent[x]
+    return x
+
+  pending = list()
+  for root in roots:
+    if root not in parent:
+      parent[root] = root
+      pending.append(root)
+
+  while pending:
+    node = pending.pop()
+    for toNode in successorFunc(node):
+      if toNode not in parent:
+        parent[toNode] = toNode
+        pending.append(toNode)
+      a, b = find(node), find(toNode)
+      if a != b:
+        parent[a] = b
+
+  parts = dict()
+  for node in parent:
+    parts.setdefault(find(node), set()).add(node)
+  return list(parts.values())
+
 def layers(dagSuccessorFunc, topologicalOrder):
   '''
   Return a list of sets of nodes forming layers in the graph. Index 0 is the
