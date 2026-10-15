@@ -65,9 +65,9 @@ def can_contain_functions(target):
             target.kind().check(CLASS_KIND_STR) or \
             target.kind().check(PYTHON_PACKAGE_KIND_STR)))
 
-def list_functions(target, arch_recursive=True, include_unresolved=False):
+def list_functions(target, arch_recursive=True, include_unresolved=False, exclude_standard=False):
   kstr = FUNCTION_KIND_STR_WITH_UNRESOLVED if include_unresolved else FUNCTION_KIND_STR
-  return list_by_kind(target, kstr, arch_recursive=arch_recursive, expand_classes=True)
+  return list_by_kind(target, kstr, arch_recursive=arch_recursive, exclude_standard=exclude_standard, expand_classes=True)
 
 def can_contain_classes(target, db=None, test_ents=True):
   if db is None and isinstance(target, understand.Db):
@@ -85,9 +85,9 @@ def can_contain_classes(target, db=None, test_ents=True):
             target.kind().check(PYTHON_PACKAGE_KIND_STR)) and \
            (not test_ents or len(list_classes(target)) > 0))
 
-def list_classes(target, arch_recursive=True, include_unresolved=False):
+def list_classes(target, arch_recursive=True, include_unresolved=False, exclude_standard=False):
   kstr = CLASS_KIND_STR_WITH_UNRESOLVED if include_unresolved else CLASS_KIND_STR
-  return list_by_kind(target, kstr, arch_recursive=arch_recursive)
+  return list_by_kind(target, kstr, arch_recursive=arch_recursive, exclude_standard=exclude_standard)
 
 def can_contain_files(target):
   return isinstance(target, understand.Db) or \
@@ -95,17 +95,19 @@ def can_contain_files(target):
          (isinstance(target, understand.Ent) and \
             target.kind().check(PYTHON_PACKAGE_KIND_STR))
 
-def list_files(target, arch_recursive=True, include_unresolved=False):
+def list_files(target, arch_recursive=True, include_unresolved=False, exclude_standard=False):
   kstr = FILE_KIND_STR_WITH_UNRESOLVED if include_unresolved else FILE_KIND_STR
-  return list_by_kind(target, FILE_KIND_STR, arch_recursive=arch_recursive, expand_files=False)
+  return list_by_kind(target, kstr, arch_recursive=arch_recursive, exclude_standard=exclude_standard, expand_files=False)
 
-def list_by_kind(target, ent_kind_str, arch_recursive=True, expand_files=True, expand_classes=False, expand_python_packages=True):
+def list_by_kind(target, ent_kind_str, arch_recursive=True, expand_files=True, expand_classes=False, expand_python_packages=True, exclude_standard=False):
   """
   Return a list or set of entities matching the entity kind string inside
   the target (database, architecture, or container entity such as a file)
   """
   if isinstance(target, understand.Db):
-    return target.ents(ent_kind_str)
+    if not exclude_standard:
+      return target.ents(ent_kind_str)
+    return [ent for ent in target.ents(ent_kind_str) if not is_standard(ent)]
 
   start = []
   if isinstance(target, understand.Arch):
@@ -121,6 +123,8 @@ def list_by_kind(target, ent_kind_str, arch_recursive=True, expand_files=True, e
   classes = set()
 
   for ent in start:
+    if exclude_standard and is_standard(ent):
+      continue
     if ent.kind().check(ent_kind_str):
       ents.add(ent)
     elif ent.kind().check(PYTHON_PACKAGE_KIND_STR):
@@ -133,22 +137,27 @@ def list_by_kind(target, ent_kind_str, arch_recursive=True, expand_files=True, e
   if expand_python_packages:
     for ent in python_packages:
       for ref in ent.refs("python contain","file ~unknown ~unresolved",True):
+        if exclude_standard and is_standard(ref.ent()):
+          continue
         files.add(ref.ent())
         if ref.ent().kind().check(ent_kind_str):
           ents.add(ref.ent())
   if expand_files:
     for ent in files:
       for ref in ent.filerefs("define, separate, ada declare body, vhdl declare", ent_kind_str, True):
-        ents.add(ref.ent())
+        if not exclude_standard or not is_standard(ref.ent()):
+          ents.add(ref.ent())
   if expand_classes:
     for ent in classes:
       for ref in ent.refs("define, declare", ent_kind_str, True):
-        ents.add(ref.ent())
+        if not exclude_standard or not is_standard(ref.ent()):
+          ents.add(ref.ent())
 
   return ents
 
-
-
-
-
+def is_standard(ent):
+  lib = ent.library().lower()
+  if ent.language() == "VHDL":
+    return lib in ("std", "ieee")
+  return lib == "standard"
 
