@@ -108,7 +108,7 @@ def init(graph, target):
 
 def draw(graph, target):
     tasks, enableDisableFunctions, _ = parseArch(target)
-    edges, lockEnts = lock_order_edges(tasks, enableDisableFunctions)
+    edges, lockEnts, lockCalls, unidentified = lock_order_edges(tasks, enableDisableFunctions)
     cycles, complete = find_lock_cycles(edges)
 
     deadlockLocks: set = set()
@@ -135,9 +135,30 @@ def draw(graph, target):
         grouped.setdefault(key, []).append(edge)
 
     graph.set('rankdir', 'LR')
-    if not complete:
-        graph.set('label', 'The deadlock search stopped early, so some possible deadlocks may not be shown.')
-        graph.set('labelloc', 't')
+    messages = []
+    if not tasks:
+        messages.append('No tasks were found in the architecture.')
+    elif not enableDisableFunctions:
+        messages.append('No lock and unlock functions were found in the architecture.')
+    elif not lockCalls:
+        messages.append('The tasks never call the lock functions.')
+    else:
+        if unidentified:
+            if unidentified == 1:
+                counted = "1 lock call isn't shown because its lock can't be identified."
+            else:
+                counted = f"{unidentified} lock calls aren't shown because their lock can't be identified."
+            messages.append(counted + "\nCheck for headers the analysis couldn't find, or locks passed by pointer.")
+        if lockEnts and not edges:
+            messages.append('No task takes one lock while holding another.')
+        elif not complete:
+            messages.append('The deadlock search stopped early, so some possible deadlocks may not be shown.')
+        elif onlyDeadlocks and edges and not cycles:
+            messages.append('No possible deadlocks were found.')
+
+    # The graph view doesn't draw graph labels, so the messages are a text node
+    if messages:
+        graph.node('\n'.join(messages)).set('shape', 'none')
     nodes = dict()
 
     def lockNode(lid):

@@ -1500,8 +1500,10 @@ class _FnLockOps:
     def __init__(self, fn: Ent, pair_id_map, acquire_fns, release_fns, tasks=()):
         self.nodes: list[CFNode] = []
         self.children: list[list[int]] = []
-        self.ops: list[list[tuple]] = []  # (kind, lock_id or callee Ent, ref)
+        self.ops: list[list[tuple]] = []  # (kind, lock_id or callee Ent, ref, lock Ent)
         self.start = None
+        self.lock_calls = 0  # lock and unlock calls, identified or not
+        self.unidentified = 0  # lock and unlock calls whose lock can't be identified
         cfg = fn.control_flow_graph()
         if not cfg:
             return
@@ -1517,8 +1519,10 @@ class _FnLockOps:
                 continue
             callee = call.ent()
             if callee in acquire_fns or callee in release_fns:
+                self.lock_calls += 1
                 arg = extract_lock_arg(call)
                 if not arg:
+                    self.unidentified += 1
                     continue
                 kind = 'acquire' if callee in acquire_fns else 'release'
                 self.ops[index[node]].append((kind, (pair_id_map[callee], arg.id()), call, arg))
@@ -1558,14 +1562,16 @@ class _FnLockOps:
         return state
 
 
-def lock_order_edges(tasks, enable_disable_functions: dict) -> tuple[list[LockOrderEdge], dict[tuple, Ent]]:
+def lock_order_edges(tasks, enable_disable_functions: dict) -> tuple[list[LockOrderEdge], dict[tuple, Ent], int, int]:
     """Every held -> acquired edge reachable from the task roots, one per
-    (held, acquired, task, gate), and the lock object for each lock_id.
-    Locks whose object can't be identified are left out."""
+    (held, acquired, task, gate), the lock object for each lock_id, the
+    number of lock and unlock calls the tasks reach, and how many of those
+    name a lock that can't be identified. Those calls are left out."""
     pair_id_map, acquire_fns, release_fns = build_lock_maps(enable_disable_functions)
     fn_ops: dict[Ent, _FnLockOps] = {}
     lock_ents: dict[tuple, Ent] = {}
     edges: dict[tuple, LockOrderEdge] = {}
+    reached: set[Ent] = set()
 
     def ops_for(fn):
         if fn not in fn_ops:
@@ -1606,11 +1612,14 @@ def lock_order_edges(tasks, enable_disable_functions: dict) -> tuple[list[LockOr
 
         for fn, state in entry.items():
             ops_for(fn).run(state, record)
+        reached.update(entry)
 
     for edge in edges.values():
         unique = {refStr(ref): ref for ref in edge.refs}
         edge.refs = sorted(unique.values(), key=refComparator)
-    return list(edges.values()), lock_ents
+    return (list(edges.values()), lock_ents,
+            sum(ops_for(fn).lock_calls for fn in reached),
+            sum(ops_for(fn).unidentified for fn in reached))
 
 
 def _cycles_of_length(adjacency: dict[tuple, set[tuple]], length: int, order: dict, budget: list[int]):
