@@ -1,0 +1,923 @@
+# Interactive Report: C Data Coupling
+#
+# Lists every data coupling link between C modules (source files): one row
+# per writer -> reader link. Only C code (.c files and the headers they
+# include) is analyzed.
+#
+# Columns: Data Item | Mechanism | Writer Module | Writer Function |
+#          Reader Module | Reader Function | Direction | Linkage | Volatile |
+#          Write Site | Read Site | Requirement Ref | Test Ref
+#
+# Mechanisms:
+#   global            a function writes a file-scope or static object and a
+#                     function in another module reads it, directly or
+#                     through a pointer that aliases it
+#   by_value          an argument passed by value to a function in another
+#                     module
+#   by_ref            an argument passed through a pointer: caller -> callee
+#                     when the callee reads through it, callee -> caller when
+#                     the callee writes through it
+#   function_pointer  a function pointer passed to a function in another
+#                     module
+#   return            a value returned to a caller in another module that uses
+#                     it
+#
+# Scoping:
+#   - Coupling is tracked per whole object, not per struct field.
+#   - Writer/reader pairs within the same module are not data coupling between
+#     modules and are left out.#   - Initializers are not run-time writes and are ignored.
+#   - A write through a pointer writes the data it points to, not the
+#     pointer: g->a = x only reads a pointer global g.
+#   - Requirement Ref and Test Ref are left blank for the analyst.
+#
+# Limitations:
+#   - Pointer assignments inside macro expansions are not in the database
+#     (no Assign refs), so aliases made by a macro such as
+#     #define NORM(p) ((p) = (p) ? (p) : g_default) are not followed.
+
+import re
+
+_MECHANISM_ORDER = {"global": 0, "by_ref": 1, "by_value": 2,
+                    "function_pointer": 3, "return": 4}
+_STMT_START = {";", "{", "}", ")", ":", "else", "do"}
+_MEMBER_OPS = {".", "->"}
+_VOLATILE_RE = re.compile(r"\bvolatile\b")
+_CONST_RE = re.compile(r"\bconst\b")
+# Words and symbols stripped from a type to leave the type it is built on.
+_TYPE_NOISE_RE = re.compile(r"\[[^\]]*\]|[*&]|\b(?:const|volatile|restrict|"
+                            r"__restrict|struct|union|enum|signed)\b")
+# Understand parses C with its C/C++ parser, so C code is told apart by file:
+# .c sources (upper-case .C is C++ by convention), plus every header they
+# include. A .h file only included by C++ sources is C++.
+_C_SOURCE_EXTENSION = ".c"
+_CPP_SOURCE_EXTENSIONS = (".cpp", ".cxx", ".cc", ".c++", ".cp", ".C")
+# Entity kinds that only exist in C++.
+_CPP_ONLY_KINDS = "Class, Template, Namespace, Member Function, Type Alias"
+
+
+def name():
+    return "C Data Coupling"
+
+
+def description():
+    return '''Documents data coupling between C modules: every link where data
+    written in one module is read in another.
+    <p>Output is one row per writer &rarr; reader link. Each source
+    file is a module, and only links that cross a module boundary are
+    listed. Only C code is analyzed: .c files and the headers they include.
+    C++ sources, and headers only C++ sources include, are skipped.</p>    <p>Mechanisms:</p>
+    <ul>
+      <li><b>global</b> &ndash; a file-scope or static object written in one
+        module and read in another, directly or through a pointer that
+        aliases it</li>
+      <li><b>by_value</b> &ndash; an argument passed by value</li>
+      <li><b>by_ref</b> &ndash; an argument passed through a pointer; the
+        direction follows whether the callee reads or writes through it</li>
+      <li><b>function_pointer</b> &ndash; a function pointer passed as an
+        argument</li>
+      <li><b>return</b> &ndash; a returned value that the caller uses</li>
+    </ul>
+    <p>Coupling is tracked per whole object, not per struct field.
+    Initializers are not run-time writes and are ignored. Requirement Ref and
+    Test Ref are left blank for the analyst to fill in.</p>
+    <p>A write through a pointer is a write to the data it points to, not
+    to the pointer: for a pointer global g, only g = ... writes g, while
+    g-&gt;field = ... reads it.</p>
+    <p>Limitations:</p>
+    <ul>
+      <li>Calls made through function pointers cannot be resolved to a
+        callee, so arguments and return values passed through them are not
+        listed.</li>
+      <li>Pointers stored in struct or union members are not followed,
+        because a member is shared by every instance of its type.</li>
+      <li>Pointer assignments made inside a macro expansion, such as
+        <code>#define NORM(p) ((p) = (p) ? (p) : g_default)</code>, are not
+        recorded in the database, so an alias created that way is not
+        followed. Accesses through it, and the links they would create, are
+        not listed.</li>
+    </ul>
+  '''
+
+
+def tags():
+    return [
+        'Target: Project',
+        'Language: C',
+    ]
+
+
+def test_global(db):
+    return "C++" in db.language()
+
+
+def is_enabled_by_default():
+    return True
+
+
+def support_abort():
+    return True
+
+
+def generate(report, db):
+    report.table('''
+    [{
+      "name" : "Data Item",
+      "filtertype": "string"
+     },{
+      "name" : "Mechanism",
+      "filtertype": "string"
+     },{
+      "name" : "Writer Module",
+      "filtertype": "string"
+     },{
+      "name" : "Writer Function",
+      "filtertype": "string"
+     },{
+      "name" : "Reader Module",
+      "filtertype": "string"
+     },{
+      "name" : "Reader Function",
+      "filtertype": "string"
+     },{
+      "name" : "Direction",
+      "filtertype": "string"
+     },{
+      "name" : "Linkage",
+      "filtertype": "string"
+     },{
+      "name" : "Volatile",
+      "filtertype": "string"
+     },{
+      "name" : "Write Site",
+      "filtertype": "string"
+     },{
+      "name" : "Read Site",
+      "filtertype": "string"
+     },{
+      "name" : "Requirement Ref",
+      "filtertype": "string"
+     },{
+      "name" : "Test Ref",
+      "filtertype": "string"
+    }]''')
+
+    caches = _Caches()
+    caches.macros = {str(m.name()) for m in db.ents("Macro")}
+    _c_functions.clear()
+    _c_files.clear()
+    _c_files.update(_c_file_ids(db))
+    objects = [e for e in db.ents("Global Object ~Unknown ~Unresolved, "
+                                  "Static Local Object")
+               if _defined_in_c(e)]
+    funcs = [e for e in db.ents("Function ~Unknown ~Unresolved")
+             if _is_function(e)]
+    total = max(1, len(objects) + len(funcs))
+
+    rows = []
+    for i, obj_ent in enumerate(objects):
+        report.progress(int(i / total * 100))
+        if report.is_aborted():
+            return
+        rows.extend(_global_rows(obj_ent, caches))
+
+    for i, callee_ent in enumerate(funcs, len(objects)):
+        report.progress(int(i / total * 100))
+        if report.is_aborted():
+            return
+        rows.extend(_call_rows(callee_ent, caches))
+
+    rows.sort(key=lambda r: (_MECHANISM_ORDER[r["mechanism"]],
+                             r["item"].name().lower(),
+                             r["writer_module"].lower(),
+                             r["writer_fn"].name().lower(),
+                             r["reader_module"].lower(),
+                             r["reader_fn"].name().lower(),
+                             r["write_sites"][0][1] if r["write_sites"] else 0))
+
+    for r in rows:
+        report.tablecell()
+        report.entity(r["item"])
+        report.print(r["item"].name())
+        report.entity()
+
+        report.tablecell()
+        report.print(r["mechanism"])
+
+        report.tablecell()
+        report.print(r["writer_module"])
+
+        report.tablecell()
+        report.entity(r["writer_fn"])
+        report.print(r["writer_fn"].name())
+        report.entity()
+
+        report.tablecell()
+        report.print(r["reader_module"])
+
+        report.tablecell()
+        report.entity(r["reader_fn"])
+        report.print(r["reader_fn"].name())
+        report.entity()
+
+        report.tablecell()
+        report.print("{} → {}".format(r["writer_module"], r["reader_module"]))
+
+        report.tablecell()
+        report.print(r["linkage"])
+
+        report.tablecell()
+        report.print("yes" if r["volatile"] else "no")
+
+        report.tablecell()
+        _print_sites(report, r["write_sites"])
+
+        report.tablecell()
+        _print_sites(report, r["read_sites"])
+
+        report.tablecell()  # Requirement Ref: intentionally blank
+
+        report.tablecell()  # Test Ref: intentionally blank
+
+    report.table()
+
+
+class _Caches:
+    def __init__(self):
+        self.lexers = {}    # file id -> lexer (or None)
+        self.modules = {}   # file id -> module display name
+        # function id -> [(file, line, col)] of return sites
+        self.returns = {}
+        self.macros = set()  # names of macros, whose expansions can read &x
+
+
+def _module(file, caches):
+    fid = file.id()
+    module_name = caches.modules.get(fid)
+    if module_name is None:
+        module_name = str(file.relname() or file.name())
+        caches.modules[fid] = module_name
+    return module_name
+
+
+def _c_file_ids(db):
+    """Ids of the files holding C code: .c files and every header they
+    include, directly or through other headers. A header no source is seen
+    to include (its #include path was not resolved) is C unless it defines
+    C++-only constructs; a header only C++ sources include is C++."""
+    file_ents = db.ents("File ~Unknown ~Unresolved")
+    c_ids = _included_closure(
+        [f for f in file_ents if str(f.name()).endswith(_C_SOURCE_EXTENSION)])
+    cpp_ids = _included_closure(
+        [f for f in file_ents
+         if str(f.name()).endswith(_CPP_SOURCE_EXTENSIONS)])
+    for file_ent in file_ents:
+        fid = file_ent.id()
+        if fid in c_ids or fid in cpp_ids:
+            continue
+        if str(file_ent.name()).endswith(_CPP_SOURCE_EXTENSIONS):
+            continue
+        if not file_ent.ents("Define, Declare", _CPP_ONLY_KINDS):
+            c_ids.add(fid)
+    return c_ids
+
+
+def _included_closure(source_ents):
+    """Ids of source_ents and every file they include, transitively."""
+    file_ids = {f.id() for f in source_ents}
+    queue = list(source_ents)
+    while queue:
+        file_ent = queue.pop()
+        for include_ref in file_ent.refs("Include", "File ~Unknown ~Unresolved"):
+            header_ent = include_ref.ent()
+            if header_ent.id() not in file_ids:
+                file_ids.add(header_ent.id())
+                queue.append(header_ent)
+    return file_ids
+
+
+# Ids of the files that hold C code, collected once per run.
+_c_files = set()
+
+
+def _defined_in_c(ent):
+    define_ref = ent.ref("Definein")
+    return define_ref is not None and define_ref.file().id() in _c_files
+
+
+# Function id -> True when it is a function defined in a C file. Every access
+# and call site checks its scope, so the answer is cached per run.
+_c_functions = {}
+
+
+def _is_function(ent):
+    if ent is None:
+        return False
+    eid = ent.id()
+    is_c_function = _c_functions.get(eid)
+    if is_c_function is None:
+        is_c_function = (ent.kind().check("Function ~Unknown ~Unresolved") and
+                         _defined_in_c(ent))
+        _c_functions[eid] = is_c_function
+    return is_c_function
+
+
+# --------------------------------------------------------------------------
+# Global objects
+# --------------------------------------------------------------------------
+
+def _global_rows(obj_ent, caches):
+    # Read-only data is never written at run time, so it couples nothing.
+    if _is_read_only(obj_ent):
+        return []
+    writes, reads = _accesses(obj_ent, 0, caches)
+    if not writes or not reads:
+        return []
+
+    writers = _group_by_function(writes)
+    readers = _group_by_function(reads)
+    linkage = _linkage(obj_ent)
+    is_volatile = _is_volatile(obj_ent)
+
+    rows = []
+    for (writer_fn, writer_file), write_sites in writers.items():
+        writer_module = _module(writer_file, caches)
+        for (reader_fn, reader_file), read_sites in readers.items():
+            reader_module = _module(reader_file, caches)
+            if writer_module == reader_module:
+                continue
+            rows.append(_row(obj_ent, "global", writer_fn, writer_module,
+                             reader_fn, reader_module, linkage, is_volatile,
+                             write_sites, read_sites))
+    return rows
+
+
+def _group_by_function(sites):
+    """Group (fn, file, line, col) accesses by (fn, file), keeping order."""
+    groups = {}
+    keys = {}
+    for fn, file, line, col in sites:
+        key = (fn.id(), file.id())
+        if key not in keys:
+            keys[key] = (fn, file)
+            groups[keys[key]] = []
+        groups[keys[key]].append((file, line, col))
+    return groups
+
+
+def _accesses(start_ent, start_level, caches):
+    """Return (writes, reads) of the data that start_ent holds (level 0) or
+    points to (level 1), following every pointer that aliases it.
+
+    Each access is (function, file, line, col). Pointer flow comes from
+    Understand's Assignby Ptr references, which cover any pointer-valued
+    assignment; _alias_level keeps only those that point at the data. A store
+    through a pointer to a pointer (*out = alias) makes whatever out points to
+    an alias as well. Aliases are not followed into struct or union members,
+    nor into pointers to a different type: a cast reinterprets the memory, and
+    following it lets generic code (kfree, memcpy) spread the alias widely.
+    """
+    writes = []
+    reads = []
+    data_types = _base_types(start_ent)
+    seen_ents = {start_ent.id()}
+    seen_sites = set()
+    queue = [(start_ent, start_level)]
+    while queue:
+        ent, level = queue.pop()
+        refs = ent.refs()
+        deref_pos = {_pos(r) for r in refs
+                     if r.kind().check("Deref Useby, Deref Modifyby, "
+                                       "Deref Setby")}
+        type_text = _resolved_type(ent) if level == 0 else ""
+        is_array = "[" in type_text
+        # The tracked object is itself a pointer, so dereferencing it reads it.
+        reads_pointer_value = "*" in type_text and not is_array
+        # A use that hands out a pointer to the data (&x, or an array decaying
+        # to a pointer) passes the data on rather than reading it.
+        ptr_out_pos = set()
+
+        for ref in refs:
+            kind = ref.kind()
+            if kind.check("Assignby Ptr ~Deref"):
+                target_level = _alias_level(ref, level, deref_pos, is_array,
+                                            caches)
+                if target_level is None:
+                    continue
+                ptr_out_pos.add(_pos(ref))
+                if target_level == 1:
+                    _enqueue(ref.ent(), 1, seen_ents, queue, data_types)
+            elif level == 1 and kind.check("Deref Assignby Ptr"):
+                if _alias_level(ref, level, deref_pos, is_array, caches) != 1:
+                    continue
+                for pointee_ref in ref.ent().refs("Assign Ptr ~Deref"):
+                    _enqueue(pointee_ref.ent(), 1, seen_ents, queue,
+                             data_types)
+
+        for ref in refs:
+            kind = ref.kind()
+            if level == 0:
+                is_write = kind.check("Setby ~Init, Modifyby")
+                is_read = kind.check("Useby ~Addr, Modifyby, Deref Callby")
+            else:
+                is_write = kind.check("Deref Setby, Deref Modifyby")
+                is_read = kind.check("Deref Useby, Deref Modifyby")
+            if not (is_write or is_read):
+                continue
+            scope_ent = ref.ent()
+            if not _is_function(scope_ent):
+                continue
+            pos = _pos(ref)
+            if is_read and not is_write and pos in ptr_out_pos:
+                continue
+            # &p->field or &x.field only computes an address. Understand puts
+            # the pointer flow on the member, so it is not in ptr_out_pos.
+            # A pointer object (&g->field) is still read for its value.
+            if (is_read and not is_write and not reads_pointer_value and
+                    _address_only(ref, caches)):
+                continue
+            # p->a->b = x writes what p->a points to, and g->a = x writes what
+            # a pointer object g points to: both only read the data.
+            if is_write and _writes_through_member(ref, level, caches):
+                is_write = False
+                is_read = True
+            key = (scope_ent.id(),) + pos
+            if key in seen_sites:
+                continue
+            seen_sites.add(key)
+            site = (scope_ent, ref.file(), ref.line(), ref.column())
+            if is_write:
+                writes.append(site)
+            if is_read:
+                reads.append(site)
+    return writes, reads
+
+
+def _alias_level(ref, level, deref_pos, is_array, caches):
+    """Pointer level of the value that a pointer-valued assignment at ref
+    hands out, relative to the tracked data: 1 points at the data, 2 points at
+    a pointer to it, None does not point at it at all.
+
+    level 0 (the object x):  &x, &x[i], or an array x decaying -> 1
+                             x[i] or x copying a pointer held in x -> None
+    level 1 (a pointer p):   p, p + n -> 1    &p[i], &p->f -> 1
+                             &p -> 2          p->next, p[i], *p -> None
+    """
+    takes_address = _follows_ampersand(ref, caches)
+    dereferenced = _pos(ref) in deref_pos
+    if level == 0:
+        if takes_address or (is_array and not dereferenced):
+            return 1
+        return None
+    if dereferenced:
+        return 1 if takes_address else None
+    return 2 if takes_address else 1
+
+
+def _follows_ampersand(ref, caches):
+    return _ampersand_operand(ref, caches) is not None
+
+
+def _ampersand_operand(ref, caches):
+    """The lexeme at ref when it is the operand of a unary &, else None."""
+    lexer = _get_lexer(ref.file(), caches.lexers)
+    if lexer is None:
+        return None
+    try:
+        lex = lexer.lexeme(ref.line(), ref.column())
+    except Exception:
+        return None
+    prev_lex = lex.previous(True, True) if lex else None
+    while prev_lex is not None and prev_lex.text() == "(":
+        prev_lex = prev_lex.previous(True, True)
+    if prev_lex is None or prev_lex.text() != "&":
+        return None
+    return lex
+
+
+def _address_only(ref, caches):
+    """True when the use at ref only computes an address: &p->f, &p[i],
+    &x.f.g. A second -> or [ (&p->q->f, &p->q[i]) reads the member q, so the
+    use is a read, as is an address handed to a macro, whose expansion can
+    dereference it (list_for_each_entry(pos, &p->list, member))."""
+    lex = _ampersand_operand(ref, caches)
+    if lex is None:
+        return False
+    if _enclosing_call_name(lex) in caches.macros:
+        return False
+    scan = lex.next(True, True)
+    first = True
+    while scan is not None:
+        text = scan.text()
+        if text in ("->", "["):
+            if not first:
+                return False
+            if text == "[":
+                scan = _skip_brackets(scan)
+                if scan is None:
+                    return False
+            else:
+                scan = scan.next(True, True)    # member name
+        elif text == ".":
+            scan = scan.next(True, True)        # member name
+        else:
+            return True
+        first = False
+        scan = scan.next(True, True) if scan is not None else None
+    return True
+
+
+def _writes_through_member(ref, level, caches):
+    """True when the write at ref stores through a pointer held in the data
+    rather than into the data: p->a->b, (*p)->b or *p->a for a pointer p to
+    the data (level 1); x.a->b or x[i]->b for the object x itself, or g->a
+    and *g for a pointer object g, whose only data is the pointer (level 0).
+
+    Each *, -> and leading [ dereferences once. The data allows one
+    dereference per pointer level plus one per array dimension of x; any
+    more goes through a pointer stored in the data. An index after a member
+    name is assumed to index an array member, which stays inside the data.
+    """
+    lexer = _get_lexer(ref.file(), caches.lexers)
+    if lexer is None:
+        return False
+    try:
+        lex = lexer.lexeme(ref.line(), ref.column())
+    except Exception:
+        return False
+    # A use from a macro expansion cannot be followed in the source text.
+    if lex is None or lex.text() != ref.scope().name():
+        return False
+
+    # Leading * and ( before the name, nearest first.
+    prefix = []
+    scan = lex.previous(True, True)
+    while scan is not None and scan.text() in ("*", "("):
+        prefix.append(scan.text())
+        scan = scan.previous(True, True)
+
+    # Closing parens right after the name end the derefs that apply first,
+    # as in (*p)->b; stars outside them apply last, as in *p->a.
+    scan = lex.next(True, True)
+    closed = 0
+    while scan is not None and scan.text() == ")" and closed < prefix.count("("):
+        closed += 1
+        scan = scan.next(True, True)
+    inner_stars = 0
+    outer_stars = 0
+    opens_seen = 0
+    for text in prefix:
+        if text == "(":
+            opens_seen += 1
+        elif opens_seen < closed:
+            inner_stars += 1
+        else:
+            outer_stars += 1
+
+    derefs = inner_stars
+    after_member = False
+    while scan is not None:
+        text = scan.text()
+        if text == "->":
+            derefs += 1
+            after_member = True
+            scan = scan.next(True, True)        # member name
+        elif text == "[":
+            if not after_member:
+                derefs += 1
+            scan = _skip_brackets(scan)
+        elif text == ".":
+            after_member = True
+            scan = scan.next(True, True)        # member name
+        else:
+            break
+        scan = scan.next(True, True) if scan is not None else None
+    derefs += outer_stars
+
+    allowed = level
+    if level == 0:
+        allowed = str(ref.scope().type() or "").count("[")
+    return derefs > allowed
+
+
+def _enclosing_call_name(lex):
+    """Name of the call whose argument list contains lex, or "" if none."""
+    depth = 0
+    scan = lex.previous(True, True)
+    while scan is not None:
+        text = scan.text()
+        if text in (")", "]"):
+            depth += 1
+        elif text in ("(", "["):
+            if depth == 0:
+                if text == "[":
+                    return ""
+                name_lex = scan.previous(True, True)
+                return str(name_lex.text()) if name_lex is not None else ""
+            depth -= 1
+        elif text in (";", "{", "}"):
+            return ""
+        scan = scan.previous(True, True)
+    return ""
+
+
+def _skip_brackets(open_lex):
+    """The ] matching the [ at open_lex, or None."""
+    depth = 0
+    scan = open_lex
+    while scan is not None:
+        text = scan.text()
+        if text == "[":
+            depth += 1
+        elif text == "]":
+            depth -= 1
+            if depth == 0:
+                return scan
+        scan = scan.next(True, True)
+    return None
+
+
+def _enqueue(ent, level, seen_ents, queue, data_types):
+    # A struct or union member is one entity shared by every instance of the
+    # type, so following an alias into it would tie every use of that field
+    # anywhere to the tracked data.
+    if ent is None or ent.id() in seen_ents or ent.kind().check("Member"):
+        return
+    seen_ents.add(ent.id())
+    if not _same_data_type(ent, data_types):
+        return
+    queue.append((ent, level))
+
+
+def _same_data_type(ent, data_types):
+    """True when ent is a pointer to the tracked data's type, ignoring
+    qualifiers and typedefs. Generic pointers (void *) on either side match,
+    since C passes data through them without a cast."""
+    if "void" in data_types:
+        return True
+    target_types = _base_types(ent)
+    return "void" in target_types or bool(target_types & data_types)
+
+
+def _base_types(ent):
+    """Names of the type ent's data is built on, through its typedef chain:
+    `const type_a *` -> {"type_a"}, `uint16_t[4]` -> {"uint16_t",
+    "unsigned short"}."""
+    names = {_base_type(str(ent.type() or ""))}
+    typed_ents = ent.ents("Typed", "Typedef")
+    for _ in range(8):
+        if not typed_ents:
+            break
+        typedef_ent = typed_ents[0]
+        names.add(str(typedef_ent.name()))
+        names.add(_base_type(str(typedef_ent.type() or "")))
+        typed_ents = typedef_ent.ents("Typed", "Typedef")
+    names.discard("")
+    return names
+
+
+def _base_type(type_text):
+    return " ".join(_TYPE_NOISE_RE.sub(" ", type_text).split())
+
+
+def _is_read_only(obj_ent):
+    """True when the object itself is const: `const char s[]` or
+    `int * const p`, but not `const char *p`, whose pointer can change."""
+    type_text = str(obj_ent.type() or "")
+    if "*" in type_text:
+        type_text = type_text[type_text.rfind("*") + 1:]
+    return bool(_CONST_RE.search(type_text))
+
+
+def _pos(ref):
+    return (ref.file().id(), ref.line(), ref.column())
+
+
+def _linkage(obj_ent):
+    if obj_ent.kind().check("Local"):
+        return "none (static local)"
+    if obj_ent.kind().check("Static"):
+        return "internal"
+    return "external"
+
+
+# --------------------------------------------------------------------------
+# Arguments and return values
+# --------------------------------------------------------------------------
+
+def _call_rows(callee_ent, caches):
+    define_ref = callee_ent.ref("Definein")
+    if define_ref is None:
+        return []
+    callee_module = _module(define_ref.file(), caches)
+    call_refs = [r for r in callee_ent.refs("Callby ~Deref ~Inactive")
+                 if _is_function(r.ent())]
+    if not call_refs:
+        return []
+
+    params = [r.ent() for r in sorted(callee_ent.refs("Define", "Parameter"),
+                                      key=lambda r: (r.line(), r.column()))]
+    param_info = None   # computed lazily on the first cross-module call
+    return_type = str(callee_ent.type() or "").strip()
+    returns_value = bool(return_type) and return_type != "void"
+
+    rows = []
+    seen = set()
+    for call_ref in call_refs:
+        caller_ent = call_ref.ent()
+        call_file = call_ref.file()
+        caller_module = _module(call_file, caches)
+        if caller_module == callee_module:
+            continue
+        key = (caller_ent.id(),) + _pos(call_ref)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if param_info is None:
+            param_info = [_param_info(p, callee_ent, caches) for p in params]
+        call_site = [(call_file, call_ref.line(), call_ref.column())]
+        caller_id = caller_ent.id()
+        for (param_ent, mechanism, read_accesses, write_accesses,
+             is_volatile) in param_info:
+            # The caller's own accesses through its pointer are not coupling with
+            # the callee.
+            reads = [(f, l, c) for fn, f, l, c in read_accesses
+                     if fn.id() != caller_id]
+            writes = [(f, l, c) for fn, f, l, c in write_accesses
+                      if fn.id() != caller_id]
+
+            if mechanism != "by_ref" or reads or not writes:
+                rows.append(_row(param_ent, mechanism, caller_ent, caller_module,
+                                 callee_ent, callee_module, "none", is_volatile,
+                                 call_site, reads))
+            if mechanism == "by_ref" and writes:
+                rows.append(_row(param_ent, mechanism, callee_ent, callee_module,
+                                 caller_ent, caller_module, "none", is_volatile,
+                                 writes, call_site))
+
+        if returns_value and _value_used(call_ref, callee_ent, caches):
+            rows.append(_row(callee_ent, "return",
+                             callee_ent, callee_module, caller_ent, caller_module,
+                             "none", bool(_VOLATILE_RE.search(return_type)),
+                             _return_sites(callee_ent, define_ref, caches),
+                             call_site))
+    return rows
+
+
+def _param_info(param_ent, callee_ent, caches):
+    """Return (param, mechanism, read_sites, write_sites, is_volatile) for one
+    parameter. Sites are (function, file, line, col). A by_ref parameter keeps
+    accesses made anywhere the pointer is passed on to, since that data still
+    crosses the callee's interface; other parameters keep only the callee's
+    own accesses."""
+    type_text = _resolved_type(param_ent)
+    if "(*" in type_text:
+        mechanism = "function_pointer"
+    elif "*" in type_text or "[" in type_text:
+        mechanism = "by_ref"
+    else:
+        mechanism = "by_value"
+
+    if mechanism == "by_ref":
+        writes, reads = _accesses(param_ent, 1, caches)
+    else:
+        writes, reads = _accesses(param_ent, 0, caches)
+        callee_id = callee_ent.id()
+        reads = [s for s in reads if s[0].id() == callee_id]
+        writes = []
+    return (param_ent, mechanism, reads, writes,
+            bool(_VOLATILE_RE.search(type_text)))
+
+
+def _resolved_type(ent):
+    """The entity's type text with typedefs expanded, joined with the
+    original so qualifiers on either are kept."""
+    type_text = str(ent.type() or "")
+    parts = [type_text]
+    typedef_ent = None
+    typed_ents = ent.ents("Typed", "Typedef")
+    if typed_ents:
+        typedef_ent = typed_ents[0]
+
+    for _ in range(8):
+        if typedef_ent is None:
+            break
+        parts.append(str(typedef_ent.type() or ""))
+        typed_ents = typedef_ent.ents("Typed", "Typedef")
+        typedef_ent = typed_ents[0] if typed_ents else None
+    return " ".join(parts)
+
+
+def _is_volatile(ent):
+    return bool(_VOLATILE_RE.search(_resolved_type(ent)))
+
+
+def _return_sites(fn_ent, define_ref, caches):
+    fid = fn_ent.id()
+    if fid in caches.returns:
+        return caches.returns[fid]
+    sites = []
+    end_ref = fn_ent.ref("End")
+    file = define_ref.file()
+    lexer = _get_lexer(file, caches.lexers)
+    if lexer is not None and end_ref is not None:
+        for lex in lexer.lexemes(define_ref.line(), end_ref.line()):
+            if lex.token() == "Keyword" and lex.text() == "return":
+                sites.append((file, lex.line_begin(), lex.column_begin()))
+    caches.returns[fid] = sites
+    return sites
+
+
+def _value_used(call_ref, callee_ent, caches):
+    """True unless the call at call_ref is a whole statement on its own, which
+    discards the returned value. When the call text cannot be read, err on the
+    side of listing the return value."""
+    lexer = _get_lexer(call_ref.file(), caches.lexers)
+    if lexer is None:
+        return True
+    try:
+        name_lex = lexer.lexeme(call_ref.line(), call_ref.column())
+    except Exception:
+        return True
+    if name_lex is None or name_lex.text() != callee_ent.name():
+        return True
+    open_lex = name_lex.next(True, True)
+    if open_lex is None or open_lex.text() != "(":
+        return True
+
+    depth = 0
+    scan = open_lex.next(True, True)
+    while scan is not None:
+        text = scan.text()
+        if scan.token() in ("Punctuation", "Operator"):
+            if text in ("(", "[", "{"):
+                depth += 1
+            elif text in (")", "]", "}"):
+                if depth == 0:
+                    break
+                depth -= 1
+        scan = scan.next(True, True)
+    if scan is None:
+        return True
+
+    after_lex = scan.next(True, True)
+    before_lex = name_lex.previous(True, True)
+    while before_lex is not None and before_lex.text() in _MEMBER_OPS:
+        object_lex = before_lex.previous(True, True)
+        before_lex = object_lex.previous(True, True) if object_lex else None
+    discarded = (after_lex is not None and after_lex.text() == ";" and
+                 (before_lex is None or before_lex.text() in _STMT_START))
+    return not discarded
+
+
+def _get_lexer(file, cache):
+    fid = file.id()
+    if fid in cache:
+        return cache[fid]
+    lexer = None
+    try:
+        lexer = file.lexer(lookup_ents=False)
+    except Exception:
+        lexer = None
+    cache[fid] = lexer
+    return lexer
+
+
+# --------------------------------------------------------------------------
+# Output helpers
+# --------------------------------------------------------------------------
+
+def _row(item_ent, mechanism, writer_fn, writer_module, reader_fn, reader_module,
+         linkage, is_volatile, write_sites, read_sites):
+    return {
+        "item": item_ent,
+        "mechanism": mechanism,
+        "writer_fn": writer_fn,
+        "writer_module": writer_module,
+        "reader_fn": reader_fn,
+        "reader_module": reader_module,
+        "linkage": linkage,
+        "volatile": is_volatile,
+        "write_sites": sorted(write_sites, key=lambda s: (s[1], s[2])),
+        "read_sites": sorted(read_sites, key=lambda s: (s[1], s[2])),
+    }
+
+
+def _format_sites(sites):
+    """file.c:12, 15; other.c:4 -- one entry per file, lines in order."""
+    by_file = {}
+    for file, line, _ in sites:
+        lines = by_file.setdefault(str(file.name()), [])
+        if line not in lines:
+            lines.append(line)
+    return "; ".join("{}:{}".format(name, ", ".join(str(l) for l in lines))
+                     for name, lines in by_file.items())
+
+
+def _print_sites(report, sites):
+    if not sites:
+        return
+    file, line, col = sites[0]
+    report.syncfile(file.longname(), line, col)
+    report.print(_format_sites(sites))
+    report.syncfile()
