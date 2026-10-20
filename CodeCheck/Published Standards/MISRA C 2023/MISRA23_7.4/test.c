@@ -95,3 +95,39 @@ void parameters(char *param, const char *cparam)
     cparam = "y";                           // UndCC_Valid
     (void)param; (void)cparam;
 }
+
+struct Rec { char *name; const char *cname; int n; };
+typedef struct { uint8_t *p; } URec;
+typedef char *Table[2];
+typedef const char *CTable[2];
+
+char *table[] = { "a", "b" };                       // UndCC_Violation
+const char *ctable[] = { "a", "b" };                // UndCC_Valid
+char *grid[2][2] = { { "a", "b" }, { "c", "d" } };  // UndCC_Violation
+char words[2][4] = { "abc", "def" };                // UndCC_Valid - char arrays copy the literals
+char *desig[3] = { [2] = "z" };                     // UndCC_Violation
+char *mixed[] = { (char *)0, MSG };                 // UndCC_Violation
+Table t1 = { "t" };                                 // UndCC_Violation
+CTable t2 = { "t" };                                // UndCC_Valid
+char *multi[] = {
+    "first",                                        // UndCC_Violation
+    (char *)0,                                      // UndCC_Valid
+    "last"                                          // UndCC_Violation
+};
+
+struct Rec r1 = { "x", "y", 1 };                    // UndCC_Violation
+struct Rec r2 = { (char *)0, "y", 2 };              // UndCC_Valid
+struct Rec r3 = { .cname = "y", .n = 2 };           // UndCC_Valid
+struct Rec r4 = { .name = "x" };                    // UndCC_Violation
+URec u1 = { "u8" };                                 // UndCC_Violation
+struct Rec recs[] = {
+    { "x", "y", 1 },                                // UndCC_Violation
+    { (char *)0, "y", 2 },                          // UndCC_Valid
+};
+
+void localTables(void)
+{
+    char *local[] = { "a" };                        // UndCC_Violation
+    struct Rec lr = { "x" };                        // UndCC_Violation
+    (void)local; (void)lr;
+}
