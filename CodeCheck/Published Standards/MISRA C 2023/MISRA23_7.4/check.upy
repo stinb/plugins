@@ -3,7 +3,6 @@
 # 7/29/25
 
 import re
-import Modules
 
 ERR1 = 'String literal was not assigned to const char *'
 
@@ -212,104 +211,195 @@ def test_language(language):
     return language == 'C++'
 
 def check(check, file):
-    lexer = None
-    refs = file.filerefs('Define', 'Object')
-    for ref in refs:
-        if re.search(r'const.*char.*\*', str(ref.ent().type())) or not re.search(r'char|string', str(ref.ent().type())):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    # Assignments and initializations of objects
+    for ref in file.filerefs('Set', 'Object, Parameter'):
+        if not violatingTarget(ref.ent().type(), ref.ent().freetext('UnderlyingType')):
             continue
-
-        setRefs = ref.ent().refs('Setby')
-        for setRef in setRefs:
-            if not lexer:
-                lexer = file.lexer()
-            # Look for string literals in setby refs
-            lexeme = lexer.lexeme(setRef.line(), setRef.column())
-            if lexeme:
-                lexeme = lexeme.next(True, True)
-                if lexeme and lexeme.text() == '=':
-                    lexeme = lexeme.next(True, True)
-                    if lexeme and checkStringLiteral(lexeme, r';'):
-                        check.violation(setRef.ent(), file, setRef.line(), setRef.column(), ERR1)
-
-    refs = file.filerefs('Define, Declare', 'Function', True)
-    for ref in refs:
-        # Skip if not of type char or string or is of type 'const char *'
-        if re.search(r'char|string', str(ref.ent().freetext("UnderlyingType"))) and not re.search(r'const.*char.*\*', str(ref.ent().freetext("UnderlyingType"))):
-            if not lexer:
-                lexer = file.lexer()
-            # Look through function to find return
-            begin = ref.ent().ref("Begin Body")
-            if not begin:
-                begin = ref.ent().ref("Begin")
-            end = ref.ent().ref("End")
-            if not (begin and end):
-                continue
-            lexeme = lexer.lexeme(begin.line(), begin.column())
-            close = lexer.lexeme(end.line(), end.column())
-            while lexeme and close and checkLexBounds(lexeme, close):
-                if lexeme.text() == 'return':
-                    lexeme = lexeme.next(True, True)
-                    if not lexeme:
-                        continue
-                    if lexeme.text() in ['(', '{']:
-                        if lexeme.text() == '(':
-                            last = r'\)'
-                        elif lexeme.text() == '{':
-                            last = r'\}'
-                        lexeme = lexeme.next(True, True)
-                        # Flag if string literal was returned
-                        if lexeme and checkStringLiteral(lexeme, last):
-                            check.violation(ref.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
-                    # Flag if string literal was returned
-                    elif checkStringLiteral(lexeme, r';'):
-                        check.violation(ref.ent(), file, lexeme.line_begin(), lexeme.column_begin(), ERR1)
-
-
-                lexeme = lexeme.next(True, True)
-        # Put parameters in a list for later use
-        parameters = ref.ent().parameters()
-        if not parameters:
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        # Sets inside a macro expansion are positioned at the macro name
+        if not (lexeme and lexeme.text() == ref.ent().name()):
             continue
-        parameters = parameters.split(',')
-        callRefs = ref.ent().refs('Callby')
-        for callRef in callRefs:
-            if not lexer:
-                lexer = file.lexer()
-
-            lexeme = lexer.lexeme(callRef.line(), callRef.column())
-            if lexeme:
-                lexeme = lexeme.next(True, True)
-                if lexeme and lexeme.text() == '(':
-                    close = Modules.findClose(lexeme)
-                    count = 0
-                    # Go through all parameters defined and called
-                    skip = False
-                    while lexeme and close and checkLexBounds(lexeme, close):
-                        if not skip:
-                            if count >= len(parameters):
-                                break
-                            # Skip variable argument for exception
-                            if parameters[count] == '...' or re.search(r'const.*char.*\*', parameters[count]) or not re.search(r'char|string', parameters[count]):
-                                skip = True
-                        if lexeme.text() == ',':
-                            skip = False
-                            count += 1
-                        if not skip and checkStringLiteral(lexeme, r',|\)'):
-                            check.violation(callRef.ent(), file, callRef.line(), callRef.column(), ERR1)
-                        lexeme = lexeme.next(True, True)
-
-
-
-
-
-# Checks for string literal after the '=' in a set
-def checkStringLiteral(lexeme, last):
-    if lexeme and lexeme.token() == 'String':
         lexeme = lexeme.next(True, True)
-        if lexeme and re.search(last, lexeme.text()):
-            return True
+        if not (lexeme and lexeme.text() == '='):
+            continue
+        tokens, _ = collect(lexeme.next(True, True), (';', ','))
+        if isStringLiteral(tokens):
+            check.violation(ref.scope(), file, ref.line(), ref.column(), ERR1)
 
+    # Returns from functions
+    for ref in file.filerefs('Define', 'Function', True):
+        func = ref.ent()
+        if not violatingTarget(func.type(), func.freetext('UnderlyingType')):
+            continue
+        begin = func.ref('Begin Body') or func.ref('Begin')
+        end = func.ref('End')
+        if not (begin and end and begin.file() == file and end.file() == file):
+            continue
+        lexeme = lexer.lexeme(begin.line(), begin.column())
+        close = lexer.lexeme(end.line(), end.column())
+        while lexeme and close and checkLexBounds(lexeme, close):
+            if lexeme.text() == 'return':
+                tokens, lexeme = collect(lexeme.next(True, True), (';',))
+                if isStringLiteral(tokens):
+                    check.violation(func, file, tokens[0].line_begin(), tokens[0].column_begin(), ERR1)
+            if lexeme:
+                lexeme = lexeme.next(True, True)
+
+    # Arguments of function calls
+    for ref in file.filerefs('Call ~Implicit', 'Function'):
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        # Calls inside a macro expansion are positioned at the macro name
+        if not (lexeme and lexeme.text() == ref.ent().name()):
+            continue
+        lexeme = lexeme.next(True, True)
+        if not (lexeme and lexeme.text() == '('):
+            continue
+        params = parameterTypes(ref.ent())
+        index = 0
+        stop = lexeme
+        while stop and stop.text() in ('(', ','):
+            tokens, stop = collect(stop.next(True, True), (',', ')'))
+            # Arguments past the named parameters belong to a variable argument list
+            if index >= len(params) or any(expandsToList(token) for token in tokens):
+                break
+            if isStringLiteral(tokens) and violatingTarget(*params[index]):
+                check.violation(ref.scope(), file, ref.line(), ref.column(), ERR1)
+            index += 1
+
+
+# (declared type, underlying type) of each named parameter, in order
+def parameterTypes(func):
+    refs = func.refs('Define', 'Parameter', True) or func.refs('Declare', 'Parameter', True)
+    if refs:
+        # Already in declaration order; '...' may be positioned at a macro instead
+        params = []
+        for ref in refs:
+            if ref.ent().name() == '...':
+                break
+            params.append((ref.ent().type(), ref.ent().freetext('UnderlyingType')))
+        return params
+
+    # Library functions have no parameter entities, only the declared text
+    params = []
+    text = func.parameters() or ''
+    depth = 0
+    current = ''
+    for char in text:
+        if char in '([':
+            depth += 1
+        elif char in ')]':
+            depth -= 1
+        if char == ',' and depth == 0:
+            params.append(current.strip())
+            current = ''
+        else:
+            current += char
+    if current.strip() and current.strip() not in ('...', 'void'):
+        params.append(current.strip())
+    return [(param, None) for param in params]
+
+
+# True if a string literal stored in this type is not "pointer to const-qualified char"
+def violatingTarget(declared, underlying):
+    declared = str(declared or '')
+    underlying = str(underlying or declared)
+    # Arrays copy the literal, and non-pointer types cannot hold it
+    if '*' not in underlying:
+        return False
+    return not (pointsToConstChar(declared) or pointsToConstChar(underlying))
+
+
+def pointsToConstChar(type):
+    if '*' not in type:
+        return False
+    pointee = type[:type.rindex('*')]
+    return bool(re.search(r'\bconst\b', pointee) and re.search(r'\b(char|wchar_t|char8_t|char16_t|char32_t)\b', pointee))
+
+
+# Lexemes up to the first stop at depth 0, and the lexeme that ended the walk
+def collect(lexeme, stops):
+    tokens = []
+    depth = 0
+    while lexeme:
+        text = lexeme.text()
+        if depth == 0 and (text in stops or text in (')', ']', '}')):
+            break
+        if text in ('(', '[', '{'):
+            depth += 1
+        elif text in (')', ']', '}'):
+            depth -= 1
+        tokens.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    return tokens, lexeme
+
+
+# True if the expression is a string literal, optionally parenthesized or cast
+def isStringLiteral(tokens):
+    if not tokens:
+        return False
+    if isConcatenation(tokens):
+        return True
+    if tokens[0].text() != '(':
+        return False
+    depth = 0
+    for i, token in enumerate(tokens):
+        if token.text() == '(':
+            depth += 1
+        elif token.text() == ')':
+            depth -= 1
+            if depth == 0:
+                if i == len(tokens) - 1:
+                    return isStringLiteral(tokens[1:-1])
+                return isStringLiteral(tokens[i + 1:])
     return False
+
+
+# True if the token is a macro that expands to several comma-separated values
+def expandsToList(token):
+    ent = token.ent()
+    if not (ent and ent.kind().check('Macro')):
+        return False
+    depth = 0
+    for char in str(ent.value() or ''):
+        if char in '([{':
+            depth += 1
+        elif char in ')]}':
+            depth -= 1
+        elif char == ',' and depth == 0:
+            return True
+    return False
+
+
+# True if the tokens are adjacent string literals, or macros that expand to one
+def isConcatenation(tokens):
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token.token() == 'String' and re.match(r'(u8|u|U|L)?"', token.text()):
+            i += 1
+            continue
+        ent = token.ent()
+        if not (ent and ent.kind().check('Macro') and str(ent.value() or '').lstrip().startswith('"')):
+            return False
+        i += 1
+        # Skip the macro's argument list
+        if i < len(tokens) and tokens[i].text() == '(':
+            depth = 0
+            while i < len(tokens):
+                if tokens[i].text() == '(':
+                    depth += 1
+                elif tokens[i].text() == ')':
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            i += 1
+    return True
+
 
 # Return False if 'lexeme' has passed position of 'close'
 def checkLexBounds(lexeme, close):
