@@ -1,0 +1,155 @@
+ERR1 = "Use <= or >= instead of = or /= when comparing real operands"
+
+
+def ids():
+    return ("ADA95_7.2.7",)
+
+
+def name(id):
+    return {
+        "ADA95_7.2.7": "Published Standards/Ada 95/7.2.7 Relational Tests",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_7.2.7": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Expressions",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_7.2.7": """
+<p><b>Guideline</b></p>
+<p>&#8226; Consider using <= and >= to do relational tests on real valued
+arguments, avoiding the &lt;, &gt;, =, and /= operations.</p>
+<p>&#8226; Use values of type attributes in comparisons and checking for
+small values.</p>
+
+<p><b>Example</b></p>
+<p>The following examples test for (1) absolute "equality" in storage,
+(2) absolute "equality" in computation, (3) relative "equality" in
+storage, and (4) relative "equality" in computation:</p>
+<pre><code language="Ada">abs (X - Y) &lt;= Float_Type'Model_Small                -- (1)
+abs (X - Y) &lt;= Float_Type'Base'Model_Small           -- (2)
+abs (X - Y) &lt;= abs X * Float_Type'Model_Epsilon      -- (3)
+abs (X - Y) &lt;= abs X * Float_Type'Base'Model_Epsilon -- (4)
+</code></pre>
+<p>And, specifically, for "equality" to 0:</p>
+<pre><code language="Ada">abs X &lt;= Float_Type'Model_Small                      -- (1)
+abs X &lt;= Float_Type'Base'Model_Small                 -- (2)
+abs X &lt;= abs X * Float_Type'Model_Epsilon            -- (3)
+abs X &lt;= abs X * Float_Type'Base'Model_Epsilon       -- (4)
+</code></pre>
+
+<p><b>Rationale</b></p>
+<p>Strict relational comparisons ( &lt;, &gt;, =, /= ) are a general
+problem with computations involving real numbers. Because of the way
+comparisons are defined in terms of model intervals, it is possible for
+the values of the comparisons to depend on the implementation. Within a
+model interval, the result of comparing two values is nondeterministic
+if the values are not model numbers. In general, you should test for
+proximity rather than equality as shown in the examples. See also
+Rationale (1995, &sect;&sect;G.4.1 and G.4.2.).</p>
+<p>Type attributes are the primary means of symbolically accessing the
+implementation of the Ada numeric model. When the characteristics of
+the model numbers are accessed by type attributes, the source code is
+portable. The appropriate model numbers of any implementation will then
+be used by the generated code.</p>
+<p>Although 0 is technically not a special case, it is often overlooked
+because it looks like the simplest and, therefore, safest case. But in
+reality, each time comparisons involve small values, you should evaluate
+the situation to determine which technique is appropriate.</p>
+
+<p><b>Notes</b></p>
+<p>Regardless of language, real-valued computations have inaccuracy.
+That the corresponding mathematical operations have algebraic properties
+usually introduces some confusion. This guideline explains how Ada
+deals with the problem that most languages face.</p>
+
+<p><b>Developer's Note</b></p>
+<p>Only the equality/inequality half of the first bullet is automated: a
+direct <code>=</code> or <code>/=</code> comparison where either operand resolves to a
+real (floating- or fixed-point) type is flagged, the same
+<code>Typed</code>/<code>Derivefrom</code> type-resolution technique
+<code>ADA95_5.5.6</code> uses for its own, narrower <code>=</code>-only version of this
+rule (that check predates this guideline and was never extended to
+<code>/=</code>, so the two are kept separate rather than merged). The weaker
+"consider avoiding <code>&lt;</code>/<code>&gt;</code> too" is not automated: strict ordering
+comparisons on real operands (<code>if X &gt; 0.0 then</code>) are extremely common
+and almost always intentional, so flagging every one would be mostly
+noise rather than a meaningful signal, unlike the universally-recognized
+equality/inequality anti-pattern. The second bullet ("use type
+attributes... for small values") is not automated either: there is no
+structural way to tell a deliberately-chosen tolerance literal apart from
+any other floating-point literal without first knowing the comparison is
+a tolerance check, which is exactly the pattern this check already
+targets from the other direction (the fix, not a separate violation).</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _is_real_type(ent):
+    if not ent:
+        return False
+
+    type_ref = ent.ref("Typed", "Type")
+
+    if not type_ref:
+        return False
+
+    type_ent = type_ref.ent()
+
+    while type_ent:
+        type_def = str(type_ent.type()).lower() if type_ent.type() else ""
+
+        if "digits" in type_def or "delta" in type_def:
+            return True
+
+        derive_ref = type_ent.ref("Derivefrom")
+        type_ent = derive_ref.ent() if derive_ref else None
+
+    return False
+
+
+def check(check, file):
+    lex = file.lexer().first()
+
+    while lex:
+        if lex.token() == "Operator" and lex.text() in ("=", "/="):
+            left_lex = lex.previous(True, True)
+            left_ent = (
+                left_lex.ent()
+                if left_lex and left_lex.token() == "Identifier"
+                else None
+            )
+
+            right_lex = lex.next(True, True)
+            right_ent = (
+                right_lex.ent()
+                if right_lex and right_lex.token() == "Identifier"
+                else None
+            )
+
+            if _is_real_type(left_ent) or _is_real_type(right_ent):
+                check.violation(
+                    left_ent or right_ent,
+                    file,
+                    lex.line_begin(),
+                    lex.column_begin(),
+                    ERR1,
+                )
+
+        lex = lex.next(True, True)
