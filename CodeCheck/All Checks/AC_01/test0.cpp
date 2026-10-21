@@ -30,3 +30,24 @@ int32_t fn_3 ( int32_t x ) // UndCC_Violation
   }
   return ( x );
 }
+
+void missedCycle_a();
+void missedCycle_b();
+void missedCycle_c();
+
+// missedCycle_b is reached from missedCycle_a before the cycle through missedCycle_c
+void missedCycle_a() // UndCC_Violation
+{
+  missedCycle_b();
+  missedCycle_c();
+}
+
+void missedCycle_b() // UndCC_Violation
+{
+  missedCycle_a();
+}
+
+void missedCycle_c() // UndCC_Violation
+{
+  missedCycle_b();
+}

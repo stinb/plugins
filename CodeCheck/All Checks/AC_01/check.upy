@@ -3,6 +3,8 @@
 
 import re
 
+from und_lib.graph_algorithms import sccList
+
 
 ERR1 = 'Function is directly recursive.'
 ERR2 = 'Function is indirectly recursive.'
@@ -478,15 +480,7 @@ def check(check, file):
             # check cache empty again after obtaining lock in case another
             # thread populated the cache while waiting on the lock
             if cache.is_empty():
-                functions = check.db().ents(entKindString)
-                directRecursion = []
-                indirectRecursion = []
-                seen = []
-                for fun in functions:
-                    stack = []
-                    if fun.id() in seen:
-                        continue
-                    seen, directRecursion, indirectRecursion = checkRecursion(fun, stack,  directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr, 0, 500)
+                directRecursion, indirectRecursion = findRecursion(check.db().ents(entKindString), refKindString, entKindString, coreConstExpr)
                 cache.insert(directRecursion, "Direct Recursion")
                 cache.insert(indirectRecursion, "Indirect Recursion")
         finally:
@@ -498,57 +492,34 @@ def check(check, file):
     for ref in file.filerefs('Define', entKindString):
         if ref.ent().id() in directRecursions:
             check.violation(ref.ent(), file, ref.line(), ref.column(), ERR1)
-        if ref.ent().id() in indirectRecursions:
+        elif ref.ent().id() in indirectRecursions:
             check.violation(ref.ent(), file, ref.line(), ref.column(), ERR2)
 
 
+def findRecursion(functions, refKindString, entKindString, coreConstExpr):
+    direct = set()
 
+    # Exception functions have no outgoing calls, so they are never part of a
+    # cycle
+    def calls(fun):
+        if misra_exception(fun) if coreConstExpr else exception(fun):
+            return []
+        called = []
+        for ref in fun.refs(refKindString, entKindString, True):
+            callee = ref.ent()
+            if callee.kind().check("Template") and isTemplateException(ref, fun):
+                continue
+            if callee == fun:
+                direct.add(fun.id())
+            called.append(callee)
+        return called
 
-
-
-# Recursively checks for recursion
-def checkRecursion(fun, stack,  directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr, depth, maxDepth):
-    # Return if seen
-    if fun.id() in seen or depth >= maxDepth:
-        return seen, directRecursion, indirectRecursion
-    is_except = misra_exception(fun) if coreConstExpr else exception(fun)
-    if is_except:
-        seen.append(fun.id())
-    stack.append(fun.id())
-    # Check if exception
-    # Go through function call refs
-    for ref in fun.refs(refKindString, entKindString, True):
-        # Skip if seen
-        if ref.ent().id() in seen or (ref.ent().kind().check("Template") and isTemplateException(ref, fun)):
-            continue
-        # Add to list if direct recursion is found
-        if ref.ent().id() == fun.id() and ref.ent().id() not in  (directRecursion + indirectRecursion):
-            directRecursion.append(fun.id())
-
-            continue
-        # Recursion loop is found
-        if ref.ent().id() in stack:
-
-            # Go through loop and add to list
-            if ref.ent().id() not in (directRecursion + indirectRecursion):
-                indirectRecursion.append(ref.ent().id())
-            tempStack = stack
-            stackItem = tempStack.pop()
-            while stackItem != ref.ent().id():
-                if stackItem not in (directRecursion + indirectRecursion):
-                    indirectRecursion.append(stackItem)
-                stackItem = tempStack.pop()
-            continue
-
-        # Recurse
-        seen, directRecursion, indirectRecursion = checkRecursion(ref.ent(), stack, directRecursion, indirectRecursion, seen, refKindString, entKindString, coreConstExpr, depth + 1, maxDepth)
-
-        if len(stack) > 0:
-            stack.pop()
-    # Add to seen
-    if fun.id() not in seen:
-        seen.append(fun.id())
-    return seen, directRecursion, indirectRecursion
+    components, _ = sccList(calls, functions)
+    indirect = set()
+    for component in components:
+        if len(component) > 1:
+            indirect.update(fun.id() for fun in component)
+    return list(direct), list(indirect)
 
 
 # Check for misra exception
