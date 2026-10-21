@@ -54,3 +54,32 @@ void booleanKeywords()
   b = true;                     // UndCC_Valid
   (void)b; (void)i;
 }
+
+unsigned char namedCasts(int v, const unsigned char *p)
+{
+  unsigned char u;
+  int s;
+  u = static_cast<unsigned char>(v);          // UndCC_Valid - the cast gives the essential type
+  u = static_cast<unsigned char>(v) + 1U;     // UndCC_Valid
+  s = static_cast<int>(u);                    // UndCC_Valid
+  s = static_cast<unsigned int>(v);           // UndCC_Violation - unsigned assigned to signed
+  u = *const_cast<unsigned char *>(p);        // UndCC_Valid
+  (void)s;
+  return static_cast<unsigned char>(v);       // UndCC_Valid
+}
+
+template <typename T> struct Limits { static T max(); };
+template <typename T> int widthOf(T v);
+template <typename T> T convert(int v);
+
+void templateArguments(int v)
+{
+  unsigned char u = 0U;
+  int s;
+  u = Limits<unsigned char>::max();           // UndCC_Valid - the template arguments are types, not comparisons
+  s = widthOf<unsigned char>(u);              // UndCC_Valid - returns int
+  u = widthOf<unsigned char>(u);              // UndCC_Violation - int assigned to unsigned char
+  u = convert<unsigned char>(v);              // UndCC_Valid
+  s = v < 2 > 0;                              // UndCC_Violation - relational operators, not a template
+  (void)s;
+}

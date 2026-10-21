@@ -850,8 +850,12 @@ def cAssignedExpression(lexeme: Lexeme) -> list[Lexeme]:
 def cOuterLexemes(lexemes: list[Lexeme]) -> list[Lexeme]:
     outer = []
     depth = 0
-    for lexeme in lexemes:
+    angle = 0
+    for i, lexeme in enumerate(lexemes):
         text = lexeme.text()
+        if angle or cOpensTemplateArguments(lexemes, i):
+            angle = cAngleDepth(angle, text)
+            continue
         if text in ('(', '['):
             depth += 1
         elif text in (')', ']'):
@@ -1454,15 +1458,17 @@ def cMatchingClose(lexemes: list[Lexeme]) -> int | None:
 
 # If the expression begins with a cast, return the cast's essential type
 def cLeadingCast(lexemes: list[Lexeme]) -> tuple[str, int | None] | None:
-    if len(lexemes) < 4 or lexemes[0].text() != '(':
+    if len(lexemes) >= 5 and lexemes[0].text() in C_NAMED_CASTS and lexemes[1].text() == '<':
+        inner = cNamedCastType(lexemes)
+    elif len(lexemes) < 4 or lexemes[0].text() != '(':
         return None
+    else:
+        # A cast must be followed by the expression it applies to
+        close = cMatchingClose(lexemes)
+        if close is None or close == len(lexemes) - 1:
+            return None
+        inner = lexemes[1:close]
 
-    # A cast must be followed by the expression it applies to
-    close = cMatchingClose(lexemes)
-    if close is None or close == len(lexemes) - 1:
-        return None
-
-    inner = lexemes[1:close]
     if not inner or any(lex.token() in C_LITERAL_TOKENS for lex in inner):
         return None
 
@@ -1476,13 +1482,56 @@ def cLeadingCast(lexemes: list[Lexeme]) -> tuple[str, int | None] | None:
     text = ' '.join(lex.text() for lex in inner)
     return cEssentialType(text, typeEnt)
 
+C_NAMED_CASTS = ('static_cast', 'const_cast', 'reinterpret_cast', 'dynamic_cast')
+
+# True if the lexeme at index i opens a template argument list, whose angle
+# brackets enclose types rather than act as relational operators
+def cOpensTemplateArguments(lexemes: list[Lexeme], i: int) -> bool:
+    if lexemes[i].text() != '<' or not i:
+        return False
+    previous = lexemes[i - 1]
+    if previous.text() in C_NAMED_CASTS:
+        return True
+    return bool(previous.ent() and previous.ent().kind().check('Template'))
+
+# The nesting of template argument lists after a lexeme
+def cAngleDepth(angle: int, text: str) -> int:
+    return max(0, angle + {'<': 1, '>': -1, '>>': -2}.get(text, 0))
+
+# The type lexemes of a C++ named cast that makes up the whole expression, or
+# None. The angle brackets would otherwise read as relational operators.
+def cNamedCastType(lexemes: list[Lexeme]) -> list[Lexeme] | None:
+    depth = 0
+    for i, lex in enumerate(lexemes[1:], 1):
+        if lex.text() == '<':
+            depth += 1
+        elif lex.text() == '>':
+            depth -= 1
+        elif lex.text() == '>>':
+            depth -= 2
+        if depth <= 0:
+            break
+    else:
+        return None
+    if depth != 0 or i + 1 >= len(lexemes) or lexemes[i + 1].text() != '(':
+        return None
+
+    close = cMatchingClose(lexemes[i + 1:])
+    if close is None or i + 1 + close != len(lexemes) - 1:
+        return None
+    return lexemes[2:i]
+
 # Index of the operator that binds least tightly, or None if there is none
 def cTopLevelOperator(lexemes: list[Lexeme]) -> int | None:
     best = None
     bestPrecedence = 0
     depth = 0
+    angle = 0
     for i, lex in enumerate(lexemes):
         text = lex.text()
+        if angle or cOpensTemplateArguments(lexemes, i):
+            angle = cAngleDepth(angle, text)
+            continue
         if text in ('(', '[', '{'):
             depth += 1
         elif text in (')', ']', '}'):
