@@ -5,7 +5,7 @@ enum enuma { a1, a2, a3 } ena, enb; /* Essentially enum<enuma> */
 enum { K1 = 1, K2 = 2 };            /* Essentially signed (anonymous enum) */
 
 struct Flags {
-  unsigned int one  : 1;            /* Single-bit unsigned bit-field — essentially Boolean */
+  unsigned int one  : 1;            /* Single-bit unsigned bit-field — essentially unsigned */
   unsigned int four : 4;            /* Wider bit-field — essentially Unsigned */
 };
 
@@ -78,10 +78,10 @@ int main(void) {
 
 
   /* ------------------------------------------------------------------- */
-  /* Single-bit unsigned bit-field is essentially Boolean.                */
+  /* An unsigned bit-field is essentially unsigned, whatever its width.    */
   /* ------------------------------------------------------------------- */
 
-  (void)(fl.one && bla);                // UndCC_Valid - 1-bit unsigned bit-field treated as Boolean
+  (void)(fl.one && bla);                // UndCC_Violation - an unsigned bit-field is essentially unsigned, whatever its width
   (void)(fl.four && bla);               // UndCC_Violation - wider bit-field is essentially unsigned
 
 
@@ -125,4 +125,23 @@ int main(void) {
   (void)(f32a > 0.0);                   // UndCC_Valid
 
   return 0;
+}
+
+struct Bits {
+  uint32_t value1 : 1;
+  uint32_t value2 : 1;
+  bool     flag   : 1;
+};
+
+void bitFieldOperands(void)
+{
+  struct Bits bits = {1, 0, true};
+  uint32_t result;
+  bool b = false;
+
+  result = bits.value2 | bits.value1;   // UndCC_Valid - 1-bit unsigned bit-fields are essentially unsigned
+  result = bits.value1 + bits.value2;   // UndCC_Valid
+  b = bits.flag && b;                   // UndCC_Valid - a bool bit-field is essentially Boolean
+  result = bits.flag | bits.value1;     // UndCC_Violation - Boolean operand to a bitwise operator
+  (void)result; (void)b;
 }
