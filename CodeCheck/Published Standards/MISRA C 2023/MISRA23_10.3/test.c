@@ -139,3 +139,38 @@ void func9(int32_t s32, uint32_t u32, char *p, uint8_t *up, int cond) {
   *up = 'a';                    // UndCC_Violation - character through a pointer to unsigned
   s8 = ~s8;                     // UndCC_Violation - a signed complement takes the standard type
 }
+
+#include <stdbool.h>
+
+void booleanConstants(void)
+{
+  bool b1 = false;              // UndCC_Valid - false from stdbool.h is essentially Boolean
+  bool b2 = true;               // UndCC_Valid
+  bool *bp = &b1;
+  int i;
+  b1 = true;                    // UndCC_Valid
+  *bp = false;                  // UndCC_Valid
+  i = true;                     // UndCC_Violation - Boolean assigned to a signed object
+  b2 = 1;                       // UndCC_Violation - a signed constant is not essentially Boolean
+  (void)b2; (void)i;
+}
+
+void unaryMinus(void)
+{
+  int i32;
+  signed char s8;
+  short s16;
+  unsigned int u32;
+  unsigned char u8 = 1U;
+  long long s64;
+  i32 = -2147483648;            // UndCC_Valid - a negated constant takes the narrowest signed type of its value
+  s8 = -128;                    // UndCC_Valid
+  s8 = -129;                    // UndCC_Violation - needs 16 bits
+  s16 = -32768;                 // UndCC_Valid
+  s64 = -2147483649;            // UndCC_Valid
+  i32 = -2147483649;            // UndCC_Violation - needs 64 bits
+  u32 = -1U;                    // UndCC_Valid - negating unsigned int gives its standard type, unsigned int
+  i32 = -1U;                    // UndCC_Violation - unsigned assigned to signed
+  i32 = -u8;                    // UndCC_Valid - an unsigned char operand gives the standard type int
+  (void)i32; (void)s8; (void)s16; (void)u32; (void)s64;
+}

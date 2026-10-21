@@ -46,3 +46,11 @@ int main() {
   //use_uint32 ( s32a ); /* signed and unsigned */
   //f32a = cf32a; /* real floating and complex floating */
 }
+
+void booleanKeywords()
+{
+  bool b = false;               // UndCC_Valid
+  int i = true;                 // UndCC_Violation - Boolean assigned to a signed object
+  b = true;                     // UndCC_Valid
+  (void)b; (void)i;
+}

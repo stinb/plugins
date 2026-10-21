@@ -907,6 +907,10 @@ def cEssentialTypeOfLiteral(text: str) -> tuple[str, int | None, bool] | None:
     if not text:
         return None
 
+    # The keywords of C++ and C23
+    if text in ('true', 'false'):
+        return (C_ESSENTIAL_BOOLEAN, 1)
+
     # Character constants are essentially character, string literals are not
     # arithmetic operands
     if re.match(r"^(?:L|u8?|U)?'", text):
@@ -1029,8 +1033,11 @@ def cEssentialTypeOfEnt(ent: Ent | None) -> tuple[str, int | None] | None:
         value = cEssentialTypeOfLiteral(str(ent.value())) if ent.value() else None
         return (C_ESSENTIAL_SIGNED, value[1] if value else 32, True)
 
-    # An object-like macro holding a constant behaves as that constant
+    # An object-like macro holding a constant behaves as that constant, except
+    # that true and false from stdbool.h are essentially Boolean
     if ent.kind().check('Macro'):
+        if ent.name() in ('true', 'false'):
+            return (C_ESSENTIAL_BOOLEAN, 1)
         return cEssentialTypeOfLiteral(str(ent.value())) if ent.value() else None
 
     return cEssentialType(ent.type(), ent)
@@ -1083,7 +1090,10 @@ def cEssentialTypeOfExpression(lexemes: list[Lexeme], depth: int = 0) -> tuple[s
         if prefix == '~':
             return cShiftOrComplementEssentialType(
                 cEssentialTypeOfExpression(lexemes[1:], depth + 1))
-        if prefix in ('-', '+', '++', '--'):
+        if prefix == '-':
+            return cUnaryMinusEssentialType(lexemes,
+                cEssentialTypeOfExpression(lexemes[1:], depth + 1))
+        if prefix in ('+', '++', '--'):
             return cEssentialTypeOfExpression(lexemes[1:], depth + 1)
         return cEssentialTypeOfTerm(lexemes)
 
@@ -1184,6 +1194,23 @@ def cWiderEssentialType(left, right):
     if left[1] is None or right[1] is None:
         return (left[0], None, constant)
     return (left[0], max(left[1], right[1]), constant)
+
+# Appendix D.7.7: negating a signed integer constant expression gives the
+# narrowest signed type able to represent the result, negating any other signed
+# expression keeps its type, and negating anything else gives its standard type
+def cUnaryMinusEssentialType(lexemes, operand):
+    if not operand or operand[0] == C_ESSENTIAL_POINTER:
+        return operand
+    if operand[0] != C_ESSENTIAL_SIGNED:
+        return cUsualArithmeticConversions(operand, operand)
+
+    value = cConstantValue(lexemes) if cIsConstantExpression(lexemes) else None
+    if value is None:
+        return operand
+    for width in (8, 16, 32, 64):
+        if -(1 << (width - 1)) <= value < (1 << (width - 1)):
+            return (C_ESSENTIAL_SIGNED, width, True)
+    return (C_ESSENTIAL_SIGNED, 64, True)
 
 # The essential type of the result of a shift or a complement, which follow the
 # same rule. An essentially unsigned operand, the left hand one for a shift,
@@ -1373,7 +1400,7 @@ def cEssentialTypeOfTerm(lexemes: list[Lexeme]) -> tuple[str, int | None] | None
 # member it names.
 def cTermLexeme(lexemes: list[Lexeme]) -> Lexeme | None:
     for lex in reversed(cOuterLexemes(lexemes)):
-        if lex.ent() or lex.token() in C_LITERAL_TOKENS:
+        if lex.ent() or lex.token() in C_LITERAL_TOKENS or lex.text() in ('true', 'false'):
             return lex
 
     return None
