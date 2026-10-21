@@ -13,3 +13,18 @@ void f1 ( )
     {
     }
 }
+
+template < typename T >
+struct Cursor
+{
+    T pos;
+};
+
+bool operator<( Cursor< int32_t * > a, Cursor< int32_t * > b );
+
+void f2 ( Cursor< int32_t * > first, Cursor< int32_t * > last )
+{
+    if ( first < last ) // UndCC_Valid - class objects, not pointers
+    {
+    }
+}

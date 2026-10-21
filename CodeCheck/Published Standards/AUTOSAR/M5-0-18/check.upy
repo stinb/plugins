@@ -1,8 +1,13 @@
 import re
+import understand
 
 
 ERR1 = 'Relational operator %1 shall only be used between pointers that refer to the same object'
 STDLIB_FUNCS = ["strchr", "strrchr", "strstr", "memchr"]
+# limits how many function boundaries pointer tracing crosses
+MAX_CALL_DEPTH = 3
+MAX_CACHED_LEXERS = 64
+LEXERS = {}
 
 
 def ids():
@@ -110,26 +115,123 @@ def get_obj(lex):
         lex = lex.previous()
 
 
+def is_unary(op_lex):
+    prev_lex = op_lex.previous(True, True)
+
+    return not (prev_lex and (prev_lex.token() in ["Identifier", "Literal"] or prev_lex.text() in [")", "]"]))
+
+
+def get_pointer_levels(ent):
+    utype = str(ent.freetext("UnderlyingType"))
+    stripped_type = None
+
+    # a '*' inside template arguments is not a pointer level of the type itself
+    while stripped_type != utype:
+        stripped_type = utype
+        utype = re.sub(r"<[^<>]*>", "", utype)
+
+    return utype.count("*") + len(re.findall(r"\[[^\]]*\]", utype))
+
+
+def is_pointer_value(id_lex):
+    levels = get_pointer_levels(id_lex.ent())
+
+    # prefix operators apply to the whole member access chain
+    start_lex = id_lex
+
+    while start_lex.previous(True, True) and start_lex.previous(True, True).text() in [".", "->"]:
+        start_lex = start_lex.previous(True, True).previous(True, True)
+
+    prev_lex = start_lex.previous(True, True)
+
+    while prev_lex and (prev_lex.text() in ["*", "&"]) and is_unary(prev_lex):
+        levels += 1 if prev_lex.text() == "&" else -1
+        prev_lex = prev_lex.previous(True, True)
+
+    next_lex = id_lex.next(True, True)
+
+    while next_lex and (next_lex.text() == "["):
+        levels -= 1
+        next_lex = get_matching_close(next_lex)
+        next_lex = next_lex.next(True, True) if next_lex else None
+
+    return levels > 0
+
+
+def get_matching_close(open_lex):
+    depth = 0
+    lex = open_lex
+
+    while lex:
+        if lex.text() in ["(", "["]:
+            depth += 1
+        elif lex.text() in [")", "]"]:
+            depth -= 1
+
+            if not depth:
+                return lex
+
+        lex = lex.next(True, True)
+
+
+def get_matching_open(close_lex):
+    depth = 0
+    lex = close_lex
+
+    while lex:
+        if lex.text() in [")", "]"]:
+            depth += 1
+        elif lex.text() in ["(", "["]:
+            depth -= 1
+
+            if not depth:
+                return lex
+
+        lex = lex.previous(True, True)
+
+
+def get_member_base(id_lex):
+    prev_lex = id_lex.previous(True, True)
+
+    if not prev_lex or (prev_lex.text() not in [".", "->"]):
+        return None
+
+    base_ent = get_obj(prev_lex)
+
+    return base_ent if base_ent and base_ent.kind().check("Object, Parameter") else None
+
+
 def get_left_op(lex):
     parent_obj = None
 
     while lex and (lex.text() != "=" ) and lex.token() not in ["Literal", "Whitespace", "Indent", "Newline"]:
+        if lex.text() == ")":
+            open_lex = get_matching_open(lex)
+            callee_lex = open_lex.previous(True, True) if open_lex else None
+
+            # a call or sizeof result is not a pointer unless the function returns one
+            if callee_lex and (callee_lex.text() == "sizeof"):
+                return None, None, None
+            elif callee_lex and callee_lex.ent() and callee_lex.ent().kind().check("Function"):
+                return_type = str(callee_lex.ent().freetext("UnderlyingType") or callee_lex.ent().type())
+
+                if "*" not in return_type:
+                    return None, None, None
+
         if (lex.token() == "Identifier") and lex.ent():
             if not lex.ent().kind().check("Object, Parameter"):
-                return None, None
-            
-            utype = str(lex.ent().freetext("UnderlyingType"))
+                return None, None, None
 
             if lex.ent().kind().check("Member") and lex.previous().text() in [".", "->"] and lex.ref() and lex.ref().kind().check("Addr"):
                 parent_obj = get_obj(lex.previous())
-            elif not (re.search(r"(\*$|\[.*\]$)", utype) or (lex.previous(True, True).text() == "&")):
-                return None, None
-                        
-            return lex.ent(), parent_obj
+            elif not is_pointer_value(lex):
+                return None, None, None
+
+            return lex.ent(), parent_obj, get_member_base(lex)
 
         lex = lex.previous()
 
-    return None, None
+    return None, None, None
 
 
 def get_right_op(lex):
@@ -138,33 +240,219 @@ def get_right_op(lex):
 
     # compared to sizeof
     if lex.token() == "Keyword":
-        return None, lex, None
+        return None, lex, None, None
 
     while lex and lex.text() not in [";", ","] and lex.token() not in ["Literal", "Whitespace", "Indent", "Newline"]:
         if (lex.token() == "Identifier") and lex.ent() and lex.next().text() not in ["->", "."]:
             if not lex.ent().kind().check("Object, Parameter"):
-                return None, lex, None
-            
-            utype = str(lex.ent().freetext("UnderlyingType"))
+                return None, lex, None, None
 
             if lex.ent().kind().check("Member") and lex.previous().text() in [".", "->"] and lex.ref() and lex.ref().kind().check("Addr"):
                 parent_obj = get_obj(lex.previous())
-            elif not (re.search(r"(\*$|\[.*\]$)", utype) or (lex.previous(True, True).text() == "&")):
-                return None, lex, None
+            elif not is_pointer_value(lex):
+                return None, lex, None, None
             
-            return lex.ent(), lex, parent_obj        
+            return lex.ent(), lex, parent_obj, get_member_base(lex)
         
         lex = lex.next()
     
-    return right_ent, lex, None
+    return right_ent, lex, None, None
 
 
-def get_ptrs(ent):
+def get_ref_lexeme(ref):
+    file_id = ref.file().id()
+
+    if file_id not in LEXERS:
+        if len(LEXERS) >= MAX_CACHED_LEXERS:
+            LEXERS.pop(next(iter(LEXERS)))
+
+        # referenced files may be missing or out of date
+        try:
+            LEXERS[file_id] = ref.file().lexer()
+        except understand.UnderstandError:
+            LEXERS[file_id] = None
+
+    lexer = LEXERS[file_id]
+
+    return lexer.lexeme(ref.line(), ref.column()) if lexer else None
+
+
+def get_call_args(open_lex):
+    args = [[]]
+    depth = 0
+    lex = open_lex.next(True, True)
+
+    while lex:
+        if lex.text() in ["(", "[", "{"]:
+            depth += 1
+        elif lex.text() in [")", "]", "}"]:
+            if not depth:
+                break
+
+            depth -= 1
+        elif not depth and (lex.text() == ","):
+            args.append([])
+        elif lex.ent():
+            args[-1].append(lex)
+
+        lex = lex.next(True, True)
+
+    return args
+
+
+def get_enclosing_call(lex):
+    depth = 0
+    lex = lex.previous(True, True)
+
+    while lex and lex.text() not in [";", "{", "}"]:
+        if lex.text() == ")":
+            depth += 1
+        elif lex.text() == "(":
+            if not depth:
+                return lex
+
+            depth -= 1
+
+        lex = lex.previous(True, True)
+
+
+def is_pointer_ent(ent):
+    return ent.kind().check("Object, Parameter") and (get_pointer_levels(ent) > 0)
+
+
+def get_arg_ptrs(arg_lexes, visited, depth):
+    ptr_ids = []
+
+    for arg_lex in arg_lexes:
+        arg_ent = arg_lex.ent()
+        prev_lex = arg_lex.previous(True, True)
+        next_lex = arg_lex.next(True, True)
+        is_base = next_lex and (next_lex.text() in ["->", "."])
+
+        # member entities are shared by every instance, so track a member
+        # access through the object it is accessed from
+        if prev_lex and (prev_lex.text() in ["->", "."]):
+            continue
+
+        if not arg_ent.kind().check("Object, Parameter") or not (is_base or is_pointer_value(arg_lex)):
+            continue
+
+        ptr_ids.append(arg_ent.id())
+
+        if arg_ent.id() not in visited:
+            ptr_ids.extend(get_ptrs(arg_ent, visited, depth))
+
+    return ptr_ids
+
+
+def get_params(func_ent):
+    # order from the header, since K&R declarations may list them differently
+    params_by_name = {str(param_ent.name()): param_ent for param_ent in func_ent.ents("Define", "Parameter")}
+    define_ref = func_ent.ref("Definein")
+    lex = get_ref_lexeme(define_ref) if define_ref else None
+    open_lex = lex.next(True, True) if lex else None
+
+    if not open_lex or (open_lex.text() != "("):
+        return []
+
+    params = [None]
+    depth = 0
+    lex = open_lex.next(True, True)
+
+    # K&R header names have no entity, so match them by name
+    while lex:
+        if lex.text() in ["(", "["]:
+            depth += 1
+        elif lex.text() in [")", "]"]:
+            if not depth:
+                break
+
+            depth -= 1
+        elif not depth and (lex.text() == ","):
+            params.append(None)
+        elif str(lex.text()) in params_by_name:
+            params[-1] = params_by_name[str(lex.text())]
+
+        lex = lex.next(True, True)
+
+    return params
+
+
+def get_return_ptrs(func_ent, open_lex, visited, depth):
+    # objects a call result may point into: whatever the function returns,
+    # with its parameters mapped to this call's arguments
+    call_key = (func_ent.id(), open_lex.line_begin(), open_lex.column_begin())
+    begin_ref = func_ent.ref("Definein")
+    end_ref = func_ent.ref("End")
+
+    if (depth >= MAX_CALL_DEPTH) or (call_key in visited) or not begin_ref or not end_ref:
+        return []
+
+    if "*" not in str(func_ent.type()):
+        return []
+
+    depth += 1
+
+    visited.add(call_key)
+    lex = get_ref_lexeme(begin_ref)
+    return_ids = set()
+
+    while lex and (lex.line_begin() <= end_ref.line()):
+        if lex.text() == "return":
+            return_lexes = []
+            lex = lex.next(True, True)
+
+            while lex and (lex.text() != ";"):
+                # a conditional's condition is not returned
+                if lex.text() == "?":
+                    return_lexes = []
+                elif lex.ent():
+                    return_lexes.append(lex)
+
+                lex = lex.next(True, True)
+
+            return_ids.update(get_arg_ptrs(return_lexes, visited, depth))
+
+        lex = lex.next(True, True) if lex else None
+
+    params = get_params(func_ent)
+    args = get_call_args(open_lex)
+
+    # the callee's parameters and locals are different objects on every call
+    local_ids = {local_ent.id() for local_ent in func_ent.ents("Define", "Object ~Static, Parameter")}
+    ptr_ids = [return_id for return_id in return_ids if return_id not in local_ids]
+
+    for i, param_ent in enumerate(params):
+        if param_ent and (param_ent.id() in return_ids) and (i < len(args)):
+            ptr_ids.extend(get_arg_ptrs(args[i], visited, depth))
+
+    return ptr_ids
+
+
+def is_caller_ref(param_ent, ptr_ref):
+    # a parameter's Assign Ptr refs from outside its function are call arguments
+    func_ent = param_ent.parent()
+    begin_ref = func_ent.ref("Definein") if func_ent else None
+    end_ref = func_ent.ref("End") if func_ent else None
+
+    if not begin_ref or not end_ref:
+        return True
+
+    return (ptr_ref.file().id() != begin_ref.file().id()) or not (begin_ref.line() <= ptr_ref.line() <= end_ref.line())
+
+
+def get_ptrs(ent, visited=None, depth=0):
+    # objects ent may point into, traced within its function; parameters are
+    # resolved per call site by is_related
+    if visited is None:
+        visited = set()
+
+    visited.add(ent.id())
     ptr_ids = [ent.id()]
 
     for ptr_ref in ent.refs("Assign Ptr"):
         if ptr_ref.ent().kind().check("Function") and ptr_ref.ent().name() in STDLIB_FUNCS:
-            lex = ptr_ref.file().lexer().lexeme(ptr_ref.line(), ptr_ref.column())
+            lex = get_ref_lexeme(ptr_ref)
             on_param = 0
 
             while lex:
@@ -172,30 +460,64 @@ def get_ptrs(ent):
                     on_param += 1
                 elif lex.text() == ")":
                     on_param -= 1
-                elif (on_param == 1) and lex.ent():
+                elif (on_param == 1) and lex.ent() and lex.ent().kind().check("Object, Parameter"):
                     ptr_ids.append(lex.ent().id())
 
                 lex = lex.next(True, True)
         elif ptr_ref.ent().kind().check("Object, Parameter"):
+            if ent.kind().check("Parameter") and is_caller_ref(ent, ptr_ref):
+                continue
+
             ptr_ids.append(ptr_ref.ent().id())
 
-    for set_ref in ent.refs("Setby"):
-        lex = set_ref.file().lexer().lexeme(set_ref.line(), set_ref.column())
+            # follow pointer copies back to the object they point into
+            if is_pointer_ent(ptr_ref.ent()) and (ptr_ref.ent().id() not in visited):
+                ptr_ids.extend(get_ptrs(ptr_ref.ent(), visited, depth))
 
-        if lex and (lex.next(True, True).text() != "="):
+    # passed as &ptr to a pointer-to-pointer parameter, e.g. the strtol end pointer
+    for out_ref in ent.refs("Assignby Ptr", "Parameter"):
+        if not re.search(r"\*\s*\*", str(out_ref.ent().freetext("UnderlyingType"))):
             continue
-            
+
+        lex = get_ref_lexeme(out_ref)
+        open_lex = get_enclosing_call(lex) if lex else None
+
+        if not open_lex:
+            continue
+
+        for arg in get_call_args(open_lex):
+            pointer_args = [arg_lex for arg_lex in arg if (arg_lex.ent().id() != ent.id()) and is_pointer_ent(arg_lex.ent()) and is_pointer_value(arg_lex)]
+            ptr_ids.extend(get_arg_ptrs(pointer_args, visited, depth))
+
+    for set_ref in ent.refs("Setby"):
+        lex = get_ref_lexeme(set_ref)
+
+        if not lex or (lex.next(True, True).text() != "="):
+            continue
+
         lex = lex.next(True, True)
-        on_bracket = 0
+        skip_stack = []
 
         while lex and (lex.text() != ";"):
-            if lex.text() in "[{(":
-                on_bracket += 1
-            elif lex.text() in "]})":
-                on_bracket -= 1
-            elif not on_bracket and lex.ent():
+            skipping = any(skip_stack)
+
+            if lex.text() in ["[", "{", "("]:
+                # look inside grouping parentheses but not call arguments or subscripts
+                prev_lex = lex.previous(True, True)
+                is_call = (lex.text() == "(") and prev_lex and (prev_lex.token() == "Identifier")
+                skip_stack.append(lex.text() != "(" or is_call)
+
+                if is_call and not skipping and prev_lex.ent() and prev_lex.ent().kind().check("Function"):
+                    ptr_ids.extend(get_return_ptrs(prev_lex.ent(), lex, visited, depth))
+            elif lex.text() in ["]", "}", ")"]:
+                if skip_stack:
+                    skip_stack.pop()
+            elif not skipping and lex.ent() and lex.ent().kind().check("Object, Parameter"):
                 ptr_ids.append(lex.ent().id())
-            elif not on_bracket and (lex.text() == ","):
+
+                if is_pointer_ent(lex.ent()) and (lex.ent().id() not in visited):
+                    ptr_ids.extend(get_ptrs(lex.ent(), visited, depth))
+            elif not skipping and (lex.text() == ","):
                 break
 
             lex = lex.next(True, True)
@@ -203,20 +525,90 @@ def get_ptrs(ent):
     return ptr_ids
 
 
+def map_params(ptr_ids, param_index, args, depth):
+    mapped_ids = set(ptr_ids)
+
+    for ptr_id in ptr_ids:
+        if (ptr_id in param_index) and (param_index[ptr_id] < len(args)):
+            mapped_ids.update(get_arg_ptrs(args[param_index[ptr_id]], set(), depth))
+
+    return mapped_ids
+
+
+def is_related(left_ids, right_ids, func_ent, depth=0):
+    if left_ids & right_ids:
+        return True
+
+    if (depth >= MAX_CALL_DEPTH) or not func_ent:
+        return False
+
+    param_index = {param_ent.id(): i for i, param_ent in enumerate(get_params(func_ent)) if param_ent}
+
+    # only pointers reaching the function's parameters depend on its callers
+    if not (param_index.keys() & left_ids) and not (param_index.keys() & right_ids):
+        return False
+
+    call_refs = func_ent.refs("Callby")
+
+    if not call_refs:
+        return False
+
+    # every call must pass arguments into the same object
+    for call_ref in call_refs:
+        lex = get_ref_lexeme(call_ref)
+        open_lex = lex.next(True, True) if lex else None
+
+        if not open_lex or (open_lex.text() != "("):
+            return False
+
+        args = get_call_args(open_lex)
+        caller_left = map_params(left_ids, param_index, args, depth + 1)
+        caller_right = map_params(right_ids, param_index, args, depth + 1)
+
+        if not is_related(caller_left, caller_right, call_ref.ent(), depth + 1):
+            return False
+
+    return True
+
+
+def get_function_ranges(file):
+    ranges = []
+
+    for define_ref in file.filerefs("Define", "Function"):
+        end_ref = define_ref.ent().ref("End")
+
+        if end_ref and (end_ref.file().id() == file.id()):
+            ranges.append((define_ref.line(), end_ref.line(), define_ref.ent()))
+
+    return ranges
+
+
+def get_enclosing_function(ranges, line):
+    enclosing = None
+
+    for begin_line, end_line, func_ent in ranges:
+        if (begin_line <= line <= end_line) and (not enclosing or begin_line >= enclosing[0]):
+            enclosing = (begin_line, func_ent)
+
+    return enclosing[1] if enclosing else None
+
+
 def check(check, file):
+    LEXERS.clear()
+    func_ranges = get_function_ranges(file)
     lexer = file.lexer(True, 8, False, False)
     lex = lexer.first()
 
     while lex:
         if (lex.token() == "Operator") and lex.text() in ["<", "<=", ">=", ">"]:
             op = lex
-            left_ent, l_parent = get_left_op(lex.previous(True, True))
+            left_ent, l_parent, l_base = get_left_op(lex.previous(True, True))
 
             if not left_ent:
                 lex = lex.next(True, True)
                 continue
 
-            right_ent, lex, r_parent = get_right_op(lex.next(True, True))
+            right_ent, lex, r_parent, r_base = get_right_op(lex.next(True, True))
 
             if not right_ent:
                 continue
@@ -229,10 +621,19 @@ def check(check, file):
                 check.violation(None, file, op.line_begin(), op.column_begin(), ERR1, op.text())
                 continue
             
-            left_ptrs = get_ptrs(left_ent)
-            right_ptrs = get_ptrs(right_ent)                      
+            left_ptrs = set(get_ptrs(left_ent))
+            right_ptrs = set(get_ptrs(right_ent))
 
-            if not set(left_ptrs) & set(right_ptrs):
+            # member entities are shared by every instance, so also track a
+            # member through the object it is accessed from
+            if l_base:
+                left_ptrs.update(get_ptrs(l_base))
+
+            if r_base:
+                right_ptrs.update(get_ptrs(r_base))
+            func_ent = get_enclosing_function(func_ranges, op.line_begin())
+
+            if not is_related(left_ptrs, right_ptrs, func_ent):
                 check.violation(None, file, op.line_begin(), op.column_begin(), ERR1, op.text())
 
         lex = lex.next(True, True)
