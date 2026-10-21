@@ -141,9 +141,10 @@ cf32a = f64a; /* complex floating and real floating */</code></pre>
 <p><b>See Also</b></p>
 <p>Rule 10.1</p>
 <p><b>Developer's Notes</b></p>
-<p>Assignments written with an assignment operator are reported. Arguments passed
-to a function, values returned from a function and the case labels of a switch
-statement are not.</p>
+<p>Assignments written with an assignment operator, arguments passed to a named
+parameter and values returned from a function are reported. Arguments to a
+variable argument list, calls and returns written inside a macro, and the case
+labels of a switch statement are not.</p>
 <p>Type widths are the minimums the C Standard guarantees rather than those of
 your target, so an assignment that is narrowing only because a type such as
 <code>long</code> or <code>size_t</code> is wider on your target is not reported.
@@ -225,7 +226,7 @@ cf32a = f64a;             /* complex floating and real floating        */
 <pre><code language="C">float array[5] = {0};    /* Compliant by Exception 2                  */
 </code></pre>
 <p><b>Developer's Notes</b></p>
-<p>Assignments written with an assignment operator are reported. Arguments passed to a function, values returned from a function and the case labels of a switch statement are not.</p>
+<p>Assignments written with an assignment operator, arguments passed to a named parameter and values returned from a function are reported. Arguments to a variable argument list, calls and returns written inside a macro, and the case labels of a switch statement are not.</p>
 <p>Type widths are the minimums the C Standard guarantees rather than those of your target, so an assignment that is narrowing only because a type such as <code>long</code> or <code>size_t</code> is wider on your target is not reported. Fixed width types such as <code>uint16_t</code> are exact.</p>
 <p>Assignments between two different enumerated types are not reported.</p>
 """,
@@ -253,22 +254,39 @@ def check(check, file):
         # value assigned is the composite of both operands
         if lexeme.text() != '=':
             right = Modules.cBalanceEssentialTypes(left, right, lexeme.text()[:-1])
-            if not right:
-                continue
 
-        if left[0] != right[0]:
-            if signedConstantFits(rightLexemes, left, right):
-                continue
-            error = ERR1
-        elif left[1] is None or right[1] is None or left[1] >= right[1]:
-            continue
-        else:
-            error = ERR2
+        checkAssignment(check, file, lexeme, target, left, right, rightLexemes)
 
-        check.violation(target, file, lexeme.line_begin(),
-                        lexeme.column_begin(), error,
-                        Modules.cDescribeEssentialType(right),
-                        Modules.cDescribeEssentialType(left))
+    # Passing an argument and returning a value are assignments too
+    for lexeme, parameter, argument, essential in Modules.cArgumentAssignments(file):
+        checkAssignment(check, file, argument[0], parameter, essential,
+                        Modules.cEssentialTypeOfExpression(argument), argument)
+
+    for lexeme, function, value in Modules.cReturnAssignments(file):
+        checkAssignment(check, file, lexeme, function,
+                        Modules.cEssentialType(function.type(), function),
+                        Modules.cEssentialTypeOfExpression(value), value)
+
+
+def checkAssignment(check, file, lexeme, target, left, right, rightLexemes):
+    if not left or not right:
+        return
+    if Modules.C_ESSENTIAL_POINTER in (left[0], right[0]):
+        return
+
+    if left[0] != right[0]:
+        if signedConstantFits(rightLexemes, left, right):
+            return
+        error = ERR1
+    elif left[1] is None or right[1] is None or left[1] >= right[1]:
+        return
+    else:
+        error = ERR2
+
+    check.violation(target, file, lexeme.line_begin(),
+                    lexeme.column_begin(), error,
+                    Modules.cDescribeEssentialType(right),
+                    Modules.cDescribeEssentialType(left))
 
 
 # Exception 1: an essentially signed integer constant expression may be assigned

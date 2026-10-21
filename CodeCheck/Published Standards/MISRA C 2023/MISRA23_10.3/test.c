@@ -174,3 +174,55 @@ void unaryMinus(void)
   i32 = -u8;                    // UndCC_Valid - an unsigned char operand gives the standard type int
   (void)i32; (void)s8; (void)s16; (void)u32; (void)s64;
 }
+
+void takesU32(unsigned int u);
+void takesS32(int s);
+void takesU8(unsigned char u);
+void takesVariable(int n, ...);
+int  passThrough(int s);
+#define CALL_U32(x) takesU32(x)
+
+unsigned char narrowReturn(unsigned short x)
+{
+  return x;                     // UndCC_Violation - uint16_t to uint8_t
+}
+
+unsigned char sameReturn(unsigned char x)
+{
+  return x;                     // UndCC_Valid
+}
+
+unsigned int constantReturn(void)
+{
+  return 5;                     // UndCC_Valid - by Exception 1
+}
+
+int booleanReturn(int a, int b)
+{
+  return a > b;                 // UndCC_Violation - essentially Boolean returned as signed
+}
+
+void callArguments(void)
+{
+  int s = 5;
+  unsigned short u16 = 1U;
+  takesU32(s);                  // UndCC_Violation - signed passed to unsigned
+  takesU32(5);                  // UndCC_Valid - by Exception 1
+  takesU32(-1);                 // UndCC_Violation - the constant cannot be represented
+  takesS32(0xFFFFFFFE);         // UndCC_Violation - unsigned passed to signed
+  takesS32(-2147483648);        // UndCC_Valid
+  takesU8(u16);                 // UndCC_Violation - narrower
+  takesS32(s + 1);              // UndCC_Valid
+  takesVariable(1, u16, s);     // UndCC_Valid - a variable argument list has no parameter type
+  takesU32(passThrough(s));     // UndCC_Violation - the call returns signed
+  takesS32(passThrough(u16));   // UndCC_Violation - the inner argument is unsigned
+  CALL_U32(s);                  // UndCC_Valid - calls inside a macro are not checked
+}
+
+void libraryArguments(char *d, const char *s, int n)
+{
+  memcpy(d, s, n);              // UndCC_Violation - signed passed to size_t
+  memcpy(d, s, 4);              // UndCC_Valid - by Exception 1
+  memset(d, 0, sizeof(int));    // UndCC_Valid
+  (void)strncmp(d, s, n);       // UndCC_Violation
+}

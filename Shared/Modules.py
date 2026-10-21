@@ -639,6 +639,135 @@ def cAssignments(file: Ent):
 
         yield (lexeme, target, value, ent)
 
+# Yield each argument a file passes to a named parameter as (function lexeme,
+# parameter, argument lexemes, parameter's essential type). A library function
+# may have no parameter entities, so the function stands in for them. An
+# argument to a variable argument list has no parameter, and a call inside a
+# macro expansion is positioned at the macro name, so neither is yielded.
+def cArgumentAssignments(file: Ent):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    for ref in file.filerefs('Call ~Implicit', 'Function'):
+        function = ref.ent()
+        lexeme = lexer.lexeme(ref.line(), ref.column())
+        if not lexeme or lexeme.text() != function.name() or lexeme.inactive():
+            continue
+        paren = lexeme.next(True, True)
+        if not paren or paren.text() != '(':
+            continue
+
+        parameters = cParameterTypes(function)
+        for index, argument in enumerate(cCallArguments(paren)):
+            # A macro expanding to several arguments shifts every one after it
+            if index >= len(parameters) or any(cExpandsToList(l) for l in argument):
+                break
+            yield (lexeme, parameters[index][0], argument, parameters[index][1])
+
+# Yield each value a file returns from a function as (return lexeme, function,
+# value lexemes). A return belongs to the innermost function enclosing it.
+def cReturnAssignments(file: Ent):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    bodies = []
+    for ref in file.filerefs('Define', 'Function', True):
+        function = ref.ent()
+        begin = function.ref('Begin Body') or function.ref('Begin')
+        end = function.ref('End')
+        if begin and end and begin.file() == file and end.file() == file:
+            bodies.append(((begin.line(), begin.column()), (end.line(), end.column()), function))
+
+    for lexeme in lexer.lexemes():
+        if lexeme.text() != 'return' or lexeme.token() != 'Keyword' or lexeme.inactive():
+            continue
+        position = (lexeme.line_begin(), lexeme.column_begin())
+        enclosing = [body for body in bodies if body[0] <= position <= body[1]]
+        value = cAssignedExpression(lexeme)
+        if enclosing and value:
+            yield (lexeme, max(enclosing, key=lambda body: body[0])[2], value)
+
+# A function's named parameters in declaration order as (entity, essential
+# type). The references already follow that order; the '...' of a variable
+# argument list may be positioned at a macro instead, so it only ends the list.
+def cParameterTypes(function: Ent) -> list[tuple[Ent, tuple | None]]:
+    refs = function.refs('Define', 'Parameter', True) or function.refs('Declare', 'Parameter', True)
+    if refs:
+        parameters = []
+        for ref in refs:
+            if ref.ent().name() == '...':
+                break
+            parameters.append((ref.ent(), cEssentialTypeOfEnt(ref.ent())))
+        return parameters
+
+    # A function declared in a system header has only its parameter text, where
+    # a library typedef may carry the leading underscores of its implementation
+    parameters = []
+    for text in cSplitTopLevel(str(function.parameters() or '')):
+        text = text.replace('[unnamed]', '').strip()
+        if text in ('', '...', 'void'):
+            break
+        essential = cEssentialType(text) or C_LIBRARY_TYPES.get(text.lstrip('_'))
+        parameters.append((function, essential))
+    return parameters
+
+# Text split at the commas no bracket encloses
+def cSplitTopLevel(text: str) -> list[str]:
+    parts = ['']
+    depth = 0
+    for char in text:
+        if char in '([{':
+            depth += 1
+        elif char in ')]}':
+            depth -= 1
+        if char == ',' and depth == 0:
+            parts.append('')
+        else:
+            parts[-1] += char
+    return parts
+
+# The arguments of a call as lexeme lists, given the lexeme opening its list
+def cCallArguments(paren: Lexeme) -> list[list[Lexeme]]:
+    arguments = []
+    current = []
+    depth = 0
+    lexeme = paren.next(True, True)
+    while lexeme:
+        text = lexeme.text()
+        if text in ('(', '[', '{'):
+            depth += 1
+        elif text in (')', ']', '}'):
+            if depth == 0:
+                break
+            depth -= 1
+        elif text == ',' and depth == 0:
+            arguments.append(current)
+            current = []
+            lexeme = lexeme.next(True, True)
+            continue
+        current.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    if current:
+        arguments.append(current)
+    return arguments
+
+# True if the lexeme is a macro whose replacement is a comma-separated list
+def cExpandsToList(lexeme: Lexeme) -> bool:
+    ent = lexeme.ent()
+    if not ent or not ent.kind().check('Macro'):
+        return False
+    depth = 0
+    for char in str(ent.value() or ''):
+        if char in '([{':
+            depth += 1
+        elif char in ')]}':
+            depth -= 1
+        elif char == ',' and depth == 0:
+            return True
+    return False
+
 # The object being assigned to. Two adjacent primaries end the target, as does
 # anything naming a type, which keeps a declaration's type and an enclosing
 # condition out of it.
