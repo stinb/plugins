@@ -18,7 +18,7 @@ int a_ddddddddddddddddddddddddddddd1;
 
 // Types
 //          1234567890123456789012345678901*********     Characters
-typedef int a_eeeeeeeeeeeeeeeeeeeeeeeeeeeee0_t; // UndCC_Violation(a,b) - same as the next 1
+typedef int a_eeeeeeeeeeeeeeeeeeeeeeeeeeeee0_t; // UndCC_Valid - typedef names have no linkage
 typedef int a_eeeeeeeeeeeeeeeeeeeeeeeeeeeee1_t;
 
 // Functions
