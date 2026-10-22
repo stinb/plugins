@@ -10,6 +10,8 @@ ERR1 = 'Cast removed const qualification from %1'
 ERR2 = 'Cast removed volatile qualification from %1'
 ERR3 = 'Cast removed _Atomic qualification from %1'
 
+CAST_TYPE_WORDS = {'const', 'volatile', 'restrict', '_Atomic', 'signed', 'unsigned', 'char', 'short', 'int', 'long', 'float', 'double', 'void', '_Bool', 'bool', 'struct', 'union', 'enum', '*'}
+
 
 def ids():
     return ('MISRA08_5-2-5', 'MISRA12_11.8', 'A5-2-3', 'CPP_T021', 'MISRA23_8.2.3', 'MISRA23_11.8', 'MISRA25_11.8', 'MISRA04_11.5')
@@ -412,8 +414,154 @@ def get_utype(ent):
     return str(ent.freetext("UnderlyingType"))
 
 
+def get_matching_close(open_lex):
+    depth = 0
+    lex = open_lex
+
+    while lex:
+        if lex.text() in {'(', '['}:
+            depth += 1
+        elif lex.text() in {')', ']'}:
+            depth -= 1
+
+            if not depth:
+                return lex
+
+        lex = lex.next(True, True)
+
+
+def get_cast_type(open_lex):
+    # The type of a C-style pointer cast starting at open_lex, else None
+    prev_lex = open_lex.previous(True, True)
+
+    # a call or sizeof, not a cast
+    if prev_lex and (prev_lex.token() == 'Identifier' or prev_lex.text() == 'sizeof'):
+        return None
+
+    words = []
+    lex = open_lex.next(True, True)
+
+    while lex and lex.text() != ')':
+        lex_ent = lex.ent()
+
+        if lex.text() in CAST_TYPE_WORDS:
+            words.append(str(lex.text()))
+        elif lex_ent and lex_ent.kind().check('Namespace') and lex.next(True, True).text() == '::':
+            lex = lex.next(True, True)
+        elif lex_ent and lex_ent.kind().check('Typedef'):
+            words.append(get_utype(lex_ent))
+        elif lex_ent and lex_ent.kind().check('Type'):
+            words.append(str(lex.text()))
+        else:
+            return None
+
+        lex = lex.next(True, True)
+
+    type_text = ' '.join(words)
+
+    return type_text if lex and ('*' in type_text) else None
+
+
+def deref_type(type_text):
+    if not type_text:
+        return None
+
+    if re.search(r'\[[^\]]*\]$', type_text):
+        return re.sub(r'\s*\[[^\]]*\]$', '', type_text)
+
+    if '*' in type_text:
+        return type_text[:type_text.rindex('*')].rstrip()
+
+    return None
+
+
+def apply_postfix(type_text, lex):
+    # Apply subscripts and member accesses that follow an operand
+    while type_text and lex:
+        if lex.text() == '[':
+            type_text = deref_type(type_text)
+            lex = get_matching_close(lex)
+        elif lex.text() in {'.', '->'} and lex.next(True, True).ent():
+            lex = lex.next(True, True)
+            type_text = get_utype(lex.ent())
+        else:
+            break
+
+        lex = lex.next(True, True) if lex else None
+
+    return type_text
+
+
+def get_expr_type(lex):
+    # The type of the operand starting at lex, else None when unknown
+    if not lex:
+        return None
+
+    if lex.text() == '&':
+        value_type = get_expr_type(lex.next(True, True))
+
+        return value_type + ' *' if value_type else None
+
+    if lex.text() == '*':
+        return deref_type(get_expr_type(lex.next(True, True)))
+
+    if lex.text() == '(':
+        # a cast applies to the whole following operand, so its type is final
+        cast_type = get_cast_type(lex)
+
+        if cast_type:
+            return cast_type
+
+        close_lex = get_matching_close(lex)
+
+        if not close_lex:
+            return None
+
+        return apply_postfix(get_expr_type(lex.next(True, True)), close_lex.next(True, True))
+
+    if lex.ent() and lex.ent().kind().check('Object, Parameter'):
+        return apply_postfix(get_utype(lex.ent()), lex.next(True, True))
+
+    return None
+
+
+def get_pointee_quals(type_text):
+    # Qualifiers of the type a pointer of type_text points to
+    pointer_text = re.sub(r'\[[^\]]*\]', '*', type_text)
+
+    if '*' not in pointer_text:
+        return set()
+
+    pointee_segment = pointer_text.split('*')[-2]
+
+    return set(pointee_segment.split()) & {'const', 'volatile'}
+
+
+def get_operand_ent(lex):
+    # The first object in the operand, which names it in the violation
+    depth = 0
+
+    while lex:
+        if lex.text() in {'(', '['}:
+            depth += 1
+        elif lex.text() in {')', ']'}:
+            depth -= 1
+        elif lex.ent() and lex.ent().kind().check('Object, Parameter'):
+            # name the member that is cast, not the object it belongs to
+            while lex.next(True, True) and lex.next(True, True).text() in {'.', '->'} and lex.next(True, True).next(True, True).ent():
+                lex = lex.next(True, True).next(True, True)
+
+            return lex.ent()
+
+        if depth <= 0 and lex.text() not in {'&', '*', '(', '.', '->'} and lex.token() != 'Identifier':
+            return None
+
+        lex = lex.next(True, True)
+
+
 def check(check, file):
     lexer = None
+    reported = set()
 
     # Cast on the right side of =
     for toRef in file.filerefs('Assignby Ptr ~Indirect', '~Function'):
@@ -470,9 +618,11 @@ def check(check, file):
             if removedConst:
                 check.violation(toEnt, file, toRef.line(),
                                 toRef.column(), ERR1, fromEnt.name())
+                reported.add((toRef.line(), fromEnt.id(), ERR1))
             if removedVolatile:
                 check.violation(toEnt, file, toRef.line(),
                                 toRef.column(), ERR2, fromEnt.name())
+                reported.add((toRef.line(), fromEnt.id(), ERR2))
 
     # Cast on the left side of =
     for ref in file.filerefs('Deref Set'):
@@ -496,3 +646,26 @@ def check(check, file):
                     break
                 lexeme = lexeme.previous(
                     ignore_whitespace=True, ignore_comments=True)
+
+    # C-style casts whose result is not assigned to a pointer, such as one
+    # dereferenced, passed to a function, or nested in another cast
+    lexer = file.lexer()
+    lexeme = lexer.first()
+
+    while lexeme:
+        if lexeme.text() == '(':
+            cast_type = get_cast_type(lexeme)
+            close_lex = get_matching_close(lexeme) if cast_type else None
+            operand_lex = close_lex.next(True, True) if close_lex else None
+            operand_type = get_expr_type(operand_lex)
+            operand_ent = get_operand_ent(operand_lex)
+
+            if operand_type and operand_ent:
+                removed_quals = get_pointee_quals(operand_type) - get_pointee_quals(cast_type)
+
+                for qual, err in (('const', ERR1), ('volatile', ERR2)):
+                    if (qual in removed_quals) and ((lexeme.line_begin(), operand_ent.id(), err) not in reported):
+                        check.violation(operand_ent, file, lexeme.line_begin(), lexeme.column_begin(), err, operand_ent.name())
+                        reported.add((lexeme.line_begin(), operand_ent.id(), err))
+
+        lexeme = lexeme.next(True, True)
