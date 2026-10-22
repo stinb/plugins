@@ -2,11 +2,9 @@
 # Written by Jason Quinn
 # 8/14/24
 
-import re
-
 import Modules
 
-ERR1 = 'The operands, "%2" and "%3", for the operator %1 are not of the same essential type'
+ERR1 = 'The operands of %1 are %2 and %3, different essential type categories'
 
 
 # The ID for the check
@@ -119,11 +117,9 @@ u8a + u16b</pre></code>
 enb > A1 /* enum<enumb> and enum<enuma> */
 ena == enb /* enum<enuma> and enum<enumb> */</pre></code>
 <p><b>Developer's Notes</b></p>
-<p>This check examines the lexemes directly left and right of the operator.
-Numeric and character literals are classified by their textual form (suffixes
-like <code>U</code>, <code>L</code>, presence of a decimal point, etc.).
-Comparisons between a pointer and an integer literal (e.g. <code>p == 0</code>)
-are not flagged.</p>
+<p>Operators written inside a macro definition or a preprocessor directive are
+not checked, and neither are operands that are pointers. Two enumerated
+operands are only reported when both of their enumerations are known.</p>
 """
     return {
         'MISRA12_10.4': desc,
@@ -178,163 +174,240 @@ def test_global():
 def test_language(language):
     return language == 'C++'
 
+# Binary operators that perform the usual arithmetic conversions, and the
+# compound assignments that do
+OPERATORS = {'*', '/', '%', '+', '-', '<', '<=', '>', '>=', '==', '!=', '&', '^', '|'}
+COMPOUND_OPERATORS = {'*=', '/=', '%=', '+=', '-=', '&=', '^=', '|='}
+
+# Keywords that can end an operand, so the operator after them is binary
+OPERAND_KEYWORDS = {'true', 'false', 'this', 'nullptr'}
+
+NUMERIC = (Modules.C_ESSENTIAL_SIGNED, Modules.C_ESSENTIAL_UNSIGNED)
+
+
 def check(check, file):
-    # All possible operators for the standard
-    operators = ['+', '-', '*', '/', '%', '==', '!=', '>', '<', '>=', '<=', '+=', '-=', '&', '|', '^', '?']
-    if not file.lexer():
-        return
     lexer = file.lexer()
-    lexemes = lexer.lexemes()
-    for lexeme in lexemes:
-        member = False
-        # Check the operands if the operator is in the list
-        if lexeme.text() in operators:
-            if lexeme.text() == '?':
-                while lexeme and not lexeme.text() in [':', ';', '{', '}']:
-                    lexeme = lexeme.next(True, True)
-                if not (lexeme and lexeme.text() == ':'):
-                    continue
-            left = ''
-            right = ''
-            leftEnt = None
-            rightEnt = None
-            leftText = ''
-            rightText = ''
-            prevLex = lexeme.previous(True, True)
-            nextLex = lexeme.next(True, True)
-            if prevLex and lexeme.text() == '<':
-                if prevLex.token() == 'Keyword':
-                    continue
-            if prevLex and prevLex.ent():
-                if lexeme.text() == '<' and prevLex.ent().kind().check("Type"):
-                    continue
+    if not lexer:
+        return
 
-                left = prevLex.ent().type()
-                leftEnt = prevLex.ent()
-                leftText = prevLex.text()
-                if leftEnt.kind().check('Macro'):
-                    continue
-            elif prevLex and prevLex.token() == 'Literal':
-                literalType = literalEssentialType(prevLex.text())
-                if literalType:
-                    left = literalType
-                    leftText = prevLex.text()
+    directive = False
+    previous = None
+    for lexeme in lexer.lexemes():
+        token = lexeme.token()
+        if token == 'Newline':
+            # A directive continues past a line ending in a backslash
+            directive = directive and bool(previous) and previous.text().endswith('\\')
+            continue
+        if token == 'Preprocessor' and lexeme.text() == '#':
+            directive = True
+        if token not in ('Whitespace', 'Comment'):
+            previous = lexeme
+        if directive or token != 'Operator' or lexeme.inactive():
+            continue
 
-            if nextLex.ent():
-                tempLex = nextLex.next(True, True)
+        text = lexeme.text()
+        if text == '?':
+            operands = conditionalOperands(lexeme)
+        elif text in COMPOUND_OPERATORS:
+            operands = (Modules.cAssignmentTarget(lexeme), Modules.cAssignedExpression(lexeme))
+        elif text in OPERATORS and isBinary(lexeme):
+            operands = (leftOperand(lexeme), rightOperand(lexeme))
+        else:
+            continue
+        if not operands[0] or not operands[1]:
+            continue
 
-                # Check for member objects
-                while tempLex and tempLex.text() in ['[', '.', '->', '::']:
-                    if tempLex.text() == '[':
-                        while tempLex and tempLex.text() != ']':
-                            tempLex = tempLex.next(True, True)
-                    if tempLex.text() in ['[', '.', '->', '::']:
-                        tempLex = tempLex.next(True, True)
-                        if tempLex and tempLex.ent():
-                            right = str(tempLex.ent().type())
-                            rightEnt = tempLex.ent()
-                            rightText = tempLex.text()
-                            if rightEnt.kind().check('Macro'):
-                                continue
+        left = Modules.cEssentialTypeOfExpression(operands[0])
+        right = Modules.cEssentialTypeOfExpression(operands[1])
+        if not left or not right or Modules.C_ESSENTIAL_POINTER in (left[0], right[0]):
+            continue
+        if sameCategory(left, right, operands) or isException(text, left, right):
+            continue
+
+        check.violation(entityOf(operands[0]), file, lexeme.line_begin(), lexeme.column_begin(), ERR1,
+                        text, Modules.cDescribeEssentialType(left),
+                        Modules.cDescribeEssentialType(right))
 
 
-
-                    tempLex = tempLex.next(True, True)
-                if not right:
-                    right = str(nextLex.ent().type())
-                    rightEnt = nextLex.ent()
-                    rightText = nextLex.text()
-                    if rightEnt.kind().check('Macro'):
-                        continue
-                    if ('*' in right or lexeme.text() == '&') and nextLex.ref().kind().check('Definein, Declarein'):
-                        continue
-            elif nextLex and nextLex.token() == 'Literal':
-                literalType = literalEssentialType(nextLex.text())
-                if literalType:
-                    right = literalType
-                    rightText = nextLex.text()
-
-            if left and right:
-                # Don't flag pointer compared to integer literal (e.g. p == 0).
-                # The string-based type matcher misclassifies pointer types and
-                # would otherwise produce false positives on a common idiom.
-                if '*' in str(left) or '*' in str(right):
-                    if leftEnt is None or rightEnt is None:
-                        continue
-                if not sameEssentialType(left, right, lexeme.text()):
-                    # Operands of one enumeration have the same essential type,
-                    # whether they name the enumeration, a typedef of it, or one
-                    # of its enumerators
-                    leftEnum = Modules.cEnumType(leftEnt)
-                    if leftEnum and leftEnum == Modules.cEnumType(rightEnt):
-                        continue
-                    anchor = leftEnt if leftEnt else rightEnt
-                    leftName = leftEnt.name() if leftEnt else leftText
-                    rightName = rightEnt.name() if rightEnt else rightText
-                    check.violation(anchor, file, lexeme.line_begin(), lexeme.column_begin(), ERR1, lexeme.text(), leftName, rightName)
-
-# Derive the essential type of a numeric or character literal from its text.
-# Returns a synthetic type string compatible with sameEssentialType, or None
-# if the text is not a literal we can classify.
-def literalEssentialType(text):
-    if not text:
-        return None
-    # Character constant: 'A', '\n', L'A', u'A', U'A', u8'A'
-    if text.startswith("'") or re.match(r"^(L|u8?|U)'", text):
-        return 'char'
-    # String literals are not arithmetic operands
-    if text.startswith('"') or re.match(r'^(L|u8?|U)"', text):
-        return None
-    lower = text.lower()
-    # Floating literal: has '.', exponent, or trailing f/F (but not just l/L)
-    if '.' in text:
-        return 'float'
-    if re.search(r'[0-9](e[+\-]?[0-9])', lower):
-        return 'float'
-    if re.search(r'[0-9]p[+\-]?[0-9]', lower):  # hex float p-exponent
-        return 'float'
-    # Integer literal (decimal, hex, octal, binary) with optional u/l suffix
-    if not re.match(r'^(0[xXbB])?[0-9a-fA-F\']+[uUlL]*$', text):
-        return None
-    suffix = re.search(r'[uUlL]+$', text)
-    if suffix and 'u' in suffix.group(0).lower():
-        return 'unsigned int'
-    return 'int'
-
-# Checks if both operands are the same essential type or one of the exceptions
-def sameEssentialType(left, right, operator):
-    if left == right:
-        return True
-    # Checks for the exceptions for the +, -, +=, and -= operators
-    if re.search(r'\+|\-', operator):
-        if 'char' in left:
-            if 'int' in right:
-                return True
-        elif 'char' in right and '+' in operator:
-            if 'int' in left:
-                return True
-    # Checks if the same enum is used or an object within the same enum
-    if 'enum' in left and 'enum' in right:
-        if left in right or right in left:
-            return True
+def sameCategory(left, right, operands):
+    if left[0] != right[0]:
         return False
-    # Check for dereference
-    if operator == '*':
-        if 'typedef' in left:
-            return True
-    types = ['int', 'bool', 'float', 'char']
-    for type in types:
-        # Check for types that are essentially the same but not the same exact
-        if type in left:
-            if type not in right:
-                return False
-            if type == 'int':
-                left_unsigned = bool(re.search(r'unsigned|uint', left))
-                right_unsigned = bool(re.search(r'unsigned|uint', right))
-                return left_unsigned == right_unsigned
-            return True
+    if left[0] != Modules.C_ESSENTIAL_ENUM:
+        return True
+    # Each enumeration is its own essential type
+    leftEnum, rightEnum = (Modules.cEnumType(entityOf(operand)) for operand in operands)
+    return not (leftEnum and rightEnum) or leftEnum == rightEnum
 
-        elif type in right:
-            return False
 
+def entityOf(lexemes):
+    lexeme = Modules.cTermLexeme(lexemes)
+    return lexeme.ent() if lexeme else None
+
+
+# Exception: character manipulation with + and -
+def isException(operator, left, right):
+    if operator in ('+', '+='):
+        return ((left[0] == Modules.C_ESSENTIAL_CHARACTER and right[0] in NUMERIC)
+                or (right[0] == Modules.C_ESSENTIAL_CHARACTER and left[0] in NUMERIC))
+    if operator in ('-', '-='):
+        return left[0] == Modules.C_ESSENTIAL_CHARACTER and right[0] in NUMERIC
+    return False
+
+
+# True if an operator has a left operand, which rules out a prefix operator, a
+# pointer or reference declarator, and the angle brackets of a template
+def isBinary(lexeme):
+    before = lexeme.previous(True, True)
+    if not before:
+        return False
+    text = before.text()
+    if text == ')':
+        return not closesCast(before)
+    if text == ']':
+        return True
+    if before.token() == 'Keyword':
+        return text in OPERAND_KEYWORDS
+    if before.token() in ('Literal', 'String'):
+        return True
+    if before.token() != 'Identifier':
+        return False
+    ent = before.ent()
+    if ent and ent.kind().check('Typedef, Type, Template'):
+        return False
     return True
+
+
+# True if a closing parenthesis ends a cast, meaning the parentheses hold only a
+# type, so an operator after it is a prefix of the operand being cast
+def closesCast(close):
+    inner = []
+    depth = 0
+    lexeme = close.previous(True, True)
+    while lexeme:
+        if lexeme.text() == ')':
+            depth += 1
+        elif lexeme.text() == '(':
+            if depth == 0:
+                break
+            depth -= 1
+        inner.append(lexeme)
+        lexeme = lexeme.previous(True, True)
+    # The parenthesized type of sizeof is an operand, not a cast
+    before = lexeme.previous(True, True) if lexeme else None
+    if not inner or (before and before.text() in ('sizeof', '_Alignof', 'alignof')):
+        return False
+    named = False
+    for lexeme in inner:
+        ent = lexeme.ent()
+        if lexeme.token() == 'Keyword' and lexeme.text() not in OPERAND_KEYWORDS | {'sizeof'}:
+            named = True
+        elif ent and ent.kind().check('Typedef, Type'):
+            named = True
+        elif lexeme.text() not in ('*', '&', '::'):
+            return False
+    return named
+
+
+# An operator preceded by nothing that can end an operand is a prefix operator
+def isPrefix(lexeme):
+    return lexeme.token() == 'Operator' and not isBinary(lexeme)
+
+
+def leftOperand(operator):
+    precedence = Modules.C_OPERATOR_PRECEDENCES[operator.text()]
+    lexemes = []
+    depth = 0
+    lexeme = operator.previous(True, True)
+    while lexeme:
+        text = lexeme.text()
+        if text in (')', ']'):
+            depth += 1
+        elif text in ('(', '['):
+            if depth == 0:
+                break
+            depth -= 1
+        elif depth == 0:
+            if text in (';', '{', '}', ',', ':', '?') or lexeme.token() == 'Preprocessor':
+                break
+            if lexeme.token() == 'Keyword' and text not in OPERAND_KEYWORDS and text != 'sizeof':
+                break
+            # The operators are left associative, so an operator of the same
+            # precedence belongs to the left operand
+            if (lexeme.token() == 'Operator' and not isPrefix(lexeme)
+                    and Modules.C_OPERATOR_PRECEDENCES.get(text, 0) > precedence):
+                break
+        lexemes.append(lexeme)
+        lexeme = lexeme.previous(True, True)
+    lexemes.reverse()
+    return lexemes
+
+
+def rightOperand(operator):
+    return operandAfter(operator, Modules.C_OPERATOR_PRECEDENCES[operator.text()])
+
+
+# The operand following a lexeme, ending at an operator binding no tighter than
+# the given precedence
+def operandAfter(start, precedence):
+    lexemes = []
+    depth = 0
+    angle = 0
+    expecting = True
+    lexeme = start.next(True, True)
+    while lexeme:
+        text = lexeme.text()
+        if angle or (lexemes and Modules.cOpensTemplateArguments(lexemes + [lexeme], len(lexemes))):
+            angle = Modules.cAngleDepth(angle, text)
+        elif text in ('(', '['):
+            depth += 1
+        elif text in (')', ']'):
+            if depth == 0:
+                break
+            depth -= 1
+            expecting = depth > 0
+        elif depth == 0:
+            if text in (';', '{', '}', ',', ':', '?') or lexeme.token() == 'Preprocessor':
+                break
+            if lexeme.token() == 'Operator':
+                if not expecting:
+                    if Modules.C_OPERATOR_PRECEDENCES.get(text, 99) >= precedence:
+                        break
+                    # A postfix operator leaves the operand complete
+                    expecting = text not in ('++', '--')
+            elif lexeme.token() == 'Keyword' and text not in OPERAND_KEYWORDS and text != 'sizeof':
+                if not (expecting and lexemes):
+                    break
+            else:
+                expecting = False
+        lexemes.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    return lexemes
+
+
+# The second and third operands of a conditional operator
+def conditionalOperands(question):
+    second = []
+    depth = 0
+    nested = 0
+    lexeme = question.next(True, True)
+    while lexeme:
+        text = lexeme.text()
+        if text in ('(', '[', '{'):
+            depth += 1
+        elif text in (')', ']', '}'):
+            if depth == 0:
+                return ([], [])
+            depth -= 1
+        elif depth == 0 and text == '?':
+            nested += 1
+        elif depth == 0 and text == ':':
+            if nested == 0:
+                break
+            nested -= 1
+        elif depth == 0 and text == ';':
+            return ([], [])
+        second.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    if not lexeme:
+        return ([], [])
+    return (second, operandAfter(lexeme, Modules.C_OPERATOR_PRECEDENCES['?']))

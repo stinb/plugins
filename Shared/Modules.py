@@ -1105,7 +1105,7 @@ def cConstantValue(lexemes: list[Lexeme], depth: int = 0) -> int | None:
         # An object-like macro holding a constant behaves as that constant
         ent = lexemes[0].ent()
         if ent and ent.kind().check('Macro') and ent.value():
-            return cParseIntLiteral(str(ent.value()))
+            return cParseIntLiteral(cMacroConstant(ent))
         return None
 
     operator = cTopLevelOperator(lexemes)
@@ -1150,6 +1150,19 @@ def cConstantValue(lexemes: list[Lexeme], depth: int = 0) -> int | None:
         return None
     return None
 
+# A macro's replacement text without the parentheses enclosing all of it, as in
+# #define LIMIT (8U)
+def cMacroConstant(ent: Ent) -> str:
+    text = str(ent.value() or '').strip()
+    while len(text) > 1 and text[0] == '(' and text[-1] == ')':
+        depth = 0
+        for i, char in enumerate(text):
+            depth += {'(': 1, ')': -1}.get(char, 0)
+            if depth == 0 and i < len(text) - 1:
+                return text
+        text = text[1:-1].strip()
+    return text
+
 # Return the essential type of the entity a lexeme resolves to, or None
 def cEssentialTypeOfEnt(ent: Ent | None) -> tuple[str, int | None] | None:
     if not ent:
@@ -1171,7 +1184,7 @@ def cEssentialTypeOfEnt(ent: Ent | None) -> tuple[str, int | None] | None:
     if ent.kind().check('Macro'):
         if ent.name() in ('true', 'false'):
             return (C_ESSENTIAL_BOOLEAN, 1)
-        return cEssentialTypeOfLiteral(str(ent.value())) if ent.value() else None
+        return cEssentialTypeOfLiteral(cMacroConstant(ent)) if ent.value() else None
 
     return cEssentialType(ent.type(), ent)
 
@@ -1362,7 +1375,10 @@ def cBalanceEssentialTypes(left, right, operator: str | None = None):
     if not right:
         return left
 
-    # Pointer arithmetic yields a pointer, whatever the other operand is
+    # The difference of two pointers is a ptrdiff_t, and any other pointer
+    # arithmetic yields a pointer
+    if left[0] == right[0] == C_ESSENTIAL_POINTER and operator == '-':
+        return C_LIBRARY_TYPES['ptrdiff_t']
     if C_ESSENTIAL_POINTER in (left[0], right[0]):
         return (C_ESSENTIAL_POINTER, None)
 
@@ -1566,10 +1582,15 @@ def cEssentialTypeOfTerm(lexemes: list[Lexeme]) -> tuple[str, int | None] | None
     # type already gives the element type. The subscript is only this term's when
     # it opens on it, not on an object it is a member of
     index = next((i for i, l in enumerate(lexemes) if l is lex), None)
-    if index is not None and index + 1 < len(lexemes) and lexemes[index + 1].text() == '[':
+    subscripted = index is not None and index + 1 < len(lexemes) and lexemes[index + 1].text() == '['
+    if subscripted:
         pointee = cEssentialTypeOfPointee(lex.ent())
         if pointee:
             return pointee
+
+    # An array named without a subscript is converted to a pointer
+    elif lex.ent().kind().check('Object, Parameter') and '[' in str(lex.ent().type()):
+        return (C_ESSENTIAL_POINTER, None)
 
     return cEssentialTypeOfEnt(lex.ent())
 
