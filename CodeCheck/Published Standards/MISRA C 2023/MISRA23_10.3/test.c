@@ -226,3 +226,10 @@ void libraryArguments(char *d, const char *s, int n)
   memset(d, 0, sizeof(int));    // UndCC_Valid
   (void)strncmp(d, s, n);       // UndCC_Violation
 }
+
+void parenthesizedOperand(int s)
+{
+  unsigned int u;
+  u = (s - 1) * s;              // UndCC_Violation - signed assigned to unsigned
+  u = (unsigned int)s * 2U;     // UndCC_Valid - the cast gives unsigned
+}

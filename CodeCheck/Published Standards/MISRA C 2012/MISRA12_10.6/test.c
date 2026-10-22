@@ -61,3 +61,18 @@ void compositeOperands(void) {
   flags = FLAG_A | FLAG_B;            // UndCC_Valid - a constant expression is not composite
   p = &dataArr[0];                    // UndCC_Valid - a pointer is outside the essential type model
 }
+
+void parenthesizedOperands(void) {
+  uint32_t timestamp = 0xFFFFFFFU;
+  uint32_t numPackets = 3276800U;
+  uint32_t basePackets = 20U;
+  uint32_t duration = 4U;
+  uint64_t longTimestamp;
+  uint8_t shortInt = 47U;
+  uint16_t result;
+
+  longTimestamp = timestamp + (((numPackets - basePackets) * duration) >> 12); // UndCC_Violation - a leading parenthesized operand is not a cast
+  longTimestamp = timestamp + ((numPackets - basePackets) * duration);         // UndCC_Violation
+  longTimestamp = (uint64_t)timestamp + duration;                             // UndCC_Valid - the cast widens an operand
+  result = 17U + shortInt;                                                    // UndCC_Violation - 17U is essentially unsigned char
+}

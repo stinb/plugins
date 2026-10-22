@@ -1484,6 +1484,9 @@ def cLeadingCast(lexemes: list[Lexeme]) -> tuple[str, int | None] | None:
         if close is None or close == len(lexemes) - 1:
             return None
         inner = lexemes[1:close]
+        # Parentheses around an operand, as in (a - b) * c, hold no type name
+        if not cNamesType(inner):
+            return None
 
     if not inner or any(lex.token() in C_LITERAL_TOKENS for lex in inner):
         return None
@@ -1499,6 +1502,19 @@ def cLeadingCast(lexemes: list[Lexeme]) -> tuple[str, int | None] | None:
     return cEssentialType(text, typeEnt)
 
 C_NAMED_CASTS = ('static_cast', 'const_cast', 'reinterpret_cast', 'dynamic_cast')
+
+# True if the lexemes are only a type name, as the parentheses of a cast hold
+def cNamesType(lexemes: list[Lexeme]) -> bool:
+    named = False
+    for lex in lexemes:
+        ent = lex.ent()
+        if lex.token() == 'Keyword' and lex.text() not in ('sizeof', 'true', 'false', 'this', 'nullptr'):
+            named = True
+        elif ent and ent.kind().check('Typedef, Type, Template'):
+            named = True
+        elif lex.text() not in ('*', '&', '::', '<', '>', ','):
+            return False
+    return named
 
 # True if the lexeme at index i opens a template argument list, whose angle
 # brackets enclose types rather than act as relational operators
