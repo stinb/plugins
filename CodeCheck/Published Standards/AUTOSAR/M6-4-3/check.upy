@@ -3,6 +3,15 @@ import re
 
 ERR1 = 'A switch statement shall be a well-formed switch statement'
 
+# The MISRA C grammar only allows break; to end a switch-clause
+C_IDS = {'MISRA04_15', 'MISRA12_16.1', 'MISRA23_16.1', 'MISRA25_16.1'}
+CPP23_IDS = {'MISRA23_9.4.2'}
+TERMINATOR_CHOICES = [
+    'break',
+    'break or throw',
+    'break, throw, return, goto, continue, exit or abort',
+]
+
 
 # The ID for the check
 def ids():
@@ -217,63 +226,198 @@ def test_global():
     return False
 
 
+def define_options(check):
+    if check.id() in C_IDS:
+        default = TERMINATOR_CHOICES[0]
+    elif check.id() in CPP23_IDS:
+        default = TERMINATOR_CHOICES[2]
+    else:
+        default = TERMINATOR_CHOICES[1]
+
+    check.options().choice('terminators', 'Statements allowed to end a switch clause', TERMINATOR_CHOICES, default)
+
+
 def test_language(language):
     return language == 'C++'
 
 
+def get_terminators(choice):
+    return {
+        TERMINATOR_CHOICES[0]: {"break"},
+        TERMINATOR_CHOICES[1]: {"break", "throw"},
+        TERMINATOR_CHOICES[2]: {"return", "break", "throw", "goto", "exit", "abort", "continue"},
+    }[choice]
+
+
+def next_code(lex):
+    lex = lex.next(True, True)
+
+    while lex and (lex.inactive() or lex.token() == "Preprocessor"):
+        # skip the rest of a directive, such as the condition of #if 1
+        if lex.token() == "Preprocessor":
+            while lex and (lex.token() != "Newline"):
+                lex = lex.next()
+
+        lex = lex.next(True, True) if lex else None
+
+    return lex
+
+
+def skip_label(lex):
+    # Return the ':' ending the case or default label starting at lex
+    pending_colons = 0
+    lex = next_code(lex)
+
+    while lex:
+        if lex.text() == "?":
+            pending_colons += 1
+        elif lex.text() == ":":
+            if not pending_colons:
+                return lex
+
+            pending_colons -= 1
+
+        lex = next_code(lex)
+
+
+def get_clauses(switch_lex):
+    # The lexemes of each switch-clause, split at the switch's own labels
+    lex = next_code(switch_lex)
+    depth = 0
+
+    while lex:
+        if lex.text() == "(":
+            depth += 1
+        elif lex.text() == ")":
+            depth -= 1
+
+            if not depth:
+                break
+
+        lex = next_code(lex)
+
+    lex = next_code(lex) if lex else None
+
+    if not lex or (lex.text() != "{"):
+        return None
+
+    clauses = []
+    clause = None
+    depth = 0
+    lex = next_code(lex)
+
+    while lex:
+        if not depth and (lex.text() == "}"):
+            break
+
+        if not depth and (lex.text() in ["case", "default"]) and (lex.token() == "Keyword"):
+            lex = skip_label(lex)
+            clause = []
+            clauses.append(clause)
+        else:
+            if lex.text() == "{":
+                depth += 1
+            elif lex.text() == "}":
+                depth -= 1
+
+            if clause is not None:
+                clause.append(lex)
+
+        lex = next_code(lex) if lex else None
+
+    return clauses
+
+
+def is_one_block(clause):
+    depth = 0
+
+    for i, lex in enumerate(clause):
+        if lex.text() == "{":
+            depth += 1
+        elif lex.text() == "}":
+            depth -= 1
+
+            if not depth:
+                return i == len(clause) - 1
+
+    return False
+
+
+def ends_with_terminator(clause, terminators):
+    if not clause:
+        return False
+
+    # a clause that is one compound statement ends with its last statement
+    if (clause[0].text() == "{") and is_one_block(clause):
+        return ends_with_terminator(clause[1:-1], terminators)
+
+    if clause[-1].text() != ";":
+        return False
+
+    # find the first lexeme of the last statement
+    depth = 0
+    i = len(clause) - 2
+
+    while i >= 0:
+        if clause[i].text() in [")", "]"]:
+            depth += 1
+        elif clause[i].text() in ["(", "["]:
+            depth -= 1
+        elif not depth and clause[i].text() in [";", "{", "}"]:
+            break
+
+        i -= 1
+
+    return clause[i + 1].text() in terminators
+
+
+def find_switch(lexer, node, index):
+    lex = lexer.lexeme(node.line_begin(), node.column_begin())
+    paren_lex = lex.previous(True, True) if lex else None
+    keyword_lex = paren_lex.previous(True, True) if paren_lex else None
+
+    # the node usually starts at the condition, just after "switch ("
+    if paren_lex and keyword_lex and (paren_lex.text() == "(") and (keyword_lex.text() == "switch"):
+        return keyword_lex
+
+    # otherwise the switch comes from a macro expanded within the node
+    end = (node.line_end(), node.column_end())
+
+    while lex and ((lex.line_begin(), lex.column_begin()) <= end):
+        if (lex.text() == "switch") and (lex.token() == "Keyword"):
+            if not index:
+                return lex
+
+            index -= 1
+
+        lex = lex.next(True, True)
+
+
 def check(check, file):
-    lexer = file.lexer(lookup_ents=False)
+    lexer = file.lexer(lookup_ents=False, expand_macros=True)
+    terminators = get_terminators(check.options().lookup('terminators'))
 
     for func_ref in file.filerefs("Define", "Function"):
         func_cfg = func_ref.ent().control_flow_graph()
+        switches_at = {}
 
         for node in func_cfg.nodes():
-            if node.kind() != "switch":
+            if (node.kind() != "switch") or not (node.line_begin() and node.column_begin()):
                 continue
 
-            end_switch = node.end_node()
+            # several switches can come from one macro expanded at the same place
+            position = (node.line_begin(), node.column_begin())
+            switches_at[position] = switches_at.get(position, -1) + 1
 
-            for node_child in node.children():
-                if (not str(node_child.kind()).startswith("switch-")
-                        or (not (node_child.line_begin() and node_child.column_begin()))):
-                    continue
+            switch_lex = find_switch(lexer, node, switches_at[position])
+            clauses = get_clauses(switch_lex) if switch_lex else None
 
-                lex = lexer.lexeme(node_child.line_begin(),
-                                   node_child.column_begin())
-                has_exit = False
+            if not clauses:
+                continue
 
-                while lex and (lex.line_begin() <= node_child.line_end()):
-                    if ((lex.line_begin() == node_child.line_end())
-                            and (lex.text() == ":")
-                            and lex.next(True, True).text() not in ["case", "default"]):
-                        break
-
-                    lex = lex.next(True, True)
-
-                on_switch = False
-                out_of_scope = 0
-
-                while lex and (lex.line_begin() <= end_switch.line_end()):
-                    if (lex.text() == "switch") and (lex.token() == "Keyword"):
-                        on_switch = True
-                    if on_switch and (lex.text() == "{"):
-                        out_of_scope += 1
-                    elif on_switch and (lex.text() == "}"):
-                        out_of_scope -= 1
-
-                        if not out_of_scope:
-                            on_switch = False
-                    elif (not out_of_scope
-                          and lex.text() in ["return", "break", "throw", "goto", "exit", "abort", "continue"]
-                          and lex.token() in ["Keyword", "Identifier"]):
-                        has_exit = True
-                        break
-                    elif not out_of_scope and lex.text() in ["case", "default"]:
-                        break
-
-                    lex = lex.next(True, True)
-
-                if not has_exit:
+            # consecutive labels may share a clause, but the last one must end
+            for i, clause in enumerate(clauses):
+                if (clause or (i == len(clauses) - 1)) and not ends_with_terminator(clause, terminators):
                     check.violation(None, file, node.line_begin(),
                                     node.column_begin(), ERR1)
                     break
