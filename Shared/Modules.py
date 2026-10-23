@@ -1288,8 +1288,23 @@ def cIsCompositeExpression(lexemes: list[Lexeme]) -> bool:
 # read, which folding it would need.
 def cIsConstantExpression(lexemes: list[Lexeme]) -> bool:
     operands = False
+    sizeof = False
+    depth = 0
     for lexeme in cNormalizeExpression(lexemes):
         token = lexeme.token()
+        text = lexeme.text()
+        # sizeof is a constant whatever its operand names
+        if depth:
+            depth += {'(': 1, ')': -1}.get(text, 0)
+            continue
+        if sizeof:
+            sizeof = False
+            if text == '(':
+                depth = 1
+            continue
+        if text == 'sizeof':
+            operands = sizeof = True
+            continue
         if token in C_LITERAL_TOKENS:
             operands = True
             continue

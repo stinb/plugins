@@ -127,21 +127,39 @@ def check(check, file):
     if not lexer:
         return
 
-    for ref in file.filerefs('Cast Use', 'Type'):
-        lexeme = lexer.lexeme(ref.line(), ref.column())
-        if not lexeme:
+    # A cast through a type macro or a qualified name is found by its reference
+    castRefs = {(ref.line(), ref.column()): ref for ref in file.filerefs('Cast Use', 'Type')}
+
+    directive = False
+    previous = None
+    for lexeme in lexer.lexemes():
+        token = lexeme.token()
+        if token == 'Newline':
+            # A directive continues past a line ending in a backslash
+            directive = directive and bool(previous) and previous.text().endswith('\\')
+            continue
+        if token == 'Preprocessor' and lexeme.text() == '#':
+            directive = True
+        if token not in ('Whitespace', 'Comment'):
+            previous = lexeme
+        if directive or lexeme.text() != '(' or lexeme.inactive():
             continue
 
-        closing = lexeme.next(True, True)
-        # A pointer cast is outside the essential type model
-        if not closing or closing.text() != ')':
+        typeLexemes, ref = castType(lexeme, castRefs)
+        if not typeLexemes:
             continue
-
+        closing = typeLexemes[-1].next(True, True)
         operand = castOperand(closing.next(True, True))
         if not operand or not Modules.cIsCompositeExpression(operand):
             continue
 
-        cast = Modules.cEssentialType(ref.ent().name(), ref.ent())
+        if ref:
+            # A pointer cast is outside the essential type model
+            if any(l.text() == '*' for l in typeLexemes):
+                continue
+            cast = Modules.cEssentialType(ref.ent().name(), ref.ent())
+        else:
+            cast = Modules.cLeadingCast([lexeme] + typeLexemes + [closing] + operand)
         value = Modules.cEssentialTypeOfExpression(operand)
         if not cast or not value:
             continue
@@ -156,9 +174,47 @@ def check(check, file):
         else:
             error = ERR2
 
-        check.violation(ref.ent(), file, ref.line(), ref.column(), error,
+        if ref:
+            typeEnt, line, column = ref.ent(), ref.line(), ref.column()
+        else:
+            anchor = next((l for l in typeLexemes if l.ent()), typeLexemes[0])
+            typeEnt, line, column = anchor.ent(), anchor.line_begin(), anchor.column_begin()
+        check.violation(typeEnt, file, line, column, error,
                         Modules.cDescribeEssentialType(value),
                         Modules.cDescribeEssentialType(cast))
+
+
+# The type lexemes of a cast opening at this parenthesis and the cast reference
+# among them, or (None, None). The parentheses must hold only a type name, or a
+# name the cast reference lands on, and must not be those of a call, of sizeof,
+# or of a compound literal.
+def castType(opening, castRefs):
+    before = opening.previous(True, True)
+    if before and (before.token() == 'Identifier' or before.text() in (')', ']')
+            or before.text() in ('sizeof', '_Alignof', 'alignof', '_Generic')):
+        return (None, None)
+
+    inner = []
+    lexeme = opening.next(True, True)
+    while lexeme and lexeme.text() != ')':
+        if lexeme.text() in ('(', '[', ';', '{', '}'):
+            return (None, None)
+        inner.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    if not lexeme or not inner:
+        return (None, None)
+    ref = next((castRefs[(l.line_begin(), l.column_begin())] for l in inner
+                if (l.line_begin(), l.column_begin()) in castRefs), None)
+    if not ref and not Modules.cNamesType(inner):
+        return (None, None)
+
+    after = lexeme.next(True, True)
+    if not after or after.text() == '{':
+        return (None, None)
+    if after.token() not in ('Identifier', 'Literal', 'String', 'Keyword') and after.text() not in (
+            '(', '~', '!', '-', '+', '*', '&', '++', '--'):
+        return (None, None)
+    return (inner, ref)
 
 
 # The lexemes of the expression a cast applies to. A cast binds tighter than any

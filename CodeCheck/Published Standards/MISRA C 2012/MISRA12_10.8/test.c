@@ -70,3 +70,48 @@ void unaryAndConditionalOperands(uint32_t u32, uint16_t u16a, uint16_t u16b, int
   r   = (uint32_t)-(u16a + u16b);              // UndCC_Violation - unary minus of a composite
   r   = (uint32_t)(flag ? u16a + u16b : u16a); // UndCC_Violation - conditional with a composite operand
 }
+
+struct Pair { int a; int b; };
+int takesInt(int v);
+#define WIDEN(x) ((unsigned long)((x) + 1U))
+
+void keywordCasts(void)
+{
+  char message[16] = {0};
+  unsigned int u = 3U;
+  int s = 2;
+  unsigned long ul;
+  unsigned long long ull;
+  int r;
+  message[2] = (char)((message[2] & 0xF0U) | 0x0AU);   // UndCC_Violation - unsigned composite cast to character
+  r = (int)(u + 1U);                                   // UndCC_Violation - unsigned composite cast to signed
+  r = (int)u;                                          // UndCC_Valid - not a composite expression
+  ull = (unsigned long long)(u * 2U);                  // UndCC_Violation - wider
+  ul = (unsigned long)(u * 2U);                        // UndCC_Valid - long is only guaranteed 32 bits
+  u = (unsigned int)(s + 1);                           // UndCC_Violation
+  r = (signed int)(s + 1);                             // UndCC_Valid - same category and width
+  r = takesInt(s + 1);                                 // UndCC_Valid - a call, not a cast
+  ul = sizeof(int) + u;                                // UndCC_Valid - sizeof, not a cast
+  struct Pair p = (struct Pair){ s + 1, 2 };           // UndCC_Valid - a compound literal
+  ul = WIDEN(u);                                       // UndCC_Valid - casts in a macro body are not checked
+  (void)r; (void)p; (void)ul; (void)ull;
+}
+
+void sizeofConstants(void)
+{
+  const char *names[4];
+  int n;
+  n = (int)(sizeof(names) / sizeof(names[0]));         // UndCC_Valid - a constant expression is not composite
+  n = (int)(sizeof names / 2U);                        // UndCC_Valid
+  (void)n; (void)names;
+}
+
+#define U64 uint64_t
+
+void typeMacroCast(uint32_t a, uint32_t b)
+{
+  uint64_t w;
+  w = (U64)(a + b);                                    // UndCC_Violation - wider, through a type macro
+  w = (U64)a;                                          // UndCC_Valid
+  (void)w;
+}
