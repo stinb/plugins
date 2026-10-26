@@ -228,10 +228,11 @@ def check(check, file):
                             lexeme = nextLex
                             continue
                         # Check for side effects within the for statement clauses themselves (e.g., ++flag in condition)
+                        path = accessPath(lexeme)
                         refs_in_clause = lexeme.ent().refs('Modifyby, Setby')
                         for ref in refs_in_clause:
                             # If this is a modification within the for statement (before close paren, after for keyword)
-                            if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), close, vLex):
+                            if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), close, vLex) and samePath(lexer, ref, path):
                                 ok = False
                                 break
 
@@ -239,7 +240,7 @@ def check(check, file):
                         if ok and openBrace and closeBrace:
                             refs_in_body = lexeme.ent().refs('Modifyby, Setby')
                             for ref in refs_in_body:
-                                if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, openBrace):
+                                if ref.file().longname() == file.longname() and checkBounds(ref.line(), ref.column(), closeBrace, openBrace) and samePath(lexer, ref, path):
                                     ok = False
                                     break
                     
@@ -294,6 +295,43 @@ def check(check, file):
         else:
             lexeme = lexeme.next(True, True)
 
+
+
+# The entities of a member access from its base object to the member, so that
+# one member of two different objects is told apart. A base that cannot be
+# named is None, which matches any base.
+def accessPath(lexeme):
+    path = [lexeme.ent().id()]
+    operator = lexeme.previous(True, True)
+    while operator and operator.text() in ('.', '->'):
+        base = operator.previous(True, True)
+        # A subscript selects an element of the same array
+        depth = 0
+        while base and (depth or base.text() == ']'):
+            if base.text() == ']':
+                depth += 1
+            elif base.text() == '[':
+                depth -= 1
+            base = base.previous(True, True)
+        if not base or not base.ent():
+            path.append(None)
+            break
+        path.append(base.ent().id())
+        operator = base.previous(True, True)
+    return tuple(reversed(path))
+
+
+# True if the object a reference modifies is the one the access path names
+def samePath(lexer, ref, path):
+    lexeme = lexer.lexeme(ref.line(), ref.column())
+    # A reference inside a macro expansion is positioned at the macro name
+    if not lexeme or not lexeme.ent() or lexeme.ent().id() != path[-1]:
+        return True
+    other = accessPath(lexeme)
+    # Without a named base the two may be the same object
+    if None in path or None in other:
+        return True
+    return path == other
 
 
 # Returns true if still before the given closing parenthesis

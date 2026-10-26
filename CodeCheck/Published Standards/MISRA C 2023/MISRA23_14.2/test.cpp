@@ -85,3 +85,36 @@ void h(void) {
 int get_status() {
   return 1;
 }
+
+struct Info { unsigned int count; unsigned int data[16]; };
+struct Outer { int header; struct Info info; };
+
+void sameMemberOtherObject(struct Outer *outer, struct Info *other) {
+  unsigned int k;
+  for (k = 0; k < outer->info.count; ++k) { // UndCC_Valid - the body modifies the count of another object
+    if (outer->info.data[k] == 4U) {
+      other->count++;
+    }
+  }
+  for (k = 0; k < outer->info.count; ++k) { // UndCC_Violation - the body modifies the bound itself
+    outer->info.count--;
+  }
+  for (k = 0; k < other->count; ++k) { // UndCC_Violation - (*p) has no named base, so it may be the same object
+    (*other).count = 0;
+  }
+}
+
+static unsigned int total;
+#define BUMP_TOTAL() (total++)
+#define BUMP(s) ((s).count++)
+
+void modifiedInMacro(void) {
+  struct Info info = {0};
+  unsigned int k;
+  for (k = 0; k < total; ++k) { // UndCC_Violation - the macro modifies the bound
+    BUMP_TOTAL();
+  }
+  for (k = 0; k < info.count; ++k) { // UndCC_Violation
+    BUMP(info);
+  }
+}
