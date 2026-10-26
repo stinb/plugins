@@ -14,6 +14,9 @@ ERR3 = 'Right operand %1 can be greater than the width of the left operand (mini
 # Dictionary of all minimum sizes in bits, not always true for all compilers and target platforms
 WIDTHS = {'char': 8, 'signed char': 8, 'unsigned char': 8, 'short': 16, 'short int': 16, 'signed short': 16, 'signed short int': 16, 'unsigned short': 16, 'unsigned short int': 16, 'int': 16, 'signed': 16, 'signed int': 16, 'unsigned': 16, 'unsigned int': 16, 'size_t': 16, 'long': 32, 'long int': 32, 'signed long': 32, 'signed long int': 32, 'unsigned long': 32, 'unsigned long int': 32, 'long long': 64, 'long long int': 64, 'signed long long': 64, 'signed long long int': 64, 'unsigned long long': 64, 'unsigned long long int': 64, '16 bit pointer': 16, '32 bit pointer': 32, '64 bit pointer': 64}
 
+# Types whose width is the target's int width
+INT_TYPES = {'int', 'signed', 'signed int', 'unsigned', 'unsigned int'}
+
 
 def ids():
     return ('M5-8-1', 'MISRA08_5-8-1', 'CPP_E046', 'MISRA04_12.8', 'MISRA12_12.2', 'MISRA23_12.2', 'MISRA25_12.2')
@@ -389,6 +392,7 @@ def test_global():
 
 def define_options(check):
     check.options().choice('architecture', 'Minimum architecture for target systems (for pointer widths)', ['16 bit', '32 bit', '64 bit'], '32 bit')
+    check.options().choice('intWidth', 'Width of int and unsigned int on the target system', ['16 bit', '32 bit'], '16 bit')
     check.options().checkbox('treatIntAsChar', 'Treat literal int as char (see note 1)', True)
     check.options().checkbox('trustWidthInTypeName', 'Trust the width in type names (example: u32 is 32 bits)', True)
     check.options().checkbox('trustMacroName', 'Trust the width in the name of macro types(see note 3)', False)
@@ -406,7 +410,15 @@ def integerLiteral(string):
     return re.match(r'-?\d+\w*$', str(string))
 
 
-def widthFromValue(string, treatIntAsChar):
+def getWidths(intWidth):
+    # The minimum widths, with int and unsigned int set to the target's width
+    widths = dict(WIDTHS)
+    for intType in INT_TYPES:
+        widths[intType] = int(intWidth.split()[0])
+    return widths
+
+
+def widthFromValue(string, treatIntAsChar, widths):
     string = string.lower()
 
     # Count the amount of integer suffix characters in the last 3 characters
@@ -418,28 +430,28 @@ def widthFromValue(string, treatIntAsChar):
     # Get the minimum width of the suffixes
     if counts == {'u': 0, 'l': 0, 'z': 0}:
         if treatIntAsChar:
-            return WIDTHS['char']
+            return widths['char']
         else:
-            return WIDTHS['int']
+            return widths['int']
     elif counts == {'u': 1, 'l': 0, 'z': 0}:
         if treatIntAsChar:
-            return WIDTHS['unsigned char']
+            return widths['unsigned char']
         else:
-            return WIDTHS['unsigned int']
+            return widths['unsigned int']
     elif counts == {'u': 0, 'l': 1, 'z': 0}:
-        return WIDTHS['long int']
+        return widths['long int']
     elif counts == {'u': 1, 'l': 1, 'z': 0}:
-        return WIDTHS['unsigned long int']
+        return widths['unsigned long int']
     elif counts == {'u': 0, 'l': 2, 'z': 0}:
-        return WIDTHS['long long int']
+        return widths['long long int']
     elif counts == {'u': 0, 'l': 2, 'z': 0}:
-        return WIDTHS['long long int']
+        return widths['long long int']
     elif counts == {'u': 1, 'l': 2, 'z': 0}:
-        return WIDTHS['unsigned long long int']
+        return widths['unsigned long long int']
     elif counts == {'u': 0, 'l': 0, 'z': 1}:
-        return WIDTHS['size_t']
+        return widths['size_t']
     elif counts == {'u': 1, 'l': 0, 'z': 1}:
-        return WIDTHS['size_t']
+        return widths['size_t']
 
 
 def literalToInteger(literal):
@@ -470,7 +482,7 @@ def literalToInteger(literal):
         return int(literal, 16)
 
 
-def widthFromType(lexeme, trustWidthInTypeName):
+def widthFromType(lexeme, trustWidthInTypeName, widths):
     if lexeme.token() == 'Identifier':
         ent = lexeme.ent()
         if ent and ent.kind().check('Typedef'):
@@ -480,11 +492,11 @@ def widthFromType(lexeme, trustWidthInTypeName):
                 return width
             # Width from underlying type
             underlyingType = ent.freetext('UnderlyingType')
-            if underlyingType in WIDTHS:
-                return WIDTHS[underlyingType]
+            if underlyingType in widths:
+                return widths[underlyingType]
     elif lexeme.token() == 'Keyword':
-        if lexeme.text() in WIDTHS:
-            return WIDTHS[lexeme.text()]
+        if lexeme.text() in widths:
+            return widths[lexeme.text()]
     return None
 
 
@@ -522,15 +534,70 @@ def getWidthFromName(name, trustWidthInTypeName):
     return width
 
 
-def widthFromCStyleCast(lexeme, trustWidthInTypeName):
+def matchingOpen(closeLex):
+    depth = 0
+    lexeme = closeLex
+
+    while lexeme:
+        if lexeme.text() in {')', ']'}:
+            depth += 1
+        elif lexeme.text() in {'(', '['}:
+            depth -= 1
+            if not depth:
+                return lexeme
+        lexeme = lexeme.previous(True, True)
+
+    return None
+
+
+def operandStart(lexeme):
+    # The first lexeme of the operand ending at lexeme, since a cast applies
+    # to a whole member access, subscript or call such as (u64)p->x
+    while lexeme:
+        if lexeme.text() in {')', ']'}:
+            openLex = matchingOpen(lexeme)
+            if not openLex:
+                return lexeme
+            prevLex = openLex.previous(True, True)
+            # A subscript or call continues the operand, parentheses end it
+            if lexeme.text() == ']' or (prevLex and prevLex.token() == 'Identifier'):
+                lexeme = prevLex
+                continue
+            return openLex
+
+        prevLex = lexeme.previous(True, True)
+        if prevLex and prevLex.text() in {'.', '->'}:
+            lexeme = prevLex.previous(True, True)
+            continue
+
+        return lexeme
+
+    return None
+
+
+def widthFromCStyleCast(lexeme, trustWidthInTypeName, widths):
+    startLex = operandStart(lexeme)
+    if not startLex:
+        return None
+
+    # A parenthesized operand that starts with a cast, such as ((u64)x)
+    if startLex.text() == '(' and startLex != lexeme:
+        innerLex = startLex.next(True, True)
+        typeLex = innerLex.next(True, True) if innerLex and innerLex.text() == '(' else None
+        closeLex = typeLex.next(True, True) if typeLex else None
+        if closeLex and closeLex.text() == ')':
+            width = widthFromType(typeLex, trustWidthInTypeName, widths)
+            if width:
+                return width
+
     # Match )
-    lexeme = lexeme.previous(True, True)
-    if lexeme.token() != 'Punctuation' or lexeme.text() != ')':
+    lexeme = startLex.previous(True, True)
+    if not lexeme or lexeme.token() != 'Punctuation' or lexeme.text() != ')':
         return None
 
     # Match a type
     lexeme = lexeme.previous(True, True)
-    return widthFromType(lexeme, trustWidthInTypeName)
+    return widthFromType(lexeme, trustWidthInTypeName, widths)
 
 
 def check(check, file):
@@ -544,6 +611,7 @@ def check(check, file):
     treatIntAsChar       = check.options().lookup('treatIntAsChar')
     trustWidthInTypeName = check.options().lookup('trustWidthInTypeName')
     checkMacros          = check.options().lookup('trustMacroName')
+    widths               = getWidths(check.options().lookup('intWidth'))
 
     # Find all the bit shift operators
     while lex:
@@ -581,20 +649,20 @@ def check(check, file):
                     if lType and re.search(r'\*$', lType):
                         lType = check.options().lookup('architecture') + ' pointer'
                     # If it's a normal integer or pointer
-                    if lType in WIDTHS:
-                        lWidth = WIDTHS[lType]
+                    if lType in widths:
+                        lWidth = widths[lType]
                     # If it's a resolved macro which is an integer literal
                     elif lEnt.kind().check('~Unresolved Macro'):
                         value = lEnt.value()
                         if integerLiteral(value):
-                            lWidth = widthFromValue(value, treatIntAsChar)
+                            lWidth = widthFromValue(value, treatIntAsChar, widths)
             # Get the width of the left hand operand if it's a literal
             elif lLex.token() == 'Literal' and integerLiteral(lLex.text()):
                 value = lLex.text()
-                lWidth = widthFromValue(value, treatIntAsChar)
+                lWidth = widthFromValue(value, treatIntAsChar, widths)
 
             # Change the width of the left hand operand if there's a cast
-            castWidth = widthFromCStyleCast(lLex, trustWidthInTypeName)
+            castWidth = widthFromCStyleCast(lLex, trustWidthInTypeName, widths)
             if castWidth:
                 lWidth = castWidth
 
