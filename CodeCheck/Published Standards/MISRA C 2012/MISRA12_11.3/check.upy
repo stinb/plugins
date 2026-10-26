@@ -157,83 +157,305 @@ def test_global():
 def test_language(language):
     return language == 'C++'
 
+QUALIFIERS = {'const', 'volatile', 'restrict', '_Atomic'}
+TAGS = {'struct', 'union', 'enum', 'class'}
+CHARACTER_TYPES = {'char', 'signed char', 'unsigned char'}
+
+
 def check(check, file):
-    lexer = None
-    refs = file.filerefs('Define', 'Object')
-    for ref in refs:
-        if not '*' in str(ref.ent().type()) or re.search(r'\*\)', str(ref.ent().type())):
+    lexer = file.lexer()
+    if not lexer:
+        return
+
+    # A cast through a type macro or a qualified name is found by its reference
+    castRefs = {(ref.line(), ref.column()): ref for ref in file.filerefs('Cast Use', 'Type')}
+
+    directive = False
+    previous = None
+    for lexeme in lexer.lexemes():
+        token = lexeme.token()
+        if token == 'Newline':
+            # A directive continues past a line ending in a backslash
+            directive = directive and bool(previous) and previous.text().endswith('\\')
             continue
-        setRefs = ref.ent().refs('Setby ~Deref')
-        type0 = ref.ent().freetext("UnderlyingType")
-        if not type0:
+        if token == 'Preprocessor' and lexeme.text() == '#':
+            directive = True
+        if token not in ('Whitespace', 'Comment'):
+            previous = lexeme
+        if directive or lexeme.text() != '(' or lexeme.inactive():
             continue
-        type0 = type0.lower()
-        if 'const' in type0 and not re.search(r'\*\s*const', type0):
-            type0 = re.sub(r'const', '', type0)
+
+        cast = castAt(lexeme, castRefs)
+        if not cast:
+            continue
+        inner, ref, closing = cast
+        target = castTypeText(inner, ref)
+        if not target or '*' not in target or '(' in target:
+            continue
+
+        source = operandType(castOperand(closing.next(True, True)))
+        if not source or '*' not in source or '(' in source:
+            continue
+
+        to, of = pointee(target), pointee(source)
+        if to == of or 'void' in (to, of):
+            continue
+        # Exception: any object may be accessed as its bytes
+        if to in CHARACTER_TYPES:
+            continue
+
+        anchor = (ref.line(), ref.column()) if ref else (inner[0].line_begin(), inner[0].column_begin())
+        check.violation(ref.ent() if ref else None, file, anchor[0], anchor[1], ERR1)
+
+
+# The type lexemes, cast reference and closing parenthesis of a cast opening at
+# this parenthesis, or None. The parentheses hold only a type name, or a name a
+# cast reference lands on, and are not those of a call or of sizeof.
+def castAt(opening, castRefs):
+    before = opening.previous(True, True)
+    if before and (before.token() == 'Identifier' or before.text() in (')', ']')
+            or before.text() in ('sizeof', '_Alignof', 'alignof', '_Generic')):
+        return None
+
+    inner = []
+    lexeme = opening.next(True, True)
+    while lexeme and lexeme.text() != ')':
+        if lexeme.text() in ('(', '[', ';', '{', '}'):
+            return None
+        inner.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    if not lexeme or not inner:
+        return None
+    ref = next((castRefs[(l.line_begin(), l.column_begin())] for l in inner
+                if (l.line_begin(), l.column_begin()) in castRefs), None)
+    if not ref and not Modules.cNamesType(inner):
+        return None
+
+    after = lexeme.next(True, True)
+    if not after or after.text() in ('{', ')', ';', ','):
+        return None
+    return (inner, ref, lexeme)
+
+
+# The written type of a cast with its typedef names resolved
+def castTypeText(inner, ref):
+    words = []
+    for lexeme in inner:
+        ent = lexeme.ent()
+        if lexeme.text() == '::' or (ent and ent.kind().check('Namespace')):
+            continue
+        if ent and ent.kind().check('Macro') and ref:
+            words.append(underlying(ref.ent()))
+        elif ent and ent.kind().check('Typedef'):
+            words.append(underlying(ent))
         else:
-            type0 = re.sub(r'\*\s*const', '*', type0)
-        type0 = re.sub(r'\[\d*\]', '', type0)
-        type0 = remove_parentheses(type0)
-        type0 = re.sub(r'(volatile|struct|restrict)|[^a-z\d]', '', type0)
-        
+            words.append(lexeme.text())
+    return ' '.join(words)
 
-        for setRef in setRefs:
-            if not lexer:
-                if not file.lexer():
-                    return
-                lexer = file.lexer()
-            lexeme = lexer.lexeme(setRef.line(), setRef.column())
-            while lexeme and not re.match(r'=|;|{|}', lexeme.text()):
-                lexeme = lexeme.next(True, True)
 
-            if lexeme and lexeme.text() == '=':
-                prevLex = lexeme
-                line = lexeme.line_begin()
-                while lexeme and not re.match(r';|{|}|,', lexeme.text()) and lexeme.line_begin() == line:
-                    if lexeme.text() == '(' or lexeme.text() == '[':
-                        lexeme = Modules.findClose(lexeme)
-                        if not lexeme:
-                            break
-                        lexeme = lexeme.next(True, True)
-                        continue
-                    if lexeme.text() == ')':
-                        break
-                    # Look for ents
-                    if lexeme.ent():
-                        nextLex = lexeme.next(True, True)
-                        if nextLex and (nextLex.text() in ['->', '.', '['] or nextLex.token() == 'Operator'):
-                            lexeme = nextLex
-                            continue
-                        # Remove volatile keywords
-                        type1 = lexeme.ent().freetext("UnderlyingType")
-                        if not type1:
-                            lexeme = nextLex 
-                            continue
-                        type1 = type1.lower()
-                        if ('*' not in type1 and prevLex.text() != '&') or re.search(r'\*\)', type1):
-                            lexeme = nextLex
-                            continue
-                        if not re.search(r'const|volatile|restrict', type1) and 'char' in type0:
-                            lexeme = nextLex 
-                            continue
-                        if 'const' in type1 and not re.search(r'\*\s*const', type1):
-                            type1 = re.sub(r'const', '', type1)
-                        else:
-                            type1 = re.sub(r'\*\s*const', '*', type1)
-                        type1 = re.sub(r'\[\d*\]', '', type1)
-                        type1 = remove_parentheses(type1)
-                        type1 = re.sub(r'(volatile|struct|restrict)|[^a-z\d]', '', type1)
+def underlying(ent):
+    return str(ent.freetext('UnderlyingType') or ent.type() or ent.name())
 
-                        # Check if types are the same
-                        if type0 != type1 and not 'void' in type0 + type1 and type0 not in ['char', 'signedchar', 'unsignedchar']:
-                            check.violation(ref.ent(), file, setRef.line(), setRef.column(), ERR1)
-                            break
-                    prevLex = lexeme
-                    lexeme = lexeme.next(True, True)
 
-def remove_parentheses(s):
-    while True:
-        s, n = re.subn(r'\([^()]*\)', '', s)
-        if n == 0:
+# The type pointed to, without the qualifiers that apply to that type itself.
+# Qualifiers further down the type remain part of it.
+def pointee(text):
+    words = re.findall(r'\*|\[[^\]]*\]|[A-Za-z_]\w*', text)
+    last = max(i for i, w in enumerate(words) if w == '*')
+    words = [w for w in words[:last] if w not in TAGS]
+    if '*' in words:
+        star = max(i for i, w in enumerate(words) if w == '*')
+        words = words[:star + 1] + [w for w in words[star + 1:] if w not in QUALIFIERS]
+    else:
+        words = [w for w in words if w not in QUALIFIERS]
+    return ' '.join(canonicalWords(words))
+
+
+INTEGER_WORDS = {'signed', 'unsigned', 'short', 'long', 'int', 'char'}
+
+
+# Built-in type names in one spelling, so that unsigned and unsigned int, or
+# long int and long, compare as the same type
+def canonicalWords(words):
+    result = []
+    run = []
+    for word in words + [None]:
+        if word in INTEGER_WORDS:
+            run.append(word)
+            continue
+        if run:
+            result.append(canonicalInteger(run))
+            run = []
+        if word is not None:
+            result.append(word)
+    return result
+
+
+def canonicalInteger(run):
+    if 'char' in run:
+        return ' '.join(w for w in ('signed', 'unsigned') if w in run) + (' char' if len(run) > 1 else 'char')
+    sign = 'unsigned ' if 'unsigned' in run else ''
+    longs = run.count('long')
+    size = 'short' if 'short' in run else 'long long' if longs > 1 else 'long' if longs else 'int'
+    return sign + size
+
+
+# The pointer type of an expression as text, or None when it is not a pointer
+# or cannot be told
+def operandType(lexemes):
+    value = expressionType(lexemes)
+    return value if value and '*' in value else None
+
+
+def expressionType(lexemes):
+    lexemes = Modules.cNormalizeExpression(lexemes)
+    if not lexemes:
+        return None
+
+    if lexemes[0].text() == '(':
+        cast = castAt(lexemes[0], {})
+        if cast and cast[2] is not lexemes[-1]:
+            return castTypeText(cast[0], cast[1])
+
+    if lexemes[0].text() == '&':
+        target = lvalueType(lexemes[1:])
+        return target + ' *' if target else None
+
+    operator = Modules.cTopLevelOperator(lexemes)
+    if operator is not None:
+        # Pointer arithmetic keeps the type of the pointer
+        if lexemes[operator].text() not in ('+', '-'):
+            return None
+        left = operandType(lexemes[:operator])
+        right = operandType(lexemes[operator + 1:])
+        # The difference of two pointers is not a pointer
+        if left and right:
+            return None
+        return (left or right) if lexemes[operator].text() == '+' else left
+
+    value = lvalueType(lexemes)
+    if not value:
+        return None
+    # An array is converted to a pointer to its first element
+    dims = re.search(r'\[[^\]]*\]', value)
+    if dims:
+        return value[:dims.start()] + ' *' + value[dims.end():]
+    return value
+
+
+# The type of an object designated by an expression as text, or None
+def lvalueType(lexemes):
+    lexemes = Modules.cNormalizeExpression(lexemes)
+    if not lexemes:
+        return None
+
+    derefs = 0
+    while lexemes and lexemes[0].text() == '*':
+        derefs += 1
+        lexemes = lexemes[1:]
+    if not lexemes:
+        return None
+
+    # A member access designates the member, whatever comes before it
+    term = Modules.cTermLexeme(lexemes)
+    index = next((i for i, l in enumerate(lexemes) if l is term), None)
+    member = bool(index) and lexemes[index - 1].text() in ('.', '->')
+
+    if lexemes[0].text() == '(' and not member:
+        close = Modules.cMatchingClose(lexemes)
+        if close is None:
+            return None
+        value = operandType(lexemes[1:close])
+        postfix = lexemes[close + 1:]
+    else:
+        if not term or not term.ent():
+            return None
+        if not term.ent().kind().check('Object, Parameter, Function'):
+            return None
+        value = underlying(term.ent())
+        postfix = lexemes[index + 1:]
+        # A call designates what the function returns
+        if term.ent().kind().check('Function'):
+            if not postfix or postfix[0].text() != '(':
+                return None
+            close = Modules.cMatchingClose(postfix)
+            postfix = postfix[close + 1:] if close is not None else []
+
+    depth = 0
+    for lexeme in postfix:
+        if lexeme.text() == '[':
+            if depth == 0:
+                derefs += 1
+            depth += 1
+        elif lexeme.text() == ']':
+            depth -= 1
+        elif depth == 0:
+            return None
+    if not value:
+        return None
+    for _ in range(derefs):
+        value = dereference(value)
+        if not value:
+            return None
+    return value
+
+
+# The type an array element or pointer designates
+def dereference(text):
+    dims = re.search(r'\[[^\]]*\]', text)
+    if dims:
+        return (text[:dims.start()] + text[dims.end():]).strip()
+    if '*' in text:
+        last = text.rindex('*')
+        return (text[:last] + text[last + 1:]).strip()
+    return None
+
+
+# The lexemes of the expression a cast applies to. A cast binds tighter than any
+# binary operator, so it covers a unary expression and no more.
+def castOperand(lexeme):
+    lexemes = []
+    while lexeme and lexeme.text() in ('~', '!', '-', '+', '*', '&', '++', '--'):
+        lexemes.append(lexeme)
+        lexeme = lexeme.next(True, True)
+    if not lexeme:
+        return []
+
+    if lexeme.text() == '(':
+        lexemes += group(lexeme)
+    elif lexeme.token() in ('Identifier', 'Literal', 'String', 'Keyword'):
+        lexemes.append(lexeme)
+    else:
+        return []
+
+    lexeme = lexemes[-1].next(True, True)
+    while lexeme:
+        if lexeme.text() in ('(', '['):
+            lexemes += group(lexeme)
+        elif lexeme.text() in ('.', '->'):
+            lexemes.append(lexeme)
+            lexeme = lexeme.next(True, True)
+            if not lexeme:
+                break
+            lexemes.append(lexeme)
+        else:
             break
-    return s
+        lexeme = lexemes[-1].next(True, True)
+    return lexemes
+
+
+# The lexemes of a group, from its opening bracket through the one that closes it
+def group(opening):
+    lexemes = []
+    depth = 0
+    lexeme = opening
+    while lexeme:
+        lexemes.append(lexeme)
+        if lexeme.text() in ('(', '['):
+            depth += 1
+        elif lexeme.text() in (')', ']'):
+            depth -= 1
+            if depth == 0:
+                return lexemes
+        lexeme = lexeme.next(True, True)
+    return []
