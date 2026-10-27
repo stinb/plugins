@@ -1,6 +1,6 @@
 // MISRA C++ 2008
 
-template < typename T > // UndCC_Violation
+template < typename T > // UndCC_Valid
 class Sample
 {
 public:
