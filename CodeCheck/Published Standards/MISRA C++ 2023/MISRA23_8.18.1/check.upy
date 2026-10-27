@@ -1,3 +1,6 @@
+import re
+import Modules
+
 ERR1 = 'Object is assigned to an overlapping object'
 
 MEMCPY_FUNCS = {'memcpy'}
@@ -451,10 +454,121 @@ def check(check, file):
                         dest_via_member = True
                 elif in_src_range and dest_ent and not flagged and \
                         not dest_via_member and \
-                        lex.ent().id() == dest_ent.id():
+                        lex.ent().id() == dest_ent.id() and \
+                        not (fn_name == 'memcpy' and
+                             disjointSlices(lexer, call_ref, dest_ent)):
                     check.violation(
                         dest_ent, file, call_ref.line(), call_ref.column(),
                         ERR1)
                     flagged = True
 
             lex = lex.next(True, True)
+
+
+# True if a memcpy copies between two constant slices of one object that do
+# not overlap, as in memcpy(&a[0], &a[10], 5u * sizeof(a[0]))
+def disjointSlices(lexer, call_ref, ent):
+    args = callArguments(lexer, call_ref)
+    if len(args) != 3:
+        return False
+    dest = sliceOffset(args[0], ent)
+    src = sliceOffset(args[1], ent)
+    count = elementCount(args[2], ent)
+    if dest is None or src is None or count is None:
+        return False
+    return abs(dest - src) >= count
+
+
+# The lexemes of each argument of a call, nested parentheses included
+def callArguments(lexer, call_ref):
+    lex = lexer.lexeme(call_ref.line(), call_ref.column())
+    lex = lex.next(True, True) if lex else None
+    if not lex or lex.text() != '(':
+        return []
+    args = [[]]
+    depth = 0
+    lex = lex.next(True, True)
+    while lex:
+        text = lex.text()
+        if text in ('(', '['):
+            depth += 1
+        elif text in (')', ']'):
+            if depth == 0:
+                return args
+            depth -= 1
+        elif text == ',' and depth == 0:
+            args.append([])
+            lex = lex.next(True, True)
+            continue
+        args[-1].append(lex)
+        lex = lex.next(True, True)
+    return []
+
+
+# The element offset of a, &a[K] or a + K, or None
+def sliceOffset(lexemes, ent):
+    lexemes = Modules.cNormalizeExpression(lexemes)
+    if len(lexemes) == 1 and isEnt(lexemes[0], ent):
+        return 0
+    if len(lexemes) > 2 and isEnt(lexemes[0], ent) and lexemes[1].text() == '+':
+        return Modules.cConstantValue(lexemes[2:])
+    if len(lexemes) > 4 and lexemes[0].text() == '&' and \
+            isSubscript(lexemes[1:], ent):
+        return Modules.cConstantValue(lexemes[3:-1])
+    return None
+
+
+# The number of elements of ent in a size of N * sizeof(element), or None
+def elementCount(lexemes, ent):
+    lexemes = Modules.cNormalizeExpression(lexemes)
+    if isElementSize(lexemes, ent):
+        return 1
+    operator = Modules.cTopLevelOperator(lexemes)
+    if operator is None or lexemes[operator].text() != '*':
+        return None
+    left, right = lexemes[:operator], lexemes[operator + 1:]
+    count, value = elementCount(right, ent), Modules.cConstantValue(left)
+    if count is None:
+        count, value = elementCount(left, ent), Modules.cConstantValue(right)
+    if count is None or value is None:
+        return None
+    return count * value
+
+
+# True if the lexemes are sizeof applied to an element of ent or its type
+def isElementSize(lexemes, ent):
+    if not lexemes or lexemes[0].text() != 'sizeof':
+        return False
+    operand = Modules.cNormalizeExpression(lexemes[1:])
+    if len(operand) == 2 and operand[0].text() == '*' and isEnt(operand[1], ent):
+        return True
+    if isSubscript(operand, ent):
+        return True
+    return ''.join(lex.text() for lex in operand) == elementType(ent)
+
+
+# The element type of an array or pointer, without spaces, or None
+def elementType(ent):
+    typeText = str(ent.type() or '')
+    if '[' in typeText:
+        return re.sub(r'\[[^\]]*\]', '', typeText, count=1).replace(' ', '')
+    if typeText.endswith('*'):
+        return typeText[:-1].replace(' ', '')
+    return None
+
+
+# True if the lexemes are a single subscript of ent, as in a[K]
+def isSubscript(lexemes, ent):
+    if len(lexemes) < 4 or not isEnt(lexemes[0], ent) or \
+            lexemes[1].text() != '[' or lexemes[-1].text() != ']':
+        return False
+    depth = 0
+    for lex in lexemes[1:-1]:
+        depth += {'[': 1, ']': -1}.get(lex.text(), 0)
+        if depth == 0:
+            return False
+    return True
+
+
+def isEnt(lex, ent):
+    return lex.ent() is not None and lex.ent().id() == ent.id()

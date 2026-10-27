@@ -44,8 +44,36 @@ void memcpy_same_array(void)
     memcpy(buf, buf, 10u * sizeof(buf[0]));          /* UndCC_Violation(win(memcpy),lin(memcpy)) - direct same-pointer copy */
     memcpy(&buf[0], &buf[1], 10u * sizeof(buf[0]));  /* UndCC_Violation(win(memcpy),lin(memcpy)) */
     memcpy(&buf[1], &buf[0], 10u * sizeof(buf[0]));  /* UndCC_Violation(win(memcpy),lin(memcpy)) */
-    memcpy(&buf[0], &buf[10], 5u * sizeof(buf[0]));  /* UndCC_FalsePos(win(memcpy),lin(memcpy)) - disjoint slices, no overlap */
+    memcpy(&buf[0], &buf[10], 5u * sizeof(buf[0]));  /* UndCC_Valid - disjoint slices, no overlap */
     memmove(&buf[0], &buf[1], 10u * sizeof(buf[0])); /* UndCC_Valid - memmove permitted */
+}
+
+/* Constant slices of one array, overlapping only when they are closer than the count. */
+#define DELAY   (4)
+#define OFFSET  (20)
+
+void memcpy_constant_slices(int16_t *p, size_t n)
+{
+    int32_t a[32] = {0};
+    int32_t m[4][8];
+
+    memcpy(a, &a[OFFSET], DELAY * sizeof(int32_t));     /* UndCC_Valid - a[0..3] and a[20..23] */
+    memcpy(a + 4, a, 4u * sizeof(a[0]));                /* UndCC_Valid */
+    memcpy(&a[8], &a[4], sizeof(*a) * 4u);              /* UndCC_Valid */
+    memcpy(&a[8], a, 4u * 2u * sizeof(a[0]));           /* UndCC_Valid */
+    memcpy(&a[8], a, sizeof(a[0]) * 4u * 2u);           /* UndCC_Valid */
+    memcpy(&a[7], a, sizeof(a[0]) * 4u * 2u);           /* UndCC_Violation(win(memcpy),lin(memcpy)) */
+    memcpy(a, &a[2], sizeof(a[0]) * 4u - 3u);           /* UndCC_Violation(win(memcpy),lin(memcpy)) - 13 bytes, not 1 element */
+    memcpy(&a[4], &a[1], 4u * sizeof(a[0]));            /* UndCC_Violation(win(memcpy),lin(memcpy)) */
+    memcpy(a, &a[OFFSET - 18], DELAY * sizeof(int32_t)); /* UndCC_Violation(win(memcpy),lin(memcpy)) */
+    memcpy(a, &a[20], 4u);                              /* UndCC_Violation(win(memcpy),lin(memcpy)) - a byte count, element size unknown */
+    memcpy(a, &a[20], n * sizeof(a[0]));                /* UndCC_Violation(win(memcpy),lin(memcpy)) - count unknown */
+    memcpy(a, &a[20], 4u * sizeof(int16_t));            /* UndCC_Violation(win(memcpy),lin(memcpy)) - not the element size */
+    memcpy(m[0], m[1], 8u * sizeof(int32_t));           /* UndCC_FalsePos(win(memcpy),lin(memcpy)) - disjoint rows */
+    memcpy(&m[0], &m[2], 2u * sizeof(m[0]));            /* UndCC_Valid */
+    memcpy(&m[0], &m[1], 2u * sizeof(m[0]));            /* UndCC_Violation(win(memcpy),lin(memcpy)) */
+    memcpy(p, &p[10], 10u * sizeof(int16_t));           /* UndCC_Valid */
+    memcpy(p, &p[9], 10u * sizeof(int16_t));            /* UndCC_Violation(win(memcpy),lin(memcpy)) */
 }
 
 /* Different arrays — no overlap. */
