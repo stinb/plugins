@@ -29,7 +29,7 @@ void stringLiterals(void)
     m = "typedef of char";                  // UndCC_Violation
     ok = "fine";                            // UndCC_Valid
 
-    (void)memcpy(stringArray, "CMRL ", 5);  // UndCC_Violation - const void * is not const char *
+    (void)memchr("CMRL ", 'C', 5);         // UndCC_Violation - const void * is not const char *
     if(memcmp(stringArray, (uint8_t*)"ID3", 3) != 0){   // UndCC_Violation
         (void)strlen("fine");               // UndCC_Valid
     }

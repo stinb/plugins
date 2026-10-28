@@ -221,8 +221,8 @@ void callArguments(void)
 
 void libraryArguments(char *d, const char *s, int n)
 {
-  memcpy(d, s, n);              // UndCC_Violation - signed passed to size_t
-  memcpy(d, s, 4);              // UndCC_Valid - by Exception 1
+  (void)memcmp(d, s, n);        // UndCC_Violation - signed passed to size_t
+  (void)memcmp(d, s, 4);        // UndCC_Valid - by Exception 1
   memset(d, 0, sizeof(int));    // UndCC_Valid
   (void)strncmp(d, s, n);       // UndCC_Violation
 }
