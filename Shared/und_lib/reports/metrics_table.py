@@ -1,6 +1,6 @@
 import understand
 
-def metricsTable(report, metriclist, targetlist, link=False, filenameformat="long", names=dict(), prog_min = 0, prog_max=100):
+def metricsTable(report, metriclist, targetlist, link=False, filenameformat="long", names=dict(), prog_min = 0, prog_max=100, archLink=True, archnameformat="short"):
   tbldesc = """ [{ "name" : "Name", "filtertype": "string", "sort" : "ascending" } """
   for metric in metriclist:
     tbldesc += ",{ \"name\": \"" + names.get(metric,metric) + "\", \"filtertype\": \"numeric\"}"
@@ -12,8 +12,14 @@ def metricsTable(report, metriclist, targetlist, link=False, filenameformat="lon
   for i, target in enumerate(targetlist):
     report.tablecell()
     if isinstance(target, understand.Arch):
-      report.pagelink(target.longname())
-      report.print(target.name())
+      if archLink:
+        report.pagelink(target.longname())
+      else:
+        report.arch(target)
+      if archnameformat == "long":
+        report.print(target.longname())
+      else:
+        report.print(target.name())
     else:
       isfile = target.kind().check("file ~unresolved ~unknown")
       if isfile and link:
@@ -28,6 +34,7 @@ def metricsTable(report, metriclist, targetlist, link=False, filenameformat="lon
         report.print(target.name())
     report.pagelink()
     report.entity()
+    report.arch()
     for m in metriclist:
       report.tablecell()
       val = target.metric(m)

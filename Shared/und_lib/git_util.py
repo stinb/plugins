@@ -25,12 +25,12 @@ def fileToListFromLog(format, db):
     return dict()
 
   pathToFile = dict()
-  wd.replace('\\','/')
+  wd = wd.replace('\\','/')
   if not wd.endswith('/'):
     wd += '/'
   for file in db.ents("file ~unknown ~unresolved"):
     path = file.longname()
-    path.replace('\\','/')
+    path = path.replace('\\','/')
     if path.startswith(wd):
       path = path[len(wd):]
     pathToFile[path] = file
@@ -42,7 +42,7 @@ def fileToListFromLog(format, db):
     if line.startswith("#"):
       cur = line[1:]
     elif line:
-      line.replace('\\','/')
+      line = line.replace('\\','/')
       file = pathToFile.get(line)
       if file:
         fileToList.setdefault(file,[]).append(cur)
@@ -69,9 +69,11 @@ def listFromLog(db, target, format):
 
   return gitlog.splitlines()
 
-def fileToListFromCache(und_cache, db, key):
+def fileToListFromCache(plugin, und_cache, db, key):
   fileToList = dict()
   for file in db.ents("file ~unknown ~unresolved"):
+    if plugin.is_aborted():
+      return dict()
     keyList = und_cache.value(ent=file,key=key)
     if keyList:
       fileToList[file] = keyList
@@ -79,7 +81,7 @@ def fileToListFromCache(und_cache, db, key):
 
 def fileToListFromPlugin(plugin, db, cacheKey, logKey):
   if hasCache(plugin):
-    return fileToListFromCache(plugin.cache("Git"), db, cacheKey)
+    return fileToListFromCache(plugin, plugin.cache("Git"), db, cacheKey)
   return fileToListFromLog(logKey, db)
 
 def gitAuthors(plugin, db):
@@ -110,6 +112,18 @@ def hasGit(plugin,db=None):
 def hasCache(plugin):
   return hasattr(plugin, "cache") and plugin.cache("Git") and not plugin.cache("Git").is_empty()
 
+def buildCache(plugin):
+  """
+  Build the Git cache using the plugin's cancel. Call this before computing
+  Git metrics through ent.metric(), which can't be canceled while the cache
+  builds. Returns False if the plugin was aborted.
+  """
+  if hasCache(plugin):
+    files = plugin.db().ents("file ~unknown ~unresolved")
+    if files:
+      plugin.cache("Git").value(key="commits", ent=files[0])
+  return not plugin.is_aborted()
+
 def archHasGit(plugin, arch):
   return hasCache(plugin) or ((arch.longname().startswith("Directory Structure/") or arch.name() == "Directory Structure") and hasGit(plugin))
 
@@ -138,10 +152,12 @@ def targetAuthorCounts(plugin, target):
     for file in targetToFileList(target):
       fileCommits = und_cache.value(key="commits", ent=file, value=[])
       fileAuthors = und_cache.value(key="authors", ent=file, value=[])
-      for i in range(len(fileCommits)):
-        if fileCommits[i] not in commits:
-          commits.add(fileCommits[i])
-          authors[fileAuthors[i]] = authors.get(fileAuthors[i],0) + 1
+      if plugin.is_aborted():
+        return dict(), 0
+      for commit, author in zip(fileCommits, fileAuthors):
+        if commit not in commits:
+          commits.add(commit)
+          authors[author] = authors.get(author, 0) + 1
     sum = len(commits)
   else:
     authorList = listFromLog(plugin.db(), target, "%an")
@@ -172,6 +188,8 @@ def targetGitValues(plugin, target, cacheKey, logKey):
 
     values = set()
     for file in files:
+      if plugin.is_aborted():
+        return set()
       for val in cache_vals(cacheKey, und_cache, file):
         values.add(val)
     return values
@@ -182,7 +200,7 @@ def targetGitValues(plugin, target, cacheKey, logKey):
     for key in logKey:
       sublist = listFromLog(plugin.db(), target, key)
       if sublist:
-        lists.append()
+        lists.append(sublist)
     return tuple(zip(*lists))
 
 def kindstringHasGit(plugin, entkindstr):

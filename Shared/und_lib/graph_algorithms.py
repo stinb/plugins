@@ -1,4 +1,4 @@
-def sccList(successorFunc, roots, calcCondensedGraph = False):
+def sccList(successorFunc, roots, calcCondensedGraph = False, isAborted=None):
   '''
   Find the strongly connected components reachable from roots using Tarjan's
   algorithm.
@@ -34,6 +34,8 @@ def sccList(successorFunc, roots, calcCondensedGraph = False):
     work = [(root, iter(successorFunc(root)))]
 
     while work:
+      if isAborted is not None and isAborted():
+        return list(), dict()
       node, successors = work[-1]
       descended = False
       for toNode in successors:
@@ -73,6 +75,8 @@ def sccList(successorFunc, roots, calcCondensedGraph = False):
       condensed[i] = set()
 
     for node, src in nodeToComponent.items():
+      if isAborted is not None and isAborted():
+        return list(), dict()
       for to in successorFunc(node):
         dest = nodeToComponent[to]
         if src != dest:
@@ -80,7 +84,7 @@ def sccList(successorFunc, roots, calcCondensedGraph = False):
 
   return components, condensed
 
-def disjointParts(successorFunc, roots):
+def disjointParts(successorFunc, roots, isAborted=None):
   '''
   Find the weakly connected components reachable from roots: groups of nodes
   linked by edges in either direction. Uses union-find, so edges are only
@@ -107,6 +111,8 @@ def disjointParts(successorFunc, roots):
       pending.append(root)
 
   while pending:
+    if isAborted is not None and isAborted():
+      return list()
     node = pending.pop()
     for toNode in successorFunc(node):
       if toNode not in parent:
@@ -121,7 +127,7 @@ def disjointParts(successorFunc, roots):
     parts.setdefault(find(node), set()).add(node)
   return list(parts.values())
 
-def layers(dagSuccessorFunc, topologicalOrder):
+def layers(dagSuccessorFunc, topologicalOrder, isAborted=None):
   '''
   Return a list of sets of nodes forming layers in the graph. Index 0 is the
   lowest layer, and nodes with no incoming dependencies are in the last layer.
@@ -135,6 +141,8 @@ def layers(dagSuccessorFunc, topologicalOrder):
   '''
   depth = dict()
   for node in topologicalOrder:
+    if isAborted is not None and isAborted():
+      return []
     d = depth.setdefault(node, 0)
     for toNode in dagSuccessorFunc(node):
       depth[toNode] = max(d + 1, depth.get(toNode, 0))
@@ -148,7 +156,7 @@ def layers(dagSuccessorFunc, topologicalOrder):
     layerList[maxDepth - d].add(node)
   return layerList
 
-def reachability(dagSuccessorFunc, topologicalOrder):
+def reachability(dagSuccessorFunc, topologicalOrder, isAborted = None):
   '''
   Return a dictionary from a node to the set of all nodes that can reach it,
   transitively.
@@ -160,6 +168,8 @@ def reachability(dagSuccessorFunc, topologicalOrder):
   '''
   reachInto = {}
   for node in topologicalOrder:
+    if isAborted is not None and isAborted():
+      return dict()
     reachedBy = reachInto.setdefault(node, set())
     for toNode in dagSuccessorFunc(node):
       reachInto.setdefault(toNode, set()).update(reachedBy, (node,))

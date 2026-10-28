@@ -41,7 +41,7 @@ class DepMatrix:
       return defaultValue
 
   # File matrix
-  def __init__(self, entities=set(), progress=None):
+  def __init__(self, entities=set(), progress=None, isAborted=None):
     self.graph = dict()
     self.order = []
     self.metrics = []
@@ -54,16 +54,18 @@ class DepMatrix:
       self.metrics.append("dfo")
       progressMax = self.size()
       for i, file in enumerate(entities):
+        if isAborted is not None and isAborted():
+          return
         self.order.append(file)
         self.graph[file] = self.FileData(file, entities)
         if progress and i % 20 == 0:
           progress("\rCalculating Dependencies: %d of %d entities" % (i+1, progressMax))
       if progress:
         progress("\rCalculating Dependencies: %d of %d entities\n" % (progressMax, progressMax))
-      self.calcVisibility(progress)
-      self.calcFanIns()
+      self.calcVisibility(progress, isAborted)
+      self.calcFanIns(isAborted)
 
-  def calcVisibility(self, progress=None):
+  def calcVisibility(self, progress=None, isAborted=None):
     if "vfo" in self.metrics:
       return
     self.metrics.append("vfo")
@@ -71,6 +73,8 @@ class DepMatrix:
     dirtotal = 0
     progressMax = self.size()
     for i, data in enumerate(self.graph.values()):
+      if isAborted is not None and isAborted():
+        return
       visited = set()
       toVisit = list(data.direct)
       while toVisit:
@@ -89,7 +93,7 @@ class DepMatrix:
       self.values["propagation_cost"] = total / (self.size() * self.size()) * 100 # percentage
       self.values["dir_propagation_cost"] = dirtotal / (self.size() * self.size()) * 100 # percentage
 
-  def calcFanIns(self):
+  def calcFanIns(self, isAborted=None):
     if "vfi" in self.metrics or ("vfo" not in self.metrics and "dfo" in self.metrics):
       return
     vfi = 0 if "vfo" in self.metrics else None
@@ -97,6 +101,8 @@ class DepMatrix:
       data.directFanIn = 0
       data.visibleFanIn = vfi
     for data in self.graph.values():
+      if isAborted is not None and isAborted():
+        return
       for file in data.direct:
         self.graph[file].directFanIn += 1
       for file in data.visible:
@@ -106,7 +112,7 @@ class DepMatrix:
     if "vfo" in self.metrics and "vfi" not in self.metrics:
       self.metrics.append("vfi")
 
-  def calcCycles(self):
+  def calcCycles(self, isAborted=None):
     """
     Find the size, vfi, and vfo of the largest cycle and the size of the next
     largest cycle and store them in the values dictionary of the matrix
@@ -114,7 +120,7 @@ class DepMatrix:
     if "core_size" in self.values:
       return
 
-    components, _ = sccList(lambda file: self.graph[file].direct, self.order)
+    components, _ = sccList(lambda file: self.graph[file].direct, self.order, isAborted=isAborted)
 
     if not components:
       return components
@@ -146,12 +152,14 @@ class DepMatrix:
     for m in metrics:
       self.values["median_"+m] = median(lists[m])
 
-  def findType(self):
+  def findType(self, isAborted=None):
     cnt = self.size()
     if cnt < 1:
       return
 
-    self.calcCycles()
+    self.calcCycles(isAborted=isAborted)
+    if "core_size" not in self.values:
+      return
     largest = self.values["core_size"]
     second = self.values["second_largest_cycle_size"]
 
@@ -163,14 +171,16 @@ class DepMatrix:
     elif largest/cnt <= 0.06:
       self.type = "Borderline Core-Periphery"
 
-  def classify(self, strategy="auto"):
+  def classify(self, strategy="auto", isAborted=None):
     # Allow calling this function with different strategies, so clear
     # previous results
     for prevCategory in self.categories:
       if prevCategory in self.values:
         del self.values[prevCategory]
 
-    self.findType()
+    self.findType(isAborted=isAborted)
+    if isAborted is not None and isAborted():
+      return
     if strategy == "median" or (strategy == "auto" and self.type in ["Hierarchical", "Multi-Core"]):
       # hierarchical or multi-core, use medians
       self.calcMedians(["vfi","vfo"])

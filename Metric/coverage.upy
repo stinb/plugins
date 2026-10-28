@@ -64,6 +64,7 @@ def tags(id):
   taglist = [
     'Category: Coverage',
     'Language: Any',
+    'Cost: Cached',
   ]
   if id == "CoverageHits":
     taglist.extend([
@@ -198,7 +199,7 @@ def value(metric, target):
       sums.addFromCache(ent, und_cache)
   else:
     cov_file = coverage_file(metric)
-    for cov in scanCoverageFile(cov_file, fileents):
+    for cov in scanCoverageFile(metric, cov_file, fileents):
       sums.addCoverageObject(cov)
 
   return sums.value(metric.id())
@@ -262,6 +263,12 @@ class FileCoverage:
       hits = int(parts[0])
       id = ','.join(parts[1:])
       self.functions[id] = self.functions.get(id,0) + hits
+    elif text.startswith("FNA:"):
+      # LCOV 2.x: FNA:<index>,<hits>,<name>
+      parts = text[4:].split(',')
+      hits = int(parts[1])
+      id = ','.join(parts[2:])
+      self.functions[id] = self.functions.get(id,0) + hits
 
     return True # still in file
 
@@ -272,7 +279,7 @@ class FileCoverage:
     cache.insert(countHit(self.lines), key="CoverageLinesHit", ent=self.file)
     cache.insert(self.locations, key="seek", ent=self.file)
 
-def scanCoverageFile(cov_file, entList):
+def scanCoverageFile(metric, cov_file, entList):
   # LCOV File format as described here:
   # https://ltp.sourceforge.net/coverage/lcov/geninfo.1.php
   nameToFile = dict()
@@ -284,7 +291,9 @@ def scanCoverageFile(cov_file, entList):
   curCoverage = None
   curLoc = 0
   with open(cov_file, 'r') as f:
-    for line in f:
+    for i, line in enumerate(f):
+      if i % 1000 == 0 and metric.is_aborted():
+        return []
       text = line.strip()
       if text.startswith("SF:"): # Starting record for file
         fileEnt = nameToFile.get(text[3:])
@@ -354,7 +363,10 @@ def findCache(metric):
       # Build cache if empty
       if und_cache.is_empty():
         entList = metric.db().ents("file ~unknown ~unresolved")
-        for coverageObj in scanCoverageFile(cov_file, entList):
+        coverageObjs = scanCoverageFile(metric, cov_file, entList)
+        if metric.is_aborted():
+          return None
+        for coverageObj in coverageObjs:
           coverageObj.addToCache(und_cache)
         und_cache.insert(modtime, key="filemod")
   return und_cache
@@ -368,7 +380,7 @@ def fileCoverage(metric, file):
     partialScanCoverage(cov_file, cov, und_cache.value(key="seek",ent=file))
     return cov
 
-  coverages = list(scanCoverageFile(cov_file, [file]))
+  coverages = list(scanCoverageFile(metric, cov_file, [file]))
   if coverages:
     return coverages[0]
   return FileCoverage(file)
