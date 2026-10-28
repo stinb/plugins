@@ -1,0 +1,152 @@
+import re
+
+ERR1 = 'Character dummy argument "%1" is assigned a concatenation that starts with itself, so nothing is appended'
+ERR2 = 'Character dummy argument "%1" is assigned a concatenation of itself, which is truncated if it does not fit'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def ids():
+    return ('FORTRAN_A000',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Dummy Arguments/Character dummy arguments shall not be assigned a concatenation that starts with themselves'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Dummy Arguments',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A character dummy argument shall not be assigned a concatenation that starts
+with its own value, such as <code>s = s // '.dat'</code>.</p>
+
+<p><b>Rationale</b></p>
+<p>The length of a character dummy argument is fixed by the caller, whether it
+is declared <code>len=*</code>, <code>len=n</code> or with a constant length.
+Assignment truncates the right-hand side to that length, so
+<code>s = s // x</code> always assigns <code>s</code> its own value and nothing
+is appended. Code written this way expects the string to grow, and silently
+loses the appended text.</p>
+
+<p>FORTRAN 77 also forbids it: none of the character positions being defined in
+the variable on the left of a character assignment may be referenced in the
+expression on the right.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">subroutine add_extension(fstring)
+  character(len=*), intent(inout) :: fstring
+  fstring = fstring // '.dat'          ! Noncompliant
+end subroutine
+
+subroutine add_extension_ok(fstring, fname)
+  character(len=*), intent(in) :: fstring
+  character(len=:), allocatable, intent(out) :: fname
+  fname = fstring // '.dat'            ! Compliant
+end subroutine
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>With the option enabled, the check also reports concatenations that keep the
+dummy argument's value elsewhere, such as <code>s = trim(s) // t</code> or
+<code>s = 'pre' // s</code>. These work when there is room but are truncated
+when the result is longer than the dummy argument.</p>
+<p>When the target is a substring or array element, it is reported only if
+the right-hand side repeats exactly the same reference, as in
+<code>names(i) = names(i) // 'x'</code>.</p>
+'''
+
+
+def define_options(check):
+    check.options().checkbox('flagTruncation', 'Also flag concatenations of itself that may be truncated, such as s = trim(s) // t', False)
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    flagTruncation = check.options().lookup('flagTruncation')
+    lexer = None
+    for ref in file.filerefs('Set', 'Dummy Argument'):
+        ent = ref.ent()
+        if not re.match(r'\s*CHARACTER\b', ent.type() or '', re.I):
+            continue
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if not lex:
+            continue
+
+        target, operands = assignment(lex)
+        if len(operands) < 2:
+            continue
+        if sameTokens(operands[0], target):
+            check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
+        elif flagTruncation and any(isItself(operand, target) for operand in operands):
+            check.violation(ent, file, ref.line(), ref.column(), ERR2, ent.name())
+
+
+def assignment(lex):
+    # The target, and the operands of the top-level // on the right-hand side
+    target = []
+    depth = 0
+    while lex and not (depth == 0 and lex.text() == '='):
+        if lex.token() == 'EndOfStatement' or lex.text() == ';':
+            return [], []
+        if lex.text() == '(':
+            depth += 1
+        elif lex.text() == ')':
+            depth -= 1
+        elif depth == 0 and target:
+            return [], []
+        target.append(lex)
+        lex = nextCode(lex)
+    if not lex:
+        return [], []
+
+    operands = [[]]
+    lex = nextCode(lex)
+    while lex and lex.token() != 'EndOfStatement' and lex.text() != ';':
+        text = lex.text()
+        if text == '(':
+            depth += 1
+        elif text == ')':
+            depth -= 1
+        if depth == 0 and text == '//':
+            operands.append([])
+        else:
+            operands[-1].append(lex)
+        lex = nextCode(lex)
+    return target, operands
+
+
+def isItself(operand, target):
+    # The target, or the target wrapped in trim()
+    if sameTokens(operand, target):
+        return True
+    return (len(operand) == len(target) + 3
+        and operand[0].text().lower() == 'trim'
+        and operand[1].text() == '('
+        and sameTokens(operand[2:-1], target)
+        and operand[-1].text() == ')')
+
+
+def sameTokens(a, b):
+    return len(a) == len(b) and all(x.text().lower() == y.text().lower() for x, y in zip(a, b))
+
+
+def nextCode(lex):
+    lex = lex.next()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.next()
+    return lex
