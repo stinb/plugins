@@ -48,3 +48,12 @@ void standardTypeOfOperands(void)
   s32a |= ch - '0';        // UndCC_Valid - char minus char takes the standard type
   s32a = (s16a << 2) + u32a; // UndCC_Valid - a signed shift takes the standard type
 }
+
+void pointerAlignment(const char *p)
+{
+  uint32_t u32a = 4;
+  uint64_t u64a = 0;
+
+  u64a = ((uint64_t)(uintptr_t)p + (u32a - 1U)) & ~(uint64_t)(u32a - 1U);   // UndCC_Violation - the composite is 32 bit, the cast pointer 64
+  u64a = ((uint64_t)(uintptr_t)p + ((uint64_t)u32a - 1U)) & ~((uint64_t)u32a - 1U); // UndCC_Valid - the composite is widened before the subtraction
+}
