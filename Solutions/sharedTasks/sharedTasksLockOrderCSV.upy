@@ -1,0 +1,117 @@
+# Interactive report listing the lock orders of shared tasks, one row per
+# call site, with possible deadlocks. Use the report's built-in CSV export
+# (GUI export button or `und report -format csv`) to save the tables to disk.
+
+
+from sharedTasks import *
+
+
+LOCKS_OPTION = 'Locks'
+LOCKS_ALL = 'All'
+LOCKS_DEADLOCK = 'Deadlock cycles only'
+
+
+def name():
+    return 'Shared Tasks Lock Order CSV'
+
+def description():
+    return '''Table of the lock orders that tasks use, with possible deadlocks.
+
+    <p>This report lists what the
+    <a href="und://plugin/graph/Shared%20Tasks-Lock%20Order">lock order</a>
+    graph shows, one row for each call site that takes a lock while the
+    task may still hold another. It uses the same architecture as the
+    graph.</p>
+
+    <p>The columns are:</p>
+    <ul>
+      <li><b>Held Lock</b> and <b>Acquired Lock</b>: the task takes the
+      acquired lock while it may still hold the held lock. Locks with the
+      same name also show their file, function or lock and unlock pair,
+      whichever differ.</li>
+      <li><b>Possible Deadlock</b>: x when this order is part of a possible
+      deadlock.</li>
+      <li><b>Order to Reverse</b>: x when this order is the suggested fix
+      for its deadlock.</li>
+      <li><b>Cycle</b>: the numbers of the possible deadlocks this order is
+      part of, so rows of the same deadlock can be grouped. Deadlocks
+      between fewer locks are numbered first.</li>
+      <li><b>Task</b>, <b>Function</b>, <b>File</b> and <b>Line</b>: the
+      task, and where the acquired lock is taken.</li>
+    </ul>
+
+    <p>When locks or deadlocks may be missing, a second table lists the
+    reasons. It isn't made when everything was checked. Export both tables to CSV from the command line with:</p>
+
+    <pre>und report -format csv -arch "ARCH" "Shared Tasks Lock Order CSV" OUT_DIRECTORY</pre>
+
+    <p>The lock orders are written to <code>table0.csv</code>, and the
+    reasons, when there are any, to <code>table1.csv</code>.</p>
+
+    <p>See the
+    <a href="und://plugin/graph/Shared%20Tasks-Lock%20Order">lock order</a>
+    graph for how to set up the architecture. Also related are
+    <a href="und://plugins?filter=Tags%3A%22Concurrency%22">concurrency</a>
+    plugins. </p>
+    '''
+
+def tags():
+    return [
+        'Solution: Shared Tasks',
+        'Target: Architectures',
+        'Language: Any',
+        'Concurrency'
+    ]
+
+def test_architecture(arch):
+    return True
+
+
+def init(report):
+    report.options().choice(LOCKS_OPTION, LOCKS_OPTION, [LOCKS_ALL, LOCKS_DEADLOCK], LOCKS_ALL)
+
+
+def cellEnt(report, ent, text):
+    report.tablecell()
+    report.entity(ent)
+    report.print(text)
+    report.entity()
+
+
+def cellText(report, text):
+    report.tablecell()
+    report.print(text)
+
+
+def generate(report, target):
+    order = lock_order(target, report.options().lookup(LOCKS_OPTION) == LOCKS_DEADLOCK)
+
+    # Sort by name and position. Entity ids change between analyses, so never sort on them.
+    rows = []
+    for key, refs in order.groups.items():
+        held, acquired, task = key
+        for ref in refs:
+            rows.append(((order.lock_names[held], order.lock_names[acquired], task.longname(),
+                          ref.file().relname(), ref.line(), ref.column()), key, ref))
+    rows.sort(key=lambda row: row[0])
+
+    report.table(['Held Lock', 'Acquired Lock', 'Possible Deadlock', 'Order to Reverse',
+                  'Cycle', 'Task', 'Function', 'File', 'Line'])
+    for _, key, ref in rows:
+        held, acquired, task = key
+        cellEnt(report, order.lock_ents[held], order.lock_names[held])
+        cellEnt(report, order.lock_ents[acquired], order.lock_names[acquired])
+        cellText(report, 'x' if key in order.deadlock_edges else '-')
+        cellText(report, 'x' if key in order.fix_edges else '-')
+        cellText(report, ', '.join(str(number) for number in order.edge_cycles.get(key, [])))
+        cellEnt(report, task, task.longname())
+        cellEnt(report, ref.scope(), ref.scope().longname())
+        cellEnt(report, ref.file(), ref.file().relname())
+        cellText(report, str(ref.line()))
+    report.table()
+
+    if order.warnings:
+        report.table(['Note'])
+        for message in order.warnings:
+            cellText(report, message.replace('\n', ' '))
+        report.table()

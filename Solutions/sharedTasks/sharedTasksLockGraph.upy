@@ -79,7 +79,9 @@ def description():
     deadlocks slow. If it stops early, the graph says so.</p>
 
     <p>See also the shared tasks graph by
-    <a href="und://plugin/graph/Shared%20Tasks-By%20Function">function</a>.
+    <a href="und://plugin/graph/Shared%20Tasks-By%20Function">function</a>,
+    and the <a href="und://plugin/ireport/Shared%20Tasks%20Lock%20Order%20CSV">
+    lock order table</a> that can be exported to CSV.
     Also related are <a href="und://plugins?filter=Tags%3A%22Concurrency%22">
     concurrency</a> plugins. </p>
    '''
@@ -107,64 +109,20 @@ def init(graph, target):
 
 
 def draw(graph, target):
-    tasks, enableDisableFunctions, _ = parseArch(target)
-    edges, lockEnts, lockCalls, unidentified = lock_order_edges(tasks, enableDisableFunctions)
-    cycles, complete = find_lock_cycles(edges)
-
-    deadlockLocks: set = set()
-    deadlockEdges: set = set()
-    fixEdges: set = set()
-    siteCounts = lock_order_site_counts(edges)
-    for cycle in cycles:
-        deadlockLocks.update(cycle.locks)
-        for edge in cycle.participants:
-            deadlockEdges.add((edge.held, edge.acquired, edge.task))
-        fix = cycle_fix_edge(cycle, siteCounts)
-        for edge in cycle.participants:
-            if (edge.held, edge.acquired) == (fix.held, fix.acquired):
-                fixEdges.add((edge.held, edge.acquired, edge.task))
-
     onlyDeadlocks = graph.options().lookup(LOCKS_OPTION) == LOCKS_DEADLOCK
-
-    # One drawn edge per lock order and task, synced to the first call site
-    grouped: dict[tuple, list[LockOrderEdge]] = {}
-    for edge in edges:
-        key = (edge.held, edge.acquired, edge.task)
-        if onlyDeadlocks and key not in deadlockEdges:
-            continue
-        grouped.setdefault(key, []).append(edge)
+    order = lock_order(target, onlyDeadlocks)
 
     graph.set('rankdir', 'LR')
-    messages = []
-    if not tasks:
-        messages.append('No tasks were found in the architecture.')
-    elif not enableDisableFunctions:
-        messages.append('No lock and unlock functions were found in the architecture.')
-    elif not lockCalls:
-        messages.append('The tasks never call the lock functions.')
-    else:
-        if unidentified:
-            if unidentified == 1:
-                counted = "1 lock call isn't shown because its lock can't be identified."
-            else:
-                counted = f"{unidentified} lock calls aren't shown because their lock can't be identified."
-            messages.append(counted + "\nCheck for headers the analysis couldn't find, or locks passed by pointer.")
-        if lockEnts and not edges:
-            messages.append('No task takes one lock while holding another.')
-        elif not complete:
-            messages.append('The deadlock search stopped early, so some possible deadlocks may not be shown.')
-        elif onlyDeadlocks and edges and not cycles:
-            messages.append('No possible deadlocks were found.')
 
     # The graph view doesn't draw graph labels, so the messages are a text node
-    if messages:
-        graph.node('\n'.join(messages)).set('shape', 'none')
+    if order.messages:
+        graph.node('\n'.join(order.messages)).set('shape', 'none')
     nodes = dict()
 
     def lockNode(lid):
         if lid not in nodes:
-            node = graph.node(lockEnts[lid].longname(), lockEnts[lid])
-            if lid in deadlockLocks:
+            node = graph.node(order.lock_names[lid], order.lock_ents[lid])
+            if lid in order.deadlock_locks:
                 node.set('fillcolor', red + opacity)
                 node.set('color', red)
                 node.set('penwidth', '2')
@@ -173,16 +131,16 @@ def draw(graph, target):
             nodes[lid] = node
         return nodes[lid]
 
-    for key, group in sorted(grouped.items(), key=lambda item: item[0][2].longname()):
+    # One drawn edge per lock order and task, synced to the first call site
+    for key, refs in sorted(order.groups.items(), key=lambda item: item[0][2].longname()):
         held, acquired, task = key
-        refs = {refStr(ref): ref for edge in group for ref in edge.refs}
         label = task.longname()
         if len(refs) > 1:
             label += f' ({len(refs)} sites)'
         drawn = graph.edge(lockNode(held), lockNode(acquired), label)
-        drawn.sync(min(refs.values(), key=refComparator))
-        if key in deadlockEdges:
+        drawn.sync(refs[0])
+        if key in order.deadlock_edges:
             drawn.set('color', red)
             drawn.set('penwidth', '2')
-        if key in fixEdges:
+        if key in order.fix_edges:
             drawn.set('style', 'dashed')

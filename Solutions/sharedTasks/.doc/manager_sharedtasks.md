@@ -2,7 +2,7 @@ Calls graphs with global objects are useful for finding all global objects acces
 
 ![image](shared_tasks.png)
 
-Architectures are used to tag the root functions defining the call trees. Then shared global objects can be found by [graphing](und://plugin/graph/Shared%20Tasks-By%20Function) or [exporting](und://plugin/ireport/Shared%20Tasks%20CSV) the architecture. It's also possible to start from an object and find the root functions with the [Shared Tasks - By Object](und://plugin/graph/Shared%20Tasks-By%20Object) graph. The [Shared Tasks - Lock Order](und://plugin/graph/Shared%20Tasks-Lock%20Order) graph finds possible deadlocks, where tasks take the same locks in different orders.
+Architectures are used to tag the root functions defining the call trees. Then shared global objects can be found by [graphing](und://plugin/graph/Shared%20Tasks-By%20Function) or [exporting](und://plugin/ireport/Shared%20Tasks%20CSV) the architecture. It's also possible to start from an object and find the root functions with the [Shared Tasks - By Object](und://plugin/graph/Shared%20Tasks-By%20Object) graph. The [Shared Tasks - Lock Order](und://plugin/graph/Shared%20Tasks-Lock%20Order) graph finds possible deadlocks, where tasks take the same locks in different orders. The [Shared Tasks Lock Order CSV](und://plugin/ireport/Shared%20Tasks%20Lock%20Order%20CSV) report lists the same lock orders as a table.
 
 ## Architecture Structure
 

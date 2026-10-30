@@ -732,7 +732,7 @@ def filterIncomingEdges(
 
 def parseArch(arch: Arch) -> tuple[dict[Ent, dict[str, str]], dict[Ent, dict[str, bool | Ent]], set[str]]:
     tasks: dict[Ent, dict[str, str]] = dict()
-    enableDisableFunctions: dict[Ent, dict[str, bool | Ent]] = dict() # inner dict is {'disable': bool, 'other': Ent}
+    enableDisableFunctions: dict[Ent, dict[str, bool | Ent]] = dict() # inner dict is {'disable': bool, 'other': Ent, 'group': str}
     foundFields = set()
 
     # Parse the architecture
@@ -761,8 +761,8 @@ def parseArch(arch: Arch) -> tuple[dict[Ent, dict[str, str]], dict[Ent, dict[str
                         enable = ent
                 if not disable or not enable:
                     continue
-                enableDisableFunctions[disable] = {'disable': True, 'other': enable}
-                enableDisableFunctions[enable] = {'disable': False, 'other': disable}
+                enableDisableFunctions[disable] = {'disable': True, 'other': enable, 'group': interruptPair.name()}
+                enableDisableFunctions[enable] = {'disable': False, 'other': disable, 'group': interruptPair.name()}
 
         # ARCH_NAME/.*priority.*/INTEGER/FUNCTION_NAME
         elif 'task' in name or any(field in name for field in TASK_FIELDS):
@@ -1710,3 +1710,115 @@ def lock_order_site_counts(edges: list[LockOrderEdge]) -> dict[tuple, int]:
 def cycle_fix_edge(cycle: LockCycle, site_counts: dict[tuple, int]) -> LockOrderEdge:
     """The cycle edge to reverse: the lock order used at the fewest call sites."""
     return min(reversed(cycle.edges), key=lambda e: site_counts[(e.held, e.acquired)])
+
+
+def _lock_names(lock_ents: dict[tuple, Ent], enable_disable_functions: dict) -> dict[tuple, str]:
+    """A name for each lock_id. Locks sharing a name add whichever of their
+    file, enclosing function and lock pair's architecture group differ."""
+    pair_id_map, _, _ = build_lock_maps(enable_disable_functions)
+    pair_names = {pid: enable_disable_functions[fn]['group'] for fn, pid in pair_id_map.items()}
+
+    def file_name(ent: Ent) -> str:
+        ref = ent.ref('Definein') or ent.ref('Declarein')
+        return ref.file().relname() if ref else ''
+
+    def function_name(ent: Ent) -> str:
+        parent = ent.parent()
+        return parent.name() if parent and parent.kind().check('Function') else ''
+
+    by_name: dict[str, list[tuple]] = {}
+    for lid, ent in lock_ents.items():
+        by_name.setdefault(ent.longname(), []).append(lid)
+    names: dict[tuple, str] = {}
+    for name, lids in by_name.items():
+        parts = [{lid: file_name(lock_ents[lid]) for lid in lids},
+                 {lid: function_name(lock_ents[lid]) for lid in lids},
+                 {lid: pair_names.get(lid[0], '') for lid in lids}]
+        parts = [part for part in parts if len(set(part.values())) > 1]
+        for lid in lids:
+            extra = [part[lid] for part in parts if part[lid]]
+            names[lid] = f'{name} ({", ".join(extra)})' if extra else name
+    return names
+
+
+@dataclass
+class LockOrder:
+    lock_names: dict[tuple, str]
+    groups: dict[tuple, list[Ref]]       # (held, acquired, task) -> its call sites
+    cycles: list[LockCycle]              # numbered from 1 in this order
+    deadlock_locks: set[tuple]
+    deadlock_edges: set[tuple]           # (held, acquired, task) in some cycle
+    fix_edges: set[tuple]                # (held, acquired, task) to reverse
+    edge_cycles: dict[tuple, list[int]]  # (held, acquired, task) -> cycle numbers
+    messages: list[str]                  # shown on the graph
+    warnings: list[str]                  # the messages that aren't just nothing found, also exported
+    lock_ents: dict[tuple, Ent]
+
+
+def lock_order(arch: Arch, only_deadlocks: bool = False) -> LockOrder:
+    """The lock orders the architecture's tasks use, with their possible
+    deadlocks, as shown by the Lock Order graph and table."""
+    tasks, enable_disable_functions, _ = parseArch(arch)
+    edges, lock_ents, lock_calls, unidentified = lock_order_edges(tasks, enable_disable_functions)
+    cycles, complete = find_lock_cycles(edges)
+    names = _lock_names(lock_ents, enable_disable_functions)
+
+    # Number cycles by lock name, since lock_ids change between analyses
+    def cycle_key(cycle: LockCycle):
+        labels = [names[lid] for lid in cycle.locks]
+        start = labels.index(min(labels))
+        return (len(labels), labels[start:] + labels[:start])
+    cycles.sort(key=cycle_key)
+
+    deadlock_locks: set = set()
+    deadlock_edges: set = set()
+    fix_edges: set = set()
+    edge_cycles: dict[tuple, list[int]] = {}
+    site_counts = lock_order_site_counts(edges)
+    for number, cycle in enumerate(cycles, 1):
+        deadlock_locks.update(cycle.locks)
+        fix = cycle_fix_edge(cycle, site_counts)
+        for edge in cycle.participants:
+            key = (edge.held, edge.acquired, edge.task)
+            deadlock_edges.add(key)
+            if number not in edge_cycles.setdefault(key, []):
+                edge_cycles[key].append(number)
+            if (edge.held, edge.acquired) == (fix.held, fix.acquired):
+                fix_edges.add(key)
+
+    # One group per lock order and task; the same site can be under several gates
+    groups: dict[tuple, dict[str, Ref]] = {}
+    for edge in edges:
+        key = (edge.held, edge.acquired, edge.task)
+        if only_deadlocks and key not in deadlock_edges:
+            continue
+        sites = groups.setdefault(key, {})
+        for ref in edge.refs:
+            sites[refStr(ref)] = ref
+
+    messages = []
+    found_nothing = []
+    if not tasks:
+        messages.append('No tasks were found in the architecture.')
+    elif not enable_disable_functions:
+        messages.append('No lock and unlock functions were found in the architecture.')
+    elif not lock_calls:
+        messages.append('The tasks never call the lock functions.')
+    else:
+        if unidentified:
+            if unidentified == 1:
+                counted = "1 lock call isn't shown because its lock can't be identified."
+            else:
+                counted = f"{unidentified} lock calls aren't shown because their lock can't be identified."
+            messages.append(counted + "\nCheck for headers the analysis couldn't find, or locks passed by pointer.")
+        if lock_ents and not edges:
+            found_nothing.append('No task takes one lock while holding another.')
+        elif not complete:
+            messages.append('The deadlock search stopped early, so some possible deadlocks may not be shown.')
+        elif only_deadlocks and edges and not cycles:
+            found_nothing.append('No possible deadlocks were found.')
+
+    return LockOrder(names,
+                     {key: sorted(sites.values(), key=refComparator) for key, sites in groups.items()},
+                     cycles, deadlock_locks, deadlock_edges, fix_edges, edge_cycles,
+                     messages + found_nothing, messages, lock_ents)

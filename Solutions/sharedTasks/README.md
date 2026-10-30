@@ -54,6 +54,8 @@ The same pairs work for mutexes and semaphores. The pair names can also be `lock
 
 The plugin [sharedTasksLockGraph.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksLockGraph.upy) finds possible deadlocks. It draws each lock as a node, with an edge when a task takes one lock while it may still hold another. When tasks take the same locks in different orders, the cycle is drawn in red. Locks are told apart by the object whose address is passed to the lock function, like `pthread_mutex_lock(&mutex)`.
 
+The interactive report [sharedTasksLockOrderCSV.upy](https://raw.githubusercontent.com/stinb/plugins/main/Solutions/sharedTasks/sharedTasksLockOrderCSV.upy) lists the same lock orders as a table, one row per call site, with columns for possible deadlocks, the order to reverse, and the deadlock cycle number.
+
 # Building Architectures
 
 There are a lot of options for building an architecture:
@@ -71,4 +73,12 @@ the command line:
 
 ```sh
 und report -format csv -arch "ARCH_LONGNAME" "Shared Tasks CSV" OUT_DIRECTORY
+```
+
+The Shared Tasks Lock Order CSV report exports the same way. The lock orders go
+to `table0.csv`. If locks or deadlocks may be missing, the reasons go to
+`table1.csv`:
+
+```sh
+und report -format csv -arch "ARCH_LONGNAME" "Shared Tasks Lock Order CSV" OUT_DIRECTORY
 ```
