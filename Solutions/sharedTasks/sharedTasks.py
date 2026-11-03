@@ -887,7 +887,7 @@ def buildEdgeInfo(
                 # If there are no other outgoing edges (siblings)
                 if len(outgoing[scope]) == 1:
                     # Push the incoming edges to the stack
-                    for otherEdgeKey in incoming[scope]:
+                    for otherEdgeKey in incoming.get(scope, ()):
                         edgeKeysToDeleteStack.append(otherEdgeKey)
                 # Delete the edge
                 outgoing[scope].remove(edgeKey)
