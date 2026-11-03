@@ -39,7 +39,10 @@ def cellText(report: ReportContext, text: str):
 
 
 def generateCSV(db: Db, arch: Arch, options: dict[str, str | bool], report: ReportContext):
-    edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields, arrayMemberEdges = buildEdgeInfo(db, arch, options)
+    buildResult = buildEdgeInfo(db, arch, options, report.is_aborted)
+    if buildResult is None:
+        return
+    edgeInfo, tasks, incoming, interruptDisabledRefs, foundFields, arrayMemberEdges = buildResult
 
     # Sort the objects
     objects = set()

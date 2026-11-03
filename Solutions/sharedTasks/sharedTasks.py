@@ -12,6 +12,10 @@ import understand
 from understand import Arch, CFNode, Db, Ent, Ref
 
 
+def _aborted(isAborted) -> bool:
+    return isAborted is not None and isAborted()
+
+
 class DictResult(Enum):
     NotInDict = 0
     NotInDb = 1
@@ -548,9 +552,12 @@ def addPointerDerefEdges(
         outgoing: dict,
         edgeInfo: dict,
         pointerDerefs: list[tuple[Ent, Ent, Ref]],
-        options: dict[str, str | bool]):
+        options: dict[str, str | bool],
+        isAborted=None):
     targetsCache: dict[tuple[int, int], list[tuple[Ent, list[tuple[Ent, Ref]]]]] = dict()
     for root, fun, ref in pointerDerefs:
+        if _aborted(isAborted):
+            return
         kindname = memberAccessKind(ref)
         if not kindname:
             continue
@@ -576,7 +583,11 @@ def getEdgeInfo(
         root: Ent,
         fun: Ent,
         options: dict[str, str | bool],
-        depth: int):
+        depth: int,
+        isAborted=None):
+
+    if _aborted(isAborted):
+        return
 
     # Base case: visiting a function again from the same root
     funKey = f'{root.id()} {fun.id()}'
@@ -678,9 +689,9 @@ def getEdgeInfo(
                     targets += [r.ent() for r in inst.ent().refs("Assign FunctionPtr")]
             for target in targets:
                 getEdgeInfo(cache, visited, tasks, incoming, outgoing,
-                            edgeInfo, arrayMemberEdges, pointerDerefs, root, target, options, depth + 1)
+                            edgeInfo, arrayMemberEdges, pointerDerefs, root, target, options, depth + 1, isAborted)
 
-        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, pointerDerefs, root, call.ent(), options, depth + 1)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, pointerDerefs, root, call.ent(), options, depth + 1, isAborted)
 
 
 def filterIncomingEdges(
@@ -789,7 +800,8 @@ def parseArch(arch: Arch) -> tuple[dict[Ent, dict[str, str]], dict[Ent, dict[str
 def buildEdgeInfo(
         db: Db,
         arch: Arch,
-        options: dict[str, str | bool]) -> tuple[dict, dict, dict, set[str], set[str]]:
+        options: dict[str, str | bool],
+        isAborted=None) -> tuple[dict, dict, dict, set[str], set[str]] | None:
 
     # Setup data for getEdgeInfo
     cache: DbCache = DbCache()
@@ -816,12 +828,16 @@ def buildEdgeInfo(
 
     # Get the refs going to each object/function
     for ent in tasks.keys():
-        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, pointerDerefs, ent, ent, options, 0)
-    addPointerDerefEdges(cache, visited, tasks, incoming, outgoing, edgeInfo, pointerDerefs, options)
+        getEdgeInfo(cache, visited, tasks, incoming, outgoing, edgeInfo, arrayMemberEdges, pointerDerefs, ent, ent, options, 0, isAborted)
+    addPointerDerefEdges(cache, visited, tasks, incoming, outgoing, edgeInfo, pointerDerefs, options, isAborted)
+    if _aborted(isAborted):
+        return None
 
     # See which edges are filtered out
     if options[FILTER_MODIFY_SET_ONLY] or options[FILTER_USE_ONLY]:
         for edgeObj in edgeInfo.values():
+            if _aborted(isAborted):
+                return None
             ent = edgeObj['ent']
             if ent.kind().check(OBJ_ENT_KINDS):
                 filterIncomingEdges(incoming, outgoing, edgeInfo, ent, options)
@@ -849,10 +865,12 @@ def buildEdgeInfo(
             objects.append(ent)
 
     if options[REFERENCE] == 'All':
-        interruptDisabledRefs = find_interrupt_disabled_refs(traversal_options, objects)
+        interruptDisabledRefs = find_interrupt_disabled_refs(traversal_options, objects, isAborted)
     else:
         interruptDisabledRefs = set()
-        traversal = traverse_by_many_objects(traversal_options, objects)
+        traversal = traverse_by_many_objects(traversal_options, objects, isAborted)
+        if _aborted(isAborted):
+            return None
         for pair in find_interrupt_disabled_pairs_simple(traversal, objects):
             interruptDisabledRefs.add(str(pair))
 
@@ -861,7 +879,9 @@ def buildEdgeInfo(
     # single lock is held on every access. Replaces the prior "any lock
     # held = protected" heuristic which mistook different mutexes for
     # equivalent protection (stinb/und-issues#680).
-    sharedObjects = classify_shared_objects(edgeInfo, tasks, enableDisableFunctions)
+    sharedObjects = classify_shared_objects(edgeInfo, tasks, enableDisableFunctions, isAborted)
+    if _aborted(isAborted):
+        return None
     for edgeObj in edgeInfo.values():
         ent = edgeObj['ent']
         edgeObj['shared'] = sharedObjects.get(ent, False)
@@ -1006,9 +1026,9 @@ def find_interrupt_disabled_pairs_simple(traversal: dict[Ent, TraversedNode], gl
 
 
 # Get references (transformed by refStr) that are interrupt-protected
-def find_interrupt_disabled_refs(options: TraversalOptions, global_objects: list[Ent]) -> set[str]:
+def find_interrupt_disabled_refs(options: TraversalOptions, global_objects: list[Ent], isAborted=None) -> set[str]:
     result: set[str] = set()
-    traversal = traverse_by_many_objects(options, global_objects)
+    traversal = traverse_by_many_objects(options, global_objects, isAborted)
     for node in traversal.values():
         for edge in node.incoming:
             if not edge.interrupt_protected:
@@ -1096,7 +1116,7 @@ def traverse_by_object(options: TraversalOptions, global_object: Ent) -> dict[En
     return traverse_by_many_objects(options, [global_object])
 
 
-def traverse_by_many_objects(options: TraversalOptions, global_objects: list[Ent]) -> dict[Ent, TraversedNode]:
+def traverse_by_many_objects(options: TraversalOptions, global_objects: list[Ent], isAborted=None) -> dict[Ent, TraversedNode]:
     result: dict[Ent, TraversedNode] = dict()
 
     fn_ref_kind = FN_REF_KIND_INVERSE
@@ -1118,6 +1138,8 @@ def traverse_by_many_objects(options: TraversalOptions, global_objects: list[Ent
         next_level = []
         # Each destination
         for head_ent in current_level:
+            if _aborted(isAborted):
+                return result
             # Avoid visiting head nodes multiple times
             if head_ent in visited:
                 continue
@@ -1323,7 +1345,8 @@ _LOCKSET_TOP = object()  # sentinel for "no info yet"
 def compute_entry_locks(tasks: set[Ent],
                         pair_id_map: dict[Ent, int],
                         acquire_fns: set[Ent],
-                        release_fns: set[Ent]) -> dict[Ent, set]:
+                        release_fns: set[Ent],
+                        isAborted=None) -> dict[Ent, set]:
     """For each function reachable from a task root, the set of lock_ids
     guaranteed held on every entry (intersection over all reachable call
     sites). Task roots have entry locks = empty. Fixpoint iteration
@@ -1337,6 +1360,8 @@ def compute_entry_locks(tasks: set[Ent],
     while changed:
         changed = False
         for fn in reachable:
+            if _aborted(isAborted):
+                return {}
             if fn in tasks:
                 continue
             new_in = _LOCKSET_TOP
@@ -1376,17 +1401,19 @@ def effective_locks_for_path(path: list[tuple[Ent, Ref]],
 
 
 def classify_shared_objects(edge_info: dict, tasks: dict,
-                            enable_disable_functions: dict) -> dict[Ent, bool]:
+                            enable_disable_functions: dict, isAborted=None) -> dict[Ent, bool]:
     """Decide per object whether it is shared, using lockset intersection.
     An object is shared iff reached from more than one task root AND the
     intersection of effective-lock-sets across all (unfiltered) accesses
     to it is empty (no single lock is held on every access)."""
     pair_id_map, acquire_fns, release_fns = build_lock_maps(enable_disable_functions)
     entry_locks = compute_entry_locks(
-        set(tasks.keys()), pair_id_map, acquire_fns, release_fns)
+        set(tasks.keys()), pair_id_map, acquire_fns, release_fns, isAborted)
 
     per_obj_locks: dict = {}
     for edge in edge_info.values():
+        if _aborted(isAborted):
+            return {}
         ent = edge['ent']
         if not ent.kind().check(OBJ_ENT_KINDS):
             continue
@@ -1562,7 +1589,7 @@ class _FnLockOps:
         return state
 
 
-def lock_order_edges(tasks, enable_disable_functions: dict) -> tuple[list[LockOrderEdge], dict[tuple, Ent], int, int]:
+def lock_order_edges(tasks, enable_disable_functions: dict, isAborted=None) -> tuple[list[LockOrderEdge], dict[tuple, Ent], int, int]:
     """Every held -> acquired edge reachable from the task roots, one per
     (held, acquired, task, gate), the lock object for each lock_id, the
     number of lock and unlock calls the tasks reach, and how many of those
@@ -1594,6 +1621,8 @@ def lock_order_edges(tasks, enable_disable_functions: dict) -> tuple[list[LockOr
                 worklist.append(callee)
 
         while worklist:
+            if _aborted(isAborted):
+                return [], {}, 0, 0
             fn = worklist.pop()
             ops_for(fn).run(entry[fn], propagate)
 
@@ -1611,6 +1640,8 @@ def lock_order_edges(tasks, enable_disable_functions: dict) -> tuple[list[LockOr
                 edges[key].refs.append(op[2])
 
         for fn, state in entry.items():
+            if _aborted(isAborted):
+                return [], {}, 0, 0
             ops_for(fn).run(state, record)
         reached.update(entry)
 
@@ -1665,7 +1696,7 @@ def _pick_cycle_edges(options: list[list[LockOrderEdge]]) -> list[LockOrderEdge]
     return chosen if search(0) else None
 
 
-def find_lock_cycles(edges: list[LockOrderEdge], steps: int = 250_000) -> tuple[list[LockCycle], bool]:
+def find_lock_cycles(edges: list[LockOrderEdge], steps: int = 250_000, isAborted=None) -> tuple[list[LockCycle], bool]:
     """Lock-order cycles that two or more tasks could deadlock on, shortest
     first, and whether the search finished within steps. The budget counts
     steps, not time, so every machine gives the same result."""
@@ -1687,7 +1718,7 @@ def find_lock_cycles(edges: list[LockOrderEdge], steps: int = 250_000) -> tuple[
     result: list[LockCycle] = []
     for length in range(2, len(adjacency) + 1):
         for locks in _cycles_of_length(adjacency, length, order, budget):
-            if locks is None:
+            if locks is None or _aborted(isAborted):
                 return result, False
             options = [by_pair[(locks[i], locks[(i + 1) % length])] for i in range(length)]
             chosen = _pick_cycle_edges(options)
@@ -1755,12 +1786,16 @@ class LockOrder:
     lock_ents: dict[tuple, Ent]
 
 
-def lock_order(arch: Arch, only_deadlocks: bool = False) -> LockOrder:
+def lock_order(arch: Arch, only_deadlocks: bool = False, isAborted=None) -> LockOrder | None:
     """The lock orders the architecture's tasks use, with their possible
     deadlocks, as shown by the Lock Order graph and table."""
     tasks, enable_disable_functions, _ = parseArch(arch)
-    edges, lock_ents, lock_calls, unidentified = lock_order_edges(tasks, enable_disable_functions)
-    cycles, complete = find_lock_cycles(edges)
+    edges, lock_ents, lock_calls, unidentified = lock_order_edges(tasks, enable_disable_functions, isAborted)
+    if _aborted(isAborted):
+        return None
+    cycles, complete = find_lock_cycles(edges, isAborted=isAborted)
+    if _aborted(isAborted):
+        return None
     names = _lock_names(lock_ents, enable_disable_functions)
 
     # Number cycles by lock name, since lock_ids change between analyses
