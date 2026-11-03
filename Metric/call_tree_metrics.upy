@@ -91,9 +91,10 @@ def test_entity(metric, ent):
 def value(metric, ent):
     und_cache = metric.cache(metric.id())
     if und_cache:
-        return calculate_metric(metric.id(), und_cache, ent)
+        return calculate_metric(metric, und_cache, ent)
 
-def calculate_metric(metric_id, und_cache, ent):
+def calculate_metric(metric, und_cache, ent):
+    metric_id = metric.id()
     # Check cache first
     cached_value = und_cache.value(ent=ent)
     if cached_value is not None:
@@ -111,11 +112,13 @@ def calculate_metric(metric_id, und_cache, ent):
     suffix = metric_id.replace("CallBy", "").replace("Call", "")
 
     if suffix == "Depth":
-        result = calculate_max_depth(ent, ref_type, include_self, und_cache)
+        result = calculate_max_depth(metric, ent, ref_type, include_self, und_cache)
     else:
-        unique_nodes = collect_tree_nodes(ent, ref_type, include_self)
+        unique_nodes = collect_tree_nodes(metric, ent, ref_type, include_self)
 
-        if suffix == "Nodes":
+        if unique_nodes is None:
+            result = None
+        elif suffix == "Nodes":
             result = len(unique_nodes)
         elif suffix == "SumCyclomatic":
             result = sum_metric(unique_nodes, "Cyclomatic")
@@ -131,7 +134,7 @@ def calculate_metric(metric_id, und_cache, ent):
     return result
 
 # Traverse the tree and collect all unique nodes
-def collect_tree_nodes(start_ent, ref_type, include_self):
+def collect_tree_nodes(metric, start_ent, ref_type, include_self):
     visited = set()
     to_visit = []
 
@@ -143,6 +146,8 @@ def collect_tree_nodes(start_ent, ref_type, include_self):
             to_visit.append(ref.ent())
 
     while to_visit:
+        if metric.is_aborted():
+            return None
         current = to_visit.pop()
         if current in visited:
             continue
@@ -157,11 +162,13 @@ def collect_tree_nodes(start_ent, ref_type, include_self):
     return visited
 
 # Calculate maximum depth of tree, returning -1 for recursive/cyclic paths.
-def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
+def calculate_max_depth(metric, start_ent, ref_type, include_self, und_cache):
     ref_str = ref_type + ' ~inactive'
     visited = set()
 
     def depth(ent):
+        if metric.is_aborted():
+            return None
         cached_value = und_cache.value(key="depth", ent=ent)
         if cached_value is not None:
             return cached_value
@@ -174,6 +181,8 @@ def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
         max_d = -1
         for ref in refs:
             d = depth(ref.ent())
+            if d is None:
+                return None
             if d == -1:
                 und_cache.insert(-1, key="depth", ent=ent)
                 return -1
@@ -190,6 +199,8 @@ def calculate_max_depth(start_ent, ref_type, include_self, und_cache):
         max_d = -1
         for ref in refs:
             d = depth(ref.ent())
+            if d is None:
+                return None
             if d == -1:
                 return -1
             max_d = max(max_d, d)
