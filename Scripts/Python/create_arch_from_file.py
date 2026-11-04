@@ -1,33 +1,28 @@
-from pathlib import PurePath
-from subprocess import run
 import understand
 import sys
 import os
-input_file = ''
 
+from pathlib import PurePath
+from subprocess import run
 
 if __name__ == '__main__':
     # Open Database
     args = sys.argv
     db = understand.open(args[1])
 
-    fileValues = {}
-    input_file = "input_arch.csv"
+    file_arch = {}
+    input_file = args[2]
 
     if os.path.exists(input_file):
         with open(input_file, 'r') as f:
             lines = f.readlines()
-        fileValues = dict(line.strip().split(',') for line in lines)
-        for file in db.ents("file ~unknown ~unresolved"):
 
-            fullpath = PurePath(file.longname())
-            fullpath = str(fullpath)
-            for key, value in fileValues.items():
-                # print(key, value)
-                if key == fullpath:
-                    archval = fileValues.get(fullpath)
+        file_arch = dict(line.strip().split(',') for line in lines)
 
-                    if archval != None and os.path.exists(fullpath):
-                        print("Add File to Architecture", file.name(), archval)
-                        file.add_to_arch(archval)
-                        print("___")
+    for file in db.ents("file ~unknown ~unresolved"):
+        fullpath = PurePath(file.longname())
+        fullpath = str(fullpath)
+        arch_name = file_arch.get(fullpath)
+
+        if arch_name != None and os.path.exists(fullpath):
+            file.add_to_arch(arch_name)
