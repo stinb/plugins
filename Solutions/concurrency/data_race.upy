@@ -47,9 +47,11 @@ def check(check, file):
 
   shared_vars = {}
   critical_sections = []
-  for model in [ Pthread(db), Qt(db) ]:
+  for model in [ Pthread(db, check.is_aborted), Qt(db, check.is_aborted) ]:
     main_entry_points = lookup_main_entry_points(db, cache, model)
     thread_entry_points = lookup_thread_entry_points(db, cache, model)
+    if check.is_aborted():
+      return
     if not main_entry_points or not thread_entry_points:
       continue
 
@@ -62,7 +64,9 @@ def check(check, file):
 
     # Build a mapping of shared variables to thread entry points.
     for args in itertools.chain(main_iterator, thread_iterator):
-      for shared_var in find_shared_variables(cache, *args):
+      if check.is_aborted():
+        return
+      for shared_var in find_shared_variables(check, cache, *args):
         shared_vars.setdefault(shared_var, set()).update(set(args))
 
     # Remember critical sections.
@@ -70,6 +74,8 @@ def check(check, file):
 
   # Emit violations for shared variables referenced in this file.
   for ref in file.filerefs("use,modify,set ~init", "object ~local"):
+    if check.is_aborted():
+      return
     # FIXME: The reference occurring inside of a critical section is not the
     # same thing as both threads holding the same lock when the variable is
     # referenced. The lockset algorithm defines a potential race to happen
@@ -83,15 +89,18 @@ def check(check, file):
       err = ERR.format(var.name(), ", ".join(names))
       check.violation(var, file, ref.line(), ref.column(), err)
 
-def find_shared_variables(cache, lhs_entry_point, rhs_entry_point):
-  lhs_calls = lookup_calls(cache, lhs_entry_point)
-  lhs_reads = set(lookup_reads(cache, lhs_entry_point, lhs_calls))
-  lhs_writes = set(lookup_writes(cache, lhs_entry_point, lhs_calls))
+def find_shared_variables(check, cache, lhs_entry_point, rhs_entry_point):
+  lhs_calls = lookup_calls(check, cache, lhs_entry_point)
+  rhs_calls = lookup_calls(check, cache, rhs_entry_point)
+  if check.is_aborted():
+    return set()
+
+  lhs_reads = set(lookup_reads(check, cache, lhs_entry_point, lhs_calls))
+  lhs_writes = set(lookup_writes(check, cache, lhs_entry_point, lhs_calls))
   lhs_reads_writes = lhs_reads | lhs_writes
 
-  rhs_calls = lookup_calls(cache, rhs_entry_point)
-  rhs_reads = set(lookup_reads(cache, rhs_entry_point, rhs_calls))
-  rhs_writes = set(lookup_writes(cache, rhs_entry_point, rhs_calls))
+  rhs_reads = set(lookup_reads(check, cache, rhs_entry_point, rhs_calls))
+  rhs_writes = set(lookup_writes(check, cache, rhs_entry_point, rhs_calls))
   rhs_reads_writes = rhs_reads | rhs_writes
 
   # Shared variables are the the ones that are written on the LHS thread and
@@ -117,46 +126,54 @@ def lookup_thread_entry_points(db, cache, model):
   result = cache.value(key)
   if result is None:
     result = model.thread_entry_points()
+    if model.is_aborted():
+      return []
     cache.insert(result, key)
   return result
 
-def lookup_calls(cache, entry_point):
+def lookup_calls(check, cache, entry_point):
   key = "calls"
   result = cache.value(key, entry_point)
   if result is None:
     calls = set()
-    visit_call_tree(calls, entry_point)
+    visit_call_tree(check, calls, entry_point)
+    if check.is_aborted():
+      return []
     result = list(calls)
     cache.insert(result, key, entry_point)
   return result
 
-def lookup_reads(cache, entry_point, calls):
+def lookup_reads(check, cache, entry_point, calls):
   key = "reads"
   result = cache.value(key, entry_point)
   if result is None:
     reads = set()
     for call in calls:
+      if check.is_aborted():
+        return []
       reads |= set(call.ents("use,modify", "object ~local"))
     result = list(reads)
     cache.insert(result, key, entry_point)
   return result
 
-def lookup_writes(cache, entry_point, calls):
+def lookup_writes(check, cache, entry_point, calls):
   key = "writes"
   result = cache.value(key, entry_point)
   if result is None:
     writes = set()
     for call in calls:
+      if check.is_aborted():
+        return []
       writes |= set(call.ents("modify,set ~init", "object ~local"))
     result = list(writes)
     cache.insert(result, key, entry_point)
   return result
 
-def visit_call_tree(result, root):
-  if root not in result:
+def visit_call_tree(check, result, root):
+  if root not in result and not check.is_aborted():
     result.add(root)
     for callee in root.ents("call", "function"):
-      visit_call_tree(result, callee)
+      visit_call_tree(check, result, callee)
 
 def thread_names(main_entry_points, entry_points):
   f = lambda arg: "main" if arg in main_entry_points else arg.longname()

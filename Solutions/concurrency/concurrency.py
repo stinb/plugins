@@ -21,8 +21,9 @@ class CriticalSection:
     return line > self.lock.line() and line < self.unlock.line()
 
 class Concurrency:
-  def __init__(self, db):
+  def __init__(self, db, is_aborted=None):
     self.db = db
+    self.is_aborted = is_aborted or (lambda: False)
 
 
   def name(self) -> str:
@@ -81,12 +82,16 @@ class Concurrency:
     # Lookup named functions.
     functions = set()
     for function in self.db.ents("function"):
+      if self.is_aborted():
+        return []
       if function.longname() in names:
         functions.add(function)
 
     # Find child parameters of the functions with the matching type.
     params = set()
     for param in self.db.ents("parameter"):
+      if self.is_aborted():
+        return []
       if param.parent() in functions and type.match(param.type()):
         params.add(param)
 
@@ -94,5 +99,7 @@ class Concurrency:
     result = set()
     visited = set()
     for param in params:
+      if self.is_aborted():
+        return []
       visit_assignments(result, visited, param)
     return list(result)

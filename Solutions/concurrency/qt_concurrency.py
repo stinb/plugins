@@ -40,8 +40,8 @@ QT_CONCURRENT_FUNCTIONS = {
 }
 
 class Qt(concurrency.Concurrency):
-  def __init__(self, db):
-    super().__init__(db)
+  def __init__(self, db, is_aborted=None):
+    super().__init__(db, is_aborted)
 
 
   def name(self):
@@ -59,6 +59,8 @@ class Qt(concurrency.Concurrency):
     result = set()
     prototype = re.compile(r"(QThread|QRunnable)::run")
     for ent in self.db.lookup(prototype, "function"):
+      if self.is_aborted():
+        return []
       result |= set(ent.ents("overriddenby"))
 
     # Find functions passed to QtConcurrent functions.

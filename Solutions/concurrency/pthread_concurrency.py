@@ -26,8 +26,8 @@ CREATE_FUNCTIONS = {
 }
 
 class Pthread(concurrency.Concurrency):
-  def __init__(self, db):
-    super().__init__(db)
+  def __init__(self, db, is_aborted=None):
+    super().__init__(db, is_aborted)
 
 
   def name(self):
