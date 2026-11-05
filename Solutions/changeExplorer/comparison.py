@@ -124,6 +124,9 @@ class Loader:
   # using their id() as a key..
   cache = {} # cache for entities
   dataset = None  # The dataset we are trying to compute.
+  isAborted = None
+  def aborted(self):
+    return self.isAborted is not None and self.isAborted()
   # ##################################################################
   def addReferenceToDataset(self,ref,tag,cache_relations):
     uniquename = ref.ent().uniquename()
@@ -167,6 +170,8 @@ class Loader:
         self.addReferenceToDataset(ref,"BEFORE",cache_relations)
     # Talling those relationships...
     for uniquename in cache_relations:
+      if self.aborted():
+        return data
       # We prep the entities...
       # BUG HERE: With uniquename @lBUF_strlcpy@kBUF_strlcpy@f./source_code/crypto/buffer/buffer.c, I will get an entity
       # with ID @lBUF_strlcpy@kBUF_strlcpy@f./source_code/crypto/buffer/buf_str.c (TO BE RESOLVED)

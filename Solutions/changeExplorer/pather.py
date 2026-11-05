@@ -47,6 +47,8 @@ class Pather:
         cache = {}
         result = []        
         for path in paths:
+            if self.comparisonLoader.aborted():
+                return []
             lastindex = len(path)
             c_path_elt = path[0] # element on path.
             if not c_path_elt[0].id() in cache:
@@ -92,7 +94,7 @@ class Pather:
     # start is the starting entity
     # outs is a [] of ids for the end points entities
     def seek(self,dataset,start,outs,pipeline,pipeline_cache,pipelineHasChanged,result,changeOnly):
-        if not dataset:
+        if not dataset or self.comparisonLoader.aborted():
             return
         if dataset["AFTER_Entity"]:
             AFTER_ent = dataset["AFTER_Entity"]
@@ -170,12 +172,16 @@ class Pather:
         # =======================================================
         result = []
         for start in from_subset:
+            if self.comparisonLoader.aborted():
+                return []
             dataset = self.comparisonLoader.cache[start.id()]
             pipeline = []
             pipeline_cache = []
             one_result = []
             self.seek(dataset,start,outs,pipeline,pipeline_cache,False,one_result,changeOnly)
             result = result + one_result
+        if self.comparisonLoader.aborted():
+            return []
         # =======================================================
         # We cache the results (if all the ins and outs were in the computation):
         if isAGlobalSet:
@@ -273,11 +279,17 @@ class Pather:
             array_of_tos.append(to_ent.id())
         # we compute all the needed comparisons
         for from_ent in from_ents:
+            if self.comparisonLoader.aborted():
+                return
             if isFirstLoop:
                 self.comparisonLoader.computeData(from_ent,-1,array_of_tos)
                 isFirstLoop = False
             else:
                 self.comparisonLoader.computeDataWithoutCacheCleaning(from_ent,-1,array_of_tos)     
+    # ##################################################################
+    # isAborted is called during later computations, so set it before each run
+    def setAbortCheck(self,isAborted):
+        self.comparisonLoader.isAborted = isAborted
     # ##################################################################
     def __init__(self, db):
         self.cache_all_paths = None
