@@ -62,12 +62,15 @@ def fields_from_note(note):
   return record, rationale
 
 
-def deviations(inspection):
+def deviations(inspection, isAborted=None):
   """One entry per suppression: the violation, what silenced it, its
   rationale and its record. A violation silenced twice is two deviations,
-  because each suppression is its own claim."""
+  because each suppression is its own claim. Returns None if isAborted
+  reports a cancel."""
   found = []
   for violation in inspection.violations():
+    if isAborted and isAborted():
+      return None
     for source, note in violation.ignores():
       # The note arrives whole -- rationale and record lines together,
       # however the suppression was stored -- so the record is parsed
