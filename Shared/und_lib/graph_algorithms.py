@@ -21,7 +21,6 @@ def sccList(successorFunc, roots, calcCondensedGraph = False, isAborted=None):
   stack = list()
   onStack = set()
   components = list()
-  nodeToComponent = dict()
 
   for root in roots:
     if root in indices:
@@ -58,12 +57,10 @@ def sccList(successorFunc, roots, calcCondensedGraph = False, isAborted=None):
         lowlink[parent] = min(lowlink[parent], lowlink[node])
 
       if lowlink[node] == indices[node]:
-        componentIdx = len(components)
         component = set()
         while True:
           n = stack.pop()
           onStack.remove(n)
-          nodeToComponent[n] = componentIdx
           component.add(n)
           if n == node:
             break
@@ -71,18 +68,58 @@ def sccList(successorFunc, roots, calcCondensedGraph = False, isAborted=None):
 
   condensed = dict()
   if calcCondensedGraph:
-    for i in range(len(components)):
-      condensed[i] = set()
-
-    for node, src in nodeToComponent.items():
-      if isAborted is not None and isAborted():
-        return list(), dict()
-      for to in successorFunc(node):
-        dest = nodeToComponent[to]
-        if src != dest:
-          condensed[src].add(dest)
+    condensed = condense(successorFunc, components, isAborted)
+    if isAborted is not None and isAborted():
+      return list(), dict()
 
   return components, condensed
+
+def condense(successorFunc, groups, isAborted=None):
+  '''
+  Build the graph between groups of nodes, where group a points to group b if
+  any node in a points to any node in b.
+
+  successorFunc(node) returns an iterable of the nodes that node points to. It
+  is called once per node. groups is a list of disjoint iterables of nodes.
+  Edges to nodes outside of every group, and edges within a group, are left
+  out. Nodes must be hashable.
+
+  Returns a dict from each group index to the set of group indices it points
+  to, or an empty dict if aborted.
+  '''
+  groupOf = dict()
+  for idx, group in enumerate(groups):
+    for node in group:
+      groupOf[node] = idx
+
+  condensed = {idx: set() for idx in range(len(groups))}
+  for node, src in groupOf.items():
+    if isAborted is not None and isAborted():
+      return dict()
+    for to in successorFunc(node):
+      dest = groupOf.get(to)
+      if dest is not None and dest != src:
+        condensed[src].add(dest)
+  return condensed
+
+def incoming(successorFunc, nodes, isAborted=None):
+  '''
+  Count, for each node in nodes, how many other nodes in nodes point to it.
+
+  successorFunc(node) returns an iterable of the nodes that node points to. It
+  is called once per node, and edges to nodes outside of nodes are left out.
+  Nodes must be hashable.
+
+  Returns a dict from each node to its count, or an empty dict if aborted.
+  '''
+  counts = {node: 0 for node in nodes}
+  for node in counts:
+    if isAborted is not None and isAborted():
+      return dict()
+    for to in set(successorFunc(node)):
+      if to != node and to in counts:
+        counts[to] += 1
+  return counts
 
 def disjointParts(successorFunc, roots, isAborted=None):
   '''

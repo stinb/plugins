@@ -1,3 +1,5 @@
+import und_lib.distinct_names as distinct_names
+import und_lib.graph_algorithms as graph_algorithms
 import und_lib.kind_util as kind_util
 from und_lib.graph_algorithms import sccList
 import understand
@@ -8,9 +10,15 @@ def name():
 def description():
   return '''Identify and report cycles
     <p>This is a generic method using reference and entity kinds. The default
-    options find cycles in function calls (indirect recursion). To find file
-    dependency cycles, use the <a href="und://plugin/arch/Visibility%20Matrix%20Cores">
-    Visibility Matrix Cores</a> architecture instead. </p>
+    options find cycles in function calls (indirect recursion). By default,
+    each cycle is named after its hub, the entity the most other entities in
+    the cycle reference. Hubs tied for the most references are joined with
+    " + ", up to three, and when two cycles get the same name, more of each
+    hub's qualified name is shown. Set Cycle Names to "Size and number" to name
+    cycles by their size followed by a number instead. To find file dependency
+    cycles, use the
+    <a href="und://plugin/arch/Dependency%20Cycles">Dependency Cycles</a>
+    architecture instead.</p>
   '''
 
 def tags():
@@ -22,23 +30,40 @@ def tags():
 def define_options(arch):
   arch.options().text("entkindstr", "Entities", kind_util.FUNCTION_KIND_STR)
   arch.options().text("refkindstr", "References", "call ~inactive")
+  arch.options().choice("naming", "Cycle Names", ["Hub", "Size and number"], "Hub")
 
 def build(arch, db):
-  cycleCount = dict()
-
   refKindStr = arch.options().lookup("refkindstr")
   entKindStr = arch.options().lookup("entkindstr")
 
   def byName(ents):
     return sorted(ents, key= lambda ent: ent.name())
 
-  components, _ = sccList(lambda ent: byName(ent.ents(refKindStr, entKindStr)), byName(db.ents(entKindStr)), isAborted=arch.is_aborted)
+  successors = lambda ent: byName(ent.ents(refKindStr, entKindStr))
+  components, _ = sccList(successors, byName(db.ents(entKindStr)), isAborted=arch.is_aborted)
   if arch.is_aborted():
     return
-  for component in components:
-    cycle_size = len(component)
-    if cycle_size > 1:
-      cycleId = cycleCount.get(cycle_size, 0)
-      cycleCount[cycle_size] = cycleId + 1
-      for cycle_ent in component:
-        arch.map(cycle_ent, '{:03d}/{:03d}'.format(cycle_size, cycleId))
+
+  if arch.options().lookup("naming") == "Size and number":
+    cycleCount = dict()
+    for component in components:
+      cycle_size = len(component)
+      if cycle_size > 1:
+        cycleId = cycleCount.get(cycle_size, 0)
+        cycleCount[cycle_size] = cycleId + 1
+        for cycle_ent in component:
+          arch.map(cycle_ent, '{:03d}/{:03d}'.format(cycle_size, cycleId))
+    return
+
+  cycles = [comp for comp in components if len(comp) > 1]
+  hubs = []
+  for comp in cycles:
+    counts = graph_algorithms.incoming(successors, comp, isAborted=arch.is_aborted)
+    if arch.is_aborted():
+      return
+    top = max(counts.values())
+    hubs.append([ent for ent, count in counts.items() if count == top])
+
+  for cycle, cycleName in zip(cycles, distinct_names.distinct_names(hubs)):
+    for ent in cycle:
+      arch.map(ent, cycleName)

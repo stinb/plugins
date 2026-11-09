@@ -1,0 +1,259 @@
+from und_lib.graphs.und_colors import UND_EXTENDED_COLORS, graph_gradient_color_string
+import understand
+
+# Collapse the coloring architecture toward this many groups, but keep up to
+# len(UND_EXTENDED_COLORS) when collapsing can't get there.
+targetGroups = 6
+noneColor = "#d9d9d9"
+
+def name():
+  return "Architecture Overlap"
+
+def description():
+  return '''Show how an architecture lines up with another architecture
+    <p>This plugin draws a sunburst chart or treemap, sized by
+    <a href="und://plugin/metric/CountLineCode">lines of code</a>, that overlays
+    the architecture you run it on (the target) on the architecture chosen in
+    the Overlaid On option. The Overlaid On architecture is drawn, and each
+    entity is colored by the part of the target it belongs to. For example, run
+    it on <a href="und://plugin/arch/Dependency%20Layers">Dependency Layers</a>
+    overlaid on Directory Structure to see which layers each folder holds, or
+    on a single cycle in
+    <a href="und://plugin/arch/Dependency%20Cycles">Dependency Cycles</a> to see
+    which folders it crosses.</p>
+
+    <p>Check Invert to swap the two: the target is drawn and colored by the
+    Overlaid On architecture. For example, run it on Directory Structure
+    overlaid on <a href="und://plugin/arch/Git%20Owner">Git Owner</a> with
+    Invert checked to see who owns each folder.</p>
+
+    <p>When the coloring architecture has more than six groups, its deepest
+    groups are merged into their parents, one level at a time, as long as more
+    than one group is left. The groups are then ordered by lines of code. If
+    there are more than 18, the smallest share the last color and are listed in
+    the legend as "..." with how many there are. Each architecture takes the
+    color with the most of its lines of code. Entities that belong to more than
+    one group take the color of the group listed first in the legend. Groups are
+    ordered by the lines of code they hold that aren't already in a group listed
+    before them, so a group whose entities all belong to larger groups as well
+    gets no color. Entities that belong to no group are gray.</p>
+
+    <p>The <a href="und://plugin/ireport/Architecture%20Overlap">Architecture
+    Overlap report</a> lists the overlap in tables.</p>
+
+    <br><img src=".doc/arch_overlap.png"/>
+  '''
+
+def tags():
+  return [
+    'Target: Architectures',
+    'Layout: Sunburst',
+    'Layout: Treemap',
+    'Language: Any',
+    'Metrics Chart',
+  ]
+
+def test_architecture(arch):
+  return True
+
+def init(graph, arch):
+  roots = sorted(root.name() for root in graph.db().root_archs())
+  targetRoot = arch
+  while targetRoot.parent() is not None:
+    targetRoot = targetRoot.parent()
+  graph.options().label("Target", arch.name())
+  graph.options().define("Overlaid On", roots, defaultOther(graph.db(), arch, targetRoot, roots))
+  graph.options().checkbox("Invert", "Invert", False)
+  graph.options().define("Layout", ["Sunburst", "Treemap"], "Treemap")
+  graph.options().define("Legend", ["None", "top", "left", "right", "bottom"], "bottom")
+  graph.options().checkbox("Legend Title", "Legend Title", True)
+
+def defaultOther(db, arch, targetRoot, roots):
+  '''
+  Directory Structure, or else the other root architecture that holds the most
+  of a sample of the target's entities
+  '''
+  if "Directory Structure" in roots and targetRoot.name() != "Directory Structure":
+    return "Directory Structure"
+  counts = dict()
+  for i, ent in enumerate(arch.ents(True)):
+    if i >= 50:
+      break
+    for root in {rootOf(a) for a in db.archs(ent)}:
+      if root != targetRoot:
+        counts[root.name()] = counts.get(root.name(), 0) + 1
+  if counts:
+    return max(sorted(counts), key=lambda r: counts[r])
+  others = [r for r in roots if r != targetRoot.name()] or roots
+  return others[0] if others else ""
+
+def rootOf(arch):
+  while arch.parent() is not None:
+    arch = arch.parent()
+  return arch
+
+def draw(graph, target):
+  sunburst = graph.options().lookup("Layout") == "Sunburst"
+  if sunburst:
+    graph.set("layout", "sunburst")
+    graph.set("r1", "36")
+    graph.set("rstep", "18")
+  else:
+    graph.set("layout", "treemap")
+
+  other = graph.db().lookup_arch(graph.options().lookup("Overlaid On"))
+  if not other:
+    return
+
+  legend = graph.options().lookup("Legend")
+  if graph.options().lookup("Invert"):
+    drawGroups(graph, target, other, sunburst, legend)
+  else:
+    drawGroups(graph, other, target, sunburst, legend)
+
+# Colored by groups
+
+def drawGroups(graph, layout, colorBy, sunburst, legend):
+  db = graph.db()
+
+  # Map each drawn entity to the coloring architectures that directly hold it
+  loc = dict()
+  memberships = dict()
+  groups = dict()
+  for ent in layout.ents(True):
+    if graph.is_aborted():
+      return
+    if ent in loc:
+      continue
+    loc[ent] = ent.metric("CountLineCode") or 0
+    archs = [a for a in db.archs(ent) if inside(a, colorBy)]
+    memberships[ent] = archs
+    for a in archs:
+      groups.setdefault(a, set()).add(ent)
+
+  # Collapse deepest first, keeping groups at a single level
+  collapsedTo = {a: a for a in groups}
+  while len(groups) > targetGroups:
+    deepest = max(depth(a, colorBy) for a in groups)
+    if deepest <= 1:
+      break
+    merged = dict()
+    for a, ents in groups.items():
+      key = a.parent() if depth(a, colorBy) == deepest else a
+      merged.setdefault(key, set()).update(ents)
+    if len(merged) < 2:
+      break
+    for orig, a in collapsedTo.items():
+      if depth(a, colorBy) == deepest:
+        collapsedTo[orig] = a.parent()
+    groups = merged
+
+  # Rank by lines not already claimed by a higher ranked group, so a group
+  # whose entities all belong to bigger groups too doesn't take a color
+  lines = lambda ents: sum(loc[ent] for ent in ents)
+  ranked = []
+  claimed = set()
+  remaining = dict(groups)
+  while remaining:
+    a = min(remaining, key=lambda a: (-lines(remaining[a] - claimed), -len(remaining[a] - claimed), a.longname()))
+    if not remaining[a] - claimed:
+      break
+    claimed |= remaining.pop(a)
+    ranked.append(a)
+
+  # Rank index per group; groups past the last color share it as "..."
+  lastColor = len(UND_EXTENDED_COLORS) - 1
+  rankOf = dict()
+  for i, a in enumerate(ranked):
+    rankOf[a] = i if len(ranked) <= len(UND_EXTENDED_COLORS) else min(i, lastColor)
+  labels = [label(a, colorBy) for a in ranked[:len(UND_EXTENDED_COLORS)]]
+  if len(ranked) > len(UND_EXTENDED_COLORS):
+    labels[lastColor] = "... ({} more)".format(len(ranked) - lastColor)
+
+  # Each entity takes its highest ranked group; None means no group
+  entRank = dict()
+  for ent, archs in memberships.items():
+    ranks = [rankOf[collapsedTo[a]] for a in archs if collapsedTo[a] in rankOf]
+    entRank[ent] = min(ranks) if ranks else None
+
+  addGroups(graph, graph, layout, loc, entRank, labels, sunburst)
+
+  if legend != "None":
+    legendCluster = graph.cluster()
+    legendCluster.set("legend", legend)
+    if graph.options().lookup("Legend Title"):
+      legendCluster.set("label", "{} colored by {}".format(layout.name(), colorBy.name()))
+    entries = list(enumerate(labels))
+    if None in entRank.values():
+      entries.append((None, "(not in {})".format(colorBy.name())))
+    for rank, text in entries:
+      if rank is not None and rank not in entRank.values():
+        continue
+      n = legendCluster.node(text)
+      n.set("color", colorOf(rank))
+      n.set("fillcolor", colorOf(rank))
+
+def addGroups(graph, parent, a, loc, entRank, labels, sunburst):
+  '''
+  Add a cluster for a and its contents and return {rank: lines}
+  '''
+  cluster = parent.cluster(a.name(), a)
+  byRank = dict()
+
+  for child in a.children():
+    if graph.is_aborted():
+      return byRank
+    for rank, lines in addGroups(graph, cluster, child, loc, entRank, labels, sunburst).items():
+      byRank[rank] = byRank.get(rank, 0) + lines
+
+  for ent in a.ents(False):
+    lines = loc.get(ent, 0)
+    if not lines:
+      continue
+    rank = entRank[ent]
+    byRank[rank] = byRank.get(rank, 0) + lines
+    n = cluster.node(ent.name(), ent)
+    n.set("area", str(lines))
+    setColor(n, colorOf(rank), sunburst)
+    n.set("tooltip", "{}\n{:,} lines of code\n{}".format(ent.longname(), lines, rankLabel(rank, labels)))
+
+  total = sum(byRank.values())
+  if total:
+    # Most lines wins, then the higher ranked color, with no group last
+    rank = min(byRank, key=lambda r: (-byRank[r], r is None, r if r is not None else 0))
+    setColor(cluster, colorOf(rank), sunburst)
+    if sunburst:
+      cluster.set("color", "#ffffff")
+    shares = sorted(byRank.items(), key=lambda kv: -kv[1])[:3]
+    cluster.set("tooltip", "{}\n{:,} lines of code\n{}".format(a.longname(), total,
+      "\n".join("{:.0%} {}".format(l / total, rankLabel(r, labels)) for r, l in shares)))
+  return byRank
+
+def setColor(obj, color, sunburst):
+  obj.set("color", color)
+  if sunburst:
+    obj.set("fillcolor", color)
+  else:
+    r, g, b = (int(color[i:i+2], 16) for i in (1, 3, 5))
+    obj.set("fillcolor", graph_gradient_color_string(r, g, b))
+    obj.set("style", "radial")
+    obj.set("fontcolor", "#000000" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#ffffff")
+
+def colorOf(rank):
+  return noneColor if rank is None else UND_EXTENDED_COLORS[rank]
+
+def rankLabel(rank, labels):
+  return "(no group)" if rank is None else labels[rank]
+
+def label(a, root):
+  return a.longname()[len(root.longname()) + 1:] if a != root else root.name()
+
+def depth(a, root):
+  return a.longname().count("/") - root.longname().count("/")
+
+def inside(a, root):
+  while a is not None:
+    if a == root:
+      return True
+    a = a.parent()
+  return False

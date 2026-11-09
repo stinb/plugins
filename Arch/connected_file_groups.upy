@@ -1,3 +1,4 @@
+import und_lib.distinct_names as distinct_names
 import und_lib.graph_algorithms as graph_algorithms
 import und_lib.kind_util as kind_util
 import understand
@@ -10,8 +11,12 @@ def description():
     <p>From the file dependency graph, group files linked by dependencies in
     either direction. No dependencies cross between groups. In graph terms, the
     groups are the weakly connected components of the file dependency graph.
-    Groups are numbered from largest to smallest. Files with no dependencies to
-    or from other files are grouped together under Isolated Files.</p>
+    Companion files, such as a header and its source file, are only in the
+    same group if dependencies connect them. A group with at least half of the
+    files is named Main Group. Each other group is named after its hub, the
+    file the most other files in the group depend on, with files tied for the
+    most joined by " + ", up to three. Files with no dependencies to or from
+    other files are grouped together under Isolated Files.</p>
     <p>The <a href="und://plugin/metric/CountFileGroupsDisconnected">Disconnected File Groups</a>
     and <a href="und://plugin/metric/PercentFilesInLargestGroup">Percent of Files in Largest Connected Group</a>
     metrics summarize these groups.</p>
@@ -29,17 +34,31 @@ def build(arch, db):
     return
 
   allowed = set(files)
+  successors = lambda file: allowed.intersection(file.depends().keys())
 
-  groups = graph_algorithms.disjointParts(lambda file: allowed.intersection(file.depends().keys()), files, isAborted=arch.is_aborted)
+  groups = graph_algorithms.disjointParts(successors, files, isAborted=arch.is_aborted)
   if arch.is_aborted():
     return
-  connected = [group for group in groups if len(group) > 1]
-  connected.sort(key=lambda g: (-len(g), min(f.longname() for f in g)))
+  connected = [sorted(group, key=lambda f: f.longname()) for group in groups if len(group) > 1]
+  connected.sort(key=lambda g: (-len(g), g[0].longname()))
 
-  width = max(3, len(str(len(connected) - 1)))
-  for groupId, group in enumerate(connected):
+  # A hub doesn't describe a group that is most of the project
+  if connected and len(connected[0]) * 2 >= len(files):
+    for file in connected[0]:
+      arch.map(file, 'Main Group')
+    connected = connected[1:]
+
+  hubs = []
+  for group in connected:
+    counts = graph_algorithms.incoming(successors, group, isAborted=arch.is_aborted)
+    if arch.is_aborted():
+      return
+    top = max(counts.values())
+    hubs.append([file for file, count in counts.items() if count == top])
+
+  for group, groupName in zip(connected, distinct_names.distinct_names(hubs)):
     for file in group:
-      arch.map(file, 'Group {:0{}d}'.format(groupId, width))
+      arch.map(file, groupName)
 
   for group in groups:
     if len(group) == 1:

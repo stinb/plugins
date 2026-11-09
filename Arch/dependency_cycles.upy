@@ -1,0 +1,107 @@
+import und_lib.companion_files as companion_files
+import und_lib.distinct_names as distinct_names
+import und_lib.graph_algorithms as graph_algorithms
+import und_lib.kind_util as kind_util
+import understand
+
+def name():
+  return "Dependency Cycles"
+
+def description():
+  return '''Group files that are in the same dependency cycle
+    <p>A dependency cycle is a group of files where every file depends,
+    directly or indirectly, on every other file in the group. Files in a cycle
+    can't be changed, tested, or replaced on their own.</p>
+
+    <p>By default, companion files are combined before cycles are found, so a
+    header and its source file count as one unit and a cycle between just the
+    two of them doesn't count. Files are companions when they have the same
+    name up to the first dot (the last dot for web files) and are in the same folder, or when they are in
+    different folders and one defines most of what the other declares, or when one is
+    a file Qt generates for the other. Uncheck "Combine companion files" to
+    find cycles between individual files.</p>
+
+    <p>Within a cycle, each unit of combined companion files has its own child
+    architecture, named after the unit's main file. Files with no companions
+    are directly in the cycle. So the number of units in a cycle is the number
+    of children plus the number of files directly in it.</p>
+
+    <p>Each cycle is named after its hub: the file the most other files in the
+    cycle depend on. Since the hub is usually the reason the cycle exists, the
+    name tends to stay the same as files join or leave the cycle, which makes
+    cycles easy to compare between versions.</p>
+    <ul>
+      <li>Hubs tied for the most dependents are joined with " + ", up to
+      three.</li>
+      <li>When two cycles get the same name, more of each hub's path is shown:
+      its folders, or its extension when the other hub is in the same
+      folder.</li>
+    </ul>
+
+    <p>Set "Minimum cycle size" to leave out smaller cycles. Size counts
+    units, so when companion files are combined, a cycle between two headers
+    and their source files has size 2. The default, 0, includes every
+    cycle.</p>
+
+    <p>The <a href="und://plugin/arch/Dependency%20Layers">Dependency Layers</a>
+    architecture shows where each cycle sits in the dependency layers.</p>
+  '''
+
+def tags():
+  return [
+    'Language: Any',
+    'Dependencies',
+    'Cycles',
+  ]
+
+def define_options(arch):
+  arch.options().checkbox("companions", "Combine companion files", True)
+  arch.options().integer("minSize", "Minimum cycle size", 0)
+
+def build(arch, db):
+  files = [file for file in db.files() if not file.kind().check("unparsed") and not kind_util.is_standard(file)]
+  if not files:
+    return
+
+  allowed = set(files)
+  fileSuccessors = lambda file: allowed.intersection(file.depends().keys())
+
+  # Nodes are files, or indexes into groups of companion files
+  if arch.options().lookup("companions"):
+    groups = companion_files.companion_groups(files, arch.is_aborted)
+    condensed = graph_algorithms.condense(fileSuccessors, groups, isAborted=arch.is_aborted)
+    if arch.is_aborted():
+      return
+    nodes = list(range(len(groups)))
+    successors = condensed.get
+    filesOf = lambda node: groups[node]
+    entityOf = lambda node: companion_files.representative(groups[node])
+  else:
+    nodes = files
+    successors = fileSuccessors
+    filesOf = lambda node: [node]
+    entityOf = lambda node: node
+
+  components, _ = graph_algorithms.sccList(successors, nodes, isAborted=arch.is_aborted)
+  if arch.is_aborted():
+    return
+
+  minSize = arch.options().lookup("minSize") or 0
+  cycles = [comp for comp in components if len(comp) > 1 and len(comp) >= minSize]
+
+  hubs = []
+  for comp in cycles:
+    counts = graph_algorithms.incoming(successors, comp, isAborted=arch.is_aborted)
+    if arch.is_aborted():
+      return
+    top = max(counts.values())
+    hubs.append([entityOf(node) for node, count in counts.items() if count == top])
+
+  # Units with more than one file get their own child of the cycle
+  for comp, cycleName in zip(cycles, distinct_names.distinct_names(hubs)):
+    units = [node for node in comp if len(filesOf(node)) > 1]
+    unitNames = dict(zip(units, distinct_names.distinct_names([[entityOf(node)] for node in units])))
+    for node in comp:
+      path = cycleName + "/" + unitNames[node] if node in unitNames else cycleName
+      for file in filesOf(node):
+        arch.map(file, path)

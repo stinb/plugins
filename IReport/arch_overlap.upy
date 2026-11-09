@@ -1,0 +1,330 @@
+import json
+import und_lib.reports.arch_pages as archpages
+import understand
+
+def name():
+  return "Architecture Overlap"
+
+def description():
+  return '''Show where an architecture's entities sit in another architecture
+    <p>This report maps the entities in the architecture you run it on to the
+    architecture chosen in the Architecture option. An entity is mapped to an
+    architecture if it, or an entity that contains it, is in that architecture.
+    So the entities don't need to be the same kind: functions in a cycle map to
+    the folders of the files that define them. An entity can map to more than
+    one architecture.</p>
+
+    <p>The report has a page for each architecture under the one you run it on.
+    Each page draws the
+    <a href="und://plugin/graph/Architecture%20Overlap">Architecture Overlap
+    graph</a> of the other architecture colored by the page's architecture,
+    followed by a summary. If the architecture has child architectures, a
+    table shows
+    where each child maps: how many architectures hold its entities, and where
+    it mostly is. Mostly In is the deepest architecture that holds at least
+    half of the lines of code, or, when no architecture does, the one that
+    holds the most. Another table lists each architecture that holds any of
+    the entities. When the architecture has both child architectures and
+    entities of its own, that table also shows how many of each architecture's
+    entities are directly in it. Percentages are shares of the entities and lines of code being
+    mapped.</p>
+
+    <br><img src=".doc/arch_overlap.png"/>
+  '''
+
+def tags():
+  return [
+    'Target: Architectures',
+    'Language: Any',
+  ]
+
+def test_architecture(arch):
+  return True
+
+def support_abort():
+  return True
+
+def init(report, arch):
+  roots = sorted(root.name() for root in report.db().root_archs())
+  default = "Directory Structure" if "Directory Structure" in roots else (roots[0] if roots else "")
+  report.options().choice("arch", "Architecture", roots, default)
+
+def pages(report, target):
+  return archpages.pageslist(target)
+
+def generate(report, target, page):
+  db = report.db()
+  pageArch = archpages.breadcrumbs(report, target, page)
+  other = db.lookup_arch(report.options().lookup("arch"))
+  if not other:
+    report.print("Choose an Architecture.\n")
+    return
+
+  ents = set(pageArch.ents(True))
+  loc = dict()
+  memberships = dict()
+  for ent in ents:
+    if report.is_aborted():
+      return
+    loc[ent] = ent.metric("CountLineCode") or 0
+    memberships[ent] = [a for a in db.archs(ent, implicit=True) if inside(a, other)]
+  m = Mapping(ents, loc, memberships, other)
+
+  report.heading(1)
+  report.print("{} in {}".format(pageArch.name(), other.name()))
+  report.heading()
+
+  report.draw(pageArch, "Architecture Overlap", "Overlaid On=" + other.longname() + ";Legend Title=off",
+    title="{} colored by {}".format(other.name(), pageArch.name()))
+  report.print("\n")
+  summary(report, pageArch, m, other)
+
+  children = pageArch.children()
+  direct = set(pageArch.ents(False))
+  total = sum(1 for a in archTree(other) if a.ents(False))
+  if children:
+    childTable(report, pageArch, children, direct, loc, memberships, other, total)
+  if m.ents:
+    entityTable(report, pageArch, m, direct if children else None, other)
+
+def summary(report, pageArch, m, other):
+  report.bold()
+  report.print(pageArch.longname())
+  report.bold(False)
+  if not m.ents:
+    report.print(" has no entities.\n")
+    return
+
+  count = len(m.ents)
+  report.print(" has {} with {:,} lines of code. ".format(plural(count, "entity", "entities"), m.totalLines))
+  they = "It is" if count == 1 else "They are"
+  total = sum(1 for a in archTree(other) if a.ents(False))
+  if not m.containing:
+    report.print("{} not in {}.\n".format("It is" if count == 1 else "None of them are", other.name()))
+    return
+  if len(m.containing) == total and total > 1:
+    report.print("{} in all {} {} architectures.".format(they, total, other.name()))
+  else:
+    report.print("{} in {} of the {} {} architectures.".format(they, len(m.containing), total, other.name()))
+
+  mostly, share = m.mostlyIn()
+  if mostly:
+    if share >= 99.95:
+      report.print(" All of the code is in ")
+    elif share >= 50:
+      report.print(" Most of the code ({:.0f}%) is in ".format(share))
+    else:
+      report.print(" No architecture holds most of the code. The largest share ({:.0f}%) is in ".format(share))
+    archLink(report, mostly, label(mostly, other))
+    report.print(".")
+
+  if m.unmapped:
+    unmapped = len(m.unmapped)
+    report.print(" {} {} in {}.".format(plural(unmapped, "entity", "entities"), "isn't" if unmapped == 1 else "aren't", other.name()))
+  report.print("\n")
+
+def childTable(report, pageArch, children, direct, loc, memberships, other, total):
+  report.heading(2)
+  report.print("Child architectures")
+  report.heading()
+
+  rows = []
+  for child in children:
+    if report.is_aborted():
+      return
+    rows.append((child, Mapping(set(child.ents(True)), loc, memberships, other)))
+  if direct:
+    rows.append((None, Mapping(direct, loc, memberships, other)))
+  showUnmapped = any(m.unmapped for _, m in rows)
+
+  report.print("Each child of ")
+  boldName(report, pageArch)
+  report.print(" with its entities and lines of code. The other columns map the child onto ")
+  archLink(report, other, other.name())
+  report.print(": Overlaps is how many of the {} {} architectures hold its "
+    "entities, Mostly In is the one that holds the most of its code, and % Mostly In "
+    "is the share of the child's lines of code that are in Mostly In.".format(total, other.name()))
+  if direct:
+    report.print(" The (direct entities) row is the entities directly in ")
+    boldName(report, pageArch)
+    report.print(", not in a child.")
+  if showUnmapped:
+    report.print(" Not in {0} counts the child's entities that aren't in any {0} architecture.".format(other.name()))
+  report.print("\n")
+
+  columns = [
+    {"name": "Child", "filtertype": "string"},
+    {"name": "Entities", "filtertype": "numeric"},
+    {"name": "Lines of Code", "filtertype": "numeric"},
+    {"name": "Overlaps", "filtertype": "numeric"},
+    {"name": "Mostly In", "filtertype": "string"},
+    {"name": "% Mostly In", "filtertype": "numeric"},
+  ]
+  if showUnmapped:
+    columns.append({"name": "Not in " + other.name(), "filtertype": "numeric"})
+  report.table(json.dumps(columns))
+  for child, m in rows:
+    mostly, share = m.mostlyIn()
+    report.tablecell()
+    if child:
+      report.pagelink(child.longname())
+      report.print(child.name())
+      report.pagelink()
+    else:
+      report.print("(direct entities)")
+    report.tablecell()
+    report.print(str(len(m.ents)))
+    report.tablecell()
+    report.print(str(m.totalLines))
+    report.tablecell()
+    report.print(str(len(m.containing)))
+    report.tablecell()
+    if mostly:
+      archLink(report, mostly, label(mostly, other))
+    report.tablecell()
+    if mostly:
+      report.print("{:.1f}".format(share))
+    if showUnmapped:
+      report.tablecell()
+      report.print(str(len(m.unmapped)))
+  report.table()
+
+def entityTable(report, pageArch, m, direct, other):
+  report.heading(2)
+  report.print("Overlap by architecture")
+  report.heading()
+
+  report.print("Each ")
+  archLink(report, other, other.name())
+  report.print(" architecture that holds entities of ")
+  boldName(report, pageArch)
+  report.print(". Entities and Lines of Code count only the entities of ")
+  boldName(report, pageArch)
+  report.print(" in that architecture, and the percentages are their share of its "
+    "{} and {:,} lines of code.".format(plural(len(m.ents), "entity", "entities"), m.totalLines))
+  if direct:
+    report.print(" Direct Entities and Direct Lines of Code count only the entities directly in ")
+    boldName(report, pageArch)
+    report.print(", not in its children.")
+  report.print("\n")
+  multipleNote(report, [m])
+
+  lines = lambda ents: sum(m.loc[ent] for ent in ents)
+  rows = []
+  for arch, archEnts in m.containing.items():
+    rows.append((arch, archEnts))
+  if m.unmapped:
+    rows.append((None, set(m.unmapped)))
+  rows.sort(key=lambda r: (-lines(r[1]), -len(r[1]), r[0].longname() if r[0] else ""))
+
+  columns = [
+    {"name": other.name(), "filtertype": "string"},
+    {"name": "Entities", "filtertype": "numeric"},
+    {"name": "% of Entities", "filtertype": "numeric"},
+    {"name": "Lines of Code", "filtertype": "numeric"},
+    {"name": "% of Lines of Code", "filtertype": "numeric", "sort": "descending"},
+  ]
+  if direct:
+    columns.append({"name": "Direct Entities", "filtertype": "numeric"})
+    columns.append({"name": "Direct Lines of Code", "filtertype": "numeric"})
+  report.table(json.dumps(columns))
+  for arch, archEnts in rows:
+    report.tablecell()
+    if arch:
+      archLink(report, arch, label(arch, other))
+    else:
+      report.print("(not in {})".format(other.longname()))
+    report.tablecell()
+    report.print(str(len(archEnts)))
+    report.tablecell()
+    report.print("{:.1f}".format(len(archEnts) / len(m.ents) * 100 if m.ents else 0))
+    report.tablecell()
+    report.print(str(lines(archEnts)))
+    report.tablecell()
+    report.print("{:.1f}".format(lines(archEnts) / m.totalLines * 100 if m.totalLines else 0))
+    if direct:
+      archDirect = archEnts & direct
+      report.tablecell()
+      report.print(str(len(archDirect)))
+      report.tablecell()
+      report.print(str(lines(archDirect)))
+  report.table()
+
+def multipleNote(report, mappings):
+  if any(m.multiple for m in mappings):
+    report.print("Some entities are in more than one architecture, so they are "
+      "counted in each and the percentages can add up to more than 100.\n")
+
+class Mapping:
+  '''
+  Where a set of entities sits in the other architecture
+  '''
+  def __init__(self, ents, loc, memberships, other):
+    self.ents = ents
+    self.loc = loc
+    self.other = other
+    self.totalLines = sum(loc[ent] for ent in ents)
+    self.containing = dict()
+    self.unmapped = []
+    self.multiple = False
+    for ent in ents:
+      direct = memberships[ent]
+      if not direct:
+        self.unmapped.append(ent)
+      if len(direct) > 1:
+        self.multiple = True
+      for arch in direct:
+        self.containing.setdefault(arch, set()).add(ent)
+
+  def mostlyIn(self):
+    '''
+    Return the deepest architecture below the root holding at least half of
+    the lines of code, or else the one holding the most, and its percentage
+    '''
+    if not self.totalLines:
+      return None, 0
+    recursive = dict()
+    for arch, archEnts in self.containing.items():
+      while arch is not None and arch != self.other:
+        recursive.setdefault(arch, set()).update(archEnts)
+        arch = arch.parent()
+    if not recursive:
+      return None, 0
+    lines = {arch: sum(self.loc[ent] for ent in archEnts) for arch, archEnts in recursive.items()}
+    depth = lambda arch: arch.longname().count("/")
+    majority = [arch for arch in lines if lines[arch] * 2 >= self.totalLines]
+    if majority:
+      best = max(majority, key=lambda arch: (depth(arch), lines[arch]))
+    else:
+      best = max(lines, key=lambda arch: (lines[arch], depth(arch)))
+    return best, lines[best] / self.totalLines * 100
+
+def boldName(report, arch):
+  report.bold()
+  report.print(arch.name())
+  report.bold(False)
+
+def archLink(report, arch, text=None):
+  report.arch(arch)
+  report.print(text or arch.longname())
+  report.arch()
+
+def label(arch, root):
+  return arch.longname()[len(root.longname()) + 1:] if arch != root else root.name()
+
+def plural(count, one, many):
+  return "{:,} {}".format(count, one if count == 1 else many)
+
+def inside(arch, root):
+  while arch is not None:
+    if arch == root:
+      return True
+    arch = arch.parent()
+  return False
+
+def archTree(root):
+  toVisit = [root]
+  while toVisit:
+    a = toVisit.pop()
+    yield a
+    toVisit.extend(a.children())

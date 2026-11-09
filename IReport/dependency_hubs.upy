@@ -1,0 +1,170 @@
+import json
+import und_lib.companion_files as companion_files
+import und_lib.distinct_names as distinct_names
+import und_lib.graph_algorithms as graph_algorithms
+import understand
+
+def name():
+  return "Dependency Hubs"
+
+def description():
+  return '''Rank the files in an architecture by how much the rest of it depends on them
+    <p>If you can only read a few files to understand a group of files, read
+    its dependency hubs: the files the most other files in the group depend
+    on. This report ranks every file in the architecture you run it on that
+    way. Only dependencies between files in the architecture count, so the
+    same file can rank high in a dependency cycle but low in the folder it is
+    in.</p>
+
+    <p>By default, companion files are combined into one hub, so a header and
+    its source file rank together. Files are companions when they have the
+    same name up to the first dot (the last dot for web files) and are in the same folder, or when they are
+    in different folders and one defines most of what the other declares, or when one
+    is a file Qt generates for the other. Uncheck "Combine companion files" to
+    rank each file on its own.</p>
+
+    <p>Each row is one file. Rank orders the files by their hub's Incoming
+    count, the number of other hubs in the architecture with a file that
+    depends on one of the hub's files, and then by name. A hub's files are
+    listed together, starting with its main file. For architectures of
+    entities other than files, each entity is ranked on its own.</p>
+
+    <p>The <a href="und://plugin/arch/Dependency%20Cycles">Dependency Cycles</a>
+    and <a href="und://plugin/arch/Dependency%20Layers">Dependency Layers</a>
+    architectures name each cycle after its top hubs.</p>
+
+    <br><img src=".doc/dependency_hubs.png"/>
+  '''
+
+def tags():
+  return [
+    'Target: Architectures',
+    'Language: Any',
+    'Dependencies',
+  ]
+
+def test_architecture(arch):
+  return True
+
+def support_abort():
+  return True
+
+def init(report, target):
+  report.options().checkbox("companions", "Combine companion files", True)
+
+def generate(report, target):
+  ents = sorted(set(target.ents(True)), key=lambda e: e.longname())
+  files = bool(ents) and all(ent.kind().check("file") for ent in ents)
+  allowed = set(ents)
+  successors = lambda ent: allowed.intersection(ent.depends().keys())
+
+  if files and report.options().lookup("companions"):
+    groups = [sorted(group, key=companion_files.representativeKey) for group in companion_files.companion_groups(ents, report.is_aborted)]
+  else:
+    groups = [[ent] for ent in ents]
+  condensed = graph_algorithms.condense(successors, groups, isAborted=report.is_aborted)
+  counts = graph_algorithms.incoming(condensed.get, range(len(groups)), isAborted=report.is_aborted)
+  if report.is_aborted():
+    return
+
+  hubNames = distinct_names.distinct_names([[group[0]] for group in groups])
+  order = sorted(range(len(groups)), key=lambda i: (-counts[i], hubNames[i], groups[i][0].longname()))
+  showHubs = any(len(group) > 1 for group in groups)
+
+  report.heading(1)
+  report.print("Dependency hubs in " + target.name())
+  report.heading()
+
+  if not groups:
+    report.print("The architecture has no entities.\n")
+    return
+
+  summary(report, target, groups, counts, hubNames, order, showHubs)
+  hubTable(report, groups, counts, hubNames, order, showHubs, files)
+
+def summary(report, target, groups, counts, hubNames, order, showHubs):
+  noun = "hubs" if showHubs else "files"
+  bold(report, target.longname())
+  report.print(" has {:,} {}".format(len(groups), noun))
+  if showHubs:
+    report.print(" made of {:,} files".format(sum(len(group) for group in groups)))
+  report.print(". ")
+  if len(groups) < 2 or counts[order[0]] == 0:
+    report.print("None of them depend on each other.\n")
+    return
+
+  top = [i for i in order if counts[i] == counts[order[0]]]
+  others = len(groups) - 1
+  if len(top) == 1:
+    report.print("The top hub is ")
+    bold(report, hubNames[top[0]])
+    report.print(": {:,} of the {:,} other {} depend on it.".format(counts[top[0]], others, noun))
+  else:
+    report.print("{:,} {} are tied for the top, each depended on by {:,} of the {:,} others: ".format(
+      len(top), noun, counts[top[0]], others))
+    shown = top[:5]
+    for n, i in enumerate(shown):
+      if n:
+        report.print(", " if n < len(shown) - 1 or len(top) > len(shown) else " and ")
+      bold(report, hubNames[i])
+    if len(top) > len(shown):
+      report.print(" and {:,} more".format(len(top) - len(shown)))
+    report.print(".")
+  if len(top) < len(order):
+    nxt = order[len(top)]
+    report.print(" The next is ")
+    bold(report, hubNames[nxt])
+    report.print(", with {:,}.".format(counts[nxt]))
+  report.print("\n")
+
+def hubTable(report, groups, counts, hubNames, order, showHubs, files):
+  report.heading(2)
+  report.print("Files" if files else "Entities")
+  report.heading()
+
+  incoming = "Incoming (Hub)" if showHubs else "Incoming"
+  if showHubs:
+    report.print("Each row is one file. A hub is a file and its companion files. "
+      "Incoming (Hub) is the number of other hubs in the architecture that depend "
+      "on the file's hub. Rank orders the files by Incoming (Hub), then by hub name, "
+      "with each hub's main file first.\n")
+  else:
+    report.print("Incoming is the number of other {} in the architecture that "
+      "depend on it. Rank orders them by Incoming, then by name.\n".format("files" if files else "entities"))
+
+  columns = [
+    {"name": "Rank", "filtertype": "numeric", "sort": "ascending"},
+    {"name": "File" if files else "Entity", "filtertype": "string"},
+  ]
+  if showHubs:
+    columns.append({"name": "Hub", "filtertype": "string"})
+  columns += [
+    {"name": incoming, "filtertype": "numeric"},
+    {"name": "Lines of Code", "filtertype": "numeric"},
+  ]
+  report.table(json.dumps(columns))
+  rank = 0
+  for i in order:
+    if report.is_aborted():
+      break
+    for ent in groups[i]:
+      rank += 1
+      report.tablecell()
+      report.print(str(rank))
+      report.tablecell()
+      report.entity(ent)
+      report.print(ent.relname() if files else ent.longname())
+      report.entity()
+      if showHubs:
+        report.tablecell()
+        report.print(hubNames[i])
+      report.tablecell()
+      report.print(str(counts[i]))
+      report.tablecell()
+      report.print(str(ent.metric("CountLineCode") or 0))
+  report.table()
+
+def bold(report, text):
+  report.bold()
+  report.print(text)
+  report.bold(False)

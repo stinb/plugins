@@ -1,3 +1,5 @@
+import und_lib.companion_files as companion_files
+import und_lib.distinct_names as distinct_names
 import und_lib.graph_algorithms as graph_algorithms
 import und_lib.kind_util as kind_util
 import understand
@@ -9,8 +11,22 @@ def description():
   return '''Group files by layer in dependency graph
     <p>From the file dependency graph, group files into layers. Files that no
     other file depends on are in the highest layer, and every other file is one
-    layer below the lowest file that depends on it. Strongly connected
-    components form subgroups within a layer.</p>
+    layer below the lowest file that depends on it.</p>
+
+    <p>By default, companion files are combined into units first, so a header
+    and its source file are always in the same layer. Files are companions when
+    they have the same name up to the first dot (the last dot for web files) and are in the same folder, or
+    when they are in different folders and one defines most of what the other
+    declares, or when one is a file Qt generates for the other. Each unit with
+    more than one file has its own child architecture, named after the unit's
+    main file. Uncheck "Combine companion files" to place individual files in
+    layers.</p>
+
+    <p>Files or units in a dependency cycle form a subgroup within their
+    layer, named "Cycle: " followed by the cycle's hub, as in the
+    <a href="und://plugin/arch/Dependency%20Cycles">Dependency Cycles</a>
+    architecture: the file the most other files in the cycle depend on, with
+    companion files counted as one.</p>
   '''
 
 def tags():
@@ -20,26 +36,89 @@ def tags():
     'Cycles',
   ]
 
+def define_options(arch):
+  arch.options().checkbox("companions", "Combine companion files", True)
+
 def build(arch, db):
   files = [file for file in db.files() if not file.kind().check("unparsed") and not kind_util.is_standard(file)]
   if not files:
     return
 
   allowed = set(files)
+  fileSuccessors = lambda file: allowed.intersection(file.depends().keys())
 
-  components, condensed = graph_algorithms.sccList(lambda file: allowed.intersection(file.depends().keys()), files, True, isAborted=arch.is_aborted)
-  layers = graph_algorithms.layers(condensed.get, range(len(components) - 1, -1, -1),isAborted=arch.is_aborted)
+  # Nodes are files, or indexes into groups of companion files
+  combine = arch.options().lookup("companions")
+  if combine:
+    groups = companion_files.companion_groups(files, arch.is_aborted)
+    condensedGroups = graph_algorithms.condense(fileSuccessors, groups, isAborted=arch.is_aborted)
+    if arch.is_aborted():
+      return
+    nodes = list(range(len(groups)))
+    successors = condensedGroups.get
+    filesOf = lambda node: groups[node]
+    entityOf = lambda node: companion_files.representative(groups[node])
+  else:
+    nodes = files
+    successors = fileSuccessors
+    filesOf = lambda node: [node]
+    entityOf = lambda node: node
+
+  components, condensed = graph_algorithms.sccList(successors, nodes, True, isAborted=arch.is_aborted)
+  layers = graph_algorithms.layers(condensed.get, range(len(components) - 1, -1, -1), isAborted=arch.is_aborted)
   if arch.is_aborted():
     return
 
-  for layer, nodes in enumerate(layers):
-    cycleId = 0
-    for comp in sorted((components[idx] for idx in nodes), key=lambda c: (-len(c), min(f.longname() for f in c))):
-      compSize = len(comp)
-      cycleName = ""
-      if compSize > 1:
-        cycleName = '/Cycle {:03d}'.format(cycleId)
-        cycleId += 1
-      for file in comp:
-        arch.map(file, 'Layer {:03d}'.format(layer) + cycleName)
+  cycles = [idx for idx in range(len(components)) if len(components[idx]) > 1]
+  if combine:
+    hubs = []
+    for idx in cycles:
+      counts = graph_algorithms.incoming(successors, components[idx], isAborted=arch.is_aborted)
+      top = max(counts.values()) if counts else 0
+      hubs.append([entityOf(node) for node, count in counts.items() if count == top])
+  else:
+    hubs = cycleHubs([components[idx] for idx in cycles], successors, arch.is_aborted)
+  if arch.is_aborted():
+    return
+  cycleName = dict(zip(cycles, distinct_names.distinct_names(hubs)))
 
+  def mapUnits(path, units):
+    # Units with more than one file get their own child
+    multi = [node for node in units if len(filesOf(node)) > 1]
+    unitNames = dict(zip(multi, distinct_names.distinct_names([[entityOf(node)] for node in multi])))
+    for node in units:
+      for file in filesOf(node):
+        arch.map(file, path + "/" + unitNames[node] if node in unitNames else path)
+
+  for layer, idxs in enumerate(layers):
+    layerPath = 'Layer {:03d}'.format(layer)
+    mapUnits(layerPath, [next(iter(components[idx])) for idx in idxs if idx not in cycleName])
+    for idx in idxs:
+      if idx in cycleName:
+        mapUnits(layerPath + "/Cycle: " + cycleName[idx], list(components[idx]))
+
+def cycleHubs(cycles, successors, isAborted):
+  '''
+  For each cycle of files, the files to name it after: the representatives of
+  the companion file groups in the cycle that the most other groups in the
+  cycle depend on
+  '''
+  groupOf = dict()
+  for idx, group in enumerate(companion_files.companion_groups([f for cycle in cycles for f in cycle], isAborted)):
+    for file in group:
+      groupOf[file] = idx
+  if isAborted():
+    return []
+  hubs = []
+  for cycle in cycles:
+    parts = dict()
+    for file in cycle:
+      parts.setdefault(groupOf[file], []).append(file)
+    parts = list(parts.values())
+    condensed = graph_algorithms.condense(successors, parts, isAborted=isAborted)
+    counts = graph_algorithms.incoming(condensed.get, range(len(parts)), isAborted=isAborted)
+    if isAborted():
+      return []
+    top = max(counts.values())
+    hubs.append([companion_files.representative(parts[idx]) for idx, count in counts.items() if count == top])
+  return hubs
