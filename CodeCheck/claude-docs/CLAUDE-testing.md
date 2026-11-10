@@ -92,10 +92,13 @@ uvalid -V <checkID>                 # one check, verbose
 uvalid -V "MISRA04*" CPP_T069       # ID wildcards and several checks at once
 uvalid -V                           # every check — slow
 uvalid <checkID> -o results.csv     # CSV to a file instead of stdout
+uvalid <checkID> --json results.json  # also the full results as JSON
 ```
 
 `-V` (`--verbose`) outputs all CSV columns and all log messages — use it while
 developing. Run from anywhere; no need to `cd` to the check folder.
+`--json` (`-j`) writes what the CSV only counts: every failure and passed test
+with its file, line and test comment, plus the test files, script path and time.
 
 | Output | Meaning |
 |---|---|
