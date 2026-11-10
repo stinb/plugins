@@ -1,0 +1,260 @@
+import re
+
+ERR1 = 'intent(out) dummy argument "%1" is not set on every path through "%2"'
+
+LOOP_HEADS = ('do', 'do-while', 'for', 'where')
+BACK_EDGES = ('end-do', 'end-loop', 'cycle')
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def ids():
+    return ('FORTRAN_A001',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Dummy Arguments/intent(out) dummy arguments shall be set on every path'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Dummy Arguments',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A dummy argument declared <code>intent(out)</code> shall be set on every path
+through the procedure that returns to the caller.</p>
+
+<p><b>Rationale</b></p>
+<p>An <code>intent(out)</code> dummy argument becomes undefined when the
+procedure is entered. If a path returns without setting it, the caller receives
+an undefined value. Some compilers treat <code>intent(out)</code> like
+<code>intent(inout)</code>, so the caller's old value survives and the bug goes
+unnoticed; others rely on the intent and the program fails at run time.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">subroutine lookup(i, j)
+  integer, intent(in) :: i
+  integer, intent(out) :: j        ! Noncompliant: not set when i /= 1
+  if (i == 1) then
+    j = 0
+  end if
+end subroutine
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>A dummy argument counts as set when it is assigned, read into, or passed to
+a procedure other than an intrinsic function, since that procedure may set it.
+Paths that end in <code>stop</code> or <code>error stop</code> are not
+checked.</p>
+<p>By default a loop body is assumed to run at least once. Enable the option to
+also report paths that skip a loop body.</p>
+<p>These dummy arguments are not checked:</p>
+<ul>
+<li>Allocatable dummy arguments, which are deallocated on entry.</li>
+<li>Derived types whose components are all default-initialized or allocatable,
+since they are defined on entry.</li>
+<li>Derived types whose definition is not in the project.</li>
+<li>Dummy arguments set inside an internal procedure.</li>
+<li>Dummy arguments that are the selector of an <code>associate</code> or
+<code>select type</code> construct.</li>
+</ul>
+'''
+
+
+def define_options(check):
+    check.options().checkbox('zeroTrip', 'Also report paths that skip a loop body', False)
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    zeroTrip = check.options().lookup('zeroTrip')
+    lexer = None
+    interfaces = None
+    graphs = {}
+    for ref in file.filerefs('Define', 'Dummy Argument'):
+        ent = ref.ent()
+        proc = ref.scope()
+        if not isCandidate(ent):
+            continue
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+            interfaces = interfaceLines(lexer)
+        if any(begin <= ref.line() <= end for begin, end in interfaces):
+            continue
+        # Sets through an associate name are refs to that name
+        if any(isAssociateSelector(use, lexer) for use in ent.refs('Useby') if use.file() == file):
+            continue
+        # Same-named procedures in other files share one entity
+        if not any(defin.file() == file for defin in proc.refs('Definein')):
+            continue
+
+        if proc not in graphs:
+            graphs[proc] = proc.control_flow_graph()
+        cfg = graphs[proc]
+        if not cfg:
+            continue
+        nodes = [node for node in cfg.nodes() if node.line_begin()]
+        if not nodes:
+            continue
+
+        setNodes = set()
+        unplaced = False
+        for setRef in setRefs(ent, file, lexer):
+            node = nodeAt(nodes, setRef.line(), setRef.column())
+            if not node:
+                unplaced = True
+                break
+            setNodes.add(node)
+        if unplaced:
+            continue
+
+        if returnsWithoutSet(cfg.start(), setNodes, zeroTrip):
+            decl = ent.ref('Declarein') or ref
+            check.violation(ent, file, decl.line(), decl.column(), ERR1, ent.name(), proc.name())
+
+
+def isCandidate(ent):
+    typeText = ent.type() or ''
+    if not re.search(r'\bINTENT\s*\(\s*OUT\s*\)', typeText, re.I):
+        return False
+    if re.search(r'\bALLOCATABLE\b', typeText, re.I):
+        return False
+    for typed in ent.refs('Typed', 'Derived Type'):
+        if definedOnEntry(typed.ent()):
+            return False
+    return True
+
+
+def definedOnEntry(derivedType):
+    # Every component is default-initialized or allocatable, including inherited ones
+    if not derivedType.refs('Definein'):
+        return True  # Components unknown
+    initialized = {ref.ent() for ref in derivedType.refs('Set Init')}
+    for ref in derivedType.refs('Define', 'Variable Component'):
+        component = ref.ent()
+        if component not in initialized and not re.search(r'\bALLOCATABLE\b', component.type() or '', re.I):
+            return False
+    return all(definedOnEntry(ref.ent()) for ref in derivedType.refs('Extend', 'Derived Type'))
+
+
+def interfaceLines(lexer):
+    # Line ranges of interface blocks, whose bodies have no code
+    ranges = []
+    begin = None
+    statementStart = True
+    for lex in lexer:
+        token = lex.token()
+        if token == 'EndOfStatement':
+            statementStart = True
+            continue
+        if token in SKIP_TOKENS:
+            continue
+        text = lex.text().lower()
+        if statementStart and text == 'endinterface' or text == 'interface' and prevCode(lex) and prevCode(lex).text().lower() == 'end':
+            if begin:
+                ranges.append((begin, lex.line_begin()))
+                begin = None
+        elif statementStart and text in ('interface', 'abstract') and not begin:
+            begin = lex.line_begin()
+        statementStart = False
+    return ranges
+
+
+def setRefs(ent, file, lexer):
+    # Sets, plus bare actual arguments to procedures that may set them
+    refs = [ref for ref in ent.refs('Setby') if ref.file() == file]
+    for ref in ent.refs('Useby'):
+        if ref.file() != file:
+            continue
+        lex = lexer.lexeme(ref.line(), ref.column())
+        if lex and isPassedToProcedure(lex):
+            refs.append(ref)
+    return refs
+
+
+def isAssociateSelector(ref, lexer):
+    lex = lexer.lexeme(ref.line(), ref.column())
+    before = prevCode(lex) if lex else None
+    if not before or before.text() != '=>':
+        return False
+    while before and before.token() != 'EndOfStatement':
+        if before.text().lower() in ('associate', 'select'):
+            return True
+        before = prevCode(before)
+    return False
+
+
+def isPassedToProcedure(lex):
+    before = prevCode(lex)
+    after = nextCode(lex)
+    if not before or not after:
+        return False
+    if before.text() not in ('(', ',', '=') or after.text() not in (',', ')'):
+        return False
+
+    depth = 0
+    lex = before
+    while lex and lex.token() != 'EndOfStatement':
+        if lex.text() == ')':
+            depth += 1
+        elif lex.text() == '(':
+            if depth == 0:
+                callee = prevCode(lex)
+                call = callee.ref() if callee else None
+                return bool(call) and call.kind().check('Callby') and not callee.ent().kind().check('Intrinsic Function')
+            depth -= 1
+        lex = prevCode(lex)
+    return False
+
+
+def nodeAt(nodes, line, column):
+    for node in nodes:
+        if (node.line_begin(), node.column_begin()) <= (line, column) <= (node.line_end(), node.column_end()):
+            return node
+    return None
+
+
+def returnsWithoutSet(start, setNodes, zeroTrip):
+    # Search for a path to the end that never passes a setting node
+    stack = [(start, False)]
+    seen = set()
+    while stack:
+        node, viaBackEdge = stack.pop()
+        if (node, viaBackEdge) in seen:
+            continue
+        seen.add((node, viaBackEdge))
+        if node in setNodes or node.kind() == 'stop':
+            continue
+        children = node.children()
+        if not children:
+            return True
+        if node.kind() in LOOP_HEADS and not zeroTrip and not viaBackEdge:
+            children = children[:1]
+        backEdge = node.kind() in BACK_EDGES
+        for child in children:
+            stack.append((child, backEdge))
+    return False
+
+
+def nextCode(lex):
+    lex = lex.next()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.next()
+    return lex
+
+
+def prevCode(lex):
+    lex = lex.previous()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.previous()
+    return lex
