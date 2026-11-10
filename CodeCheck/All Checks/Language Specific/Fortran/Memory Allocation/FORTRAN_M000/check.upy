@@ -1,0 +1,248 @@
+import re
+
+ERR1 = 'Local allocatable "%1" is not deallocated on every path through "%2"'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def ids():
+    return ('FORTRAN_M000',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Memory Allocation/Local allocatable variables shall be deallocated on every path'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Memory Allocation',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A local allocatable variable that is allocated with an
+<code>allocate</code> statement shall be deallocated with a
+<code>deallocate</code> statement on every path through the procedure that
+returns to the caller.</p>
+
+<p><b>Rationale</b></p>
+<p>The standard deallocates an unsaved local allocatable variable when the
+procedure returns, but some toolchains fail to do so and leak the memory.
+Deallocating explicitly on every path does not depend on that behavior.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">subroutine work(lcondition)
+  logical, intent(in) :: lcondition
+  integer, allocatable :: iarr(:)
+  allocate(iarr(16))                 ! Noncompliant: not deallocated when lcondition is false
+  if (lcondition) then
+    deallocate(iarr)
+  end if
+end subroutine
+
+subroutine work_ok(lcondition)
+  logical, intent(in) :: lcondition
+  integer, allocatable :: iarr(:)
+  allocate(iarr(16))                 ! Compliant
+  if (allocated(iarr)) deallocate(iarr)
+end subroutine
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>A variable also counts as deallocated when it is the source of
+<code>move_alloc</code>, or on a branch where <code>allocated()</code> shows it
+is not allocated. Paths that end in <code>stop</code> or <code>error stop</code>
+are not checked.</p>
+<p>These variables are not checked:</p>
+<ul>
+<li>Dummy arguments, function results, module variables and variables with the
+<code>save</code> attribute or in a procedure with a <code>save</code>
+statement, which are not deallocated on return.</li>
+<li>Variables of the main program.</li>
+<li>Variables allocated only by assignment or by another procedure.</li>
+</ul>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexer = None
+    graphs = {}
+    savesAll = {}
+    for ref in file.filerefs('Define', 'Local Variable'):
+        ent = ref.ent()
+        proc = ref.scope()
+        typeText = ent.type() or ''
+        if not re.search(r'\bALLOCATABLE\b', typeText, re.I) or re.search(r'\bSAVE\b', typeText, re.I):
+            continue
+        if proc.kind().check('Main Program'):
+            continue
+        # Same-named procedures in other files share one entity
+        if not any(defin.file() == file for defin in proc.refs('Definein')):
+            continue
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+        if isResult(lexer.lexeme(ref.line(), ref.column())):
+            continue
+        if proc not in savesAll:
+            savesAll[proc] = hasBareSave(proc, file, lexer)
+        if savesAll[proc]:
+            continue
+
+        allocs = []
+        deallocs = []
+        for use in ent.refs('Setby, Useby'):
+            if use.file() != file:
+                continue
+            statement = allocationStatement(lexer.lexeme(use.line(), use.column()), use.kind().check('Setby'))
+            if statement == 'allocate':
+                allocs.append(use)
+            elif statement == 'deallocate':
+                deallocs.append(use)
+        if not allocs:
+            continue
+
+        if proc not in graphs:
+            graphs[proc] = proc.control_flow_graph()
+        cfg = graphs[proc]
+        if not cfg:
+            continue
+        nodes = [node for node in cfg.nodes() if node.line_begin()]
+
+        allocNodes = {}
+        deallocNodes = set()
+        unplaced = False
+        for use in allocs + deallocs:
+            node = nodeAt(nodes, use.line(), use.column())
+            if not node:
+                unplaced = True
+                break
+            if use in allocs:
+                allocNodes.setdefault(node, use)
+            else:
+                deallocNodes.add(node)
+        if unplaced:
+            continue
+
+        stops = deallocNodes | set(allocNodes)
+        for node, use in allocNodes.items():
+            if reachesEnd(node, stops, ent.name().lower(), lexer):
+                check.violation(ent, file, use.line(), use.column(), ERR1, ent.name(), proc.name())
+
+
+def isResult(lex):
+    before = prevCode(lex) if lex else None
+    return bool(before) and before.text() == '(' and bool(prevCode(before)) and prevCode(before).text().lower() == 'result'
+
+
+def hasBareSave(proc, file, lexer):
+    # A save statement with no list saves every local variable
+    begin = next((ref for ref in proc.refs('Definein') if ref.file() == file), None)
+    lex = lexer.lexeme(begin.line(), begin.column()) if begin else None
+    statement = []
+    while lex:
+        token = lex.token()
+        if token == 'EndOfStatement':
+            words = [text.lower() for text in statement]
+            if words == ['save']:
+                return True
+            if words in (['contains'], ['end']) or words[:1] == ['end'] and words[1] in ('subroutine', 'function'):
+                return False
+            statement = []
+        elif token not in SKIP_TOKENS:
+            statement.append(lex.text())
+        lex = lex.next()
+    return False
+
+
+def allocationStatement(lex, isSet):
+    # 'allocate' or 'deallocate' for an object of those statements,
+    # 'deallocate' for the source of move_alloc
+    before = prevCode(lex) if lex else None
+    if not before:
+        return None
+    keyword = None
+    if before.text() == '=' and prevCode(before) and prevCode(before).text().lower() == 'from':
+        keyword = prevCode(before)
+    elif before.text() in ('(', ',', '::'):
+        keyword = before
+    if not keyword:
+        return None
+
+    depth = 0
+    lex = keyword
+    while lex and lex.token() != 'EndOfStatement':
+        if lex.text() == ')':
+            depth += 1
+        elif lex.text() == '(':
+            if depth == 0:
+                callee = prevCode(lex)
+                text = callee.text().lower() if callee else ''
+                if isSet:
+                    return text if text in ('allocate', 'deallocate') else None
+                firstArgument = (lex.line_begin(), lex.column_begin()) == (before.line_begin(), before.column_begin())
+                if text == 'move_alloc' and (keyword.text().lower() == 'from' or firstArgument):
+                    return 'deallocate'
+                return None
+            depth -= 1
+        lex = prevCode(lex)
+    return None
+
+
+def nodeAt(nodes, line, column):
+    for node in nodes:
+        if (node.line_begin(), node.column_begin()) <= (line, column) <= (node.line_end(), node.column_end()):
+            return node
+    return None
+
+
+def reachesEnd(start, stops, name, lexer):
+    # Search for a path from the allocation to the end that never deallocates
+    stack = list(start.children())
+    seen = set()
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        if node in stops or node.kind() == 'stop':
+            continue
+        children = node.children()
+        if not children:
+            return True
+        if node.kind() in ('if', 'elsif'):
+            condition = nodeText(node, lexer)
+            if condition == '(allocated(' + name + '))':
+                children = children[:1]
+            elif condition == '(.not.allocated(' + name + '))':
+                children = children[1:]
+        stack.extend(children)
+    return False
+
+
+def nodeText(node, lexer):
+    text = ''
+    end = (node.line_end(), node.column_end())
+    lex = lexer.lexeme(node.line_begin(), node.column_begin())
+    while lex and (lex.line_begin(), lex.column_begin()) <= end:
+        if lex.token() not in SKIP_TOKENS:
+            text += lex.text().lower()
+        lex = lex.next()
+    return text
+
+
+def prevCode(lex):
+    lex = lex.previous()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.previous()
+    return lex
