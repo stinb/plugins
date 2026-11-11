@@ -1,0 +1,187 @@
+import re
+
+ERR1 = 'intent(in) dummy argument "%1" is passed to "%2", which may modify it in "%3"'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+ARGUMENT_REFS = 'Useby Argument, Useby In Argument, Setby Out Argument'
+
+
+def ids():
+    return ('FORTRAN_A002',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Dummy Arguments/intent(in) dummy arguments shall not be passed to procedures that modify them'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Dummy Arguments',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A dummy argument declared <code>intent(in)</code> shall not be passed as an
+actual argument to a procedure that may modify it, directly or through further
+calls.</p>
+
+<p><b>Rationale</b></p>
+<p>A compiler reports an assignment to an <code>intent(in)</code> dummy
+argument, but not a modification further down the call chain through dummy
+arguments declared without an intent. The caller then sees its variable change
+in spite of the intent, and if the caller passed a constant or an expression,
+the program may fail at run time.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">subroutine helper1(x)
+  real, intent(in) :: x
+  call helper2(x)                ! Noncompliant: helper3 modifies x
+end subroutine
+
+subroutine helper2(x)
+  real :: x
+  call helper3(x)
+end subroutine
+
+subroutine helper3(x)
+  real :: x
+  x = 0.
+end subroutine
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>A dummy argument may be modified when it is declared
+<code>intent(out)</code> or <code>intent(inout)</code>, when it is set, or
+when it is passed on to another procedure that may modify it. Dummy arguments
+with the <code>value</code> attribute are copies and are not followed.</p>
+<p>The violation is reported where the <code>intent(in)</code> argument is
+passed on, not at the calls into that procedure.</p>
+<p>Only whole variables passed to a procedure whose definition is in the
+project are followed. Pointer dummy arguments, calls through a generic
+interface, type-bound procedure calls and calls through dummy procedures are
+not checked.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexers = {}
+    for ref in file.filerefs('Define', 'Dummy Argument'):
+        ent = ref.ent()
+        typeText = ent.type() or ''
+        if not re.search(r'\bINTENT\s*\(\s*IN\s*\)', typeText, re.I) or re.search(r'\bPOINTER\b', typeText, re.I):
+            continue
+        for use in arguments(ent):
+            if use.file() != file:
+                continue
+            target = argumentTarget(use, lexers)
+            if not target:
+                continue
+            callee, dummy = target
+            modifier = mayModify(callee, dummy, lexers, set())
+            if modifier:
+                check.violation(ent, file, use.line(), use.column(), ERR1, ent.name(), callee.name(), modifier.name())
+
+
+def mayModify(proc, dummy, lexers, seen):
+    # The procedure that may modify the dummy argument, or None
+    if dummy in seen:
+        return None
+    seen.add(dummy)
+    typeText = dummy.type() or ''
+    if re.search(r'\bVALUE\b', typeText, re.I) or re.search(r'\bINTENT\s*\(\s*IN\s*\)', typeText, re.I):
+        return None
+    if re.search(r'\bINTENT\s*\(\s*(IN\s*OUT|OUT)\s*\)', typeText, re.I) or dummy.refs('Setby'):
+        return proc
+    for use in arguments(dummy):
+        target = argumentTarget(use, lexers)
+        if target:
+            modifier = mayModify(target[0], target[1], lexers, seen)
+            if modifier:
+                return modifier
+    return None
+
+
+def arguments(ent):
+    # Refs as an actual argument; an intent(inout) argument has two at one place
+    refs = {}
+    for ref in ent.refs(ARGUMENT_REFS):
+        refs.setdefault((ref.file(), ref.line(), ref.column()), ref)
+    return list(refs.values())
+
+
+def argumentTarget(use, lexers):
+    # The called procedure and its dummy argument for a bare actual argument
+    if use.file() not in lexers:
+        lexers[use.file()] = use.file().lexer(lookup_ents=True)
+    lex = lexers[use.file()].lexeme(use.line(), use.column())
+    before = prevCode(lex) if lex else None
+    after = nextCode(lex) if lex else None
+    if not before or not after or after.text() not in (',', ')'):
+        return None
+
+    keyword = None
+    if before.text() == '=':
+        name = prevCode(before)
+        if not name or not name.ent() or not name.ent().kind().check('Dummy Argument'):
+            return None
+        keyword = name.ent()
+        before = prevCode(name)
+    if not before or before.text() not in ('(', ','):
+        return None
+
+    position = 0
+    depth = 0
+    lex = before
+    while lex and lex.token() != 'EndOfStatement':
+        if lex.text() == ')':
+            depth += 1
+        elif lex.text() == '(':
+            if depth == 0:
+                break
+            depth -= 1
+        elif lex.text() == ',' and depth == 0:
+            position += 1
+        lex = prevCode(lex)
+    calleeLex = prevCode(lex) if lex else None
+    if not calleeLex or not calleeLex.ent():
+        return None
+    if prevCode(calleeLex) and prevCode(calleeLex).text() == '%':
+        return None  # Type-bound call, positions shift for the passed object
+
+    callee = calleeLex.ent()
+    call = calleeLex.ref()
+    if not call or not call.kind().check('Callby') or not callee.kind().check('Subroutine, Function'):
+        return None
+    if callee.kind().check('Intrinsic') or len(callee.refs('Definein')) != 1:
+        return None  # Unknown, or same-named procedures sharing one entity
+
+    if keyword:
+        return (callee, keyword) if keyword.parent() == callee else None
+    dummies = sorted(callee.refs('Define', 'Dummy Argument'), key=lambda ref: (ref.line(), ref.column()))
+    if position >= len(dummies):
+        return None
+    return callee, dummies[position].ent()
+
+
+def nextCode(lex):
+    lex = lex.next()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.next()
+    return lex
+
+
+def prevCode(lex):
+    lex = lex.previous()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.previous()
+    return lex
