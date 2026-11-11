@@ -1,0 +1,238 @@
+import re
+
+ERR1 = 'Loop variable "%1" is not listed in a private clause of the enclosing OpenMP parallel construct'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+SENTINEL = re.compile(r'^[!c*]\$omp', re.I)
+LOOP_CONSTRUCTS = {'do', 'simd', 'loop', 'distribute', 'taskloop'}
+PRIVATE_CLAUSES = ('private', 'firstprivate', 'lastprivate', 'linear')
+CONSTRUCT_WORDS = {'parallel', 'do', 'sections', 'section', 'single', 'workshare', 'task', 'taskloop',
+    'taskgroup', 'simd', 'master', 'masked', 'critical', 'ordered', 'target', 'teams', 'distribute',
+    'loop', 'data', 'atomic', 'scope'}
+UNIT_ENDS = ('subroutine', 'function', 'program', 'module', 'submodule')
+
+
+def ids():
+    return ('FORTRAN_O000',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/OpenMP/Loop variables in an OpenMP parallel construct shall be listed as private'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'OpenMP',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>The variable of a <code>do</code> loop nested inside an OpenMP parallel
+construct shall be listed in a <code>private</code>, <code>firstprivate</code>,
+<code>lastprivate</code> or <code>linear</code> clause.</p>
+
+<p><b>Rationale</b></p>
+<p>Each thread needs its own copy of an inner loop's variable. OpenMP makes the
+variable of a loop associated with a loop construct private. In Fortran it
+also makes the variables of other sequential loops in a parallel construct
+private, but in C and C++ they are shared, so the same code written there has
+a data race. Listing the variable states the intent and keeps it correct when
+the code is changed or translated. A loop variable listed in
+<code>shared</code> is a data race in any language.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">!$omp parallel do shared(iresult)
+do j = 1, 2
+  do i = 1, 2                 ! Noncompliant: i is not listed as private
+    iresult(i, j) = 0
+  end do
+end do
+
+!$omp parallel do shared(iresult) private(i)
+do j = 1, 2
+  do i = 1, 2                 ! Compliant
+    iresult(i, j) = 0
+  end do
+end do
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Codee Open Catalog PWD010: Incorrect sharing in OpenMP parallel region.</p>
+
+<p><b>Developer's Notes</b></p>
+<p>Loops associated with a loop construct, including those covered by its
+<code>collapse</code> or <code>ordered</code> clause, are not reported, nor
+are variables declared in a <code>block</code> inside the construct. A <code>default(private)</code>
+or <code>default(firstprivate)</code> clause counts for every variable. Only
+loops written inside the construct are checked, not loops in procedures it
+calls.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=True)
+    if not lexer:
+        return
+
+    regions = []     # Open OpenMP constructs
+    loops = []       # Labels of the open do loops, None for end do
+    pending = None   # Directive text still collecting continuation lines
+    pendingLine = 0
+    statement = []
+
+    lex = lexer.first()
+    while lex:
+        token = lex.token()
+        if token == 'Comment' and SENTINEL.match(lex.text().lstrip()):
+            body = lex.text().lstrip()[5:]
+            # A character right after the sentinel marks a continuation line
+            marked = bool(body) and not body[0].isspace()
+            if pending is not None and (pending.endswith('&') or marked):
+                pending = pending.rstrip('&') + ' ' + (body[1:] if marked else body).strip()
+            else:
+                if pending is not None:
+                    applyDirective(pending, pendingLine, regions)
+                pending = body.strip()
+                pendingLine = lex.line_begin()
+        elif token == 'EndOfStatement' or lex.text() == ';':
+            if statement:
+                checkStatement(check, file, statement, regions, loops)
+            statement = []
+        elif token not in SKIP_TOKENS:
+            if pending is not None:
+                applyDirective(pending, pendingLine, regions)
+                pending = None
+            statement.append(lex)
+        lex = lex.next()
+
+
+def applyDirective(text, line, regions):
+    text = text.lower().rstrip('&').strip()
+    clauses = re.findall(r'(\w+)\s*\(((?:[^()]|\([^()]*\))*)\)', text)
+    words = re.sub(r'\w+\s*\((?:[^()]|\([^()]*\))*\)', ' ', text).replace(',', ' ').split()
+    if not words:
+        return
+    if words[0].startswith('end') and words[0] != 'end':
+        words = ['end', words[0][3:]] + words[1:]
+
+    if words[0] == 'end':
+        # Close the innermost open block construct with this name
+        name = constructName(words[1:])
+        for i in range(len(regions) - 1, -1, -1):
+            if regions[i]['kind'] == 'block' and regions[i]['name'] == name:
+                del regions[i]
+                break
+        return
+
+    privates = set()
+    defaultPrivate = False
+    collapse = 1
+    for clause, args in clauses:
+        if clause in PRIVATE_CLAUSES:
+            for name in args.split(','):
+                name = name.split(':')[-1] if clause == 'lastprivate' else name.split(':')[0]
+                privates.add(name.strip())
+        elif clause == 'default' and args.strip() in ('private', 'firstprivate'):
+            defaultPrivate = True
+        elif clause in ('collapse', 'ordered') and args.strip().isdigit():
+            collapse = max(collapse, int(args.strip()))
+
+    isLoop = bool(LOOP_CONSTRUCTS & set(words))
+    regions.append({
+        'kind': 'loop' if isLoop else 'block',
+        'name': constructName(words),
+        'parallel': 'parallel' in words,
+        'line': line,
+        'privates': privates,
+        'defaultPrivate': defaultPrivate,
+        'collapse': collapse,
+        'loop': None,  # Index in loops of the associated loop, once it starts
+    })
+
+
+def checkStatement(check, file, statement, regions, loops):
+    label = statement[0].text() if statement[0].token() == 'Label' else None
+    words = statement[1:] if label else statement
+    if len(words) > 2 and words[1].text() == ':':
+        words = words[2:]  # Construct name
+    first = words[0].text().lower() if words else ''
+
+    if first == 'do':
+        variable = loopVariable(words)
+        depth = len(loops)
+        for region in regions:
+            if region['kind'] == 'loop' and region['loop'] is None:
+                region['loop'] = depth
+        if variable and inParallel(regions) and not isAssociated(regions, depth) and not isPrivate(regions, variable.text().lower()) and not declaredInside(variable.ent(), file, regions):
+            check.violation(variable.ent(), file, variable.line_begin(), variable.column_begin(), ERR1, variable.text())
+        target = words[1].text() if len(words) > 1 and words[1].token() in ('Literal', 'Label') else None
+        loops.append(target)
+
+    closed = False
+    if label:
+        while loops and loops[-1] == label:
+            closeLoop(regions, loops)
+            closed = True
+    if not closed and first == 'end' and len(words) > 1 and words[1].text().lower() == 'do' and loops:
+        closeLoop(regions, loops)
+
+    # A misread directive affects one program unit at most
+    unitEnd = first == 'end' and (len(words) == 1 or words[1].text().lower() in UNIT_ENDS)
+    if unitEnd or first in ['end' + unit for unit in UNIT_ENDS]:
+        regions.clear()
+        loops.clear()
+
+
+def constructName(words):
+    # The directive name, without clauses such as nowait
+    name = []
+    for word in words:
+        if word not in CONSTRUCT_WORDS:
+            break
+        name.append(word)
+    return name
+
+
+def loopVariable(words):
+    # The variable of do [label] [,] var = ...
+    rest = words[1:]
+    if rest and rest[0].token() in ('Literal', 'Label'):
+        rest = rest[1:]
+    if rest and rest[0].text() == ',':
+        rest = rest[1:]
+    if len(rest) > 1 and rest[0].token() == 'Identifier' and rest[1].text() == '=':
+        return rest[0]
+    return None
+
+
+def closeLoop(regions, loops):
+    loops.pop()
+    regions[:] = [region for region in regions if region['loop'] is None or region['loop'] < len(loops)]
+
+
+def inParallel(regions):
+    return any(region['parallel'] and (region['kind'] == 'block' or region['loop'] is not None) for region in regions)
+
+
+def declaredInside(ent, file, regions):
+    # Declared in a block construct inside the parallel construct
+    starts = [region['line'] for region in regions if region['parallel']]
+    return bool(ent) and any(ref.file() == file and ref.line() > max(starts) for ref in ent.refs('Definein ~Implicit'))
+
+
+def isAssociated(regions, depth):
+    return any(region['kind'] == 'loop' and region['loop'] is not None and depth - region['loop'] < region['collapse'] for region in regions)
+
+
+def isPrivate(regions, name):
+    return any(region['defaultPrivate'] or name in region['privates'] for region in regions)
