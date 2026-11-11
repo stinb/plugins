@@ -14,9 +14,13 @@
 #                     through a pointer that aliases it
 #   by_value          an argument passed by value to a function in another
 #                     module
-#   by_ref            an argument passed through a pointer: caller -> callee
+#   by_ref_address    the address in a pointer argument, always caller ->
+#                     callee; read sites are where the callee uses the pointer
+#                     itself (p != NULL, passing p on)
+#   by_ref            the data behind a pointer argument: caller -> callee
 #                     when the callee reads through it, callee -> caller when
-#                     the callee writes through it
+#                     the callee writes through it. Data the callee overwrites
+#                     without reading is not an input.
 #   function_pointer  a function pointer passed to a function in another
 #                     module
 #   return            a value returned to a caller in another module that uses
@@ -37,8 +41,8 @@
 
 import re
 
-_MECHANISM_ORDER = {"global": 0, "by_ref": 1, "by_value": 2,
-                    "function_pointer": 3, "return": 4}
+_MECHANISM_ORDER = {"global": 0, "by_ref_address": 1, "by_ref": 2,
+                    "by_value": 3, "function_pointer": 4, "return": 5}
 _STMT_START = {";", "{", "}", ")", ":", "else", "do"}
 _MEMBER_OPS = {".", "->"}
 _VOLATILE_RE = re.compile(r"\bvolatile\b")
@@ -65,14 +69,20 @@ def description():
     <p>Output is one row per writer &rarr; reader link. Each source
     file is a module, and only links that cross a module boundary are
     listed. Only C code is analyzed: .c files and the headers they include.
-    C++ sources, and headers only C++ sources include, are skipped.</p>    <p>Mechanisms:</p>
+    C++ sources, and headers only C++ sources include, are skipped.</p>
+    <p>Mechanisms:</p>
     <ul>
       <li><b>global</b> &ndash; a file-scope or static object written in one
         module and read in another, directly or through a pointer that
         aliases it</li>
       <li><b>by_value</b> &ndash; an argument passed by value</li>
-      <li><b>by_ref</b> &ndash; an argument passed through a pointer; the
-        direction follows whether the callee reads or writes through it</li>
+      <li><b>by_ref_address</b> &ndash; the address passed in a pointer
+        argument, from caller to callee; the read sites are where the callee
+        uses the pointer itself (a null check, passing it on)</li>
+      <li><b>by_ref</b> &ndash; the data behind a pointer argument: caller
+        &rarr; callee when the callee reads through it, callee &rarr; caller
+        when it writes through it. Data the callee overwrites without reading
+        is not listed as input.</li>
       <li><b>function_pointer</b> &ndash; a function pointer passed as an
         argument</li>
       <li><b>return</b> &ndash; a returned value that the caller uses</li>
@@ -738,7 +748,7 @@ def _call_rows(callee_ent, caches):
         call_site = [(call_file, call_ref.line(), call_ref.column())]
         caller_id = caller_ent.id()
         for (param_ent, mechanism, read_accesses, write_accesses,
-             is_volatile) in param_info:
+             address_uses, is_volatile) in param_info:
             # The caller's own accesses through its pointer are not coupling with
             # the callee.
             reads = [(f, l, c) for fn, f, l, c in read_accesses
@@ -746,7 +756,15 @@ def _call_rows(callee_ent, caches):
             writes = [(f, l, c) for fn, f, l, c in write_accesses
                       if fn.id() != caller_id]
 
-            if mechanism != "by_ref" or reads or not writes:
+            if mechanism == "by_ref":
+                # The address itself always goes caller -> callee. The data it
+                # points to only does when the callee reads through it: data
+                # the callee overwrites without reading is not an input.
+                rows.append(_row(param_ent, "by_ref_address",
+                                 caller_ent, caller_module,
+                                 callee_ent, callee_module, "none", is_volatile,
+                                 call_site, address_uses))
+            if mechanism != "by_ref" or reads:
                 rows.append(_row(param_ent, mechanism, caller_ent, caller_module,
                                  callee_ent, callee_module, "none", is_volatile,
                                  call_site, reads))
@@ -765,11 +783,13 @@ def _call_rows(callee_ent, caches):
 
 
 def _param_info(param_ent, callee_ent, caches):
-    """Return (param, mechanism, read_sites, write_sites, is_volatile) for one
-    parameter. Sites are (function, file, line, col). A by_ref parameter keeps
-    accesses made anywhere the pointer is passed on to, since that data still
-    crosses the callee's interface; other parameters keep only the callee's
-    own accesses."""
+    """Return (param, mechanism, read_sites, write_sites, address_uses,
+    is_volatile) for one parameter. Sites are (function, file, line, col),
+    except address_uses, which are (file, line, col) in the callee where a
+    pointer parameter's own value is used (p != NULL, passing p on) rather
+    than the data behind it. A by_ref parameter keeps accesses made anywhere
+    the pointer is passed on to, since that data still crosses the callee's
+    interface; other parameters keep only the callee's own accesses."""
     type_text = _resolved_type(param_ent)
     if "(*" in type_text:
         mechanism = "function_pointer"
@@ -778,15 +798,28 @@ def _param_info(param_ent, callee_ent, caches):
     else:
         mechanism = "by_value"
 
+    callee_id = callee_ent.id()
+    address_uses = []
     if mechanism == "by_ref":
         writes, reads = _accesses(param_ent, 1, caches)
+        # The pointer's own value is used by a plain use, or by a dereference
+        # that only computes an address (&p[i], &p->field).
+        address_uses = _sorted_unique(
+            (r.file(), r.line(), r.column())
+            for r in param_ent.refs("Useby ~Addr")
+            if r.ent() is not None and r.ent().id() == callee_id and
+            (not r.kind().check("Deref") or _address_only(r, caches)))
     else:
         writes, reads = _accesses(param_ent, 0, caches)
-        callee_id = callee_ent.id()
         reads = [s for s in reads if s[0].id() == callee_id]
         writes = []
-    return (param_ent, mechanism, reads, writes,
+    return (param_ent, mechanism, reads, writes, address_uses,
             bool(_VOLATILE_RE.search(type_text)))
+
+
+def _sorted_unique(sites):
+    unique = {(f.id(), l, c): (f, l, c) for f, l, c in sites}
+    return [unique[k] for k in sorted(unique, key=lambda k: (k[1], k[2]))]
 
 
 def _resolved_type(ent):
