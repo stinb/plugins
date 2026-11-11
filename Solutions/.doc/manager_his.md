@@ -11,33 +11,32 @@ In Understand, the primary way of accessing these metrics has been through runni
 | Name                                  | Acronym     |  Understand Metric ID                                                             |
 |---------------------------------------|-------------|-----------------------------------------------------------------------------------|
 | Comment Density                       | COMF        | [RatioCommentsWithBeforeToCode](und://plugin/metric/RatioCommentsWithBeforeToCode)|
-| Number of paths                       | PATH        | [CountPath](und://plugin/metric/CountPath) [1,2]                                  |
+| Number of paths                       | PATH        | [CountPath](und://plugin/metric/CountPath) [1]                                    |
 | Number of Goto Statements             | GOTO	      | [CountGoTo](und://plugin/metric/CountGoTo)                                        |
-| Cyclomatic Complexity                 | v(G)        | [Cyclomatic](und://plugin/metric/Cyclomatic) [1,2]                                |
+| Cyclomatic Complexity                 | v(G)        | [Cyclomatic](und://plugin/metric/Cyclomatic) [1]                                  |
 | Number of Calling Functions           | CALLING     | [CountCallbyUnique](und://plugin/metric/CountCallbyUnique)                        |
 | Number of called functions            | CALLS       | [CountCallsUnique](und://plugin/metric/CountCallsUnique)                          |
 | Number of Function Parameters         | PARAM       | [CountParams](und://plugin/metric/CountParams)                                    |
 | Number of Instructions per function   | STMT        | [CountStmt](und://plugin/metric/CountStmt) [1]                                    |
 | Number of call Levels                 | LEVEL       | [MaxCallDepth](und://plugin/metric/MaxCallDepth)                                  |
-| Number of return points               | RETURN      | [CountEarlyExit](und://plugin/metric/CountEarlyExit) [3]                          |
-| The stability index                   | S           | [StabilityIndex](und://plugin/metric/StabilityIndex) [4]                          |
+| Number of return points               | RETURN      | [CountEarlyExit](und://plugin/metric/CountEarlyExit) [2]                          |
+| The stability index                   | S           | [StabilityIndex](und://plugin/metric/StabilityIndex) [3]                          |
 | Language scope                        | VOCF        | [LanguageScope](und://plugin/metric/LanguageScope)                                |
-| Number of MISRA HIS Subset violations | NOMV		    | [HISNOMV](und://plugin/metric/HISNOMV) [5]                                        |
-| Number of MISRA violations per rule	  | NOMVPR      | [5,6]                                                                             |
-| Number of recursions                  | ap_cg_cycle | [IsRecursive](und://plugin/metric/IsRecursive) [7]                                |
-| Statements changed                    | SCHG        | [CountLineChanged](und://plugin/metric/CountLineChanged) [1,4,8]                  |
-| Statements deleted                    | SDEL        | [CountLineRemoved](und://plugin/metric/CountLineRemoved) [1,4,8]                  |
-| New statements                        | SNew        | [CountLineNew](und://plugin/metric/CountLineNew) [1,4,8]                          |
+| Number of MISRA HIS Subset violations | NOMV		    | [HISNOMV](und://plugin/metric/HISNOMV) [4]                                        |
+| Number of MISRA violations per rule	  | NOMVPR      | [4,5]                                                                             |
+| Number of recursions                  | ap_cg_cycle | [IsRecursive](und://plugin/metric/IsRecursive) [6]                                |
+| Statements changed                    | SCHG        | [CountLineChanged](und://plugin/metric/CountLineChanged) [1,3,7]                  |
+| Statements deleted                    | SDEL        | [CountLineRemoved](und://plugin/metric/CountLineRemoved) [1,3,7]                  |
+| New statements                        | SNew        | [CountLineNew](und://plugin/metric/CountLineNew) [1,3,7]                          |
 
 
 Notes:
 
 1. This metric is built-in to Understand
-2. Visible cyclomatic metrics are controlled in project settings
-3. The metric is only reporting early exits, not all exits, matching the corresponding CodeCheck check. So the expected value is one lower.
-4. All change metrics are line based instead of statement based. A comparison database must be set to calculate comparison metrics.
-5. This metric depends on the [MISRA HIS configuration](und://plugin/config/MISRA%20HIS%20Subset) running in the background.
-6. This metric is not supported. Similar output is available by running the [MISRA HIS configuration](und://plugin/config/MISRA%20HIS%20Subset) and generating a "Results By Check Report". The report will show the number of violations for each rule.
-7. This metric returns 0 for non-recursive functions, 1 for directly recursive functions, and 2 for indirectly recursive functions.
-8. These metrics are not listed on [https://emenda.com/his/ &#8599;](https://emenda.com/his/) but have been listed on [https://www.imagix.com/user_guide/his-+-misra-c.html &#8599;](https://www.imagix.com/user_guide/his-+-misra-c.html)
+2. The metric is only reporting early exits, not all exits, matching the corresponding CodeCheck check. So the expected value is one lower.
+3. All change metrics are line based instead of statement based. A comparison database must be set to calculate comparison metrics.
+4. This metric depends on the [MISRA HIS configuration](und://plugin/config/MISRA%20HIS%20Subset) running in the background.
+5. This metric is not supported. Similar output is available by running the [MISRA HIS configuration](und://plugin/config/MISRA%20HIS%20Subset) and generating a "Results By Check Report". The report will show the number of violations for each rule.
+6. This metric returns 0 for non-recursive functions, 1 for directly recursive functions, and 2 for indirectly recursive functions.
+7. These metrics are not listed on [https://emenda.com/his/ &#8599;](https://emenda.com/his/) but have been listed on [https://www.imagix.com/user_guide/his-+-misra-c.html &#8599;](https://www.imagix.com/user_guide/his-+-misra-c.html)
 
