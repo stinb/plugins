@@ -24,12 +24,14 @@ def tags(id):
         'HIS_10': [
             'Language: C',
             'Language: C++',
+            'Language: Python',
             'Standard: Hersteller Initiative Software (HIS) Metrics',
             'Control Flow',
         ],
         'AC_HIS_10': [
             'Language: C',
             'Language: C++',
+            'Language: Python',
             'Control Flow',
         ],
     }.get(id)
@@ -63,7 +65,7 @@ def test_global():
 
 
 def test_language(language):
-    return language == 'C++'
+    return language in ('C++', 'Python')
 
 
 def define_options(check):
@@ -76,9 +78,13 @@ def check(check, file):
     for ref in file.filerefs('Define', 'Function'):
         ent = ref.ent()
 
+        is_python = ent.language() == 'Python'
+
         if ignore_ctor_dtor:
-            parent = ent.parent()
-            if parent:
+            if is_python:
+                if ent.name() in ('__new__', '__init__', '__del__'):
+                    continue
+            elif parent := ent.parent():
                 parent_name = parent.name()
                 fn_name = ent.name()
                 if fn_name == parent_name or '~' + fn_name == parent_name:
@@ -91,11 +97,27 @@ def check(check, file):
         for i, node in enumerate(nodes):
             if any(str in node.kind() for str in ('return', 'goto', 'exit')):
                 count += 1
-                at_end = i == len(nodes) - 1
+                at_end = only_block_ends_follow(nodes, i + 1)
 
         if count > 1:
             check.violation(ent, file, ref.line(), ref.column(), ERR_MULTIPLE)
-        elif count == 0 and ent.freetext('UnderlyingType') != 'void':
+        # A Python function without a return statement returns None, like a void function
+        elif count == 0 and not is_python and ent.freetext('UnderlyingType') != 'void':
             check.violation(ent, file, ref.line(), ref.column(), ERR_NO_EXIT)
         elif count == 1 and not at_end:
             check.violation(ent, file, ref.line(), ref.column(), ERR_NOT_END)
+
+
+# True if the nodes from start on only close blocks around the exit point.
+# A finally body runs before the exit, so it is skipped.
+def only_block_ends_follow(nodes, start):
+    i = start
+    while i < len(nodes):
+        node = nodes[i]
+        kind = node.kind()
+        if kind == 'try-finally' and node.end_node():
+            i = nodes.index(node.end_node())
+        elif kind not in ('end-with-do', 'end-try', 'passive-implicit'):
+            return False
+        i += 1
+    return True
