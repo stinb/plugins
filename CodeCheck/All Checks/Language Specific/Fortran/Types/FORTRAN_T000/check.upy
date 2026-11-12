@@ -1,0 +1,76 @@
+import re
+
+ERR1 = 'Real constant "%1" uses a D exponent'
+
+D_EXPONENT = re.compile(r'^(\d+\.?\d*|\.\d+)d[+-]?\d+$', re.I)
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def ids():
+    return ('FORTRAN_T000',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Types/Real constants shall not use a D exponent'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Types',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A real constant shall not be written with a <code>D</code> exponent, such as
+<code>1.d3</code> or <code>1D0</code>. Give it an explicit kind instead.</p>
+
+<p><b>Rationale</b></p>
+<p>A <code>D</code> exponent makes the constant double precision, and the size
+of double precision depends on the compiler and its options. For example, the
+NAG compiler with <code>-r8</code> or <code>-double</code> makes it 16 bytes,
+even when the variables it is used with are 8 bytes. The mismatch may only
+show at run time, for example when the constant is passed to a procedure. A
+kind parameter states the precision on every compiler.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">integer, parameter :: dp = selected_real_kind(15)
+real(dp) :: x
+
+x = sqrt(1.d3)        ! Noncompliant
+x = sqrt(1.e3_dp)     ! Compliant
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>Edit descriptors in <code>FORMAT</code> statements and in strings are not
+reported.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexer = file.lexer(lookup_ents=False)
+    if not lexer:
+        return
+
+    first = None  # First word of the statement, after any label
+    for lex in lexer:
+        token = lex.token()
+        if token == 'EndOfStatement' or lex.text() == ';':
+            first = None
+            continue
+        if token in SKIP_TOKENS or token == 'Label':
+            continue
+        if first is None:
+            first = lex.text().lower()
+        # Edit descriptors such as 2D12.4 lex as literals
+        if token == 'Literal' and first != 'format' and D_EXPONENT.match(lex.text()):
+            check.violation(file, file, lex.line_begin(), lex.column_begin(), ERR1, lex.text())
