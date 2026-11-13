@@ -1,0 +1,226 @@
+import re
+
+ERR1 = 'Local variable "%1" is initialized in its declaration and changed later, but is not declared SAVE'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def ids():
+    return ('FORTRAN_V000',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Variables/Local variables initialized in their declaration shall be declared SAVE'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Variables',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A local variable that is initialized in its declaration and changed later
+shall have the <code>save</code> attribute.</p>
+
+<p><b>Rationale</b></p>
+<p>Initializing a variable in its declaration gives it the <code>save</code>
+attribute implicitly. The initial value is set once, when the program starts,
+not on each call, and the variable keeps its last value between calls. Code
+written as if the variable were reset on each call gives a different result on
+the second call. Declare the variable <code>save</code> if the value should be
+kept, or assign the initial value with an executable statement if it should be
+reset.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">integer function sum_array(array)
+  integer, intent(in) :: array(:)
+  integer :: total = 0         ! Noncompliant: total is not reset on later calls
+  integer :: i
+
+  do i = 1, size(array)
+    total = total + array(i)
+  end do
+  sum_array = total
+end function
+
+integer function sum_array_reset(array)
+  integer, intent(in) :: array(:)
+  integer :: total             ! Compliant
+  integer :: i
+
+  total = 0
+  do i = 1, size(array)
+    total = total + array(i)
+  end do
+  sum_array_reset = total
+end function
+</code></pre>
+
+<p><b>See also</b></p>
+<p>Codee Open Catalog PWR072: Split the variable initialization from the
+declaration to prevent the implicit 'save' behavior.</p>
+
+<p><b>Developer's Notes</b></p>
+<p>A variable that is never changed after its initialization behaves the same
+on every call and is not reported. A variable passed as an actual argument is
+treated as changed unless the dummy argument is <code>intent(in)</code>.
+Variables in a main program, pointer variables, variables initialized in a
+<code>DATA</code> statement, and variables in a procedure with a
+<code>save</code> statement that has no list are not reported.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexer = None
+    savesAll = {}
+    for ref in file.filerefs('Define', 'Local Variable'):
+        ent = ref.ent()
+        typeText = ent.type() or ''
+        if re.search(r'\b(SAVE|PARAMETER|POINTER)\b', typeText, re.I):
+            continue
+        if not any(init.file() == file and init.line() == ref.line() for init in ent.refs('Setby Init')):
+            continue  # Not initialized in the declaration
+        proc = ref.scope()
+        if proc.kind().check('Main Program'):
+            continue
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+        if isConcurrentIndex(lexer.lexeme(ref.line(), ref.column())):
+            continue
+        if not isChanged(ent, file, lexer):
+            continue
+        if proc not in savesAll:
+            savesAll[proc] = hasBareSave(proc, file, lexer)
+        if savesAll[proc]:
+            continue
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
+
+
+def isConcurrentIndex(lex):
+    # An index declared in a forall or do concurrent header
+    lex = prevCode(lex) if lex else None
+    while lex and lex.token() != 'EndOfStatement':
+        if lex.token() == 'Keyword' and lex.text().lower() in ('forall', 'concurrent'):
+            return True
+        lex = prevCode(lex)
+    return False
+
+
+def isChanged(ent, file, lexer):
+    # Whether the variable may hold a different value on the next call
+    if ent.refs('Setby ~Init, Modifyby'):
+        return True
+    # The parser records a plain ref, or a plain argument ref, when it doesn't
+    # know the dummy argument's intent
+    for use in ent.refs('Useby ~In'):
+        if use.file() != file:
+            continue
+        isArgument = use.kind().check('Argument')
+        target = callTarget(lexer.lexeme(use.line(), use.column()), isArgument)
+        if target is None:
+            if isArgument:
+                return True
+            continue
+        callee, dummy = target
+        if callee.kind().check('Intrinsic Function'):
+            continue
+        if not dummy or not re.search(r'\b(VALUE|INTENT\s*\(\s*IN\s*\))', dummy.type() or '', re.I):
+            return True
+    return False
+
+
+def callTarget(lex, isArgument):
+    # (callee, dummy) for an actual argument, with dummy None when unknown.
+    # None when it is not an argument or the procedure is not known.
+    if not lex:
+        return None
+    after = nextCode(lex)
+    if not after or after.text() not in (',', ')', '('):
+        return None  # Part of an expression
+    keyword = None
+    before = prevCode(lex)
+    if before and before.text() == '=':
+        name = prevCode(before)
+        if not name or name.token() != 'Identifier':
+            return None
+        keyword = name.text().lower()
+        before = prevCode(name)
+    if not before or before.text() not in ('(', ','):
+        return None
+
+    position = 0
+    depth = 0
+    lex = before
+    while lex and lex.token() != 'EndOfStatement':
+        if lex.text() == ')':
+            depth += 1
+        elif lex.text() == '(':
+            if depth == 0:
+                break
+            depth -= 1
+        elif lex.text() == ',' and depth == 0:
+            position += 1
+        lex = prevCode(lex)
+    calleeLex = prevCode(lex) if lex else None
+    callee = calleeLex.ent() if calleeLex else None
+    call = calleeLex.ref() if calleeLex else None
+    if not callee or not call or not call.kind().check('Callby'):
+        return None
+    if not callee.kind().check('Subroutine, Function'):
+        return None
+    if prevCode(calleeLex) and prevCode(calleeLex).text() == '%':
+        return callee, None  # Type-bound call, positions shift for the passed object
+    if len(callee.refs('Definein')) != 1:
+        return callee, None  # Same-named procedures sharing one entity
+
+    dummies = [ref.ent() for ref in sorted(callee.refs('Define', 'Dummy Argument'), key=lambda ref: (ref.line(), ref.column()))]
+    if keyword:
+        # The keyword is not resolved when the procedure is defined after the call
+        return callee, next((dummy for dummy in dummies if dummy.name().lower() == keyword), None)
+    return callee, dummies[position] if position < len(dummies) else None
+
+
+def nextCode(lex):
+    lex = lex.next()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.next()
+    return lex
+
+
+def prevCode(lex):
+    lex = lex.previous()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.previous()
+    return lex
+
+
+def hasBareSave(proc, file, lexer):
+    # A save statement with no list saves every local variable
+    begin = next((ref for ref in proc.refs('Definein') if ref.file() == file), None)
+    lex = lexer.lexeme(begin.line(), begin.column()) if begin else None
+    statement = []
+    while lex:
+        token = lex.token()
+        if token == 'EndOfStatement':
+            words = [text.lower() for text in statement]
+            if words == ['save']:
+                return True
+            if words in (['contains'], ['end']) or words[:1] == ['end'] and words[1] in ('subroutine', 'function'):
+                return False
+            statement = []
+        elif token not in SKIP_TOKENS:
+            statement.append(lex.text())
+        lex = lex.next()
+    return False
