@@ -155,12 +155,12 @@ def violationTableRow(report, v, cols, checkname, checkseverity, filenames=None)
     # Check
     elif col == "CheckID":
       report.print(v.check_id())
-    elif col == "CheckContext Name":
+    elif col == "Check Name":
       report.print(checkname.get(v.check_id(),""))
-    elif col == "CheckContext Short Description":
+    elif col == "Check Short Description":
       pass # Deprecated attribute from before 7.0, usually empty
     elif col == "Severity":
-      checkseverity.get(v.check_id(),"")
+      report.print(checkseverity.get(v.check_id(),""))
 
     # Ignores
     elif col == "Note":
