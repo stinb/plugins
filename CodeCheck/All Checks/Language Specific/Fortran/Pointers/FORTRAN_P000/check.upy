@@ -1,0 +1,104 @@
+import re
+
+ERR1 = 'Pointer component "%1" of type "%2" is not default-initialized'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def ids():
+    return ('FORTRAN_P000',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Pointers/Pointer components of derived types shall be default-initialized'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Pointers',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A pointer component of a derived type shall have a default initialization,
+such as <code>=&gt; null()</code>.</p>
+
+<p><b>Rationale</b></p>
+<p>A pointer component without a default initialization has an undefined
+association status in every new object of the type. It can't be tested with
+<code>associated</code>, and code that does so may behave differently on each
+compiler or fail at run time. With <code>=&gt; null()</code>, every new object
+starts with its pointer disassociated.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">type :: node
+  real :: x
+  type(node), pointer :: next            ! Noncompliant
+  type(node), pointer :: prev => null()  ! Compliant
+end type
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>Procedure pointer components are checked as well.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexer = None
+    for ref in file.filerefs('Define', 'Variable Component, Procedure Pointer'):
+        ent = ref.ent()
+        parent = ent.parent()
+        if not parent or not parent.kind().check('Type'):
+            continue
+        if ent.kind().check('Variable Component') and not re.search(r'\bPOINTER\b', ent.type() or '', re.I):
+            continue
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False)
+        if hasInitializer(lexer.lexeme(ref.line(), ref.column())):
+            continue
+        check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name(), parent.name())
+
+
+def hasInitializer(lex):
+    # Whether the component name is followed by => after any array spec and
+    # character length
+    lex = nextCode(lex) if lex else None
+    if lex and lex.text() == '(':
+        lex = nextCode(skipParens(lex))
+    if lex and lex.text() == '*':
+        lex = nextCode(lex)
+        lex = nextCode(skipParens(lex) if lex and lex.text() == '(' else lex)
+    return bool(lex) and lex.text() == '=>'
+
+
+def skipParens(lex):
+    # The ) that closes the ( at lex
+    depth = 0
+    while lex:
+        if lex.text() == '(':
+            depth += 1
+        elif lex.text() == ')':
+            depth -= 1
+            if depth == 0:
+                break
+        lex = nextCode(lex)
+    return lex
+
+
+def nextCode(lex):
+    if not lex:
+        return None
+    lex = lex.next()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.next()
+    return lex
