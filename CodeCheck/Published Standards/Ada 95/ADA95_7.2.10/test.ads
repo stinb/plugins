@@ -1,31 +1,36 @@
 package Test_7_2_10 is
 
-   task type Worker is
-      pragma Storage_Size (1024);  -- UndCC_Valid
-   end Worker;
+   type Callback is access procedure (X : Integer);
+   type Func_Ptr is access function (X : Integer) return Integer;
+   type Obj_Ptr is access Integer;
 
-   for Worker'Storage_Size use 1024;  -- UndCC_Violation
+   procedure Do_Thing (X : Integer);
 
-   My_Task : Worker;
-   for My_Task'Storage_Size use 2048;  -- UndCC_Violation
+   CB1 : Callback := Do_Thing'Access;
+   CB2 : Callback := Do_Thing'Access;
 
-   type Handle is access Integer;
-   for Handle'Storage_Size use 4096;  -- UndCC_Violation
+   O1 : Obj_Ptr := new Integer'(1);
+   O2 : Obj_Ptr := new Integer'(2);
 
-   type Byte is range 0 .. 255;
-   for Byte'Size use 8;  -- UndCC_Valid
+   function Compute (X : Integer) return Integer;
 
-   Default_Pool_Size : constant := 512;
+   FP1 : Func_Ptr := Compute'Access;
+   FP2 : Func_Ptr := Compute'Access;
 
-   type Handle2 is access Integer;
-   for Handle2'Storage_Size use Default_Pool_Size * 2;  -- UndCC_Violation
+   Ignore : constant Callback := null;
 
-   type Handle3 is access Integer;
-   for Handle3'STORAGE_SIZE use 100;  -- UndCC_Violation
+   Also_Ignore : Callback renames Ignore;
 
-   type Handle4 is access Integer;
-   for Handle4 'Storage_Size use 100;  -- UndCC_Violation
+   A, B : constant Callback := null;
 
-   Queried_Size : constant Integer := Handle'Storage_Size;  -- UndCC_Valid
+   function Compare_CB return Boolean;
+   function Compare_CB_Ignore return Boolean;
+   function Compare_CB_Null return Boolean;
+   function Compare_Obj return Boolean;
+   function Compare_FP_Null return Boolean;
+   function Compare_FP_Ne return Boolean;
+   function Compare_Direct_Access return Boolean;
+   function Compare_CB_Rename return Boolean;
+   function Compare_Multi_Const return Boolean;
 
 end Test_7_2_10;

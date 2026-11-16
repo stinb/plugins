@@ -1,4 +1,4 @@
-ERR1 = "Do not use a representation clause to specify 'Storage_Size"
+ERR1 = "Do not compare access-to-subprogram values"
 
 
 def ids():
@@ -7,7 +7,7 @@ def ids():
 
 def name(id):
     return {
-        "ADA95_7.2.10": "Published Standards/Ada 95/7.2.10 Representation Clause",
+        "ADA95_7.2.10": "Published Standards/Ada 95/7.2.10 Access-to-Subprogram Values",
     }[id]
 
 
@@ -25,32 +25,43 @@ def detailed_description(id):
     return {
         "ADA95_7.2.10": """
 <p><b>Guideline</b></p>
-<p>Do not use a representation clause to specify number of storage
-units.</p>
+<p>Do not compare access-to-subprogram values.</p>
 
 <p><b>Rationale</b></p>
-<p>The meaning of the 'Storage_Size attribute is ambiguous; specifying a
-particular value will not improve portability. It may or may not
-include space allocated for parameters, data, etc. Save the use of this
-feature for designs that must depend on a particular vendor's
-implementation.</p>
+<p>The Ada Reference Manual, &sect;3.10.2 explains that an "implementation
+may consider two access-to-subprogram values to be unequal, even though
+they designate the same subprogram. This might be because one points
+directly to the subprogram, while the other points to a special
+prologue that performs an Elaboration_Check and then jumps to the
+subprogram." The Ada Reference Manual, &sect;4.5.2 states that it is
+"unspecified whether two access values that designate the same
+subprogram but are the result of distinct evaluations of Access
+attribute references are equal or unequal."</p>
+<p>See also Guideline 5.3.4.</p>
 
-<p><b>Notes</b></p>
-<p>During a porting activity, it can be assumed that any occurrence of
-storage specification indicates an implementation dependency that must
-be redesigned.</p>
+<p><b>Exceptions</b></p>
+<p>If you must compare an access-to-subprogram value, you should define
+a constant using the access-to-subprogram value and make all future
+comparisons against the constant. However, if you attempt to compare
+access-to-subprogram values with different levels of indirection, the
+values might still be unequal, even if designating the same
+subprogram.</p>
 
 <p><b>Developer's Note</b></p>
-<p>Automated directly: an attribute definition clause of the form
-<code>for X'Storage_Size use N;</code> is a specific, fixed syntax
-(<code>Representation Ref</code> in Understand's model, confirmed by the lexer
-to be for the <code>Storage_Size</code> attribute specifically rather than
-<code>'Size</code>, <code>'Alignment</code>, or another representation attribute), so
-every occurrence is flagged regardless of target (a task, a task type,
-or an access type) or the value supplied. The companion
-<code>pragma Storage_Size (N);</code> form is a different language construct
-(a pragma, not a representation clause) and is not what this guideline's
-wording addresses, so it is not flagged.</p>
+<p>A <code>=</code>/<code>/=</code> is flagged when an operand is an access-to-subprogram
+value: either a plain identifier of that type, or a direct <code>'Access</code>
+on a procedure/function name (the "distinct evaluations of Access
+attribute references" case from RM 4.5.2 in the Rationale). A
+comparison against the literal <code>null</code>, or against a named constant
+declared <code>:= null</code> (resolved by name, since Understand does not
+reliably resolve every reference to such a constant back to its
+entity), is not flagged &#8212; Ada defines that unambiguously, and it is
+the overwhelming majority of real-world access-to-subprogram
+comparisons.</p>
+<p>Known gaps: two access-to-<i>function</i> objects compared directly to
+each other (same Understand resolution gap as above, but here there is
+no null check to fall back on); and a rename of a null-valued constant
+is not traced, so it is flagged like an ordinary comparison.</p>
 """,
     }[id]
 
@@ -63,26 +74,149 @@ def test_language(language):
     return language == "Ada"
 
 
-def _is_storage_size_clause(lexer, ref):
-    lex = lexer.lexeme(ref.line(), ref.column())
-
-    if not lex:
+def _is_access_to_subprogram(ent):
+    if not ent:
         return False
 
-    lex = lex.next(True, True)
+    type_ref = ent.ref("Typed", "Type")
 
-    if not lex or lex.text() != "'":
+    if not type_ref:
         return False
 
-    lex = lex.next(True, True)
+    return type_ref.ent().kind().check("Access Subprogram")
 
-    return bool(lex) and lex.text().lower() == "storage_size"
+
+def _is_subprogram_access_attribute(lex):
+    # lex is the token immediately adjacent to the operator. Recognizes
+    # "<prefix>'Access" where <prefix> names a procedure or function
+    # directly: Ada defines this as producing an access-to-subprogram
+    # value regardless of whether it is ever assigned to a variable at
+    # all, which is the literal "distinct evaluations of Access
+    # attribute references" hazard the guideline's own Rationale quotes.
+    if not lex or lex.text().lower() != "access":
+        return False
+
+    tick = lex.previous(True, True)
+
+    if not tick or tick.text() != "'":
+        return False
+
+    prefix = tick.previous(True, True)
+    prefix_ent = prefix.ent() if prefix and prefix.token() == "Identifier" else None
+
+    return bool(prefix_ent) and prefix_ent.kind().check("Procedure, Function")
+
+
+def _is_access_to_subprogram_operand(lex, ent):
+    return _is_access_to_subprogram(ent) or _is_subprogram_access_attribute(lex)
+
+
+def _is_null_literal(lex):
+    return bool(lex) and lex.token() == "Keyword" and lex.text().lower() == "null"
+
+
+def _candidate_files(file):
+    # Every file this file can see a declaration from: itself, its own
+    # package's other half (a body does not "with" its own spec - that
+    # visibility is automatic, not an explicit with clause), and whatever
+    # package each of its own "with" clauses names. This bounds the later
+    # name-based scan to files Ada visibility actually allows, rather
+    # than a blind project-wide name lookup.
+    files = {file.id(): file}
+
+    for decl_ref in file.filerefs("Declare", "Package"):
+        for other_ref in decl_ref.ent().refs("Declare"):
+            files[other_ref.file().id()] = other_ref.file()
+
+    for with_ref in file.filerefs("With"):
+        for decl_ref in with_ref.ent().refs("Declare"):
+            files[decl_ref.file().id()] = decl_ref.file()
+
+    return list(files.values())
+
+
+def _collect_null_constant_names(files):
+    # A name-based scan, not an entity-based one: Understand does not
+    # reliably resolve every reference to an access-to-subprogram typed
+    # constant (see the Developer's Note), so the declarations themselves
+    # are read directly instead of trying to resolve a use of one back to
+    # its entity.
+    names = set()
+
+    for f in files:
+        lex = f.lexer(lookup_ents=False).first()
+
+        while lex:
+            if lex.token() == "Identifier":
+                colon = lex.next(True, True)
+
+                if colon and colon.text() == ":":
+                    is_constant = False
+                    scan = colon.next(True, True)
+                    n = 0
+
+                    while scan and n < 40:
+                        text = scan.text()
+
+                        if text == ":=":
+                            if is_constant and _is_null_literal(scan.next(True, True)):
+                                names.add(lex.text().lower())
+                            break
+
+                        if text == ";":
+                            break
+
+                        if scan.token() == "Keyword" and text.lower() == "constant":
+                            is_constant = True
+
+                        scan = scan.next(True, True)
+                        n += 1
+
+            lex = lex.next(True, True)
+
+    return names
+
+
+def _is_effectively_null(lex, null_constant_names):
+    if _is_null_literal(lex):
+        return True
+
+    return bool(lex) and lex.token() == "Identifier" and lex.text().lower() in null_constant_names
 
 
 def check(check, file):
-    lexer = file.lexer(lookup_ents=False)
+    null_constant_names = _collect_null_constant_names(_candidate_files(file))
+    lex = file.lexer(lookup_ents=True).first()
 
-    for ref in file.filerefs("Representation Ref"):
-        if _is_storage_size_clause(lexer, ref):
-            check.violation(ref.ent(), file, ref.line(),
-                            ref.column(), ERR1)
+    while lex:
+        if lex.token() == "Operator" and lex.text() in ("=", "/="):
+            left_lex = lex.previous(True, True)
+            left_ent = (
+                left_lex.ent()
+                if left_lex and left_lex.token() == "Identifier"
+                else None
+            )
+
+            right_lex = lex.next(True, True)
+            right_ent = (
+                right_lex.ent()
+                if right_lex and right_lex.token() == "Identifier"
+                else None
+            )
+
+            is_null_check = _is_effectively_null(
+                left_lex, null_constant_names) or _is_effectively_null(right_lex, null_constant_names)
+
+            if not is_null_check and (
+                _is_access_to_subprogram_operand(left_lex, left_ent)
+                or _is_access_to_subprogram_operand(right_lex, right_ent)
+            ):
+                check.violation(
+                    left_ent or right_ent,
+                    file,
+                    lex.line_begin(),
+                    lex.column_begin(),
+                    ERR1,
+                )
+
+        lex = lex.next(True, True)
