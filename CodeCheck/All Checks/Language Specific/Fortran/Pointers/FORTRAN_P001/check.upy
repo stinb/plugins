@@ -1,0 +1,298 @@
+import re
+
+ERR1 = 'Pointer "%1" may be used before it is associated or nullified'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+ASSOCIATING_STATEMENTS = ('allocate', 'nullify')
+
+
+def ids():
+    return ('FORTRAN_P001',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Pointers/Local pointers shall be associated or nullified before use'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Pointers',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A local pointer without a default initialization shall be associated,
+allocated or nullified on every path before it is used.</p>
+
+<p><b>Rationale</b></p>
+<p>A local pointer starts with an undefined association status. Even
+<code>associated</code> can't be used to test it: the result is undefined,
+and the program may crash or behave differently on each compiler.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">subroutine sample()
+  real, pointer :: x
+  real, target :: y
+
+  y = 0.
+  if (associated(x)) print *, x  ! Noncompliant: x is undefined
+  x => y
+  if (associated(x)) print *, x  ! Compliant
+end subroutine
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>A pointer is associated by pointer assignment, <code>allocate</code>,
+<code>nullify</code>, or by passing it to a procedure that may associate it:
+one whose dummy argument is a pointer without <code>intent(in)</code>, or one
+whose dummy argument can't be found, such as an external, generic or
+type-bound procedure, or <code>c_f_pointer</code>. Any other reference is a
+use, including passing it to an intrinsic function such as
+<code>associated</code>, but not the mold of <code>null</code>. Paths are
+followed through the control flow of the procedure, without evaluating
+conditions. Pointers that are initialized in their declaration, saved, dummy
+arguments, Cray pointers, or declared in a procedure with a <code>save</code>
+statement that has no list are not checked.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexer = None
+    graphs = {}
+    savesAll = {}
+    for ref in file.filerefs('Define', 'Local Variable'):
+        ent = ref.ent()
+        typeText = ent.type() or ''
+        if not re.search(r'\bPOINTER\b', typeText, re.I) or re.search(r'\bSAVE\b', typeText, re.I):
+            continue
+        if ent.refs('Setby Init'):
+            continue
+        proc = ref.scope()
+        # Same-named procedures in other files share one entity
+        if not any(defin.file() == file for defin in proc.refs('Definein')):
+            continue
+
+        if not lexer:
+            lexer = file.lexer(lookup_ents=True)
+        if isCrayPointer(ent, file, lexer):
+            continue
+        if proc not in savesAll:
+            savesAll[proc] = hasBareSave(proc, file, lexer)
+        if savesAll[proc]:
+            continue
+
+        if proc not in graphs:
+            graphs[proc] = proc.control_flow_graph()
+        cfg = graphs[proc]
+        if not cfg:
+            continue
+        nodes = [node for node in cfg.nodes() if node.line_begin()]
+
+        # The first reference in each node decides whether it associates or uses
+        firsts = {}
+        actions = {}
+        unplaced = False
+        for use in sorted(ent.refs('Setby ~Init, Useby, Modifyby'), key=lambda r: (r.line(), r.column())):
+            if use.file() != file:
+                continue
+            node = nodeAt(nodes, use.line(), use.column())
+            if not node:
+                unplaced = True
+                break
+            if node in firsts:
+                continue
+            action = classify(lexer.lexeme(use.line(), use.column()))
+            if action:
+                firsts[node] = use
+                actions[node] = action == 'associate'
+        if unplaced or not firsts:
+            continue
+
+        for node in firstUses(cfg.start(), actions):
+            use = firsts[node]
+            check.violation(ent, file, use.line(), use.column(), ERR1, ent.name())
+
+
+def firstUses(start, actions):
+    # Uses reached on some path from the start without an association before them
+    found = []
+    stack = list(start.children())
+    seen = set()
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        if node in actions:
+            if not actions[node]:
+                found.append(node)
+            continue
+        stack.extend(node.children())
+    return sorted(found, key=lambda node: (node.line_begin(), node.column_begin()))
+
+
+def classify(lex):
+    # 'associate', 'use', or None for a reference that is neither
+    if not lex:
+        return 'use'
+    after = nextCode(lex)
+    shaped = after and after.text() == '('
+    if shaped:
+        after = nextCode(skipParens(after))  # Bounds remapping, allocate shape or element
+    if after and after.text() == '=>':
+        return 'associate'
+
+    # An argument of allocate, nullify or a procedure call
+    if not after or after.text() not in (',', ')'):
+        return 'use'
+    keyword = None
+    before = prevCode(lex)
+    if before and before.text() == '=':
+        name = prevCode(before)
+        if not name or name.token() != 'Identifier':
+            return 'use'
+        keyword = name.text().lower()
+        before = prevCode(name)
+    if not before or before.text() not in ('(', ',', '::'):
+        return 'use'
+    position = 0
+    depth = 0
+    lex = before
+    while lex and not isStatementEnd(lex):
+        if lex.text() == ')':
+            depth += 1
+        elif lex.text() == '(':
+            if depth == 0:
+                break
+            depth -= 1
+        elif lex.text() == ',' and depth == 0:
+            position += 1
+        lex = prevCode(lex)
+    callee = prevCode(lex) if lex and not isStatementEnd(lex) else None
+    if not callee:
+        return 'use'
+    if callee.text().lower() in ASSOCIATING_STATEMENTS:
+        return 'associate'
+    if shaped:
+        return 'use'
+    ent = callee.ent()
+    call = callee.ref()
+    if ent and ent.kind().check('Intrinsic Function'):
+        # The mold of null may have any association status
+        return None if ent.name().lower() == 'null' else 'use'
+    if not ent or not call or not call.kind().check('Callby') or not ent.kind().check('Subroutine, Function'):
+        return 'use'
+
+    # Only a pointer dummy that isn't intent(in) can change the association
+    dummy = findDummy(ent, callee, keyword, position)
+    if dummy and (not re.search(r'\bPOINTER\b', dummy.type() or '', re.I)
+                  or re.search(r'\bINTENT\s*\(\s*IN\s*\)', dummy.type() or '', re.I)):
+        return 'use'
+    return 'associate'
+
+
+def findDummy(proc, calleeLex, keyword, position):
+    # The dummy argument, or None when it can't be known
+    before = prevCode(calleeLex)
+    if before and before.text() == '%':
+        return None  # Type-bound call, positions shift for the passed object
+    definitions = proc.refs('Definein')
+    if len(definitions) != 1:
+        return None  # Generic, external, or same-named procedures sharing one entity
+    # Interface bodies elsewhere add their own dummies to the entity
+    begin = definitions[0]
+    ends = [ref.line() for ref in proc.refs('End') if ref.file() == begin.file() and ref.line() >= begin.line()]
+    end = min(ends) if ends else begin.line()
+    dummies = [ref.ent() for ref in sorted(proc.refs('Define', 'Dummy Argument'), key=lambda ref: (ref.line(), ref.column()))
+               if ref.file() == begin.file() and begin.line() <= ref.line() <= end]
+    if keyword:
+        # The keyword is not resolved when the procedure is defined after the call
+        return next((dummy for dummy in dummies if dummy.name().lower() == keyword), None)
+    return dummies[position] if position < len(dummies) else None
+
+
+def isCrayPointer(ent, file, lexer):
+    # Named in a pointer (pointer, pointee) statement
+    for ref in ent.refs('Definein, Declarein'):
+        if ref.file() != file:
+            continue
+        lex = lexer.lexeme(ref.line(), ref.column())
+        first = None
+        while lex and not isStatementEnd(lex):
+            first = lex
+            lex = prevCode(lex)
+        after = nextCode(first) if first else None
+        if first and first.text().lower() == 'pointer' and after and after.text() == '(':
+            return True
+    return False
+
+
+def isStatementEnd(lex):
+    return lex.token() == 'EndOfStatement' or lex.text() == ';'
+
+
+def nodeAt(nodes, line, column):
+    for node in nodes:
+        if (node.line_begin(), node.column_begin()) <= (line, column) <= (node.line_end(), node.column_end()):
+            return node
+    return None
+
+
+def hasBareSave(proc, file, lexer):
+    # A save statement with no list saves every local variable
+    begin = next((ref for ref in proc.refs('Definein') if ref.file() == file), None)
+    lex = lexer.lexeme(begin.line(), begin.column()) if begin else None
+    statement = []
+    while lex:
+        token = lex.token()
+        if token == 'EndOfStatement' or lex.text() == ';':
+            words = [text.lower() for text in statement]
+            if words == ['save']:
+                return True
+            if words in (['contains'], ['end']) or words[:1] == ['end'] and words[1] in ('subroutine', 'function', 'program'):
+                return False
+            statement = []
+        elif token not in SKIP_TOKENS:
+            statement.append(lex.text())
+        lex = lex.next()
+    return False
+
+
+def skipParens(lex):
+    # The ) that closes the ( at lex
+    depth = 0
+    while lex:
+        if lex.text() == '(':
+            depth += 1
+        elif lex.text() == ')':
+            depth -= 1
+            if depth == 0:
+                break
+        lex = nextCode(lex)
+    return lex
+
+
+def nextCode(lex):
+    if not lex:
+        return None
+    lex = lex.next()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.next()
+    return lex
+
+
+def prevCode(lex):
+    lex = lex.previous()
+    while lex and lex.token() in SKIP_TOKENS:
+        lex = lex.previous()
+    return lex
