@@ -1,0 +1,115 @@
+import re
+
+ERR1 = 'Project file "%1" is included with angle brackets'
+
+SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def ids():
+    return ('FORTRAN_PR000',)
+
+
+def name(id):
+    return 'All Checks/Language Specific/Fortran/Preprocessor/Project files shall be included with quotes, not angle brackets'
+
+
+def tags(id):
+    return [
+        'Language: Fortran',
+        'Preprocessor',
+    ]
+
+
+def detailed_description(id):
+    return '''\
+<p>A <code>#include</code> of a file that belongs to the project shall use
+quotes, <code>#include "file"</code>. Angle brackets,
+<code>#include &lt;file&gt;</code>, are for system and library files.</p>
+
+<p><b>Rationale</b></p>
+<p>Some build tools treat angle-bracket includes as system files that don't
+change, and leave them out of the dependencies of the including file. When the
+included project file changes, the files that include it may not be rebuilt,
+and only a clean rebuild picks up the change.</p>
+
+<p><b>Example</b></p>
+<pre><code language="Fortran">subroutine sample()
+#include &lt;settings.fi&gt;  /* Noncompliant: settings.fi is next to this file */
+#include "settings.fi"  /* Compliant */
+end subroutine
+</code></pre>
+
+<p><b>Developer's Notes</b></p>
+<p>A file counts as a project file when it is under the common directory of the
+project's Fortran source files, such as an <code>include</code> directory next
+to <code>src</code>. When that common directory is the root of the file system,
+the directory of the including file is used instead. Library files kept inside
+it, such as a <code>third_party</code> directory, count as project files. Files
+outside it are not reported, and neither are files that can't be found, so add
+the project's include directories to the Fortran include settings. The Fortran
+<code>include 'file'</code> line has no angle-bracket form and is not
+checked.</p>
+'''
+
+
+def test_entity(file):
+    return True
+
+
+def test_language(language):
+    return language == 'Fortran'
+
+
+def check(check, file):
+    lexer = None
+    root = projectRoot(check) or folders(file.longname())[:-1]
+    for ref in file.filerefs('Include', 'File ~Unknown'):
+        included = ref.ent()
+        if folders(included.longname())[:len(root)] != root:
+            continue
+        if not lexer:
+            lexer = file.lexer(lookup_ents=False)
+        name = angleBracketName(lexer, ref.line())
+        if name is None:
+            continue
+        check.violation(included, file, ref.line(), ref.column(), ERR1, name)
+
+
+def angleBracketName(lexer, line):
+    # The text between < and > in a #include on the line, or None
+    lexemes = [lex for lex in lexer.lexemes(line, line) if lex.token() not in SKIP_TOKENS]
+    for i, lex in enumerate(lexemes[:-1]):
+        if lex.token() == 'Preprocessor' and lex.text().lower() == 'include' and lexemes[i + 1].text() == '<':
+            name = []
+            for part in lexemes[i + 2:]:
+                if part.text() == '>':
+                    return ''.join(name)
+                name.append(part.text())
+            return None
+    return None
+
+
+def projectRoot(check):
+    # The folders common to the source files, or [] for a filesystem root
+    cache = check.cache()
+    if cache.is_empty():
+        common = None
+        for ent in check.db().ents('Fortran File ~Include ~Unknown ~Unresolved ~Unparsed'):
+            parts = folders(ent.longname())[:-1]
+            if common is None:
+                common = parts
+            while common != parts[:len(common)]:
+                common = common[:-1]
+        if not common or len(common) == 1 and common[0].endswith(':'):
+            common = []  # No files, different drives, or a drive root
+        cache.insert('/'.join(common), 'root')
+    root = cache.value('root')
+    return root.split('/') if root else []
+
+
+def folders(path):
+    # Understand stores file names with . and .. already resolved. Windows
+    # paths, with a drive or UNC prefix, are case-insensitive.
+    if re.match(r'[A-Za-z]:|[\\/]{2}', path):
+        path = path.lower()
+    return [part for part in re.split(r'[\\/]', path) if part]
