@@ -121,3 +121,28 @@ program main
   integer :: runs = 0 ! UndCC_Valid
   runs = runs + 1
 end program
+
+subroutine print_after_bare_call()
+  integer :: printed = 1 ! UndCC_Valid
+  call no_arguments
+  print *, printed, 0
+end subroutine
+
+subroutine no_arguments()
+end subroutine
+
+subroutine external_caller()
+  integer :: kept = 1 ! UndCC_Valid
+  call external_reads(kept)
+end subroutine
+
+subroutine external_reads(a)
+  integer, intent(in) :: a
+  print *, a
+end subroutine
+
+subroutine saved_after_semicolon()
+  integer :: count = 0 ! UndCC_Valid
+  integer :: n; save
+  count = count + 1
+end subroutine

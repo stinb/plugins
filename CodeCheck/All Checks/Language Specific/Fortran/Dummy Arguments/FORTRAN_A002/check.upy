@@ -1,5 +1,7 @@
 import re
 
+from Modules import fortranCallee, fortranDummy
+
 ERR1 = 'intent(in) dummy argument "%1" is passed to "%2", which may modify it in "%3"'
 
 SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
@@ -134,43 +136,22 @@ def argumentTarget(use, lexers):
         name = prevCode(before)
         if not name or not name.ent() or not name.ent().kind().check('Dummy Argument'):
             return None
-        keyword = name.ent()
+        keyword = name.text().lower()
         before = prevCode(name)
     if not before or before.text() not in ('(', ','):
         return None
-
-    position = 0
-    depth = 0
-    lex = before
-    while lex and lex.token() != 'EndOfStatement':
-        if lex.text() == ')':
-            depth += 1
-        elif lex.text() == '(':
-            if depth == 0:
-                break
-            depth -= 1
-        elif lex.text() == ',' and depth == 0:
-            position += 1
-        lex = prevCode(lex)
-    calleeLex = prevCode(lex) if lex else None
-    if not calleeLex or not calleeLex.ent():
+    target = fortranCallee(before)
+    if not target:
         return None
-    if prevCode(calleeLex) and prevCode(calleeLex).text() == '%':
-        return None  # Type-bound call, positions shift for the passed object
-
+    calleeLex, position = target
     callee = calleeLex.ent()
     call = calleeLex.ref()
-    if not call or not call.kind().check('Callby') or not callee.kind().check('Subroutine, Function'):
+    if not callee or not call or not call.kind().check('Callby') or not callee.kind().check('Subroutine, Function'):
         return None
-    if callee.kind().check('Intrinsic') or len(callee.refs('Definein')) != 1:
-        return None  # Unknown, or same-named procedures sharing one entity
-
-    if keyword:
-        return (callee, keyword) if keyword.parent() == callee else None
-    dummies = sorted(callee.refs('Define', 'Dummy Argument'), key=lambda ref: (ref.line(), ref.column()))
-    if position >= len(dummies):
+    if callee.kind().check('Intrinsic'):
         return None
-    return callee, dummies[position].ent()
+    dummy = fortranDummy(callee, calleeLex, keyword, position)
+    return (callee, dummy) if dummy else None
 
 
 def nextCode(lex):

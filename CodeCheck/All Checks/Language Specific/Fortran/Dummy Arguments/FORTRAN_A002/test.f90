@@ -126,3 +126,13 @@ subroutine calls_external(x)
   real, intent(in) :: x
   call external_sets(x) ! UndCC_Violation
 end subroutine
+
+subroutine passes_to_external(x)
+  real, intent(in) :: x
+  call external_reads(x) ! UndCC_Valid
+end subroutine
+
+subroutine external_reads(a)
+  real, intent(in) :: a
+  print *, a
+end subroutine

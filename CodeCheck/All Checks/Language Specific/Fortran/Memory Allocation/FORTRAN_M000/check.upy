@@ -1,5 +1,7 @@
 import re
 
+from Modules import fortranHasBareSave, refInNode
+
 ERR1 = 'Local allocatable "%1" is not deallocated on every path through "%2"'
 
 SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
@@ -95,7 +97,7 @@ def check(check, file):
         if isResult(lexer.lexeme(ref.line(), ref.column())):
             continue
         if proc not in savesAll:
-            savesAll[proc] = hasBareSave(proc, file, lexer)
+            savesAll[proc] = fortranHasBareSave(proc, file, lexer)
         if savesAll[proc]:
             continue
 
@@ -117,13 +119,13 @@ def check(check, file):
         cfg = graphs[proc]
         if not cfg:
             continue
-        nodes = [node for node in cfg.nodes() if node.line_begin()]
+        nodes = cfg.nodes()
 
         allocNodes = {}
         deallocNodes = set()
         unplaced = False
         for use in allocs + deallocs:
-            node = nodeAt(nodes, use.line(), use.column())
+            node = next((node for node in nodes if refInNode(use, node)), None)
             if not node:
                 unplaced = True
                 break
@@ -143,26 +145,6 @@ def check(check, file):
 def isResult(lex):
     before = prevCode(lex) if lex else None
     return bool(before) and before.text() == '(' and bool(prevCode(before)) and prevCode(before).text().lower() == 'result'
-
-
-def hasBareSave(proc, file, lexer):
-    # A save statement with no list saves every local variable
-    begin = next((ref for ref in proc.refs('Definein') if ref.file() == file), None)
-    lex = lexer.lexeme(begin.line(), begin.column()) if begin else None
-    statement = []
-    while lex:
-        token = lex.token()
-        if token == 'EndOfStatement':
-            words = [text.lower() for text in statement]
-            if words == ['save']:
-                return True
-            if words in (['contains'], ['end']) or words[:1] == ['end'] and words[1] in ('subroutine', 'function'):
-                return False
-            statement = []
-        elif token not in SKIP_TOKENS:
-            statement.append(lex.text())
-        lex = lex.next()
-    return False
 
 
 def allocationStatement(lex, isSet):
@@ -196,13 +178,6 @@ def allocationStatement(lex, isSet):
                 return None
             depth -= 1
         lex = prevCode(lex)
-    return None
-
-
-def nodeAt(nodes, line, column):
-    for node in nodes:
-        if (node.line_begin(), node.column_begin()) <= (line, column) <= (node.line_end(), node.column_end()):
-            return node
     return None
 
 

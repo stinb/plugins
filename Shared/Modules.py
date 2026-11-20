@@ -2013,3 +2013,90 @@ def javaTypeOfParameterization(lex):
             return
         constructor = constructors[0]
         return typeOfParameter(constructor, commas)
+
+
+
+###########
+# Fortran #
+###########
+
+
+
+FORTRAN_SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
+
+
+def fortranPrevCode(lex: Lexeme | None) -> Lexeme | None:
+    lex = lex.previous() if lex else None
+    while lex and lex.token() in FORTRAN_SKIP_TOKENS:
+        lex = lex.previous()
+    return lex
+
+
+# Whether the lexeme ends a statement; ; is a Punctuation token
+def fortranStatementEnd(lex: Lexeme) -> bool:
+    return lex.token() == 'EndOfStatement' or lex.text() == ';'
+
+
+# Given the ( or , before an actual argument, get the lexeme of the name before
+# the argument list and the argument's zero-based position, or None when the
+# argument is not in a parenthesized list in the same statement
+def fortranCallee(before: Lexeme) -> tuple[Lexeme, int] | None:
+    position = 0
+    depth = 0
+    lex = before
+    while lex and not fortranStatementEnd(lex):
+        if lex.text() == ')':
+            depth += 1
+        elif lex.text() == '(':
+            if depth == 0:
+                break
+            depth -= 1
+        elif lex.text() == ',' and depth == 0:
+            position += 1
+        lex = fortranPrevCode(lex)
+    if not lex or fortranStatementEnd(lex):
+        return None
+    callee = fortranPrevCode(lex)
+    return (callee, position) if callee else None
+
+
+# Given a called procedure, the lexeme of its name in the call, and the keyword
+# (lowercase) or zero-based position of an actual argument, get the dummy
+# argument, or None when it can't be known
+def fortranDummy(proc: Ent, calleeLex: Lexeme, keyword: str | None, position: int) -> Ent | None:
+    before = fortranPrevCode(calleeLex)
+    if before and before.text() == '%':
+        return None  # Type-bound call, positions shift for the passed object
+    definitions = proc.refs('Definein')
+    if len(definitions) != 1:
+        return None  # Generic, external, or same-named procedures sharing one entity
+    # Interface bodies in other files add their own dummies to the entity
+    begin = definitions[0]
+    ends = [ref.line() for ref in proc.refs('End') if ref.file() == begin.file() and ref.line() >= begin.line()]
+    end = min(ends) if ends else begin.line()
+    dummies = [ref.ent() for ref in sorted(proc.refs('Define', 'Dummy Argument'), key=lambda ref: (ref.line(), ref.column()))
+               if ref.file() == begin.file() and begin.line() <= ref.line() <= end]
+    if keyword:
+        # The keyword is not resolved when the procedure is defined after the call
+        return next((dummy for dummy in dummies if dummy.name().lower() == keyword), None)
+    return dummies[position] if position < len(dummies) else None
+
+
+# Given a procedure defined in the file, see if it has a save statement with no
+# list, which saves every local variable
+def fortranHasBareSave(proc: Ent, file: Ent, lexer) -> bool:
+    begin = next((ref for ref in proc.refs('Definein') if ref.file() == file), None)
+    lex = lexer.lexeme(begin.line(), begin.column()) if begin else None
+    statement = []
+    while lex:
+        if fortranStatementEnd(lex):
+            words = [text.lower() for text in statement]
+            if words == ['save']:
+                return True
+            if words in (['contains'], ['end']) or words[:1] == ['end'] and words[1] in ('subroutine', 'function', 'program'):
+                return False
+            statement = []
+        elif lex.token() not in FORTRAN_SKIP_TOKENS:
+            statement.append(lex.text())
+        lex = lex.next()
+    return False

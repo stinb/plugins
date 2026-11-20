@@ -1,5 +1,7 @@
 import re
 
+from Modules import fortranCallee, fortranDummy, fortranHasBareSave
+
 ERR1 = 'Local variable "%1" is initialized in its declaration and changed later, but is not declared SAVE'
 
 SKIP_TOKENS = ('Whitespace', 'Newline', 'Comment', 'Continuation')
@@ -102,7 +104,7 @@ def check(check, file):
         if not isChanged(ent, file, lexer):
             continue
         if proc not in savesAll:
-            savesAll[proc] = hasBareSave(proc, file, lexer)
+            savesAll[proc] = fortranHasBareSave(proc, file, lexer)
         if savesAll[proc]:
             continue
         check.violation(ent, file, ref.line(), ref.column(), ERR1, ent.name())
@@ -128,7 +130,7 @@ def isChanged(ent, file, lexer):
         if use.file() != file:
             continue
         isArgument = use.kind().check('Argument')
-        target = callTarget(lexer.lexeme(use.line(), use.column()), isArgument)
+        target = callTarget(lexer.lexeme(use.line(), use.column()))
         if target is None:
             if isArgument:
                 return True
@@ -141,7 +143,7 @@ def isChanged(ent, file, lexer):
     return False
 
 
-def callTarget(lex, isArgument):
+def callTarget(lex):
     # (callee, dummy) for an actual argument, with dummy None when unknown.
     # None when it is not an argument or the procedure is not known.
     if not lex:
@@ -159,37 +161,17 @@ def callTarget(lex, isArgument):
         before = prevCode(name)
     if not before or before.text() not in ('(', ','):
         return None
-
-    position = 0
-    depth = 0
-    lex = before
-    while lex and lex.token() != 'EndOfStatement':
-        if lex.text() == ')':
-            depth += 1
-        elif lex.text() == '(':
-            if depth == 0:
-                break
-            depth -= 1
-        elif lex.text() == ',' and depth == 0:
-            position += 1
-        lex = prevCode(lex)
-    calleeLex = prevCode(lex) if lex else None
-    callee = calleeLex.ent() if calleeLex else None
-    call = calleeLex.ref() if calleeLex else None
+    target = fortranCallee(before)
+    if not target:
+        return None
+    calleeLex, position = target
+    callee = calleeLex.ent()
+    call = calleeLex.ref()
     if not callee or not call or not call.kind().check('Callby'):
         return None
     if not callee.kind().check('Subroutine, Function'):
         return None
-    if prevCode(calleeLex) and prevCode(calleeLex).text() == '%':
-        return callee, None  # Type-bound call, positions shift for the passed object
-    if len(callee.refs('Definein')) != 1:
-        return callee, None  # Same-named procedures sharing one entity
-
-    dummies = [ref.ent() for ref in sorted(callee.refs('Define', 'Dummy Argument'), key=lambda ref: (ref.line(), ref.column()))]
-    if keyword:
-        # The keyword is not resolved when the procedure is defined after the call
-        return callee, next((dummy for dummy in dummies if dummy.name().lower() == keyword), None)
-    return callee, dummies[position] if position < len(dummies) else None
+    return callee, fortranDummy(callee, calleeLex, keyword, position)
 
 
 def nextCode(lex):
@@ -204,23 +186,3 @@ def prevCode(lex):
     while lex and lex.token() in SKIP_TOKENS:
         lex = lex.previous()
     return lex
-
-
-def hasBareSave(proc, file, lexer):
-    # A save statement with no list saves every local variable
-    begin = next((ref for ref in proc.refs('Definein') if ref.file() == file), None)
-    lex = lexer.lexeme(begin.line(), begin.column()) if begin else None
-    statement = []
-    while lex:
-        token = lex.token()
-        if token == 'EndOfStatement':
-            words = [text.lower() for text in statement]
-            if words == ['save']:
-                return True
-            if words in (['contains'], ['end']) or words[:1] == ['end'] and words[1] in ('subroutine', 'function'):
-                return False
-            statement = []
-        elif token not in SKIP_TOKENS:
-            statement.append(lex.text())
-        lex = lex.next()
-    return False

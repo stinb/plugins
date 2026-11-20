@@ -145,3 +145,9 @@ subroutine saves_one()
   allocate(a(2)) ! UndCC_Valid
   allocate(b(2)) ! UndCC_Violation
 end subroutine
+
+subroutine saved_after_semicolon()
+  real, allocatable :: buffer(:) ! UndCC_Valid
+  integer :: n; save
+  allocate(buffer(10))
+end subroutine
