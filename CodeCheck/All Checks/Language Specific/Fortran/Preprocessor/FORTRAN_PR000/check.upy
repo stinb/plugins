@@ -93,23 +93,31 @@ def projectRoot(check):
     # The folders common to the source files, or [] for a filesystem root
     cache = check.cache()
     if cache.is_empty():
-        common = None
-        for ent in check.db().ents('Fortran File ~Include ~Unknown ~Unresolved ~Unparsed'):
-            parts = folders(ent.longname())[:-1]
-            if common is None:
-                common = parts
-            while common != parts[:len(common)]:
-                common = common[:-1]
-        if not common or len(common) == 1 and common[0].endswith(':'):
-            common = []  # No files, different drives, or a drive root
-        cache.insert('/'.join(common), 'root')
+        cache.lock()
+        try:
+            # Another thread may have filled it while this one waited
+            if cache.is_empty():
+                cache.insert('/'.join(commonFolders(check)), 'root')
+        finally:
+            cache.unlock()
     root = cache.value('root')
     return root.split('/') if root else []
 
 
+def commonFolders(check):
+    common = None
+    for ent in check.db().ents('Fortran File ~Include ~Unknown ~Unresolved ~Unparsed'):
+        parts = folders(ent.longname())[:-1]
+        if common is None:
+            common = parts
+        while common != parts[:len(common)]:
+            common = common[:-1]
+    if not common or len(common) == 1 and common[0].endswith(':'):
+        return []  # No files, different drives, or a drive root
+    return common
+
+
 def folders(path):
-    # Understand stores file names with . and .. already resolved. Windows
-    # paths, with a drive or UNC prefix, are case-insensitive.
-    if re.match(r'[A-Za-z]:|[\\/]{2}', path):
-        path = path.lower()
-    return [part for part in re.split(r'[\\/]', path) if part]
+    # Understand stores file names with . and .. already resolved. Case is
+    # ignored, as on Windows, so include paths typed in another case still match.
+    return [part for part in re.split(r'[\\/]', path.lower()) if part]
