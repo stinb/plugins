@@ -403,9 +403,21 @@ def check(check, file):
 
                 for _ref in obj_ref.ent().refs("Assignby Ptr, Addr Useby"):
                     assign_ptr.append(_ref.line())
+                for _ref in obj_ref.ent().refs("Assignby Ref"):
+                    if not str(_ref.ent().type()).startswith("const"):
+                        assign_ptr.append(_ref.line())
+
+                # An uninitialized array or a pointer set by new: only the
+                # memory it refers to is unset, not the object itself
+                pointee_only = not is_init and (
+                    str(obj_ref.ent().type()).endswith("]")
+                    or bool(obj_ref.ent().freetext("InitText")))
+                if pointee_only and not lexer:
+                    lexer = file.lexer()
 
                 first_use, first_set = get_used_set(
-                    obj_ref, is_init, assign_ptr)
+                    obj_ref, is_init, assign_ptr,
+                    lexer=lexer if pointee_only else None)
 
                 if not is_init and first_use and first_set and first_use.line() < first_set.line():
                     if not lexer:
@@ -434,11 +446,17 @@ def check(check, file):
                                     first_use.column(), ERR1)
 
 
-def get_used_set(obj_ref, is_init, assign_ptr, func_ref=None):
+def get_used_set(obj_ref, is_init, assign_ptr, func_ref=None, lexer=None):
     first_use, first_set = None, None
 
     for _ref in sorted(obj_ref.ent().refs("Useby ~Inactive, Setby"), key=lambda x: x.line()):
         if func_ref and func_ref.ent().id() != _ref.ent().id():
+            continue
+
+        if lexer and _ref.kind().check("Useby ~Deref"):
+            if not first_use and not first_set and (
+                    _ref.line() in assign_ptr or is_call_argument(lexer, _ref)):
+                first_set = _ref
             continue
 
         if not first_use and _ref.kind().check("Useby") and _ref.line() in assign_ptr:
@@ -453,6 +471,18 @@ def get_used_set(obj_ref, is_init, assign_ptr, func_ref=None):
             break
 
     return first_use, first_set
+
+
+# Passing the address to a function may fill the memory it refers to
+def is_call_argument(lexer, ref):
+    lex = lexer.lexeme(ref.line(), ref.column())
+    prev = lex.previous(True, True) if lex else None
+    if not prev or prev.text() not in {"(", ","}:
+        return False
+    if prev.text() == "(":
+        before = prev.previous(True, True)
+        return bool(before) and before.token() != "Keyword"
+    return True
 
 
 def is_initialized(_ref):
@@ -487,9 +517,19 @@ def is_initialized(_ref):
     else:
         lexer = _ref.file().lexer(lookup_ents=False)
         lex = lexer.lexeme(_ref.line(), _ref.column())
+        name_lex = lex
         lex = lex.next(ignore_whitespace=True, ignore_comments=True)
 
         if lex.text() in {"=", "{"} and lex.token() in {"Operator", "Punctuation"}:
             return True
+
+        # A catch parameter is set by the throw
+        lex = name_lex.previous(True, True)
+        while lex and lex.text() not in {"(", ")", ";", "{", "}", ","}:
+            lex = lex.previous(True, True)
+        if lex and lex.text() == "(":
+            lex = lex.previous(True, True)
+            if lex and lex.text() == "catch":
+                return True
 
     return False
