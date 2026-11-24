@@ -3,7 +3,7 @@ package body Test_6_3_3 is
    task body Worker is
    begin
       accept Go;
-      Global_Flag := True;  -- UndCC_Violation
+      Global_Flag := True;  -- UndCC_Violation(default)
       Atomic_Flag := True;  -- UndCC_Valid
       Set_Via_Out_Param (Out_Param_Target);  -- UndCC_Valid
       accept Stop;
@@ -24,7 +24,7 @@ package body Test_6_3_3 is
       select
          Trigger.Stop;
       then abort  -- UndCC_Valid
-         Global_Flag := True;  -- UndCC_Violation
+         Global_Flag := True;  -- UndCC_Violation(default)
       end select;
    end Async_Update;
 
@@ -56,10 +56,10 @@ package body Test_6_3_3 is
             select
                Second_Trigger.Go;
             then abort  -- UndCC_Valid
-               G1 := True;  -- UndCC_Violation
+               G1 := True;  -- UndCC_Violation(default)
             end select;
          else
-            G2 := True;  -- UndCC_Violation
+            G2 := True;  -- UndCC_Violation(default)
          end if;
       end select;
    end Nested_Async;
