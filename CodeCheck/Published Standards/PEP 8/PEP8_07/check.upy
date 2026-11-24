@@ -1,0 +1,130 @@
+ERR1 = 'Module level dunder "%1" should be placed before import statements'
+
+
+def ids():
+    return ('PEP8_07', 'PYTH_10')
+
+
+def name(id):
+    return {
+        'PEP8_07': 'Published Standards/PEP 8/Module Level Dunder Names',
+        'PYTH_10': 'All Checks/Language Specific/Python/Styling/Module Level Dunder Names',
+    }[id]
+
+
+def tags(id):
+    return {
+        'PEP8_07': [
+            'Language: Python',
+            'Standard: PEP 8',
+            'Styling',
+        ],
+        'PYTH_10': [
+            'Language: Python',
+            'Styling',
+        ],
+    }.get(id)
+
+
+def detailed_description(id):
+    desc = {
+        'PEP8_07': '''\
+<p><b>Module Level Dunder Names</b></p>
+<p>Module level "dunders" (i.e. names with two leading and two trailing
+underscores) such as <code>__all__</code>, <code>__author__</code>,
+<code>__version__</code>, etc. should be placed after the module
+docstring but before any import statements except
+<code>from __future__</code> imports. Python mandates that
+future-imports must appear in the module before any other code except
+docstrings:</p>
+<pre><code language="Python">"""This is the example module.
+
+This module does stuff.
+"""
+
+from __future__ import barry_as_FLUFL
+
+__all__ = ['a', 'b', 'c']
+__version__ = '0.1'
+__author__ = 'Cardinal Biggles'
+
+import os
+import sys
+</code></pre>
+<p>Reference: <i>https://peps.python.org/pep-0008/#module-level-dunder-names</i></p>
+
+<p><b>Developer's Notes</b></p>
+<p>This check flags a module-level dunder assignment (e.g.
+<code>__all__</code>, <code>__version__</code>) that appears after a
+module-level import. Per PEP 8, module level dunders belong after the
+module docstring but before any imports, with the sole exception of
+<code>from __future__</code> imports, which must come first; a future
+import before a dunder is therefore not flagged.</p>
+<p>Imports in a module-level <code>try</code> or <code>if</code> block
+count; imports inside a function or class do not. Dunders inside a
+function or class (e.g. <code>__slots__</code>) are not subject to this
+rule, nor are dunder attributes of other objects (e.g.
+<code>MyClass.__repr__ = ...</code>) or comprehension variables. An
+augmented assignment such as <code>__all__ += [...]</code> and a bare
+annotation with no value are not flagged; an item assignment such as
+<code>__all__[0] = 'x'</code> is.</p>
+<p>A dunder whose value needs an import, such as
+<code>__path__ = extend_path(__path__, __name__)</code> or a fallback
+<code>__version__</code> in an <code>except ImportError</code> block,
+cannot be placed before that import and is flagged.</p>
+''',
+    }
+
+    desc['PYTH_10'] = desc['PEP8_07']
+
+    return desc[id]
+
+
+def test_entity(file):
+    return True
+
+
+def test_global():
+    return False
+
+
+def test_language(language):
+    return language == 'Python'
+
+
+def _is_dunder(name):
+    return len(name) > 4 and name.startswith('__') and name.endswith('__')
+
+
+def _is_future(ref):
+    # 'from __future__ import x' gives an Import From ref to the module and
+    # an Import ref to each name; a plain 'import __future__' is ordinary.
+    ent = ref.ent()
+    if ref.kind().check('From'):
+        return ent.name() in ('__future__', '__future__.py')
+    parent = ent.parent()
+    return parent is not None and parent.name() in ('__future__', '__future__.py')
+
+
+def check(check, file):
+    first_import = None
+    for ref in file.filerefs('Import'):
+        if ref.scope() != file or _is_future(ref):
+            continue
+        pos = (ref.line(), ref.column())
+        if first_import is None or pos < first_import:
+            first_import = pos
+    if first_import is None:
+        return
+
+    for ref in file.filerefs('Set', 'Variable ~Attribute'):
+        ent = ref.ent()
+        # A comprehension variable has no parent. After 'from m import *'
+        # the parser binds a dunder to m's entity, so its parent is m.
+        parent = ent.parent()
+        if (ref.scope() == file and parent is not None
+                and parent.kind().check('File')
+                and _is_dunder(ent.name())
+                and (ref.line(), ref.column()) > first_import):
+            check.violation(None, file, ref.line(), ref.column(), ERR1,
+                            ent.name())
