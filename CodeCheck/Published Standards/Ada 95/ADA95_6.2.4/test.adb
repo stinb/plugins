@@ -8,7 +8,7 @@ package body Test_6_2_4 is
                Num_Requested := Num;
             end Make_Request;
          or
-            when Num_Requested > 0 =>  -- UndCC_Violation
+            when Num_Requested > 0 =>  -- UndCC_Violation(default)
                accept Get_Container;
          end select;
          if Solo_Flag then  -- used by only this task: no ERR2
@@ -89,7 +89,7 @@ package body Test_6_2_4 is
                end if;
             end Go;
          or
-            when Nested_Guard_Flag =>  -- UndCC_Violation
+            when Nested_Guard_Flag =>  -- UndCC_Violation(default)
                accept Retrieve;
          end select;
       end loop;
