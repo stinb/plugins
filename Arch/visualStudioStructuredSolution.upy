@@ -1,4 +1,5 @@
 import glob
+import html
 import os.path
 import re
 
@@ -36,7 +37,7 @@ def translateFromVSToUnderstand(name):
   return name.replace("/", "-").replace("%28", "(").replace("%29", ")").replace("&amp;", "&").replace("\\", "/")
 
 def findSolutionsForPath(path):
-  solutions = glob.glob(os.path.join(path, "*.sln"))
+  solutions = glob.glob(os.path.join(path, "*.sln")) + glob.glob(os.path.join(path, "*.slnx"))
   if len(solutions)>0:
     return solutions
 
@@ -71,6 +72,8 @@ def build(arch, db):
 projectLineRE = re.compile(r"Project\(\"{[a-zA-Z0-9-_]+}\"\)\s*=\s*\"([^\"]*)\"\s*,\s*\"([^\"]*)\"\s*,\s*\"{([a-zA-Z0-9-_]+)}\"")
 parentLineRE = re.compile(r"\s*{([a-zA-Z0-9-_]+)}\s*=\s*{([a-zA-Z0-9-_]+)}")
 def parseSolutionFile(filename):
+  if filename.lower().endswith(".slnx"):
+    return parseSlnxFile(filename)
   names = dict()
   paths = dict()
   parents = dict()
@@ -101,6 +104,36 @@ def parseSolutionFile(filename):
       arch.append(names[hash])
       hash = parents.get(hash)
     projToArch[path] = '/'.join(reversed(arch))
+  return projToArch
+
+slnxCommentRE = re.compile(r"<!--.*?-->", re.S)
+slnxTagRE = re.compile(r"<(/?)(Folder|Project)\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*?)(/?)>")
+slnxAttrRE = re.compile(r"([\w:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
+def parseSlnxAttrs(text):
+  attrs = dict()
+  for m in slnxAttrRE.finditer(text):
+    attrs[m.group(1)] = html.unescape(m.group(2) if m.group(2) is not None else m.group(3))
+  return attrs
+
+def parseSlnxFile(filename):
+  projToArch = dict()
+  subdir = os.path.normpath(os.path.dirname(filename)).replace('\\','/')+'/'
+  with open(filename, 'r', -1, "utf-8-sig") as f:
+    contents = slnxCommentRE.sub("", f.read())
+
+  # A solution folder is named by its full path, such as /Source/Libraries/,
+  # and a project is named after its file unless it has a DisplayName.
+  folder = ""
+  for closing, tag, text, empty in slnxTagRE.findall(contents):
+    attrs = parseSlnxAttrs(text)
+    if tag == "Folder":
+      folder = attrs.get("Name", "").strip("/") if not closing and not empty else ""
+    elif not closing and attrs.get("Path"):
+      projPath = attrs["Path"].replace('\\','/')
+      path = os.path.join(subdir, projPath)
+      if os.path.exists(path):
+        projName = attrs.get("DisplayName", os.path.splitext(os.path.basename(projPath))[0])
+        projToArch[path] = folder + '/' + projName if folder else projName
   return projToArch
 
 includeRE = re.compile(r'<Cl(Compile|Include)[^>]*Include="([^"]*)"[^>]*>')
