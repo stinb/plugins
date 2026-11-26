@@ -1,0 +1,106 @@
+ERR1 = "Do not raise implementation-specific exception"
+
+
+def ids():
+    return ("ADA95_7.4.2",)
+
+
+def name(id):
+    return {
+        "ADA95_7.4.2": "Published Standards/Ada 95/7.4.2 Implementation-Specific Exceptions",
+    }[id]
+
+
+def tags(id):
+    return {
+        "ADA95_7.4.2": [
+            "Language: Ada",
+            "Standard: Ada 95",
+            "Exception Handling",
+        ],
+    }.get(id, [])
+
+
+def detailed_description(id):
+    return {
+        "ADA95_7.4.2": """
+<p><b>Guideline</b></p>
+<p>&#8226; Do not raise implementation-specific exceptions.</p>
+<p>&#8226; Convert implementation-specific exceptions within interface
+packages to visible user-defined exceptions.</p>
+
+<p><b>Rationale</b></p>
+<p>No exception defined specifically by an implementation can be
+guaranteed to be portable to other implementations whether or not they
+are from the same vendor. Not only may the names be different, but the
+range of conditions triggering the exceptions may be different also.</p>
+<p>If you create interface packages for the implementation-specific
+portions of your program, those packages can catch or recognize
+implementation-specific exceptions and convert them into user-defined
+exceptions that have been declared in the specification. Do not allow
+yourself to be forced to find and change the name of every handler you
+have written for these exceptions when the program is ported.</p>
+
+<p><b>Developer's Note</b></p>
+<p>The first bullet is automated for one specific, known vendor
+namespace: a <code>raise</code> of an exception declared in a <code>GNAT.*</code>
+package (the same vendor-extension hierarchy <code>ADA95_7.1.6</code> flags, and
+the compiler this checker's own real-project validation targets) is
+flagged &#8212; identified by the raised exception's own enclosing package,
+not the exception's name, so it works regardless of which GNAT package
+declares it. A rename of a vendor exception is resolved back through to
+what it renames, so it does not hide the vendor origin. There is no way
+to enumerate every vendor namespace any Ada compiler has ever shipped,
+so only this one is covered; a different vendor's own package hierarchy
+is not detected. This is distinct from <code>ADA95_4.3.1</code>, which already
+automates raising a <i>predefined</i> (<code>Standard</code> package) exception &#8212;
+the two do not overlap.</p>
+<p>The second bullet is not automated: whether a given interface package
+should convert an implementation-specific exception into one of its own
+is a design decision, with no fixed violation shape to detect.</p>
+""",
+    }[id]
+
+
+def test_entity(file):
+    return file.kind().check("Ada File")
+
+
+def test_language(language):
+    return language == "Ada"
+
+
+def _is_gnat_package(ent):
+    if not ent:
+        return False
+
+    longname = str(ent.longname())
+
+    return longname == "GNAT" or longname.startswith("GNAT.")
+
+
+def _resolve_exception(ent):
+    # A rename ("X : exception renames GNAT.Pkg.Some_Error;") produces a
+    # distinct Alias entity whose own parent is wherever the rename itself
+    # was declared, hiding the vendor origin unless followed back to what
+    # it renames. Bounded to guard against a pathological rename chain.
+    depth = 0
+
+    while ent and ent.kind().check("Alias") and depth < 10:
+        rename_ref = ent.ref("Rename")
+
+        if not rename_ref:
+            break
+
+        ent = rename_ref.ent()
+        depth += 1
+
+    return ent
+
+
+def check(check, file):
+    for ref in file.filerefs("Raise"):
+        ent = _resolve_exception(ref.ent())
+
+        if ent and _is_gnat_package(ent.parent()):
+            check.violation(ent, file, ref.line(), ref.column(), ERR1)
